@@ -407,13 +407,17 @@ describe('superagent engine in the a2a host', () => {
         return r.isError && r.text.includes('[superagent-role-tools]')
       }
       // Each role session's own tool scope, observed: what it may see is restricted, and lifted when the role goes.
-      const scopes = new Map<string, { allow: string[] | undefined; lifted: number }>()
+      const scopes = new Map<string, { allow: string[] | undefined; deny: string[] | undefined; lifted: number }>()
       for (const a of [m.R, m.M, m.O]) {
-        const seen = { allow: undefined as string[] | undefined, lifted: 0 }
+        const seen = { allow: undefined as string[] | undefined, deny: undefined as string[] | undefined, lifted: 0 }
         scopes.set(String(a.id), seen)
         ;(a as unknown as { ctx: unknown }).ctx = { [Symbol('dsh.scope')]: a, tools: {
           get: (name: string) => m.ctx.tools.get(name),
-          restrict: (filter: { allow: string[] }) => { seen.allow = [...filter.allow]; return () => { seen.allow = undefined; seen.lifted++ } },
+          restrict: (filter: { allow?: string[]; deny?: string[] }) => {
+            if (filter.allow !== undefined) seen.allow = [...filter.allow]
+            if (filter.deny !== undefined) seen.deny = [...filter.deny]
+            return () => { seen.allow = undefined; seen.deny = undefined; seen.lifted++ }
+          },
         } }
       }
 
@@ -426,12 +430,16 @@ describe('superagent engine in the a2a host', () => {
       const statusRun = await run('superagent_read', m.R, { kind: 'tickets' }); expect(statusRun.isError, statusRun.text).toBe(false)
       for (const name of ['a2a_route', 'a2a_report', 'a2a_teams', 'a2a_ticket_report', 'a2a_file_send']) expect(await refusedByRole(name, m.R, { team: 'dsh/c2222222', message: 'x' }), name).toBe(true)
 
-      // A member: work tools + a2a_ticket_report + a2a_file_fetch (of this host's tools, the last two). No A2A route, no report
-      // outside its ticket, no router tool.
-      expect(scopes.get(M_ID)!.allow).toEqual(['a2a_whoami', 'a2a_tool_request', 'a2a_outbound_request', 'a2a_decision_decide', 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch'])
+      // A member (tool-requests T6): every tool but the boundary. No A2A sending or joining, no router tool; the read-only
+      // network views and its own team tools stay.
+      const memberDeny = scopes.get(M_ID)!.deny ?? []
+      expect(scopes.get(M_ID)!.allow).toBeUndefined()
+      for (const name of ['a2a_route', 'a2a_report', 'a2a_file_send', 'a2a_team_join', 'superagent_route', 'a2a_ticket_request']) expect(memberDeny, name).toContain(name)
+      for (const name of ['a2a_teams', 'a2a_tasks', 'a2a_whoami', 'a2a_ticket_report', 'a2a_file_fetch', 'a2a_outbound_request']) expect(memberDeny, name).not.toContain(name)
       expect(await refusedByRole('a2a_ticket_report', m.M, { ticket_id: 'x', state: 'progress', summary: 'x' })).toBe(false)
       expect(await refusedByRole('a2a_file_fetch', m.M, {})).toBe(false)
-      for (const name of ['a2a_route', 'a2a_report', 'a2a_teams', 'a2a_tasks', 'a2a_file_send', 'superagent_route']) expect(await refusedByRole(name, m.M, { team: 'dsh/c2222222', message: 'x' }), name).toBe(true)
+      for (const name of ['a2a_teams', 'a2a_tasks']) expect(await refusedByRole(name, m.M, {}), name).toBe(false)
+      for (const name of ['a2a_route', 'a2a_report', 'a2a_file_send', 'superagent_route']) expect(await refusedByRole(name, m.M, { team: 'dsh/c2222222', message: 'x' }), name).toBe(true)
 
       // A subagent of a member acts in the member's role (it could not be opened by the member, but one opened before is held).
       const S = makeAgent('session-e4444444eeee5555', 'member-subagent')
@@ -445,14 +453,15 @@ describe('superagent engine in the a2a host', () => {
 
       // The owner swaps the roles: restrictions follow the settings at once, the old ones are lifted.
       expect(await m.team(O_ID, [])).toMatchObject({ ok: true })
-      expect(scopes.get(R_ID)).toMatchObject({ allow: undefined, lifted: 1 })
-      expect(scopes.get(M_ID)).toMatchObject({ allow: undefined, lifted: 1 })
+      // Each was an outsider first (team tools hidden), then held a role: both restrictions were lifted in turn.
+      expect(scopes.get(R_ID)).toMatchObject({ allow: undefined, lifted: 2 })
+      expect(scopes.get(M_ID)).toMatchObject({ allow: undefined, lifted: 2 })
       expect(scopes.get(O_ID)!.allow).toEqual(['a2a_whoami', 'a2a_tool_request', 'a2a_outbound_request', 'superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
       expect(await refusedByRole('a2a_teams', m.R)).toBe(false)
       expect(await refusedByRole('a2a_teams', m.O)).toBe(true)
       expect(await refusedByRole('a2a_route', S, { team: 'dsh/c2222222', message: 'x' })).toBe(false)
-      // PR-F: every refused call counted once (router 5, member 6, the member's subagent 1, the new router 1).
-      expect((await m.state()).refusals.counts['superagent-role-tools']).toBe(13)
+      // PR-F: every refused call counted once (router 5, member 4, the member's subagent 1, the new router 1).
+      expect((await m.state()).refusals.counts['superagent-role-tools']).toBe(11)
     } finally { await m.dispose() }
   }, 30_000)
 

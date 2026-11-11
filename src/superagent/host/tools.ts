@@ -13,7 +13,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { UserError, type Outcome, type ReplyRequest } from '../upstream/dsh-superagent/src/core/index.ts'
 import type { SuperagentHost } from './index.ts'
 import { OBSERVER_OPEN_MAX, observerOfActor } from './policy.ts'
-import { grantableTool, roleTools } from './role-tools.ts'
+import { grantableTool, memberBoundary, roleTools } from './role-tools.ts'
 import { parseDecision } from './decisions.ts'
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
@@ -457,6 +457,8 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       if (h === undefined || me === undefined || role === undefined) return { ok: false, code: 'not-team', error: 'a2a_tool_request serves only the sessions of a superagent team on this host' }
       const name = String(args.name ?? '').trim()
       if (h.grantedTools(me).includes(name) || roleTools(role).includes(name)) return { ok: true, granted: true, note: `${name} is already yours to use` }
+      // T6: a member or an observer already has every tool but the boundary and what the owner blocked.
+      if (role !== 'router' && !memberBoundary(role, name) && !(h.settings.blockedTools ?? []).includes(name)) return { ok: true, granted: true, note: `${name} is already yours to use: members have every tool of this host except those that leave the team` }
       if (!grantableTool(role, name)) return { ok: false, code: 'not-grantable', error: `${name} is not something a team session may be granted (it would leave the team, or it belongs to another role)` }
       return { ok: true, requested: true, note: h.requestTool(me, role, name, String(args.why ?? '')) }
     },

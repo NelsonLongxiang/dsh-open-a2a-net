@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { Config } from '../../src/config.ts'
-import { MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, TEAM_TOOLS, roleToolRefusal, type Role, type RoleAgent } from '../../src/superagent/host/role-tools.ts'
+import { MEMBER_DENY, MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, TEAM_TOOLS, memberBoundary, roleToolRefusal, type Role, type RoleAgent } from '../../src/superagent/host/role-tools.ts'
 
 describe('role tool lists', () => {
   it('the team\'s own tools are the router\'s and the member\'s ticket tools', () => {
@@ -20,7 +20,15 @@ describe('role tool lists', () => {
   it('no role may open or reach sessions, or route or report over A2A', () => {
     const sideChannels = ['subagent', 'list_subagent_models', 'send_message', 'list_agents', 'interrupt_agent', 'a2a_route', 'a2a_report', 'a2a_teams',
       'a2a_tasks', 'a2a_file_send', 'a2a_team_join', 'a2a_exposure', 'ask_user', 'schedule']
-    for (const role of ['router', 'member'] as const) for (const name of sideChannels) expect(roleToolRefusal(role, name), `${role} ${name}`).toContain('[superagent-role-tools]')
+    for (const name of sideChannels) expect(roleToolRefusal('router', name), `router ${name}`).toContain('[superagent-role-tools]')
+    // T6: a member keeps every tool but the boundary; read-only network views and the host's other tools are its own.
+    for (const role of ['member', 'observer'] as const) {
+      for (const name of ['subagent', 'subagent_fork', 'list_subagent_models', 'send_message', 'list_agents', 'interrupt_agent', 'workflow', 'plugin_manager', 'ask_user_question', 'a2a_route', 'a2a_report', 'a2a_file_send', 'a2a_team_join', 'a2a_team_leave', 'a2a_exposure', 'superagent_route', 'session_new', 'task'])
+        expect(roleToolRefusal(role, name), `${role} ${name}`).toContain('[superagent-role-tools]')
+      for (const name of ['a2a_teams', 'a2a_tasks', 'gitbash', 'mcp__workbench-market__publish', 'create_goal', 'present'])
+        expect(roleToolRefusal(role, name), `${role} ${name}`).toBeUndefined()
+      expect(roleToolRefusal(role, 'gitbash', {}, [], ['gitbash'])).toContain('blocked')
+    }
     expect(roleToolRefusal('router', 'bash')).toBeDefined()
     expect(roleToolRefusal('router', 'a2a_ticket_report')).toBeDefined()
     expect(roleToolRefusal('member', 'superagent_route')).toBeDefined()
@@ -68,13 +76,17 @@ describe('RoleTools', () => {
     const team = TEAM_TOOLS
     const r = scoped('r', [...team, 'bash', 'a2a_route'])
     const routerAllow = ROUTER_TOOLS.filter(name => team.includes(name)).join(',')
-    const memberAllow = MEMBER_TOOLS.filter(name => team.includes(name) || name === 'bash').join(',')
+    // T6: a member is restricted by what leaves the team, not to a list: here a2a_route and the router's and observer's team tools.
+    const memberDeny = [...new Set([...MEMBER_DENY, ...team])].filter(name => memberBoundary('member', name) && [...team, 'bash', 'a2a_route'].includes(name)).join(',')
     tools.sync(r)
     tools.sync(r)
     expect(log).toEqual([`r restrict ${routerAllow}`])
     roles.r = 'member'
     tools.sync(r)
-    expect(log.slice(1)).toEqual(['r lift', `r restrict ${memberAllow}`])
+    expect(log.slice(1)).toEqual(['r lift', `r deny ${memberDeny}`])
+    expect(memberDeny).toContain('a2a_route')
+    expect(memberDeny).not.toContain('bash')
+    expect(memberDeny).not.toContain('a2a_ticket_report')
     delete roles.r
     tools.sync(r)
     expect(log.slice(3)).toEqual(['r lift', `r deny ${team.join(',')}`])
@@ -110,9 +122,9 @@ describe('RoleTools', () => {
   it('a complete restriction is not made again on every sync', () => {
     const roles: Record<string, Role> = { m: 'member' }
     const { log, scoped, tools } = setup(roles)
-    const m = scoped('m', [...MEMBER_TOOLS])
+    const m = scoped('m', [...MEMBER_TOOLS, 'a2a_route'])
     tools.sync(m); tools.sync(m); tools.sync(m)
-    expect(log).toHaveLength(1)
+    expect(log).toEqual(['m deny a2a_route'])
   })
 
   it('a context without the tools service does not throw into the session\'s creation', () => {

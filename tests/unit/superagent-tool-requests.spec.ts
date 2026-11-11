@@ -31,8 +31,11 @@ describe('what may be asked for (T2)', () => {
     expect(grantableTool('router', 'a2a_ticket_report')).toBe(false)
   })
   it('a granted tool passes the guard; an ungrantable one stays refused even if listed', () => {
-    expect(roleToolRefusal('member', 'gitbash')).toContain('gitbash')
-    expect(roleToolRefusal('member', 'gitbash', {}, ['gitbash'])).toBeUndefined()
+    // T6: grants matter for the router; a member has every tool but the boundary without one.
+    expect(roleToolRefusal('router', 'gitbash')).toContain('gitbash')
+    expect(roleToolRefusal('router', 'gitbash', {}, ['gitbash'])).toBeUndefined()
+    expect(roleToolRefusal('router', 'a2a_route', {}, ['a2a_route'])).toContain('a2a_route')
+    expect(roleToolRefusal('member', 'gitbash')).toBeUndefined()
     expect(roleToolRefusal('member', 'a2a_route', {}, ['a2a_route'])).toContain('a2a_route')
   })
 })
@@ -40,13 +43,16 @@ describe('what may be asked for (T2)', () => {
 describe('the guard asks (T3)', () => {
   it('a refused grantable tool adds what the host said; an ungrantable one asks nothing', () => {
     const onRefused = vi.fn(() => 'A P0 decision card asks the owner.')
-    const tools = new RoleTools({ roleOf: id => id === 'm' ? 'member' : undefined, agentOf: () => undefined, logger: { warn: () => {} }, grantedOf: () => [], onRefused } as never)
-    expect(tools.guard('gitbash', { id: 'm' } as never)).toMatch(/gitbash.*A P0 decision card asks the owner\./)
-    expect(onRefused).toHaveBeenCalledWith('m', 'member', 'gitbash')
+    const tools = new RoleTools({ roleOf: id => id === 'r' ? 'router' : id === 'm' ? 'member' : undefined, agentOf: () => undefined, logger: { warn: () => {} }, grantedOf: () => [], onRefused } as never)
+    expect(tools.guard('gitbash', { id: 'r' } as never)).toMatch(/gitbash.*A P0 decision card asks the owner\./)
+    expect(onRefused).toHaveBeenCalledWith('r', 'router', 'gitbash')
+    expect(tools.guard('a2a_route', { id: 'r' } as never)).not.toContain('P0')
+    // A member is not asked about: it already has gitbash, and its boundary is not something a card grants.
+    expect(tools.guard('gitbash', { id: 'm' } as never)).toBeUndefined()
     expect(tools.guard('a2a_route', { id: 'm' } as never)).not.toContain('P0')
     expect(onRefused).toHaveBeenCalledTimes(1)
-    const granted = new RoleTools({ roleOf: () => 'member', agentOf: () => undefined, logger: { warn: () => {} }, grantedOf: () => ['gitbash'] } as never)
-    expect(granted.guard('gitbash', { id: 'm' } as never)).toBeUndefined()
+    const granted = new RoleTools({ roleOf: () => 'router', agentOf: () => undefined, logger: { warn: () => {} }, grantedOf: () => ['gitbash'] } as never)
+    expect(granted.guard('gitbash', { id: 'r' } as never)).toBeUndefined()
   })
 })
 
@@ -103,9 +109,11 @@ describe('asking by name (T3)', () => {
     const registered = new Map<string, { execute(a: unknown, e: unknown): Promise<Record<string, any>> }>()
     registerSuperagentTools({ tools: { register: (tool: { name: string }) => { registered.set(tool.name, tool as never) } } } as never, id => (m.h.roleOf(id) !== undefined ? m.h : undefined))
     const ask = async (as: string, args: Record<string, unknown>) => await registered.get('a2a_tool_request')!.execute(args, { agent: { id: as }, signal: new AbortController().signal })
-    expect(await ask('session-m', { name: 'a2a_teams', why: '想看有哪些团队' })).toMatchObject({ ok: true, requested: true })
+    // T6: a member already has a2a_teams; the router, which keeps its list, still asks on a card.
+    expect(await ask('session-m', { name: 'a2a_teams', why: '想看有哪些团队' })).toMatchObject({ ok: true, granted: true })
+    expect(await ask('session-r', { name: 'a2a_teams', why: '想看有哪些团队' })).toMatchObject({ ok: true, requested: true })
     const [card] = m.h.decisionCards().filter(c => c.source === 'tool')
-    expect(card).toMatchObject({ level: 'P0', by: 'member:a2a_teams' })
+    expect(card).toMatchObject({ level: 'P0', by: 'router:a2a_teams' })
     expect(card!.reason).toContain('想看有哪些团队')
     expect(await ask('session-m', { name: 'a2a_route', why: 'x' })).toMatchObject({ ok: false, code: 'not-grantable' })
     expect(await ask('session-m', { name: 'bash', why: 'x' })).toMatchObject({ ok: true, granted: true })
@@ -113,3 +121,18 @@ describe('asking by name (T3)', () => {
     await m.h.stop()
   })
 })
+
+describe('blocked tools (T6)', () => {
+  it('the owner\'s block list is saved and validated, and keeps a tool from members', async () => {
+    const m = await team()
+    expect(m.h.saveSettings({ blockedTools: ['gitbash', 'mcp__market__publish'] }, () => true)).toMatchObject({ ok: true })
+    expect(m.h.settings.blockedTools).toEqual(['gitbash', 'mcp__market__publish'])
+    expect(m.h.saveSettings({ blockedTools: ['bad/name'] }, () => true)).toMatchObject({ ok: false })
+    expect(roleToolRefusal('member', 'gitbash', {}, [], m.h.settings.blockedTools)).toContain('blocked')
+    expect(roleToolRefusal('member', 'mcp__market__read', {}, [], m.h.settings.blockedTools)).toBeUndefined()
+    expect(m.h.saveSettings({ blockedTools: [] }, () => true)).toMatchObject({ ok: true })
+    expect(m.h.settings.blockedTools).toBeUndefined()
+    await m.h.stop()
+  })
+})
+
