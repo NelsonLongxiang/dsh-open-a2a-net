@@ -39,7 +39,7 @@ async function team(stage: boolean = true) {
 describe('files a proposer puts on a card', () => {
   it('the router\'s files are staged from its workspace for the team, shown on the card, and only those can be downloaded', async () => {
     const m = await team()
-    const out = await m.call('superagent_decision_propose', 'session-r', { question: '用哪份方案？', options: ['甲', '乙'], recommended: '甲', files: ['plan-a.md', 'plan-b.md'] })
+    const out = await m.call('superagent_decision_propose', 'session-r', { question: '用哪份方案？', options: ['甲', '乙'], recommended: '甲', reason: '理由', files: ['plan-a.md', 'plan-b.md'] })
     expect(out).toMatchObject({ ok: true })
     expect(m.staged).toEqual([['session-r', ['plan-a.md', 'plan-b.md'], 'team']])
     const [card] = m.h.decisionCards()
@@ -65,7 +65,7 @@ describe('files a proposer puts on a card', () => {
     expect(m.h.stageCardFiles('session-r', [])).toEqual({ ok: true, files: [] })
     await m.h.stop()
     const n = await team(false)
-    expect(await n.call('superagent_decision_propose', 'session-r', { question: '要吗？', options: ['甲', '乙'], recommended: '甲', files: ['a'] })).toMatchObject({ ok: false, code: 'files' })
+    expect(await n.call('superagent_decision_propose', 'session-r', { question: '要吗？', options: ['甲', '乙'], recommended: '甲', reason: '理由', files: ['a'] })).toMatchObject({ ok: false, code: 'files' })
     expect(n.h.decisionCards()).toHaveLength(0)
     await n.h.stop()
   })
