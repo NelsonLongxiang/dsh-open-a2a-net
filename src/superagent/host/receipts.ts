@@ -161,6 +161,16 @@ export class A2aReceipts {
     if (this.outcomeReceipting || !this.d.a2aOn()) return
     const now = Date.parse(this.d.now())
     const origins = new Set(this.d.store.tickets.list().flatMap(t => t.origin.triggerIds))
+    // A message the engine fanned out into a ticket is that ticket's follow-up even when the router also judged it and
+    // ignored it in its own words (a requester's answer to a member's question, 2026-11-11): its one formal receipt is the
+    // ticket's ending receipt, so a rejected one here would contradict the "passed to the member" acknowledgement and use it
+    // up. A refusal of what the message asked (an agent's stop, a sender not listed) is still told; one the member handed
+    // back is the router's again, and a rejection stands.
+    const intoTicket = (triggerId: string): boolean => {
+      const disposition = this.d.store.triggers.disposition(triggerId)
+      const tickets = disposition?.fanout ?? []
+      return tickets.some(ticketId => !(disposition?.handbacks ?? []).some(item => item.ticketId === ticketId))
+    }
     const due = new Map<string, { channel: NonNullable<Trigger['channel']>; text: string; outcome: 'completed' | 'rejected'; ticketId?: string }>()
     const consider = (triggerId: string, make: () => { text: string; outcome: 'completed' | 'rejected'; ticketId?: string }): void => {
       if (origins.has(triggerId) || due.has(triggerId) || this.outcomeReceipted.has(triggerId)) return
@@ -175,8 +185,9 @@ export class A2aReceipts {
         if (decision.kind !== 'ignore') continue
         decision.triggerIds.forEach((triggerId, i) => {
           const reason = decision.reason.find(r => r.triggerId === triggerId) ?? decision.reason[decision.reason.length === decision.triggerIds.length ? i : 0]
-          // A message routed into a ticket is answered when its member has it (above).
-          if (reason?.code === 'routed') return
+          // A message routed into a ticket is answered when its member has it (above); so is one fanned out into one and only
+          // set aside by the router.
+          if (reason?.code === 'routed' || (reason?.code === 'said' && intoTicket(triggerId))) return
           consider(triggerId, () => ({ outcome: 'rejected', text: clip(`团队未接这条消息：${notTakenText(reason)}。The team did not take this message: ${reason === undefined ? 'no reason recorded' : reasonText(reason)}.`, 1_000) }))
         })
       }

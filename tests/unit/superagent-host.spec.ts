@@ -906,6 +906,37 @@ describe('spec audit: follow-ups, the owner answering, the terminal', () => {
     await h.stop()
   })
 
+  it('a requester\'s answer that reaches the ticket and is also judged and ignored by the router keeps its formal receipt for the ticket\'s end (field run, 2026-11-11)', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const calls: string[][] = []
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home: mkdtempSync(join(tmpdir(), 'sa-answer-ignore-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1',
+      runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' } })
+    const bot = 'market/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const receive = (n: string, ctx: string) => { const task = `direct-${n.padStart(12, '0')}`; h.engine.receive({ ...wb(n, ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: bot, task, context: ctx } }, addressed: 'direct', meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } } as never); h.pass(); return task }
+    const receipts = (task: string): string[][] => calls.filter(a => a[0] === 'receipt' && a[1] === task)
+    receive('1', 'ctx-1')
+    const accepted = routeItem(h, { trigger_id: '1', kind: 'accept', title: 'bump', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    await settle()
+    // The requester answers on a new task in the same context; the engine fans it out into the ticket.
+    const answer = receive('2', 'ctx-1')
+    await settle()
+    expect(h.store.triggers.disposition('2')?.fanout ?? []).toContain(accepted.ticket_id)
+    // The router also judges it, as on the field run, and ignores it (an answer, not new work).
+    h.store.decisions.save({ id: 'dec-2', threadKey: 'a2a:ctx-1', evalId: 'ev-2', kind: 'ignore', triggerIds: ['2'], reason: [{ triggerId: '2', code: 'said', values: { text: '对在办工单问题的回答' } }], at: new Date().toISOString() } as never)
+    await settle(); await settle()
+    // No "not taken" receipt: the member has it, and its outcome comes when the ticket ends.
+    expect(receipts(answer).filter(a => !a.includes('--acknowledged')), JSON.stringify(receipts(answer))).toHaveLength(0)
+    h.engine.stopTicket(accepted.ticket_id, 'done')
+    await settle()
+    const final = receipts(answer).find(a => !a.includes('--acknowledged'))
+    expect(final, JSON.stringify(receipts(answer))).toBeDefined()
+    expect(final![final!.indexOf('--outcome') + 1]).not.toBe('rejected')
+    await h.stop()
+  })
+
   it('the owner answers a question on a ticket an agent asked for; the answer reaches its member as a person\'s message', async () => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const { routeItem } = await import('../../src/superagent/host/tools.ts')
