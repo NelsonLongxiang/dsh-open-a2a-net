@@ -1182,7 +1182,7 @@ export class SuperagentHost {
     this.flushCandidates()
     this.flushOutbox()
     this.settleSplits()
-    this.named.tick()
+    try { this.named.tick() } catch (error) { this.d.logger.warn('superagent: named dispatch pass failed: %s', String(error)) }
     // Upstream: evaluation, dispatch and outbound delivery hold while paused.
     if (this.settingsValue.paused) return
     this.executor.tick()
