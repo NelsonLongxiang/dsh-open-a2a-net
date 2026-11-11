@@ -32,7 +32,9 @@ async function team(options: { declares?: readonly string[]; profiled?: boolean 
   const receive = (task: string, text: string, opts: { context?: string; proof?: string } = {}) => {
     const context = opts.context ?? `ctx-${task}`
     const id = key('a2a', bot, task)
-    host.engine.receive({ id, source: 'a2a', threads: [{ source: 'a2a', id: context }], actor: { source: 'a2a', id: bot }, human: false, addressed: 'direct', at: new Date().toISOString(), text,
+    // As the receiving host stores a delivery: its own header, a blank line, then the caller's message.
+    const stored = `[A2A direct] (task ${task}) 已验证来源 http://127.0.0.1:9890 from "${bot}" (routed to dsh/canvas/team) sent:\n\n${text}`
+    host.engine.receive({ id, source: 'a2a', threads: [{ source: 'a2a', id: context }], actor: { source: 'a2a', id: bot }, human: false, addressed: 'direct', at: new Date().toISOString(), text: stored,
       channel: { source: 'a2a', thread: `a2a:${context}`, address: { caller: bot, task, context } }, meta: { proof: opts.proof ?? 'origin-claim', admission: 'cli-deposit', taskId: task } } as never)
     host.pass()
     return id
@@ -52,6 +54,11 @@ describe('the dispatch line', () => {
     expect(parseDispatch('[A2A dispatch] not json')).toBeUndefined()
     expect(parseDispatch('[A2A dispatch] {"for":""}')).toBeUndefined()
     expect(parseDispatch('[A2A dispatch] ["for"]')).toBeUndefined()
+    // As the receiving host stores it (trial 安排九): the network's header and a blank line above the caller's message.
+    const delivered = '[A2A direct] (task wbe-1.d26.q7.a1) 已验证来源 http://127.0.0.1:9890 from "market/fd417315" (routed to dsh/canvas/market-trial) sent:\n\n[A2A dispatch] {"rework":{"of":"wbe-1.d26.a1"}}\n[打回重做] 原事项《安排九》：请改成晚安问候。'
+    expect(parseDispatch(delivered)).toEqual({ line: { rework: { of: 'wbe-1.d26.a1' } }, body: '[打回重做] 原事项《安排九》：请改成晚安问候。' })
+    // A header-shaped line inside the message is not skipped twice: only the host's one header comes off.
+    expect(parseDispatch('[A2A direct] (task x) sent:\n\n[A2A direct] (task y) sent:\n\n[A2A dispatch] {"for":"a"}')).toBeUndefined()
   })
 })
 
