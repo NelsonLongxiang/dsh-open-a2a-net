@@ -49,3 +49,16 @@ describe('granted tools (design tool-requests T5)', () => {
     expect(fields.patch()).toEqual({ patch: { extraTools: { member: [] } } })
   })
 })
+
+describe('approvers (outbound-requests O3)', () => {
+  it('sends nothing when untouched; a changed list goes out; a wrong id is refused', () => {
+    const { fields, q } = mount({ ...base, approvers: ['session-0123abcd'] })
+    expect(fields.patch()).toEqual({ patch: {} })
+    q<HTMLTextAreaElement>('审批人').value = 'session-0123abcd\nsession-4567ef01'
+    expect(fields.patch()).toEqual({ patch: { approvers: ['session-0123abcd', 'session-4567ef01'] } })
+    q<HTMLTextAreaElement>('审批人').value = ''
+    expect(fields.patch()).toEqual({ patch: { approvers: [] } })
+    q<HTMLTextAreaElement>('审批人').value = 'dsh/0123abcd'
+    expect(fields.patch()).toMatchObject({ error: expect.stringContaining('会话 id') })
+  })
+})
