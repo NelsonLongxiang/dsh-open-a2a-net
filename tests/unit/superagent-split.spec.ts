@@ -115,4 +115,27 @@ describe('the router splits a request only when it asks for parts', () => {
     expect(t.host.executor.list().map(b => b.ticketId)).not.toContain(parent)
     await t.host.stop()
   })
+
+  it('when the router relays the result itself, that receipt carries the parts and starts with the marker (trial: 安排三)', async () => {
+    const { splitRequest } = await import('../../src/superagent/host/tools.ts')
+    const t = await team()
+    const task = t.receive('5')
+    const out = splitRequest(t.host, { trigger_id: '5', title: '问候语（两项）', scope: 's', reason: 'r', rules: ['deps'], asked: '请分成两项', parts })
+    const parent = out.ticket_id as string, children = out.parts as string[]
+    await t.settle()
+    const memberOf = (ticket: string) => t.host.executor.list().find(b => b.ticketId === ticket)!.member
+    for (const [i, child] of children.entries()) t.host.report(memberOf(child), { state: 'ready', summary: `第${String(i + 1)}项完成` }, child)
+    await t.settle()
+    expect(t.host.store.tickets.get(parent)?.ended?.outcome).toBe('completed')
+    // Within the grace, the router sends the result in its own words, as it did on the trial.
+    t.host.engine.reply({ purpose: 'result', ticketId: parent, text: '安排三完成（按派工拆成两项、两项均已结束）' })
+    await t.settle()
+    const formal = t.calls.filter(a => a[0] === 'receipt' && a[1] === task && !a.includes('--acknowledged') && !a.includes('--progress'))
+    expect(formal).toHaveLength(1)
+    const receipt = formal[0]!
+    expect(receipt[receipt.indexOf('--outcome') + 1]).toBe('completed')
+    expect(JSON.parse(receipt[receipt.indexOf('--tickets') + 1]!)).toHaveLength(2)
+    expect(receipt.at(-1)!.startsWith('全部子项完成：安排三完成')).toBe(true)
+    await t.host.stop()
+  })
 })
