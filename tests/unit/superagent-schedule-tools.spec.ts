@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs'
 import { MEMBER_TOOLS, OBSERVER_TOOLS, ROUTER_TOOLS, SCHEDULE_TOOLS, TEAM_TOOLS, roleToolRefusal } from '../../src/superagent/host/role-tools.ts'
 
 describe('schedule tools for team sessions', () => {
-  it('every role has the four, and a session outside the team is not affected', () => {
+  it('every role has both generations of the schedule tools, and a session outside the team is not affected', () => {
     for (const list of [ROUTER_TOOLS, MEMBER_TOOLS, OBSERVER_TOOLS]) for (const name of SCHEDULE_TOOLS) expect(list).toContain(name)
     for (const name of SCHEDULE_TOOLS) expect(TEAM_TOOLS).not.toContain(name)
   })
@@ -14,7 +14,15 @@ describe('schedule tools for team sessions', () => {
       expect(roleToolRefusal(role, 'schedule_create', { target: 'this_session' })).toBeUndefined()
       expect(roleToolRefusal(role, 'schedule_create', { target: 'new_once' })).toContain('this_session')
       expect(roleToolRefusal(role, 'schedule_create', { target: 'new' })).toContain('this_session')
-      expect(roleToolRefusal(role, 'schedule_create', {})).toContain('this_session')
+      // DSH 0.2.1 has no target and binds the task to the calling session (a 0.2.1 host, 2026-11-11).
+      expect(roleToolRefusal(role, 'schedule_create', { title: 't', prompt: 'p', every_seconds: 3600 })).toBeUndefined()
+    }
+  })
+  it('DSH 0.2.1: update and delete are the session\'s own; a target that is not this_session is still refused', () => {
+    for (const role of ['router', 'member', 'observer'] as const) {
+      expect(roleToolRefusal(role, 'schedule_update', { id: 'x', every_seconds: 1800 })).toBeUndefined()
+      expect(roleToolRefusal(role, 'schedule_delete', { id: 'x' })).toBeUndefined()
+      expect(roleToolRefusal(role, 'schedule_update', { id: 'x', target: 'new' })).toContain('this_session')
     }
   })
   it('an edit keeps or names this_session; list and view need nothing', () => {
