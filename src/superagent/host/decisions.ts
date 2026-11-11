@@ -123,6 +123,11 @@ export class DecisionBook {
   propose(input: { source: 'router' | 'observer' | 'health' | 'tool' | 'outbound'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
     const question = input.question.trim()
     if (question === '' || question.length > QUESTION_MAX) return { ok: false, code: 'question', error: `question is required, at most ${String(QUESTION_MAX)} characters` }
+    // Design owner-reporting R5: a choice the owner decided is final; the same question gets that decision back.
+    // Only recommendations (router, observer): a health reminder may come back with its problem, a tool or outbound card has its own rule.
+    const final = (source: StoredCard['source']): boolean => source === 'router' || source === 'observer'
+    const decided = !final(input.source) ? undefined : this.cards.filter(card => card.decided !== undefined && final(card.source) && card.question === question).sort((a, b) => b.decided!.at.localeCompare(a.decided!.at))[0]
+    if (decided !== undefined) return { ok: false, code: 'decided', error: `the owner already decided this (${decided.decided!.at.slice(0, 10)}): ${decided.decided!.text}. A decision is final: act on it, do not ask again.` }
     const mine = this.open().filter(card => card.source === input.source && card.by === input.by)
     const repeated = mine.find(card => card.question === question)
     if (repeated !== undefined) return { ok: true, id: repeated.id, reused: true }

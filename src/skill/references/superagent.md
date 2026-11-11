@@ -113,6 +113,8 @@ On approval, the host sends exactly the card's text from the team's A2A identity
 
 What the owner has to decide is a card: a question, 2 to 6 options, the option you recommend, and a level (P0 irreversible or production, P1 significant, P2 routine and easy to undo, P3 trivial; no level counts as P1). The cards wait in the right bar's **待决策** view. P2 and P3 can be approved with one click; P0 and P1 need an option chosen.
 
+What reaches the owner follows the team norms (design owner-reporting), which every team persona carries: only an executable proposal or a decision card, never an open question, background or a request for more information; a proposal names the action, its object and its entry, and says whether it is proposed, authorized or done; names, not hash ids; progress only when it changes an action or a decision. A card needs its `reason`. A decision is final: a router's or observer's card whose question the owner already decided is refused with that decision (`decided`).
+
 - A member's question in `a2a_ticket_report` is a card: `question` needs `options` and `recommended`, and the decision comes back on that ticket.
 - The router puts every recommendation of its own to the owner with `superagent_decision_propose`. An observer can use `a2a_decision_propose`. Once decided, these reach the router as a request from the owner beginning `[决策卡]`, to accept as any request.
 
