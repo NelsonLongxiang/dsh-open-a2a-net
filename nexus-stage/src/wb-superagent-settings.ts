@@ -17,6 +17,8 @@ export interface TeamFieldValues {
   readonly sources?: { readonly workbench?: boolean; readonly a2a?: boolean; readonly github?: boolean }
   /** Tools the owner granted beyond each role's list (design tool-requests). */
   readonly extraTools?: { readonly router?: readonly string[]; readonly member?: readonly string[] }
+  readonly blockedTools?: readonly string[]
+  readonly approvers?: readonly string[]
   readonly reviewer?: string
   readonly repos?: Readonly<Record<string, string>>
   readonly profiles?: Readonly<Record<string, { readonly role?: string; readonly rules: readonly TeamRule[] }>>
@@ -168,10 +170,14 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
   const capBox = input('同时进行的工单上限', String(s.maxConcurrent ?? 0), '0')
   execBox.append(prepareBox, capBox)
 
-  const toolsBox = section('额外放行的工具', '成员或观察者用到角色白名单外的工具时，会给你提一张 P0 决策卡申请；批准后会出现在这里。删掉一个就是收回授权。这一块的修改需要在已登录的界面里保存。')
+  const toolsBox = section('工具', '成员和观察者默认可以用这台主机上的全部工具（包括你接入的 MCP 服务），只拦跨出团队的那几类：开会话和子代理、改插件、对外发 A2A、在界面里等人回答。想再收紧，就在「禁用的工具」里写上工具名。总工只用它自己的那组工具；它用到别的工具时会给你提一张 P0 决策卡，批准后出现在「总工额外放行的工具」里。这一块的修改需要在已登录的界面里保存。')
   const routerTools = area('总工额外放行的工具', (s.extraTools?.router ?? []).join('\n'), 2, '一行一个工具名')
-  const memberTools = area('成员和观察者额外放行的工具', (s.extraTools?.member ?? []).join('\n'), 2, '一行一个工具名，例如 gitbash')
-  toolsBox.append(routerTools, memberTools)
+  const blockedTools = area('成员和观察者禁用的工具', (s.blockedTools ?? []).join('\n'), 2, '一行一个工具名，例如 mcp__market__publish')
+  toolsBox.append(routerTools, blockedTools)
+
+  const approverBox = section('审批人', '团队想请别的团队做事时，会提一张「对外请求」P0 决策卡。除了你，这里列出的成员或观察者也能代为审批（必须写理由，不能批自己提的卡）。填会话 id，一行一个；总工不能当审批人。这一块的修改需要在已登录的界面里保存。')
+  const approvers = area('审批人', (s.approvers ?? []).join('\n'), 2, '一行一个会话 id，例如 session-0123abcd-…')
+  approverBox.appendChild(approvers)
 
   const reviewBox = section('送审地址', '填了之后，工单开的 PR 会在每个新提交上发一次评审请求，结论只供合并的人参考。必须是已建链的 A2A 地址，留空表示不送审。')
   const reviewer = input('送审地址', s.reviewer ?? '', 'dsh/xxxxxxxx')
@@ -227,12 +233,19 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
     if (!same(repoList, s.github?.repos ?? []) || intake.value !== (s.github?.intake ?? 'mention')) out.github = repoList.length === 0 && intake.value === 'mention' ? null : { repos: repoList, intake: intake.value }
 
     // Granted tools go out only when a list changed: an untouched save stays clear of the owner-login check (T5).
-    const routerList = linesOf(routerTools.value), memberList = linesOf(memberTools.value)
-    const toolsChanged = { router: !same(routerList, s.extraTools?.router ?? []), member: !same(memberList, s.extraTools?.member ?? []) }
-    if (toolsChanged.router || toolsChanged.member) out.extraTools = { ...(toolsChanged.router ? { router: routerList } : {}), ...(toolsChanged.member ? { member: memberList } : {}) }
+    const routerList = linesOf(routerTools.value)
+    if (!same(routerList, s.extraTools?.router ?? [])) out.extraTools = { router: routerList }
+    // Blocked tools go out only when the list changed (tool-requests T6: owner-only).
+    const blockedList = linesOf(blockedTools.value)
+    if (blockedList.length > 40 || blockedList.some(name => !/^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(name))) return { error: '禁用的工具要写工具名，最多 40 个' }
+    if (!same(blockedList, s.blockedTools ?? [])) out.blockedTools = blockedList
+    // Approvers go out only when the list changed, like granted tools (outbound-requests O3: owner-only).
+    const approverList = linesOf(approvers.value)
+    if (approverList.length > 10 || approverList.some(id => !/^session-[A-Za-z0-9-]{1,64}$/.test(id))) return { error: '审批人要写会话 id（session-…），最多 10 个' }
+    if (!same(approverList, s.approvers ?? [])) out.approvers = approverList
     const address = reviewer.value.trim()
     if (address !== (s.reviewer ?? '')) out.reviewer = address === '' ? null : address
     return { patch: out }
   }
-  return { nodes: [rulesBox, dispatchBox, profilesBox, execBox, botsBox, repoBox, githubBox, toolsBox, reviewBox], patch }
+  return { nodes: [rulesBox, dispatchBox, profilesBox, execBox, botsBox, repoBox, githubBox, toolsBox, approverBox, reviewBox], patch }
 }

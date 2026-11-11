@@ -94,6 +94,10 @@ export interface TeamSettings {
   readonly github?: GithubIntake
   /** Tools the owner granted beyond a role's list, for this team (design tool-requests T1); an observer follows `member`. */
   readonly extraTools?: { readonly router?: readonly string[]; readonly member?: readonly string[] }
+  /** Members or observers of this team who may decide outbound cards (design outbound-requests O3); owner-only. */
+  readonly approvers?: readonly string[]
+  /** Tools the owner keeps from this team's members and observers, on top of the boundary (design tool-requests T6); owner-only. */
+  readonly blockedTools?: readonly string[]
   /** How long the router may take over a candidate before its Eval expires (upstream: re-queued twice, then unavailable). */
   readonly evalTimeoutMs: number
   /** Pause processing (upstream docs/003): Sources still record Triggers; Evals, dispatch and replies wait. */
@@ -223,6 +227,20 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
       extraTools = next.router === undefined && next.member === undefined ? undefined : next
     }
   }
+  let approvers = current.approvers
+  if ('approvers' in r) {
+    const raw = r.approvers
+    if (raw === null || (Array.isArray(raw) && raw.length === 0)) approvers = undefined
+    else if (!Array.isArray(raw) || raw.length > 10 || raw.some(x => typeof x !== 'string' || !/^session-[A-Za-z0-9-]{1,64}$/.test(x))) return { ok: false, error: 'approvers must list at most 10 session ids of this team\'s members or observers' }
+    else approvers = [...new Set(raw as string[])]
+  }
+  let blockedTools = current.blockedTools
+  if ('blockedTools' in r) {
+    const raw = r.blockedTools
+    if (raw === null || (Array.isArray(raw) && raw.length === 0)) blockedTools = undefined
+    else if (!Array.isArray(raw) || raw.length > 40 || raw.some(x => typeof x !== 'string' || !/^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(x))) return { ok: false, error: 'blockedTools must list at most 40 tool names' }
+    else blockedTools = [...new Set(raw as string[])]
+  }
   // Design github-issues G1, G2: the repositories whose issues reach the team, and which issues count.
   let githubIntake = current.github
   if ('github' in r) {
@@ -351,7 +369,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const observers = current.observers ?? []
   const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
   if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), evalTimeoutMs, paused } }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), ...(approvers !== undefined ? { approvers } : {}), ...(blockedTools !== undefined ? { blockedTools } : {}), evalTimeoutMs, paused } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/

@@ -50,20 +50,37 @@ export const SELF_TOOLS: readonly string[] = ['a2a_whoami']
 export const YGL_READ_TOOLS: readonly string[] = ['mcp__ygl__read']
 export const YGL_WORK_TOOLS: readonly string[] = [...YGL_READ_TOOLS, 'mcp__ygl__write', 'mcp__ygl__verify', 'mcp__ygl__doctor']
 
-export const ROUTER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, ...SELF_TOOLS, ...YGL_READ_TOOLS, 'a2a_tool_request', 'superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose']
+export const ROUTER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, ...SELF_TOOLS, ...YGL_READ_TOOLS, 'a2a_tool_request', 'a2a_outbound_request', 'superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose']
 
 /** Upstream `WORK_TOOLS` (src/app/sessions.ts) without the tools that start, list, message or interrupt other sessions. */
 export const MEMBER_WORK_TOOLS: readonly string[] = ['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list',
   'job_kill', 'web_search', 'web_fetch', 'skill', 'todo_write']
 
 /** A member's tools: its work tools, its report, and the file channel for inputs it was handed. */
-export const MEMBER_TOOLS: readonly string[] = [...MEMBER_WORK_TOOLS, ...SCHEDULE_TOOLS, ...SELF_TOOLS, ...YGL_WORK_TOOLS, 'a2a_tool_request', 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch']
+export const MEMBER_TOOLS: readonly string[] = [...MEMBER_WORK_TOOLS, ...SCHEDULE_TOOLS, ...SELF_TOOLS, ...YGL_WORK_TOOLS, 'a2a_tool_request', 'a2a_outbound_request', 'a2a_decision_decide', 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch']
 
 /** An observer's tools: a member's, and opening a ticket (design D15). */
 export const OBSERVER_TOOLS: readonly string[] = [...MEMBER_TOOLS, 'a2a_ticket_request', 'a2a_decision_propose']
 
 /** The tools only a team's sessions have: a session with no role is not offered them. */
-export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS.filter(name => !SCHEDULE_TOOLS.includes(name) && !SELF_TOOLS.includes(name) && !YGL_READ_TOOLS.includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose']
+export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS.filter(name => !SCHEDULE_TOOLS.includes(name) && !SELF_TOOLS.includes(name) && !YGL_READ_TOOLS.includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_decision_decide']
+
+/**
+ * Design tool-requests T6 (owner 2026-11-11: granting tools one by one was too much to operate). A member or an observer may
+ * use every tool its host offers, the owner's MCP servers and plugins included, except these, which leave the team: other
+ * sessions and subagents, the host's plugins, a question that waits on a person in the UI (a team asks on a decision card),
+ * and the A2A network's own sending, joining and settings. The router keeps its list.
+ */
+export const MEMBER_DENY: readonly string[] = ['subagent', 'subagent_fork', 'list_subagent_models', 'interrupt_agent', 'list_agents', 'send_message', 'workflow',
+  'plugin_manager', 'ask_user_question', 'a2a_route', 'a2a_file_send', 'a2a_team_join', 'a2a_team_leave', 'a2a_exposure', 'a2a_report']
+/** Names that start or reach other sessions, whatever plugin brings them: refused at the call even when not hidden. */
+export const BOUNDARY_NAME = /subagent|^task$|^agents?$|^session[_/]|^sessions?$/i
+
+/** Whether a tool leaves the team for a member or an observer (T6): the boundary list, another role's team tools, or ygl-trees beyond its own. */
+export function memberBoundary(role: Role, name: string): boolean {
+  if (roleTools(role).includes(name)) return false
+  return MEMBER_DENY.includes(name) || BOUNDARY_NAME.test(name) || TEAM_TOOLS.includes(name) || name.startsWith('mcp__ygl__')
+}
 
 /** The tool runtime's own transport (programmatic tool calling); never restricted, every inner call is guarded. */
 const TRANSPORT = new Set(['run_code'])
@@ -96,12 +113,16 @@ export function grantableTool(role: Role, name: string): boolean {
 /** The role class a granted tool is kept under: an observer shares the members' grants (design tool-requests T1). */
 export const grantClass = (role: Role): 'router' | 'member' => role === 'router' ? 'router' : 'member'
 
-export function roleToolRefusal(role: Role, name: string, args?: unknown, granted: readonly string[] = []): string | undefined {
+export function roleToolRefusal(role: Role, name: string, args?: unknown, granted: readonly string[] = [], blocked: readonly string[] = []): string | undefined {
   if (TRANSPORT.has(name)) return undefined
+  if (role !== 'router') {
+    // T6: a member or an observer has everything but the boundary and what the owner blocked.
+    if (blocked.includes(name) && !roleTools(role).includes(name)) return `[superagent-role-tools] the owner has blocked ${name} for this team's members`
+    if (memberBoundary(role, name)) return `[superagent-role-tools] a team member works with its host's tools and reports with a2a_ticket_report; ${name} leaves the team (other sessions, subagents, A2A sending or another role's tools)`
+    return scheduleTargetRefusal(name, args)
+  }
   if (roleTools(role).includes(name) || (granted.includes(name) && grantableTool(role, name))) return scheduleTargetRefusal(name, args)
-  return role === 'router'
-    ? `[superagent-role-tools] the team router acts only through ${ROUTER_TOOLS.join(', ')}; ${name} is not one of them`
-    : `[superagent-role-tools] a team member works with its work tools and reports with a2a_ticket_report; ${name} is not one of them (no sessions, subagents or A2A routes)`
+  return `[superagent-role-tools] the team router acts only through ${ROUTER_TOOLS.join(', ')}; ${name} is not one of them`
 }
 
 /** The parts of an Agent the host reads: its id, its parent session (a subagent's), and its scoped tool registry. */
@@ -133,6 +154,8 @@ export interface RoleToolsDeps {
   readonly roleOf: (sessionId: string) => Role | undefined
   /** Tools the owner granted this session's team for its role (design tool-requests T1). */
   readonly grantedOf?: (sessionId: string) => readonly string[]
+  /** The tools the owner blocked for this team's members and observers (T6). */
+  readonly blockedOf?: (sessionId: string) => readonly string[]
   /** A grantable tool was refused: the host may raise a request and say so in the refusal (T3). */
   readonly onRefused?: (sessionId: string, role: Role, name: string) => string | undefined
   /** A loaded agent by session id (for a subagent's parents). */
@@ -170,8 +193,9 @@ export class RoleTools {
   guard(name: string, agent: RoleAgent | undefined, args?: unknown): string | undefined {
     const held = this.roleSessionOf(agent)
     if (held === undefined) return undefined
-    const refusal = roleToolRefusal(held.role, name, args, this.d.grantedOf?.(held.session) ?? [])
-    if (refusal === undefined || !grantableTool(held.role, name)) return refusal
+    const refusal = roleToolRefusal(held.role, name, args, this.d.grantedOf?.(held.session) ?? [], this.d.blockedOf?.(held.session) ?? [])
+    // T6: a member's refusal is the boundary or the owner's block, which a card would only ask about again.
+    if (refusal === undefined || held.role !== 'router' || !grantableTool(held.role, name)) return refusal
     const asked = this.d.onRefused?.(held.session, held.role, name)
     return asked === undefined ? refusal : `${refusal}. ${asked}`
   }
@@ -184,7 +208,8 @@ export class RoleTools {
     const id = String(agent.id)
     const role = this.d.roleOf(id)
     const granted = role === undefined ? [] : (this.d.grantedOf?.(id) ?? []).filter(name => grantableTool(role, name))
-    const key = granted.join(',')
+    const blocked = role === undefined || role === 'router' ? [] : this.d.blockedOf?.(id) ?? []
+    const key = `${granted.join(',')}|${blocked.join(',')}`
     const current = this.applied.get(id)
     // A restriction made while some of this plugin's own tools were not yet visible in the session's scope (a session restored
     // as the host starts) would hide them for good, since nothing about the role changed (a router left without superagent_*
@@ -195,12 +220,19 @@ export class RoleTools {
     let tools: NonNullable<RoleAgent['ctx']>['tools']
     try { tools = agent.ctx?.tools } catch { return }
     if (tools === undefined) return
-    if (role === undefined) { this.hideTeamTools(id, agent, tools); return }
+    if (role === undefined) { this.hideTeamTools(id, agent, tools, key); return }
     // The registry refuses names it does not know, so restrict to the role's tools this agent can see — through its own
     // scope, which includes its preset's tools (bash, read, edit…). The global view misses them, and restricting to it
     // would hide a member's work tools. Without the scope key, visibility stays as it is: the guard is the rule.
     const scope = scopeKeyOf(agent.ctx)
     if (scope === undefined) { this.d.logger.warn('superagent: no tool scope for %s; its tools are guarded, not hidden', id); return }
+    const has = (name: string): boolean => { try { return tools.get(name, scope) !== undefined } catch { return false } }
+    if (role !== 'router') {
+      // T6: a member or an observer sees everything its scope has but the boundary and the owner's blocks.
+      const deny = [...new Set([...MEMBER_DENY, ...TEAM_TOOLS, ...YGL_WORK_TOOLS, ...blocked])].filter(name => (memberBoundary(role, name) || (blocked.includes(name) && !roleTools(role).includes(name))) && has(name))
+      try { this.applied.set(id, { role, key, dispose: deny.length === 0 ? () => {} : tools.restrict({ deny }) }) } catch (error) { this.d.logger.warn('superagent: tools of %s not restricted: %s', id, String(error)) }
+      return
+    }
     const allow = [...roleTools(role), ...granted].filter(name => { try { return tools.get(name, scope) !== undefined } catch { return false } })
     if (allow.length === 0) return
     if (this.short(role, allow)) { if (!this.warnedShort.has(id)) { this.warnedShort.add(id); this.d.logger.warn('superagent: %s (%s) does not see %s yet; its tools are made again at its next turn', id, role, roleTools(role).filter(name => TEAM_TOOLS.includes(name) && !allow.includes(name)).join(',')) } } else this.warnedShort.delete(id)
@@ -213,12 +245,12 @@ export class RoleTools {
   }
 
   /** A session with no role: the names its scope has of the team's tools come off its list. */
-  private hideTeamTools(id: string, agent: RoleAgent, tools: NonNullable<NonNullable<RoleAgent['ctx']>['tools']>): void {
+  private hideTeamTools(id: string, agent: RoleAgent, tools: NonNullable<NonNullable<RoleAgent['ctx']>['tools']>, key: string): void {
     const scope = scopeKeyOf(agent.ctx)
     if (scope === undefined) return
     const deny = TEAM_TOOLS.filter(name => { try { return tools.get(name, scope) !== undefined } catch { return false } })
     if (deny.length === 0) return
-    try { this.applied.set(id, { role: undefined, key: '', dispose: tools.restrict({ deny }) }) } catch (error) { this.d.logger.warn('superagent: team tools of %s not hidden: %s', id, String(error)) }
+    try { this.applied.set(id, { role: undefined, key, dispose: tools.restrict({ deny }) }) } catch (error) { this.d.logger.warn('superagent: team tools of %s not hidden: %s', id, String(error)) }
   }
 
   /** A disposed agent's restriction went with its scope. */

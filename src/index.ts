@@ -64,7 +64,7 @@ import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
 import {FollowupAcceptanceUnknown,ACCEPTANCE_UNKNOWN_NOTE,ACCEPTANCE_INSERTED_NOTE} from './followup-admission.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
-import { receiptFailure, retryReceiptDelivery, transientReceiptFailure, receiptRetryWait } from './receipt-retry.ts'
+import { receiptFailure, retryReceiptDelivery, transientReceiptFailure, receiptRetryWait, readReceiptReplay, RECEIPT_RETRYABLE } from './receipt-retry.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
@@ -143,7 +143,7 @@ import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
 import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
 import { guiOwnerProven, ownerOrNoLogin, touchesRules } from './superagent/host/owner-proof.ts'
-import { SuperagentTeams, ensureTeamYglHome } from './superagent/host/teams.ts'
+import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
@@ -2059,6 +2059,7 @@ export function apply(ctx: Context, config: Config): void {
     handleOf: id => `${config.team}/${id8(id)}`,
     localSessionOf: handle => localSessionOfHandle(handle),
     onRolesChanged: () => { syncRoleTools() },
+    ensureYglProject: name => { void ensureTeamYglProject(name, { logger }) },
     // Design v5: the team is a canvas team this host owns. Its local sessions in canvas order, and its remote session slots
     // with the key the canvas pinned and the base URL of the linked peer whose signed card carries that key.
     canvasTeam: name => {
@@ -2102,7 +2103,7 @@ export function apply(ctx: Context, config: Config): void {
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
   const superagentRoleTools = new RoleTools({
-    roleOf: id => superagentTeams?.ofSession(id)?.toolRoleOf(id), grantedOf: id => superagentTeams?.ofSession(id)?.grantedTools(id) ?? [], onRefused: (id, role, name) => superagentTeams?.ofSession(id)?.requestTool(id, role, name),
+    roleOf: id => superagentTeams?.ofSession(id)?.toolRoleOf(id), grantedOf: id => superagentTeams?.ofSession(id)?.grantedTools(id) ?? [], blockedOf: id => superagentTeams?.ofSession(id)?.settings.blockedTools ?? [], onRefused: (id, role, name) => superagentTeams?.ofSession(id)?.requestTool(id, role, name),
     agentOf: id => ctx.get('agents')?.get(SessionId(id)) as RoleAgent | undefined,
     logger,
   })
@@ -4355,6 +4356,16 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       if (answer?.found === true && answer.status === 'failed') {
         return { ok: false, error: answer.error, code: -32000, task_id: taskIdFromCaller }
       }
+    }
+    // A receipt resent under its fixed transport id that comes back -32003 (same id, same fingerprint) was
+    // already taken by this receiver: read the replay through its query answer instead of resending into the
+    // same verdict until the budget runs out. Only receipts: any other message keeps its -32003 untouched.
+    if (!result.ok && result.code === WIRE_ERROR_REPLAY_REJECTED && taskIdFromCaller !== undefined && taskIdFromCaller !== '' && parseReceipt(message) !== null) {
+      const fingerprint = peerPayloadFingerprint({ caller: callerSession ?? session, message, noWait: asyncMode, team })
+      const reading = readReceiptReplay(await client.queryOutcome(url, taskIdFromCaller, fingerprint, signal))
+      if (reading === 'delivered') return { ok: true, team, reply: 'receipt already delivered: the receiver answered an idempotency replay for this transport id', task_id: taskIdFromCaller, context_id: contextId ?? '', task_status: 'TASK_STATE_COMPLETED', receipt: 'none' }
+      if (reading === 'retry') return { ...result, [RECEIPT_RETRYABLE]: true }
+      return { ...result, error: `${result.error} (the receiver recorded the prior attempt of this receipt as failed)` }
     }
     return result
   }

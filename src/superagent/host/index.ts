@@ -20,11 +20,11 @@ import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
 import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
+import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, type OutboundAsk } from './outbound.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { SettingsHistory } from './settings-history.ts'
 import { HealthReminders, HEALTH_TICK_MS, type HealthProblem } from './health-reminders.ts'
-import { DECISION_FILES_MAX, DecisionBook, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
-import { parseFileRef } from '../../blob-store.ts'
+import { DECISION_FILES_MAX, DecisionBook, decisionFiles, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
@@ -36,7 +36,8 @@ import { A2aReceipts, END_RECEIPT_GRACE_MS } from './receipts.ts'
 export { END_RECEIPT_GRACE_MS } from './receipts.ts'
 /** How long a declined tool request stays declined before the tool may be asked about again (design tool-requests T4). */
 export const TOOL_ASK_AGAIN_MS = 24 * 3_600_000
-import { agentLedEnd, clip, TEXT_CAP, presetRefusal, notTakenText, OTHER_TICKETS_SHOWN, ORIGIN_LINE_NOTE, OBSERVER_LINE, candidateCard, YGL_WRITE, YGL_CARD_LINES } from './cards.ts'
+import { agentLedEnd, clip, TEXT_CAP, presetRefusal, notTakenText, OTHER_TICKETS_SHOWN, ORIGIN_LINE_NOTE, OBSERVER_LINE, candidateCard, YGL_WRITE, yglCardLines, yglRouterLine } from './cards.ts'
+import { teamYglProject } from './ygl-home.ts'
 import type { SuperagentHostDeps, PersonMessage, WorkbenchVia } from './deps.ts'
 export * from './cards.ts'
 export type * from './deps.ts'
@@ -61,6 +62,7 @@ export class SuperagentHost {
   /** GitHub issues as a source of requests (design github-issues). */
   private readonly issues: IssueSource
   private readonly reviews: ReviewRequests
+  private readonly outbound: OutboundRequests
   /** Proposals to change a rule set, each set's revision and last change (design D8–D10b). */
   readonly ruleChanges: RuleChanges
   private disposeTimer: (() => void) | undefined
@@ -119,7 +121,7 @@ export class SuperagentHost {
     }
     this.a2a = new A2aSource({
       dir, homeUrl: () => d.homeUrl?.(), apiKey: () => d.apiKey?.(), enabled: () => this.settingsValue.sources.a2a,
-      receive: trigger => { this.reviews.received(trigger as unknown as Trigger); const result = this.engine.receive(trigger as unknown as Trigger); queueMicrotask(() => this.pass()); return result },
+      receive: trigger => { this.reviews.received(trigger as unknown as Trigger); this.outbound.received(trigger as unknown as Trigger); const result = this.engine.receive(trigger as unknown as Trigger); queueMicrotask(() => this.pass()); return result },
       ticket: id => this.store.tickets.get(id) as never,
       resultPending: (ticketId, task) => this.resultPending(ticketId, task),
       logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.teamSend !== undefined ? { teamSend: d.teamSend } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
@@ -144,6 +146,7 @@ export class SuperagentHost {
       () => this.decisions.open().filter(card => card.source === 'health').map(card => ({ id: card.id, ...(card.reason !== undefined ? { reason: card.reason } : {}) })),
       () => this.now(),
     )
+    this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), ask: (address, text) => this.a2a.askReview(address, text), logger: d.logger, now: () => this.now(), note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: outbound note on %s lost: %s', ticketId, String(error)) } } })
     this.reviews = new ReviewRequests({
       path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
       ask: (address, text) => this.a2a.askReview(address, text),
@@ -187,6 +190,7 @@ export class SuperagentHost {
       const latest = ticket.assignments.at(-1)
       if (latest !== undefined && latest.state === 'pending' && this.executor.list().every(b => b.assignmentId !== latest.id)) this.executor.start(ticket, latest)
     }
+    this.ensureYglProject()
     this.disposeTimer = this.d.interval(() => this.pass(), PASS_MS)
     // Reliability R7: look at the team's health every 15 minutes; a new problem raises one card (the boot grace period
     // keeps health() quiet, so nothing is raised from it either).
@@ -405,6 +409,17 @@ export class SuperagentHost {
   membersProfiled(): boolean { return this.pool().some(id => this.settingsValue.profiles[id] !== undefined) }
 
   /** What the router sees of the team when it dispatches (design D4). */
+  /** This team's ygl-trees project (design Y1c), named after its canvas; none while the team has no canvas. */
+  yglProject(): string | undefined { return this.settingsValue.canvas === undefined ? undefined : teamYglProject(this.settingsValue.canvas) }
+  /** Ask the host to make the team's project (idempotent, cached there); never in the way of the work. */
+  private ensureYglProject(): void { const project = this.yglProject(); if (project !== undefined) { try { this.d.ensureYglProject?.(project) } catch { /* best effort */ } } }
+  private yglRouterLines(router: string): string[] {
+    const project = this.yglProject()
+    if (project === undefined || this.d.hasTool?.(router, 'mcp__ygl__read') !== true) return []
+    this.ensureYglProject()
+    return [yglRouterLine(project)]
+  }
+
   private teamCardLines(): string[] {
     const pool = this.pool()
     const dispatch = this.settingsValue.dispatch
@@ -429,7 +444,7 @@ export class SuperagentHost {
     for (const rule of (profile?.rules ?? []).filter(r => r.enabled)) lines.push(`your rule ${rule.name}: ${clip(rule.text, 600)}`)
     if (profile !== undefined) lines.push('If this ticket does not fit your role and rules, report blocked and say why; the router will choose again.')
     // The team's memory, in the card the member acts on (owner 2026-11-10: a persona line alone was not followed).
-    if (this.d.hasTool?.(member, YGL_WRITE) === true) lines.push(...YGL_CARD_LINES)
+    if (this.d.hasTool?.(member, YGL_WRITE) === true) { this.ensureYglProject(); lines.push(...yglCardLines(this.yglProject())) }
     for (const name of ticket.mandate.basis.rules ?? []) {
       const rule = this.settingsValue.rules.find(r => r.name === name)
       if (rule !== undefined) lines.push(`accepted on team rule ${rule.name}: ${clip(rule.text, 600)}`)
@@ -583,6 +598,23 @@ export class SuperagentHost {
    * owner declined is not asked about again within a day.
    * @returns what the refusal should add, for the session to read.
    */
+  /** Design outbound-requests O1, O2: a team session asks for a message to another team on a ticket; a P0 card decides it. */
+  requestOutbound(session: string, ask: OutboundAsk): Record<string, unknown> {
+    const ticket = typeof ask.ticket_id === 'string' ? this.store.tickets.get(ask.ticket_id.trim()) : undefined
+    const checked = this.outbound.check(session, ask, { role: this.toolRoleOf(session), a2aOn: this.settingsValue.sources.a2a, own: ownAddresses(this.d.handleOf, this.settingsValue.canvas, [this.settingsValue.router, ...this.pool()]),
+      ticket: ticket === undefined ? undefined : { open: !ticket.ended, title: ticket.title, holder: this.executor.list().find(b => b.ticketId === ticket.id)?.member } })
+    if (!checked.ok) return checked
+    const out = this.decisions.propose({ source: 'outbound', by: session, at: this.now(), question: `${this.memberName(session)} ${checked.question}`, ...(checked.reason !== undefined ? { reason: checked.reason } : {}), spec: { level: 'P0', options: [OUTBOUND_APPROVE, OUTBOUND_DECLINE], recommended: OUTBOUND_APPROVE } })
+    if (out.ok && out.reused !== true) this.outbound.waiting(out.id, checked.ticketId, checked.address, checked.text, session)
+    return out.ok ? { ok: true, card_id: out.id } : out
+  }
+
+  /** Design outbound-requests O3: an approver the owner named decides an outbound card it did not raise, with a reason. */
+  approverDecide(session: string, id: string, option: unknown, reason: unknown): Record<string, unknown> {
+    const checked = approverCheck({ approvers: this.settingsValue.approvers ?? [], role: this.toolRoleOf(session), card: this.decisionCards().find(row => row.id === id), session, reason })
+    return checked.ok ? this.decide(id, 'choose', option, `审批人 ${this.memberName(session)}：${checked.reason}`) : checked
+  }
+
   requestTool(session: string, role: Role, name: string, why?: string): string {
     const cls = grantClass(role), by = `${cls}:${name}`
     if (this.decisions.open().some(card => card.source === 'tool' && card.by === by)) return `A request to use ${name} is already waiting for the owner as a P0 decision card; try again after it is approved.`
@@ -634,14 +666,9 @@ export class SuperagentHost {
     const card = this.decisionCards().find(row => row.id === id)
     if (card === undefined) return { ok: false, code: 'stale', error: 'that decision is no longer waiting: it was decided, or its ticket moved on' }
     // The owner's files, staged by the right bar like a request's (C8): reference lines, added below the decision.
-    const lines = files === undefined || files === null ? [] : Array.isArray(files) ? files.map(f => String(f).trim()) : [String(files)]
-    if (lines.length > DECISION_FILES_MAX) return { ok: false, code: 'files', error: `a decision carries at most ${String(DECISION_FILES_MAX)} files` }
-    const attached: DecisionFile[] = []
-    for (const line of lines) {
-      const ref = parseFileRef(line)
-      if (ref === undefined) return { ok: false, code: 'files', error: 'each file must be an "[A2A file] v1 …" reference line' }
-      attached.push({ sha256: ref.sha256, size: ref.size, name: ref.name, ref: line })
-    }
+    const parsedFiles = decisionFiles(files)
+    if (!parsedFiles.ok) return parsedFiles
+    const attached = parsedFiles.files
     const words = typeof note === 'string' ? note.trim() : ''
     let chosen: string
     if (how === 'approve') {
@@ -668,6 +695,8 @@ export class SuperagentHost {
       if (chosen.startsWith('批准')) this.grantTool(card.by)
       return { ok: true, granted: chosen.startsWith('批准') }
     }
+    // Design outbound-requests O4: the decision sends, or not; the result reaches the ticket as a note.
+    if (card.source === 'outbound') { this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored); void this.outbound.decided(card.id, chosen === OUTBOUND_APPROVE, this.settingsValue.canvas ?? '', ticketId => this.store.tickets.get(ticketId)?.title); return { ok: true, approved: chosen === OUTBOUND_APPROVE } }
     if (card.ticketId !== undefined) {
       const out = this.answer(card.ticketId, answer)
       if (!out.ok) return out
@@ -952,7 +981,7 @@ export class SuperagentHost {
       if (entry.delivered) continue
       const open = this.store.tickets.list().filter(t => !t.ended)
       const requeued = new Set(entry.candidate.triggers.filter(t => this.store.triggers.disposition(t.id)?.requeued === true).map(t => t.id))
-      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue, open, requeued, [...this.teamCardLines(), ...this.promptCardLines('communication')]))) return
+      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue, open, requeued, [...this.teamCardLines(), ...this.yglRouterLines(router), ...this.promptCardLines('communication')]))) return
       entry.delivered = true
       try { this.engine.candidateDelivered(evalId) } catch (error) { this.d.logger.warn('superagent: candidate %s delivered but not recorded: %s', evalId, String(error)) }
     }
@@ -1145,6 +1174,7 @@ export class SuperagentHost {
       ...(this.prs.problem !== undefined ? { pullRequestProblem: this.prs.problem } : {}),
       ...(this.issues.problem !== undefined ? { githubIssuesProblem: this.issues.problem } : {}),
       reviews: this.reviews.list(),
+      outbound: this.outbound.list(),
       executor: { canvas: this.settingsValue.canvas ?? null, members: this.settings.members, remoteMembers: this.settings.remoteMembers, bindings: this.executor.list() },
       ...(this.settingsValue.serves !== undefined ? { serves: this.settingsValue.serves } : {}),
       ...(this.store.loadError !== undefined ? { error: this.store.loadError } : {}),

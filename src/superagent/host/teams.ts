@@ -10,7 +10,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { SuperagentHost, type SuperagentHostDeps } from './index.ts'
-export { ensureTeamYglHome } from './ygl-home.ts'
+export { ensureTeamYglHome, ensureTeamYglProject } from './ygl-home.ts'
 
 const TEAM_ID = /^[0-9a-f]{8}$/
 
