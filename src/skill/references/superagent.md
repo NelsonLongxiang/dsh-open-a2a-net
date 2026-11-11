@@ -91,7 +91,7 @@ The owner can talk to a member or an observer directly in its own session. Treat
 
 ## Schedules
 
-The router, members and observers have DSH's schedule tools (`schedule_create`, `schedule_edit`, `schedule_list`, `schedule_view`) for reminders and follow-ups in their own session. Only `target: this_session` is allowed; `new_once` and `new` are refused, because they would open sessions outside the team. A scheduled prompt is the session's own text, never the owner's: it cannot open a ticket for the owner or approve a rule change.
+The router, members and observers have DSH's schedule tools for reminders and follow-ups in their own session: `schedule_create`, `schedule_edit`, `schedule_list`, `schedule_view` on DSH 0.2.2, and `schedule_create`, `schedule_list`, `schedule_update`, `schedule_delete` on DSH 0.2.1. On 0.2.2, only `target: this_session` is allowed; `new_once` and `new` are refused, because they would open sessions outside the team. On 0.2.1 there is no target: a task always belongs to the session that made it. A scheduled prompt is the session's own text, never the owner's: it cannot open a ticket for the owner or approve a rule change.
 
 ## Reading where work stands
 

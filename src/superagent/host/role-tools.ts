@@ -32,9 +32,12 @@ export const OBSERVER_PRESET = 'superagent-observer'
 
 /**
  * DSH's schedule tools, for each role's own session (owner 2026-11-10): reminders and follow-ups it keeps for itself. A target
- * other than `this_session` would open new sessions outside the team, so the guard refuses it.
+ * other than `this_session` would open new sessions outside the team, so the guard refuses it. Two generations of the tool are
+ * in use: DSH 0.2.2 has create/edit/list/view and a required `target`; DSH 0.2.1 has create/list/update/delete, no `target`
+ * at all, and binds every task to the calling session (a 0.2.1 host, 2026-11-11). Both sets are listed; a session sees the
+ * ones its DSH registers.
  */
-export const SCHEDULE_TOOLS: readonly string[] = ['schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view']
+export const SCHEDULE_TOOLS: readonly string[] = ['schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view', 'schedule_update', 'schedule_delete']
 
 /** Read-only and about the session itself: which identity and team it is (owner 2026-11-10). */
 export const SELF_TOOLS: readonly string[] = ['a2a_whoami']
@@ -71,11 +74,12 @@ export function roleTools(role: Role): readonly string[] {
 
 /** Why a schedule call would reach beyond the calling session, or undefined when it stays in it. */
 export function scheduleTargetRefusal(name: string, args: unknown): string | undefined {
-  if (name !== 'schedule_create' && name !== 'schedule_edit') return undefined
+  if (!name.startsWith('schedule_')) return undefined
   const target = args !== null && typeof args === 'object' ? (args as { target?: unknown }).target : undefined
-  // An edit without a target keeps the one the task has, which a team session could only have made this_session.
-  if (name === 'schedule_edit' && target === undefined) return undefined
-  return target === 'this_session' ? undefined : `[superagent-role-tools] a team session schedules only for itself: target must be this_session, not ${String(target)} (a new session would sit outside the team)`
+  // No target: DSH 0.2.1 has none and binds the task to the calling session; on 0.2.2 create requires one, so DSH refuses the
+  // call itself; an edit without one keeps the task's, which a team session could only have made this_session.
+  if (target === undefined || target === 'this_session') return undefined
+  return `[superagent-role-tools] a team session schedules only for itself: target must be this_session, not ${String(target)} (a new session would sit outside the team)`
 }
 
 /** Why a role session may not call a tool, or undefined when it may. */

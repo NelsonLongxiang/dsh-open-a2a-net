@@ -5,6 +5,22 @@
 
 > 2026-11-10（#569）：预览版从 npm 回读、核对通过后，立即单独提交一次「记录已发布」：把该版本一节的标题改成「已发布到 npm 的 preview 标签」，并写上状态行（标签指向的提交、npm 发布时间、shasum、integrity、回读结果）。不要等到下一版发版时才顺手改。
 
+## 0.8.1-preview.8（预览版候选，待评审，未发布）
+
+- 基线：next/0.8 合入 master 后的合并提交（候选提交在发版 PR 里写明）。相对已发布的 0.8.1-preview.7 有下列改动，都是 DSH 版本兼容修复。
+- 升级、回退照 [0.8.1 升级检查](ops/0.8.1-upgrade-check.md)。
+
+### 修复
+
+- 在 DSH 0.2.1 上也能用定时工具（#579）：DSH 0.2.1 的定时工具是 `schedule_create` / `schedule_list` / `schedule_update` / `schedule_delete`，没有 `target` 参数，任务固定属于调用的会话；DSH 0.2.2 是 `schedule_create` / `schedule_edit` / `schedule_list` / `schedule_view`，`target` 必填。此前团队会话的守卫要求 `target: this_session`，在 0.2.1 上每次创建都被拒，`update` / `delete` 也被隐藏。现在不带 `target` 放行，显式写其他 target 仍拒绝，两代的工具名都在角色清单里。
+- `a2a-network` 技能能加载了（#580、#581）：0.8.1-preview.4 起技能能出现在列表里，但每次加载都报 `loaded skill "a2a-network" source must be a string`，DSH 0.2.1 和 0.2.2 都是如此。注册时补上了 DSH 要求的 `source`。
+
+### 本版已披露限制
+
+- 0.8.1-preview.7 一节列出的限制仍然适用。
+- 定时工具在 DSH 0.2.2 的测试机上验证过（成员建、列、查本会话任务）；DSH 0.2.1 上没有在测试机复现，验收方法：不带 `target` 创建，`schedule_list` 读回 id，`schedule_update` 后 id 不变，`schedule_delete` 后列表里没有。
+- 技能加载在 DSH 0.2.2 的测试机上验证过（修复前报错、修复后返回技能正文）。
+
 ## 0.8.1-preview.7（预览版，已发布到 npm 的 preview 标签）
 
 - 状态（2026-11-10）：标签 `v0.8.1-preview.7` 指向 1515f8b（发版 PR #577）。2026-11-10T17:06:55Z 发布到 npmjs，dist-tag 为 `preview`，`latest` 仍是 0.7.0。shasum `7bf03aabf1e620a775c7ca071f44691c6a2ac32a`，integrity `sha512-Gf/8UblYfXdIzPcx130WfJ648iqKZNsi6dOGFxxN1gbJ04EGNpFzvGaqztIM+zNjz+rTzQu8KfuLwiMFxx5rjQ==`。从 npmjs 回读的包与审计过的包逐字节相同。GitHub Release 为 prerelease。未发布到 Gitea。
