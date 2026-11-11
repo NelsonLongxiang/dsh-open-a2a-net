@@ -108,6 +108,21 @@ describe('P3-5 · the first message is the one formal receipt; later ones are ne
     expect(g.runs.at(-1)!.slice(0, 7)).toEqual(['a2a-net', 'route', 'dsh/aaaa1111', '--task', `a2a-${key('reply:9')}`, '--context', 'task-2'])
   })
 
+  it('market N1d: the question carries its answers and the recommended one as --options / --default', async () => {
+    const f = fake(cli())
+    f.tickets.set('tk-1', { id: 'tk-1', attention: { id: 'a1' } })
+    await sendReply(f.ctx, f.commands, message({ id: key('attention-reply', 'a1'), ticketId: 'tk-1', text: '问候语用哪种风格？' }), at(T0), { choices: { options: ['正式', '口语', '俏皮'], recommended: '口语' } })
+    const run = f.runs.at(-1)!
+    expect(run.slice(run.indexOf('--options'), run.indexOf('--options') + 4)).toEqual(['--options', '正式|口语|俏皮', '--default', '口语'])
+    // An answer with | cannot ride the switch; a recommendation that is not among the answers is not sent.
+    const g = fake(cli())
+    g.tickets.set('tk-1', { id: 'tk-1', attention: { id: 'a1' } })
+    await sendReply(g.ctx, g.commands, message({ id: key('attention-reply', 'a1'), ticketId: 'tk-1', text: 'q' }), at(T0), { choices: { options: ['a|b', 'c'], recommended: 'z' } })
+    const r2 = g.runs.at(-1)!
+    expect(r2.slice(r2.indexOf('--options'), r2.indexOf('--options') + 2)).toEqual(['--options', 'c'])
+    expect(r2).not.toContain('--default')
+  })
+
   it('a caller from this host session is rechecked on the local face', async () => {
     const f = fake(cli())
     await sendReply(f.ctx, f.commands, message({}, { caller: 'dsh/01234567', task: 'task-1', ingress: 'local' }), at(T0))

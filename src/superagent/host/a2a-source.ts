@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { EXIT_GONE, EXIT_RECEIPT_CONFLICT, HEALTH, KIND, KV, LINK_RULES, createA2aKind, replyAllowed, seatArgs, sendReply, watch, type A2aConfig, type ReceiptOutcome, type ReceiptSeat } from '../a2a-watch.ts'
+import { EXIT_GONE, EXIT_RECEIPT_CONFLICT, HEALTH, KIND, KV, LINK_RULES, createA2aKind, replyAllowed, seatArgs, sendReply, watch, type A2aConfig, type ReceiptOutcome, type ReceiptSeat, type SendOptions } from '../a2a-watch.ts'
 import type { Commands, Health, OutboundMessage, ReceiveResult, SourceContext, TicketView, Trigger } from '../source-types.ts'
 
 /** The packaged CLI, from both src/superagent/host and lib/superagent/host. */
@@ -50,6 +50,8 @@ export interface A2aSourceDeps {
   readonly resultPending?: (ticketId: string, task: string) => boolean
   /** market N1c: the seat a ticket's receipts name as the one that took it up (its member, else the router). */
   readonly seatOf?: (ticketId: string) => ReceiptSeat | undefined
+  /** market N1d: the answers a ticket's open question offers (from the member's question report) and the recommended one. */
+  readonly choicesOf?: (ticketId: string) => SendOptions['choices']
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
   /** Mailbox poll interval in seconds (a2a-watch default 15 here); tests shorten it. */
   readonly pollSeconds?: number
@@ -280,7 +282,8 @@ export class A2aSource {
     const task = message.channel.address.task
     const hold = task !== undefined && message.ticketId !== undefined && this.d.resultPending?.(message.ticketId, task) === true
     const by = message.ticketId !== undefined ? this.d.seatOf?.(message.ticketId) : undefined
-    if (!hold && options.outcome === undefined && by === undefined) return await this.kindValue.channel.send({ commands: this.context.commands }, message)
-    return await sendReply(this.context, this.context.commands, message, undefined, { ...(hold ? { holdReceipt: true } : {}), ...(by !== undefined ? { by } : {}), ...options })
+    const choices = message.ticketId !== undefined ? this.d.choicesOf?.(message.ticketId) : undefined
+    if (!hold && options.outcome === undefined && by === undefined && choices === undefined) return await this.kindValue.channel.send({ commands: this.context.commands }, message)
+    return await sendReply(this.context, this.context.commands, message, undefined, { ...(hold ? { holdReceipt: true } : {}), ...(by !== undefined ? { by } : {}), ...(choices !== undefined ? { choices } : {}), ...options })
   }
 }

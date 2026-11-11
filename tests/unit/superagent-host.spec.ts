@@ -1223,3 +1223,25 @@ describe('a remote member listed as a bot is a caller, not a worker (market on t
     await h.stop()
   })
 })
+
+describe('market N1d: a member\'s question carries its answers to the requester', () => {
+  it('choicesOf gives the options and the recommendation of the card the question report raised', async () => {
+    const caller = { caller: 'market/0123456789abcdef' }
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const host = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home: mkdtempSync(join(tmpdir(), 'sa-choices-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1', runCli: async args => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' })
+    expect(host.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [caller.caller] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { host.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const channel = { source: 'a2a', thread: 'a2a:ctx-q', address: { caller: caller.caller, task: 'direct-000000000009', context: 'ctx-q' } }
+    host.engine.receive({ ...wb('9', 'ctx-q'), source: 'a2a', threads: [{ source: 'a2a', id: 'ctx-q' }], actor: { source: 'a2a', id: caller.caller }, human: false, channel, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: channel.address.task } })
+    host.pass()
+    const routed = routeItem(host, { trigger_id: '9', kind: 'accept', title: 'greet', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    await settle()
+    expect(host.choicesOf(routed.ticket_id)).toBeUndefined()
+    expect(host.report('session-m', { state: 'waiting', summary: '等发起方选风格', question: '问候语用哪种风格？', decision: { level: 'P1', options: ['正式', '口语', '俏皮'], recommended: '口语' } })).toMatchObject({ ok: true })
+    await settle()
+    expect(host.choicesOf(routed.ticket_id)).toEqual({ options: ['正式', '口语', '俏皮'], recommended: '口语' })
+    await host.stop()
+  })
+})

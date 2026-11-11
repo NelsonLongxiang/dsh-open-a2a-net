@@ -423,6 +423,16 @@ export interface SendOptions {
   readonly outcome?: ReceiptOutcome
   /** market N1c: the seat that took the work up, carried on the formal receipt as `--by`. */
   readonly by?: ReceiptSeat
+  /** market N1d: the answers a ticket's question offers and the recommended one, carried as `--options` / `--default`. */
+  readonly choices?: { readonly options: readonly string[]; readonly recommended?: string }
+}
+
+/** The receipt switches that carry a question's answers (an answer with `|` cannot ride the switch and is left out). */
+export const choiceArgs = (choices: SendOptions['choices']): string[] => {
+  const options = (choices?.options ?? []).map(o => o.replace(/\s+/g, ' ').trim()).filter(o => o !== '' && !o.includes('|') && o.length <= 200).slice(0, 6)
+  if (options.length === 0) return []
+  const fallback = choices?.recommended !== undefined && options.includes(choices.recommended.trim()) ? choices.recommended.trim() : undefined
+  return ['--options', options.join('|'), ...(fallback !== undefined ? ['--default', fallback] : [])]
 }
 
 /** market N1c: who took the work up (a seat id, its name), as a receipt's `by`. */
@@ -475,7 +485,7 @@ export async function sendReply(ctx: SourceContext, commands: Commands, message:
     const first = questionId === undefined && options.holdReceipt !== true && stamps(ctx, KV.answered)[task] === undefined
     if (first && !receiptable(task)) return gone(`Task ${task} cannot carry a receipt (its id is not a CLI task id); the reply was not sent`)
     const args = questionId !== undefined
-      ? ['receipt', task, '--to', caller, '--attention', '--question-id', questionId, ...seatArgs(options.by), '--json', '--exit-class', '--', text.replace(/\s+/g, ' ').trim().slice(0, 2000)]
+      ? ['receipt', task, '--to', caller, '--attention', '--question-id', questionId, ...choiceArgs(options.choices), ...seatArgs(options.by), '--json', '--exit-class', '--', text.replace(/\s+/g, ' ').trim().slice(0, 2000)]
       : first
       ? ['receipt', task, '--to', caller, ...(attention ? ['--attention'] : ['--outcome', options.outcome ?? receiptOutcome(ticket)]), ...seatArgs(options.by), '--json', '--exit-class', '--', text]
       : ['route', caller, '--task', `${LOOP_PREFIX}${key(message.id)}`, '--context', context ?? task, '--json', '--exit-class', '--', text]
