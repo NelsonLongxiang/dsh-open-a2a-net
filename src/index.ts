@@ -2113,7 +2113,7 @@ export function apply(ctx: Context, config: Config): void {
     ctx.effect(() => { superagentTeams!.start(); void ensureTeamYglHome({ logger }); return () => { void superagentTeams!.stop() } }, 'a2a: superagent engine passes')
     registerSuperagentTools(ctx, id => superagentTeams!.ofSession(id))
     // A member's turn ending is the executor's turn-end fact (PR-C1).
-    ctx.on('agent/status', payload => { if (payload.status === 'idle') superagentTeams!.ofSession(String(payload.agent.id))?.memberIdle(String(payload.agent.id)) })
+    ctx.on('agent/status', payload => { superagentRoleTools.sync(payload.agent as unknown as RoleAgent); if (payload.status === 'idle') superagentTeams!.ofSession(String(payload.agent.id))?.memberIdle(String(payload.agent.id)) })
     // A failed turn is retried or fails the ticket for a person (upstream); without this it read as still working.
     ctx.on('agent/error', ({ agent, error }) => { superagentTeams!.ofSession(String(agent.id))?.memberFailed(String(agent.id), error) })
     // PR-F: an Input counts as read once the member's session takes the message carrying it into its history.

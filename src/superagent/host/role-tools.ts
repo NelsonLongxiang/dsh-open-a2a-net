@@ -145,7 +145,8 @@ const PARENT_DEPTH = 8
 
 export class RoleTools {
   /** Restrictions in force, by session id: the role they were made for and their disposer. */
-  private readonly applied = new Map<string, { role: Role | undefined; key: string; dispose: () => void }>()
+  private readonly applied = new Map<string, { role: Role | undefined; key: string; dispose: () => void; allow?: readonly string[] }>()
+  private readonly warnedShort = new Set<string>()
 
   constructor(private readonly d: RoleToolsDeps) {}
 
@@ -185,7 +186,10 @@ export class RoleTools {
     const granted = role === undefined ? [] : (this.d.grantedOf?.(id) ?? []).filter(name => grantableTool(role, name))
     const key = granted.join(',')
     const current = this.applied.get(id)
-    if (current !== undefined && current.role === role && current.key === key) return
+    // A restriction made while some of this plugin's own tools were not yet visible in the session's scope (a session restored
+    // as the host starts) would hide them for good, since nothing about the role changed (a router left without superagent_*
+    // after a restart, 2026-11-11). Such a restriction is made again on the next sync, which every turn start asks for.
+    if (current !== undefined && current.role === role && current.key === key && !this.short(role, current.allow)) return
     if (current !== undefined) { this.applied.delete(id); try { current.dispose() } catch { /* the scope is gone */ } }
     // Runs for every session now, in `agent/created`: a context that has not injected the tools service throws on the read.
     let tools: NonNullable<RoleAgent['ctx']>['tools']
@@ -199,7 +203,13 @@ export class RoleTools {
     if (scope === undefined) { this.d.logger.warn('superagent: no tool scope for %s; its tools are guarded, not hidden', id); return }
     const allow = [...roleTools(role), ...granted].filter(name => { try { return tools.get(name, scope) !== undefined } catch { return false } })
     if (allow.length === 0) return
-    try { this.applied.set(id, { role, key, dispose: tools.restrict({ allow }) }) } catch (error) { this.d.logger.warn('superagent: tools of %s not restricted: %s', id, String(error)) }
+    if (this.short(role, allow)) { if (!this.warnedShort.has(id)) { this.warnedShort.add(id); this.d.logger.warn('superagent: %s (%s) does not see %s yet; its tools are made again at its next turn', id, role, roleTools(role).filter(name => TEAM_TOOLS.includes(name) && !allow.includes(name)).join(',')) } } else this.warnedShort.delete(id)
+    try { this.applied.set(id, { role, key, allow, dispose: tools.restrict({ allow }) }) } catch (error) { this.d.logger.warn('superagent: tools of %s not restricted: %s', id, String(error)) }
+  }
+
+  /** Whether a role's restriction leaves out any of this plugin's own team tools, which every role session must see. */
+  private short(role: Role | undefined, allow: readonly string[] | undefined): boolean {
+    return role !== undefined && allow !== undefined && roleTools(role).some(name => TEAM_TOOLS.includes(name) && !allow.includes(name))
   }
 
   /** A session with no role: the names its scope has of the team's tools come off its list. */
