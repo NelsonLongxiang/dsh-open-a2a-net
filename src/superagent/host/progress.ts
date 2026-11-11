@@ -31,6 +31,9 @@ export interface ProgressDeps {
   readonly queueAhead: (ticketId: string) => number | undefined
   /** Whether the request's formal receipt already went out (no progress after it). */
   readonly answered: (task: string) => boolean
+  /** superagent-split: a part's parent (a part sends no steps of its own) and a parent's parts. */
+  readonly parentOf?: (ticketId: string) => string | undefined
+  readonly splitView?: (ticketId: string) => { tickets: ProgressTicket[] } | undefined
   readonly load: () => Record<string, Sent> | undefined
   readonly save: (value: Record<string, Sent>) => void
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
@@ -62,19 +65,23 @@ export class ProgressReceipts {
     const due: Array<{ task: string; address: Record<string, string>; step: Parameters<A2aSource['progress']>[1]; record: Sent }> = []
     const tickets = this.d.store.tickets.list()
     for (const ticket of tickets) {
-      if (ticket.ended) continue
+      if (ticket.ended || this.d.parentOf?.(ticket.id) !== undefined) continue
       const trigger = this.d.store.triggers.get(ticket.origin.triggerId)
       const address = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel?.address : undefined
       const task = address?.task
       if (address === undefined || task === undefined || this.gone.has(task) || this.d.answered(task)) continue
-      const state = progressState(ticket)
+      // A split parent stands where its parts stand: blocked or waiting if one is, else working.
+      const parts = this.d.splitView?.(ticket.id)?.tickets
+      const state = parts !== undefined
+        ? (parts.some(p => p.state === 'blocked') ? 'blocked' : parts.some(p => p.state === 'waiting') ? 'waiting' : 'working')
+        : progressState(ticket)
       if (state === undefined) continue
       const by = this.d.seatOf(ticket.id)
       const report = [...ticket.assignments].reverse().find(a => a.report !== undefined)?.report
       const summary = (report?.summary ?? ticket.title).replace(/\s+/g, ' ').trim().slice(0, 400)
       const ahead = state === 'queued' ? this.d.queueAhead(ticket.id) : undefined
       // N2b: the tickets this request became — every ticket accepted from its trigger.
-      const became: ProgressTicket[] = tickets.filter(t => t.origin.triggerIds.includes(ticket.origin.triggerId)).slice(0, 16).map(t => {
+      const became: ProgressTicket[] = parts !== undefined ? parts.slice(0, 16) : tickets.filter(t => t.origin.triggerIds.includes(ticket.origin.triggerId)).slice(0, 16).map(t => {
         const s = t.ended ? 'ended' as const : (progressState(t) ?? 'working')
         const seat = this.d.seatOf(t.id)?.seat
         return { id: t.id, title: t.title.slice(0, 200), ...(seat !== undefined ? { seat } : {}), state: s, ...(t.ended ? { outcome: t.ended.outcome } : {}) }

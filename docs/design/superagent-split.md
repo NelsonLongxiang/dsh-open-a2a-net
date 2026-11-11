@@ -1,6 +1,6 @@
 # superagent: the router splits a request into parts when the request asks for it
 
-Status: proposed, 2026-11-11.
+Status: implemented, 2026-11-11.
 
 - **Owner ruling (via the session, 2026-11-11):** the router may split a request **only when the request explicitly asks for parts**.
 - **Recommendations the owner left to the review seat, adopted here:**

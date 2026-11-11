@@ -19,6 +19,8 @@ import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candida
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
 import { ProgressReceipts } from './progress.ts'
+import { SplitBook } from './split.ts'
+import { progressState } from './progress.ts'
 import { credentialAccess, redactedPreview, type CredentialKind } from './credential-audit.ts'
 import { RosterReports } from './roster.ts'
 import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
@@ -93,6 +95,8 @@ export class SuperagentHost {
   /** What the team owes A2A requesters (host/receipts.ts). */
   private readonly receipts: A2aReceipts
   private readonly progress: ProgressReceipts
+  /** docs/design/superagent-split.md: split parents and their children. */
+  readonly splits: SplitBook
   private readonly roster: RosterReports
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
   private readonly sending = new Set<string>()
@@ -113,8 +117,10 @@ export class SuperagentHost {
       request: candidate => { this.candidates.set(candidate.evalId, { candidate, delivered: false }); queueMicrotask(() => this.flushCandidates()) },
       release: evalId => { this.candidates.delete(evalId) },
     }
+    this.splits = new SplitBook(join(dir, 'split.json'))
     const executor = this.executor = new MemberExecutor({
       path: join(dir, 'executor.json'), members: () => this.pool(),
+      held: ticketId => this.splitHeld(ticketId),
       repoOf: member => this.settingsValue.repos[member],
       memberNotes: (member, ticket) => this.memberNotes(member, ticket),
       deliver: (member, text, kind, ticketId) => this.deliverToMember(member, text, kind, ticketId), engine: () => this.engine,
@@ -159,11 +165,13 @@ export class SuperagentHost {
     this.progress = new ProgressReceipts({
       store: this.store, a2a: this.a2a, on: () => this.settingsValue.sources.a2a && this.settingsValue.progressOff !== true, nowMs: () => Date.parse(this.now()),
       seatOf: ticketId => this.seatOf(ticketId), queueAhead: ticketId => this.executor.queueAhead(ticketId), answered: task => this.a2a.answered(task),
+      parentOf: ticketId => this.splits.parentOf(ticketId), splitView: ticketId => this.splitView(ticketId),
       load: () => { try { return existsSync(progressPath) ? JSON.parse(readFileSync(progressPath, 'utf8')) as never : undefined } catch { return undefined } },
       save: value => { try { mkdirSync(dir, { recursive: true }); const tmp = `${progressPath}.tmp-${randomUUID()}`; writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 }); renameSync(tmp, progressPath) } catch (error) { d.logger.warn('superagent: progress state not saved: %s', String(error)) } },
       logger: d.logger,
     })
-    this.receipts = new A2aReceipts({ store: this.store, a2a: this.a2a, a2aOn: () => this.settingsValue.sources.a2a, now: () => this.now(), seatOf: ticketId => this.seatOf(ticketId), logger: d.logger })
+    this.receipts = new A2aReceipts({ store: this.store, a2a: this.a2a, a2aOn: () => this.settingsValue.sources.a2a, now: () => this.now(), seatOf: ticketId => this.seatOf(ticketId),
+      parentOf: ticketId => this.splits.parentOf(ticketId), splitView: ticketId => this.splitView(ticketId), logger: d.logger })
     this.prs = new PrFollower({
       path: join(dir, 'pr-follow.json'), tickets: () => this.store.tickets.list(), engine: () => this.engine, gh: d.gh ?? defaultGh,
       allowed: () => this.settingsValue.allowed.github, paused: () => this.settingsValue.paused, logger: d.logger,
@@ -439,6 +447,110 @@ export class SuperagentHost {
   private pool(): string[] { const now = this.settings; return [...now.members, ...workerRemotes(now)] }
   private memberName(id: string): string { return this.d.sessionName?.(id) ?? id }
 
+  /** A split that failed after its parent was accepted: the parent runs as an ordinary ticket after all. */
+  releaseSplit(parentId: string): void {
+    const ticket = this.store.tickets.get(parentId)
+    const latest = ticket?.assignments.at(-1)
+    if (ticket !== undefined && !ticket.ended && latest !== undefined && latest.state === 'pending') this.executor.start(ticket, latest)
+  }
+
+  /** S3: the part of a split that an answer goes to: the one with an open question, else the first still open. */
+  private splitTarget(parentId: string): string | undefined {
+    const open = this.splits.children(parentId).map(id => this.store.tickets.get(id)).filter((t): t is Ticket => t !== undefined && !t.ended)
+    return (open.find(t => t.attention !== undefined) ?? open[0])?.id
+  }
+
+  /** A ticket no member takes: a split parent, or the ticket of a request being split right now. */
+  private splitHeld(ticketId: string): boolean {
+    if (this.splits.isParent(ticketId)) return true
+    const ticket = this.store.tickets.get(ticketId)
+    return ticket !== undefined && this.splits.isSplitting(ticket.origin.triggerId)
+  }
+
+  /** S1: whether `asked` is the request's own words (whitespace aside), so a split happens only when the request asks for parts. */
+  askedIn(triggerId: string, asked: string): boolean {
+    const norm = (text: string): string => text.replace(/\s+/g, ' ').trim()
+    const words = norm(asked)
+    const trigger = this.store.triggers.get(triggerId)
+    return words.length >= 4 && trigger !== undefined && norm(trigger.text).includes(words)
+  }
+
+  /**
+   * S2: make the parts of a parent ticket. Each part is the parent's request cloned onto a thread of its own (so a part's
+   * start fans into nothing), accepted at once with the part's title and scope under the parent's rules: the router's
+   * split is the decision. A part may name its member. The parent is held from members from now on.
+   */
+  splitParent(parentId: string, asked: string, parts: ReadonlyArray<{ title: string; scope: string; member?: string }>, reason: string): { ok: true; children: string[] } | { ok: false; code: string; error: string } {
+    const parent = this.store.tickets.get(parentId)
+    const origin = parent === undefined ? undefined : this.store.triggers.get(parent.origin.triggerId)
+    if (parent === undefined || origin === undefined || parent.ended) return { ok: false, code: 'ticket', error: 'no open ticket with that id' }
+    const rules = parent.mandate.basis.rules ?? []
+    const children: string[] = []
+    const at = this.now()
+    for (const [index, part] of parts.entries()) {
+      const thread = origin.threads[0]!
+      const child = { ...origin, id: `split-${parentId.slice(0, 8)}-${String(index + 1)}-${randomUUID().slice(0, 8)}`, at,
+        threads: [{ source: thread.source, id: `${thread.id}#part${String(index + 1)}` }],
+        text: `[part ${String(index + 1)}/${String(parts.length)} of «${parent.title}»] ${part.scope}`, meta: { ...origin.meta, splitOf: parentId } }
+      try {
+        const received = this.engine.receive(child as Trigger)
+        if (received !== 'stored') return { ok: false, code: 'part', error: `part ${String(index + 1)} was not taken in (${received})` }
+        const decision = this.engine.decide(child.id, { kind: 'accept', title: part.title, scope: part.scope, reason, ...(rules.length > 0 ? { rules: [...rules] } : {}) } as never)
+        if (decision.ticketId === undefined) return { ok: false, code: 'part', error: `part ${String(index + 1)} opened no ticket` }
+        children.push(decision.ticketId)
+        if (part.member !== undefined) this.executor.setMember(decision.ticketId, part.member)
+      } catch (error) { return { ok: false, code: 'part', error: `part ${String(index + 1)}: ${String(error)}` } }
+    }
+    this.splits.record(parentId, children, asked, at)
+    this.d.logger.info('superagent: ticket %s split into %s', parentId, children.join(', '))
+    queueMicrotask(() => this.pass())
+    return { ok: true, children }
+  }
+
+  /**
+   * S4: a split parent whose parts have all ended ends too, with one combined report — \`ready\` when every part completed,
+   * else \`failed\` part by part and then stopped (its receipt says failed).
+   */
+  private settleSplits(): void {
+    for (const parentId of this.splits.parentIds()) {
+      const parent = this.store.tickets.get(parentId)
+      if (parent === undefined || parent.ended) continue
+      const children = this.splits.children(parentId).map(id => this.store.tickets.get(id))
+      if (children.length === 0 || children.some(child => child === undefined || child.ended === undefined)) continue
+      const done = children.every(child => child!.ended!.outcome === 'completed' || child!.ended!.outcome === 'merged')
+      const lines = children.map((child, index) => {
+        const seat = this.seatOf(child!.id)
+        const summary = [...child!.assignments].reverse().find(a => a.report !== undefined)?.report?.summary
+        return `${String(index + 1)}. ${child!.title} — ${seat?.name ?? seat?.seat ?? '?'}: ${child!.ended!.outcome}${summary !== undefined ? `；${summary}` : ''}`
+      })
+      const summary = clip(`${done ? '全部子项完成' : '部分完成（有子项未完成）'}：\n${lines.join('\n')}`, 3_000)
+      try {
+        if (done) this.engine.report(parentId, { state: 'ready', summary })
+        else {
+          this.splits.markFailed(parentId)
+          this.engine.report(parentId, { state: 'failed', summary })
+          this.engine.stopTicket(parentId, 'a part of the split did not complete')
+        }
+        this.d.logger.info('superagent: split ticket %s ended (%s)', parentId, done ? 'completed' : 'failed')
+      } catch (error) { this.d.logger.warn('superagent: split ticket %s not ended: %s', parentId, String(error)) }
+    }
+  }
+
+  /** S2/S4: a split parent's children as the requester sees them, and the parent's outcome once it ended. */
+  splitView(ticketId: string): { tickets: Array<{ id: string; title: string; seat?: string; state: 'queued' | 'working' | 'waiting' | 'blocked' | 'ended'; outcome?: string }>; outcome?: 'completed' | 'failed' } | undefined {
+    if (!this.splits.isParent(ticketId)) return undefined
+    const parent = this.store.tickets.get(ticketId)
+    const tickets = this.splits.children(ticketId).flatMap(id => {
+      const child = this.store.tickets.get(id)
+      if (child === undefined) return []
+      const seat = this.seatOf(id)?.seat
+      const state = child.ended ? 'ended' as const : (progressState(child) ?? 'working')
+      return [{ id, title: child.title.slice(0, 200), ...(seat !== undefined ? { seat } : {}), state, ...(child.ended ? { outcome: child.ended.outcome } : {}) }]
+    })
+    const outcome = parent?.ended === undefined ? undefined : this.splits.failed(ticketId) ? 'failed' as const : 'completed' as const
+    return { tickets, ...(outcome !== undefined ? { outcome } : {}) }
+  }
+
   /** market N1d: the answers the ticket's open question offers, from the card the member's question report raised. */
   choicesOf(ticketId: string): { options: string[]; recommended?: string } | undefined {
     const ticket = this.store.tickets.get(ticketId)
@@ -463,8 +575,10 @@ export class SuperagentHost {
       const ticket = this.store.tickets.get(ticketId)
       const origin = ticket !== undefined && !ticket.ended ? this.store.triggers.get(ticket.origin.triggerId) : undefined
       if (origin === undefined || origin.human || origin.actor.source !== trigger.actor.source || origin.actor.id !== trigger.actor.id) continue
+      // S3: a split parent takes no work; the answer goes to the part that asked (else the first open one).
+      const target = this.splits.isParent(ticketId) ? this.splitTarget(ticketId) ?? ticketId : ticketId
       try {
-        this.engine.attach(ticketId, triggerId)
+        this.engine.attach(target, triggerId)
         this.d.logger.info('superagent: %s from %s goes straight to ticket %s (light path)', triggerId, trigger.actor.id, ticketId)
         return
       } catch (error) { this.d.logger.warn('superagent: light path for %s into %s not taken: %s', triggerId, ticketId, String(error)) }
@@ -1046,6 +1160,7 @@ export class SuperagentHost {
     try { this.engine.evaluateDue() } catch (error) { this.d.logger.warn('superagent: evaluation pass failed: %s', String(error)) }
     this.flushCandidates()
     this.flushOutbox()
+    this.settleSplits()
     // Upstream: evaluation, dispatch and outbound delivery hold while paused.
     if (this.settingsValue.paused) return
     this.executor.tick()
@@ -1060,6 +1175,8 @@ export class SuperagentHost {
    * (the A2A Source then sends a reply on it as a follow-up and keeps the formal receipt for the result).
    */
   private resultPending(ticketId: string, task: string): boolean {
+    // S3: a part never sends the request's formal receipt; only its parent's end does.
+    if (this.splits.parentOf(ticketId) !== undefined) return true
     const ticket = this.store.tickets.get(ticketId)
     if (ticket === undefined || ticket.ended) return false
     const fromTask = ticket.origin.triggerIds.some(id => this.store.triggers.get(id)?.channel?.address?.task === task)

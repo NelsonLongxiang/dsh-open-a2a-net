@@ -40,6 +40,10 @@ export interface A2aReceiptsDeps {
   readonly now: () => string
   /** market N1c: the seat an acknowledgement names as the one that took the ticket up. */
   readonly seatOf?: (ticketId: string) => ReceiptSeat | undefined
+  /** superagent-split: a part's parent (a part gets no acknowledgement and no ending receipt of its own). */
+  readonly parentOf?: (ticketId: string) => string | undefined
+  /** superagent-split S4: a split parent's parts and its outcome, for its ending receipt. */
+  readonly splitView?: (ticketId: string) => { tickets: readonly unknown[]; outcome?: 'completed' | 'failed' } | undefined
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
 }
 
@@ -72,7 +76,7 @@ export class A2aReceipts {
     if (this.acknowledging || !this.d.a2aOn()) return
     const due: Array<{ task: string; ticketId: string; address: Record<string, string>; text: string }> = []
     for (const ticket of this.d.store.tickets.list()) {
-      if (ticket.ended) continue
+      if (ticket.ended || this.d.parentOf?.(ticket.id) !== undefined) continue
       const trigger = this.d.store.triggers.get(ticket.origin.triggerId)
       const address = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel?.address : undefined
       const task = address?.task
@@ -111,7 +115,7 @@ export class A2aReceipts {
     const now = Date.parse(this.d.now())
     const due: Array<{ ticket: Ticket; channel: NonNullable<Trigger['channel']>; key: string }> = []
     for (const ticket of this.d.store.tickets.list()) {
-      if (!ticket.ended) continue
+      if (!ticket.ended || this.d.parentOf?.(ticket.id) !== undefined) continue
       const trigger = this.d.store.triggers.get(ticket.origin.triggerId)
       const origin = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel : undefined
       const grace = ticket.ended.outcome === 'stopped' || ticket.ended.outcome === 'closed' ? 0 : END_RECEIPT_GRACE_MS
@@ -130,9 +134,12 @@ export class A2aReceipts {
     void (async () => {
       for (const { ticket, channel, key } of due) {
         const summary = [...ticket.assignments].reverse().find(a => a.report !== undefined)?.report?.summary
-        const text = clip(`工单「${ticket.title}」已结束（${ticket.ended!.outcome}）${summary !== undefined ? `：${summary}` : '。'} Ticket «${ticket.title}» ended (${ticket.ended!.outcome}).`, 1_000)
+        // superagent-split S4: a split parent's receipt has the combined outcome and its parts.
+        const split = key === ticket.id ? this.d.splitView?.(ticket.id) : undefined
+        const ended = split?.outcome ?? ticket.ended!.outcome
+        const text = clip(`工单「${ticket.title}」已结束（${ended}）${summary !== undefined ? `：${summary}` : '。'} Ticket «${ticket.title}» ended (${ended}).`, split !== undefined ? 3_500 : 1_000)
         try {
-          const result = await this.d.a2a.send({ id: `a2a-end:${key}`, channel, text, kind: 'notice', ticketId: ticket.id })
+          const result = await this.d.a2a.send({ id: `a2a-end:${key}`, channel, text, kind: 'notice', ticketId: ticket.id }, split !== undefined ? { ...(split.outcome !== undefined ? { outcome: split.outcome } : {}), tickets: split.tickets } : {})
           this.endReceipted.add(key)
           this.d.logger.info('superagent: ticket %s ended; its A2A request %s got the ending receipt (%s)', ticket.id, channel.address.task ?? '?', result)
         } catch (error) { this.d.logger.warn('superagent: ending receipt for ticket %s failed (retried later): %s', ticket.id, String(error)) }

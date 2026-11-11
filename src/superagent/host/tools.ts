@@ -96,6 +96,36 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
 }
 
 /**
+ * docs/design/superagent-split.md S1/S2: the router splits a request into parts, only when the request asks for them. The
+ * request is accepted as the parent (held from members, it only coordinates); each part becomes a child ticket. \`asked\`
+ * must be the request's own words that ask for parts, copied exactly.
+ */
+export function splitRequest(host: SuperagentHost, input: { trigger_id?: unknown; title?: unknown; scope?: unknown; reason?: unknown; rules?: unknown; asked?: unknown; parts?: unknown }): Record<string, JsonValue> {
+  const triggerId = str(input.trigger_id), asked = str(input.asked), reason = str(input.reason)
+  if (triggerId === undefined || asked === undefined || reason === undefined) return { ok: false, code: 'missing', error: 'split needs trigger_id, asked (the request\'s words that ask for parts, copied exactly) and reason' }
+  const raw = Array.isArray(input.parts) ? input.parts as Array<Record<string, unknown>> : []
+  if (raw.length < 2 || raw.length > 6) return { ok: false, code: 'parts', error: 'split takes 2 to 6 parts, each { title, scope, member? }' }
+  const parts: Array<{ title: string; scope: string; member?: string }> = []
+  for (const [index, part] of raw.entries()) {
+    const title = str(part?.title), scope = str(part?.scope), memberName = str(part?.member)
+    if (title === undefined || scope === undefined) return { ok: false, code: 'parts', error: `part ${String(index + 1)} needs a title and a scope` }
+    const member = memberName !== undefined ? host.resolveMember(memberName) : undefined
+    if (memberName !== undefined && member === undefined) return { ok: false, code: 'member', error: `part ${String(index + 1)}: no such member: ${memberName}. ${host.memberListLine()}` }
+    parts.push({ title, scope, ...(member !== undefined ? { member } : {}) })
+  }
+  if (!host.askedIn(triggerId, asked)) return { ok: false, code: 'not-asked', error: 'asked is not in the request: split only a request that asks for separate parts, and copy its words exactly. Otherwise accept it as one ticket.' }
+  host.splits.beginFor(triggerId)
+  try {
+    const accepted = routeItem(host, { trigger_id: triggerId, kind: 'accept', title: input.title, scope: input.scope, reason, ...(input.rules !== undefined ? { rules: input.rules } : {}) })
+    const parent = typeof accepted.ticket_id === 'string' ? accepted.ticket_id : undefined
+    if (accepted.ok !== true || parent === undefined) return accepted
+    const out = host.splitParent(parent, asked, parts, reason)
+    if (!out.ok) { host.releaseSplit(parent); return { ok: false, code: out.code, error: `${out.error}; the request was accepted as one ticket (${parent}) instead`, ticket_id: parent } }
+    return { ok: true, trigger_id: triggerId, ticket_id: parent, parts: out.children }
+  } finally { host.splits.endFor(triggerId) }
+}
+
+/**
  * The text an attention reply sends: the router's words, led by the member's question verbatim when they do not already
  * contain it — the engine checks the question against the ticket's open one, but only the text reaches the person.
  * @param text - what the router wrote.
@@ -125,6 +155,29 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     const shown = body.length > SAID_CAP ? `${body.slice(0, SAID_CAP)}… (clipped, ${String(body.length)} chars)` : body
     return [{ type: 'text' as const, text: `${title}${ok === true ? ': ok' : ' refused:'} ${shown}` }]
   }
+
+  ctx.tools.register(defineTool({
+    name: 'superagent_split',
+    description: 'Team router only, and only when a request explicitly asks for separate parts: accept it split into 2–6 parts. The request becomes the parent ticket, which only coordinates; each part is a ticket a member works on (member names one). asked is the request\'s own words that ask for parts, copied exactly — the host refuses a split it cannot find them in. The requester gets one result when every part has ended.',
+    parameters: {
+      trigger_id: { type: 'string', required: true, description: 'The candidate request.' },
+      title: { type: 'string', required: true, description: 'The parent ticket\'s title.' },
+      scope: { type: 'string', required: true, description: 'What the whole request asks for.' },
+      reason: { type: 'string', required: true, description: 'Why it is accepted and split.' },
+      asked: { type: 'string', required: true, description: 'The request\'s words that ask for separate parts, copied exactly.' },
+      rules: { type: 'array', items: { type: 'string' }, description: 'For an inferred candidate: the enabled rules it matches.' },
+      parts: { type: 'array', required: true, items: { type: 'object', additionalProperties: true }, description: 'The parts: { title, scope, member? }, 2 to 6.' },
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('superagent split', value) },
+    presentCall: args => ({ card: 'generic', title: `superagent split (${String(Array.isArray(args.parts) ? args.parts.length : 0)})`, kind: 'other', rawInput: args }),
+    execute: async (args: Record<string, unknown>, exec): Promise<Record<string, JsonValue>> => {
+      const h = asRouter(exec)
+      if (h === undefined) return { ...notRouter }
+      const out = splitRequest(h, args)
+      h.pass()
+      return out
+    },
+  }))
 
   ctx.tools.register(defineTool({
     name: 'superagent_route',
