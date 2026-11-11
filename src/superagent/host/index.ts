@@ -20,11 +20,11 @@ import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
 import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
+import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, type OutboundAsk } from './outbound.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { SettingsHistory } from './settings-history.ts'
 import { HealthReminders, HEALTH_TICK_MS, type HealthProblem } from './health-reminders.ts'
-import { DECISION_FILES_MAX, DecisionBook, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
-import { parseFileRef } from '../../blob-store.ts'
+import { DECISION_FILES_MAX, DecisionBook, decisionFiles, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
@@ -62,6 +62,7 @@ export class SuperagentHost {
   /** GitHub issues as a source of requests (design github-issues). */
   private readonly issues: IssueSource
   private readonly reviews: ReviewRequests
+  private readonly outbound: OutboundRequests
   /** Proposals to change a rule set, each set's revision and last change (design D8–D10b). */
   readonly ruleChanges: RuleChanges
   private disposeTimer: (() => void) | undefined
@@ -120,7 +121,7 @@ export class SuperagentHost {
     }
     this.a2a = new A2aSource({
       dir, homeUrl: () => d.homeUrl?.(), apiKey: () => d.apiKey?.(), enabled: () => this.settingsValue.sources.a2a,
-      receive: trigger => { this.reviews.received(trigger as unknown as Trigger); const result = this.engine.receive(trigger as unknown as Trigger); queueMicrotask(() => this.pass()); return result },
+      receive: trigger => { this.reviews.received(trigger as unknown as Trigger); this.outbound.received(trigger as unknown as Trigger); const result = this.engine.receive(trigger as unknown as Trigger); queueMicrotask(() => this.pass()); return result },
       ticket: id => this.store.tickets.get(id) as never,
       resultPending: (ticketId, task) => this.resultPending(ticketId, task),
       logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.teamSend !== undefined ? { teamSend: d.teamSend } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
@@ -145,6 +146,7 @@ export class SuperagentHost {
       () => this.decisions.open().filter(card => card.source === 'health').map(card => ({ id: card.id, ...(card.reason !== undefined ? { reason: card.reason } : {}) })),
       () => this.now(),
     )
+    this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), ask: (address, text) => this.a2a.askReview(address, text), logger: d.logger, now: () => this.now(), note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: outbound note on %s lost: %s', ticketId, String(error)) } } })
     this.reviews = new ReviewRequests({
       path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
       ask: (address, text) => this.a2a.askReview(address, text),
@@ -596,6 +598,23 @@ export class SuperagentHost {
    * owner declined is not asked about again within a day.
    * @returns what the refusal should add, for the session to read.
    */
+  /** Design outbound-requests O1, O2: a team session asks for a message to another team on a ticket; a P0 card decides it. */
+  requestOutbound(session: string, ask: OutboundAsk): Record<string, unknown> {
+    const ticket = typeof ask.ticket_id === 'string' ? this.store.tickets.get(ask.ticket_id.trim()) : undefined
+    const checked = this.outbound.check(session, ask, { role: this.toolRoleOf(session), a2aOn: this.settingsValue.sources.a2a, own: ownAddresses(this.d.handleOf, this.settingsValue.canvas, [this.settingsValue.router, ...this.pool()]),
+      ticket: ticket === undefined ? undefined : { open: !ticket.ended, title: ticket.title, holder: this.executor.list().find(b => b.ticketId === ticket.id)?.member } })
+    if (!checked.ok) return checked
+    const out = this.decisions.propose({ source: 'outbound', by: session, at: this.now(), question: `${this.memberName(session)} ${checked.question}`, ...(checked.reason !== undefined ? { reason: checked.reason } : {}), spec: { level: 'P0', options: [OUTBOUND_APPROVE, OUTBOUND_DECLINE], recommended: OUTBOUND_APPROVE } })
+    if (out.ok && out.reused !== true) this.outbound.waiting(out.id, checked.ticketId, checked.address, checked.text, session)
+    return out.ok ? { ok: true, card_id: out.id } : out
+  }
+
+  /** Design outbound-requests O3: an approver the owner named decides an outbound card it did not raise, with a reason. */
+  approverDecide(session: string, id: string, option: unknown, reason: unknown): Record<string, unknown> {
+    const checked = approverCheck({ approvers: this.settingsValue.approvers ?? [], role: this.toolRoleOf(session), card: this.decisionCards().find(row => row.id === id), session, reason })
+    return checked.ok ? this.decide(id, 'choose', option, `审批人 ${this.memberName(session)}：${checked.reason}`) : checked
+  }
+
   requestTool(session: string, role: Role, name: string, why?: string): string {
     const cls = grantClass(role), by = `${cls}:${name}`
     if (this.decisions.open().some(card => card.source === 'tool' && card.by === by)) return `A request to use ${name} is already waiting for the owner as a P0 decision card; try again after it is approved.`
@@ -647,14 +666,9 @@ export class SuperagentHost {
     const card = this.decisionCards().find(row => row.id === id)
     if (card === undefined) return { ok: false, code: 'stale', error: 'that decision is no longer waiting: it was decided, or its ticket moved on' }
     // The owner's files, staged by the right bar like a request's (C8): reference lines, added below the decision.
-    const lines = files === undefined || files === null ? [] : Array.isArray(files) ? files.map(f => String(f).trim()) : [String(files)]
-    if (lines.length > DECISION_FILES_MAX) return { ok: false, code: 'files', error: `a decision carries at most ${String(DECISION_FILES_MAX)} files` }
-    const attached: DecisionFile[] = []
-    for (const line of lines) {
-      const ref = parseFileRef(line)
-      if (ref === undefined) return { ok: false, code: 'files', error: 'each file must be an "[A2A file] v1 …" reference line' }
-      attached.push({ sha256: ref.sha256, size: ref.size, name: ref.name, ref: line })
-    }
+    const parsedFiles = decisionFiles(files)
+    if (!parsedFiles.ok) return parsedFiles
+    const attached = parsedFiles.files
     const words = typeof note === 'string' ? note.trim() : ''
     let chosen: string
     if (how === 'approve') {
@@ -681,6 +695,8 @@ export class SuperagentHost {
       if (chosen.startsWith('批准')) this.grantTool(card.by)
       return { ok: true, granted: chosen.startsWith('批准') }
     }
+    // Design outbound-requests O4: the decision sends, or not; the result reaches the ticket as a note.
+    if (card.source === 'outbound') { this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored); void this.outbound.decided(card.id, chosen === OUTBOUND_APPROVE, this.settingsValue.canvas ?? '', ticketId => this.store.tickets.get(ticketId)?.title); return { ok: true, approved: chosen === OUTBOUND_APPROVE } }
     if (card.ticketId !== undefined) {
       const out = this.answer(card.ticketId, answer)
       if (!out.ok) return out
@@ -1158,6 +1174,7 @@ export class SuperagentHost {
       ...(this.prs.problem !== undefined ? { pullRequestProblem: this.prs.problem } : {}),
       ...(this.issues.problem !== undefined ? { githubIssuesProblem: this.issues.problem } : {}),
       reviews: this.reviews.list(),
+      outbound: this.outbound.list(),
       executor: { canvas: this.settingsValue.canvas ?? null, members: this.settings.members, remoteMembers: this.settings.remoteMembers, bindings: this.executor.list() },
       ...(this.settingsValue.serves !== undefined ? { serves: this.settingsValue.serves } : {}),
       ...(this.store.loadError !== undefined ? { error: this.store.loadError } : {}),
