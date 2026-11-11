@@ -393,13 +393,15 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     options: { type: 'array', required: true, items: { type: 'string' }, description: 'The 2 to 6 choices.' },
     recommended: { type: 'string', required: true, description: 'The option you recommend, copied exactly from options.' },
     level: { type: 'string', description: 'P0 irreversible or production, P1 significant, P2 routine and easy to undo, P3 trivial. Default P1.' },
-    reason: { type: 'string', description: 'Why you recommend it, in a sentence or two.' },
+    reason: { type: 'string', required: true, description: 'Why you recommend it, in a sentence or two (required: design owner-reporting R3).' },
     files: { type: 'array', items: { type: 'string' }, description: 'Up to 16 files from your workspace the owner should look at to decide (paths relative to it). They show on the card for the owner to download.' },
   } as const
   type CardArgs = { question?: string; options?: string[]; recommended?: string; level?: string; reason?: string; files?: string[] }
   const raise = (h: SuperagentHost, source: 'router' | 'observer', by: string, args: CardArgs): Record<string, JsonValue> => {
     const spec = parseDecision(args)
     if (typeof spec === 'string') return { ok: false, code: 'decision', error: spec }
+    // Design owner-reporting R3: a card the owner decides carries the reason for its recommendation.
+    if (typeof args.reason !== 'string' || args.reason.trim() === '') return { ok: false, code: 'reason', error: 'a decision card needs reason: why you recommend that option, in a sentence or two' }
     const staged = h.stageCardFiles(by, args.files)
     if (!staged.ok) return json(staged) as Record<string, JsonValue>
     return json(h.proposeDecision(source, by, String(args.question ?? ''), spec, args.reason, staged.files)) as Record<string, JsonValue>
