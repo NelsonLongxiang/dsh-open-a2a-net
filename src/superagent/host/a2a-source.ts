@@ -278,7 +278,7 @@ export class A2aSource {
    * a notice — goes out as a follow-up in the same context, and the requester's row stays owed until the result settles
    * it. Whether or not the acknowledgement has gone out yet: it is sent asynchronously and may come second.
    */
-  async send(message: OutboundMessage, options: { outcome?: ReceiptOutcome } = {}): Promise<'sent' | 'gone'> {
+  async send(message: OutboundMessage, options: { outcome?: ReceiptOutcome; tickets?: readonly unknown[] } = {}): Promise<'sent' | 'gone'> {
     const task = message.channel.address.task
     const hold = task !== undefined && message.ticketId !== undefined && this.d.resultPending?.(message.ticketId, task) === true
     const by = message.ticketId !== undefined ? this.d.seatOf?.(message.ticketId) : undefined

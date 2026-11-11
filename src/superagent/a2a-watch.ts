@@ -423,6 +423,8 @@ export interface SendOptions {
   readonly outcome?: ReceiptOutcome
   /** market N1c: the seat that took the work up, carried on the formal receipt as `--by`. */
   readonly by?: ReceiptSeat
+  /** superagent-split S4: a split request's parts, carried on its formal receipt as `--tickets`. */
+  readonly tickets?: readonly unknown[]
   /** market N1d: the answers a ticket's question offers and the recommended one, carried as `--options` / `--default`. */
   readonly choices?: { readonly options: readonly string[]; readonly recommended?: string }
 }
@@ -487,7 +489,7 @@ export async function sendReply(ctx: SourceContext, commands: Commands, message:
     const args = questionId !== undefined
       ? ['receipt', task, '--to', caller, '--attention', '--question-id', questionId, ...choiceArgs(options.choices), ...seatArgs(options.by), '--json', '--exit-class', '--', text.replace(/\s+/g, ' ').trim().slice(0, 2000)]
       : first
-      ? ['receipt', task, '--to', caller, ...(attention ? ['--attention'] : ['--outcome', options.outcome ?? receiptOutcome(ticket)]), ...seatArgs(options.by), '--json', '--exit-class', '--', text]
+      ? ['receipt', task, '--to', caller, ...(attention ? ['--attention'] : ['--outcome', options.outcome ?? receiptOutcome(ticket)]), ...seatArgs(options.by), ...(!attention && options.tickets !== undefined && options.tickets.length > 0 ? ['--tickets', JSON.stringify(options.tickets.slice(0, 16))] : []), '--json', '--exit-class', '--', text]
       : ['route', caller, '--task', `${LOOP_PREFIX}${key(message.id)}`, '--context', context ?? task, '--json', '--exit-class', '--', text]
     try {
       await commands.run(PROGRAM, args)
