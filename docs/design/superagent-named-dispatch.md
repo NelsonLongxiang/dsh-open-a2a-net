@@ -60,7 +60,7 @@ Status: implemented, 2026-11-11.
 ### N5. Rework returns
 
 - **Accepted at once.** A believed `rework` request is accepted by the host without a router turn, as a split part is:
-  - title 「打回重做：<the returned ticket's title>」;
+  - title 「打回重做：<the first request's title>」. `of` is the delivery that was returned: after a rework, that is the rework ticket (market's choice, so the work goes back to whoever did it last). The title follows the chain to the first request instead of nesting 「打回重做：打回重做：…」;
   - scope = the request's text (the dispatch line removed);
   - the returned ticket's rules.
 - **It is always a new ticket.** It never reopens or attaches to the returned one.

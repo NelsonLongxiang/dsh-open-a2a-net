@@ -48,7 +48,11 @@ export function parseDispatch(delivered: string): { line: DispatchLine; body: st
 
 interface SeatRow { member: string; left?: string }
 interface Hold { wanted: string; why: string; asked?: string; answered?: 'wait'; choosing?: true }
-interface Stored { seats: Record<string, SeatRow>; named: Record<string, string>; holds: Record<string, Hold> }
+/** `reworks`: a rework ticket's original title (the first request's), so a return of a return is titled after that one. */
+interface Stored { seats: Record<string, SeatRow>; named: Record<string, string>; holds: Record<string, Hold>; reworks?: Record<string, string> }
+/** How many rework tickets' original titles are kept. */
+const REWORKS_CAP = 500
+const REWORK_TITLE = '打回重做'
 
 export interface NamedDeps {
   readonly path: string
@@ -80,7 +84,7 @@ export class NamedDispatch {
     try {
       if (existsSync(d.path)) {
         const raw = JSON.parse(readFileSync(d.path, 'utf8')) as Partial<Stored>
-        this.data = { seats: raw.seats ?? {}, named: raw.named ?? {}, holds: raw.holds ?? {} }
+        this.data = { seats: raw.seats ?? {}, named: raw.named ?? {}, holds: raw.holds ?? {}, ...(raw.reworks !== undefined ? { reworks: raw.reworks } : {}) }
       }
     } catch { this.data = { seats: {}, named: {}, holds: {} } }
   }
@@ -305,7 +309,10 @@ export class NamedDispatch {
     const originId = key('a2a', trigger.actor.id, of)
     const returned = this.d.tickets().filter(t => t.origin.triggerIds.includes(originId)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
     const body = parseDispatch(trigger.text)?.body ?? ''
-    const title = (returned !== undefined ? `打回重做：${returned.title}` : '打回重做').slice(0, 200)
+    // `of` is the delivery that was returned — after a rework, the rework ticket. The title names the first request, not a
+    // chain: the original title a host rework recorded, else the returned ticket's title without any 打回重做： prefix.
+    const root = returned === undefined ? undefined : this.data.reworks?.[returned.id] ?? returned.title.replace(new RegExp(`^(${REWORK_TITLE}：)+`), '')
+    const title = (root !== undefined && root !== '' ? `${REWORK_TITLE}：${root}` : REWORK_TITLE).slice(0, 200)
     const rules = returned?.mandate.basis.rules ?? []
     let ticketId: string | undefined
     try {
@@ -314,6 +321,10 @@ export class NamedDispatch {
     } catch (error) { this.d.logger.warn('superagent: rework return %s not taken in: %s', triggerId, String(error)); return false }
     if (ticketId === undefined) return false
     this.d.logger.info('superagent: rework return of %s accepted as ticket %s', of, ticketId)
+    if (root !== undefined && root !== '') {
+      this.data.reworks = Object.fromEntries([...Object.entries(this.data.reworks ?? {}), [ticketId, root]].slice(-REWORKS_CAP))
+      this.save()
+    }
     const wanted = this.believed(trigger, NAMED_CAPABILITY)?.for
     if (wanted !== undefined) { this.accepted(ticketId, wanted); return true }
     const last = returned !== undefined ? this.d.lastMemberOf(returned.id) : undefined
