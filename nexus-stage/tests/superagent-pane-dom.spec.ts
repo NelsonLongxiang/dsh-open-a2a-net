@@ -3,7 +3,7 @@
  * superagent design v4, PR-E: the 团队 tab. What needs a person comes first; the request box is the workbench Source;
  * tickets, the team (pinned keys included) and the settings follow. Records are data: textContent only.
  */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createSuperagentPane, personTickets, problemsOf, stageLabel, type SaState, type SaTicket } from '../src/wb-superagent.ts'
 import { createWorkbench } from '../src/workbench.ts'
 
@@ -193,6 +193,20 @@ describe('team tab', () => {
     expect(text(pane.root)).toContain('alpha/canvas/team@0123abcd')
   })
 
+  it('remembers the sub-tab across a reload', () => {
+    // jsdom here has no localStorage (opaque origin): give this test one, and take it away after.
+    const data = new Map<string, string>()
+    const storage = { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => { data.set(k, String(v)) }, removeItem: (k: string) => { data.delete(k) } }
+    Object.defineProperty(window, 'localStorage', { value: storage, configurable: true })
+    onTestFinished(() => { Object.defineProperty(window, 'localStorage', { value: undefined, configurable: true }) })
+    const first = mount()
+    first.pane.select('tickets')
+    const again = mount()
+    expect(again.pane.root.querySelector('[role=tab][aria-selected="true"]')!.textContent).toBe('工单')
+    window.localStorage.setItem('dsh-a2a.superagent.view', 'nonsense')
+    expect(mount().pane.root.querySelector('[role=tab][aria-selected="true"]')!.textContent).toBe('待你处理')
+  })
+
   describe('several teams', () => {
     const teams = [{ id: '', canvas: 'ops' }, { id: 'aaaaaaaa', canvas: 'docs' }]
     const open = () => {
@@ -260,6 +274,23 @@ describe('team tab', () => {
       toPrimary(picker)
       pane.update({ ...state(), teams, selectedTeam: 'aaaaaaaa', canvases: [] }, sessions, NOW)
       expect(pane.root.querySelector('select[aria-label="接单模式"]')).toBeNull()
+    })
+
+    it('builds no view from the old team while the switch is out, whichever sub-tab is picked', () => {
+      const { pane, picker } = open()
+      toPrimary(picker)
+      button(pane.root, '工单').click()
+      expect(pane.root.querySelector('.wb-sa-body')!.textContent).toBe('正在读取团队状态…')
+      pane.select('settings')
+      expect(pane.root.querySelector('select[aria-label="接单模式"]')).toBeNull()
+      pane.update({ ...state(), teams, selectedTeam: '', canvases: [] }, sessions, NOW)
+      expect(pane.root.querySelector('select[aria-label="接单模式"]')).not.toBeNull()
+    })
+
+    it('says in the picker how many tickets wait on a person in each other team', () => {
+      const { pane, picker } = open()
+      pane.update({ ...state(), teams: [{ id: '', canvas: 'ops', waiting: 2 }, { id: 'aaaaaaaa', canvas: 'docs' }], selectedTeam: 'aaaaaaaa', canvases: [] }, sessions, NOW)
+      expect(Array.from(picker.options).map(o => o.text)).toEqual(['ops（2 待你处理）', 'docs'])
     })
 
     it('asks for both, and shows a refusal', async () => {
