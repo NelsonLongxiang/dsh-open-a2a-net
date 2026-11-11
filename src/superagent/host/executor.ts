@@ -208,6 +208,13 @@ export class MemberExecutor implements Executor {
     queueMicrotask(() => this.launch())
   }
 
+  /** Named dispatch N4: the ticket is no longer kept for a member (the requester chose another one). */
+  clearMember(ticketId: string): void {
+    if (this.ticketMembers[ticketId] === undefined) return
+    Reflect.deleteProperty(this.ticketMembers, ticketId)
+    this.save()
+  }
+
   memberOfTicket(ticketId: string): { member: string; named: boolean } | undefined { return this.ticketMembers[ticketId] }
   /**
    * A member's load for the roster report (superagent-market-progress-roster P3): the tickets it holds (running or

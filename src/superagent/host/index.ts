@@ -43,6 +43,7 @@ export { END_RECEIPT_GRACE_MS } from './receipts.ts'
 export const TOOL_ASK_AGAIN_MS = 24 * 3_600_000
 import { agentLedEnd, clip, TEXT_CAP, presetRefusal, notTakenText, OTHER_TICKETS_SHOWN, ORIGIN_LINE_NOTE, OBSERVER_LINE, candidateCard, YGL_WRITE, yglCardLines, yglRouterLine } from './cards.ts'
 import { teamYglProject } from './ygl-home.ts'
+import { NamedDispatch, WAIT, SWAP } from './named-dispatch.ts'
 import type { SuperagentHostDeps, PersonMessage, WorkbenchVia } from './deps.ts'
 export * from './cards.ts'
 export type * from './deps.ts'
@@ -97,6 +98,8 @@ export class SuperagentHost {
   private readonly progress: ProgressReceipts
   /** docs/design/superagent-split.md: split parents and their children. */
   readonly splits: SplitBook
+  /** docs/design/superagent-named-dispatch.md: seats, named dispatch and rework returns. */
+  readonly named: NamedDispatch
   private readonly roster: RosterReports
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
   private readonly sending = new Set<string>()
@@ -120,7 +123,7 @@ export class SuperagentHost {
     this.splits = new SplitBook(join(dir, 'split.json'))
     const executor = this.executor = new MemberExecutor({
       path: join(dir, 'executor.json'), members: () => this.pool(),
-      held: ticketId => this.splitHeld(ticketId),
+      held: ticketId => this.splitHeld(ticketId) || this.named.held(ticketId),
       repoOf: member => this.settingsValue.repos[member],
       memberNotes: (member, ticket) => this.memberNotes(member, ticket),
       deliver: (member, text, kind, ticketId) => this.deliverToMember(member, text, kind, ticketId), engine: () => this.engine,
@@ -159,7 +162,7 @@ export class SuperagentHost {
       remotes: canvas => (d.canvasTeam?.(canvas)?.remote ?? []).map(r => r.ref),
       declares: (ref, capability) => d.memberDeclares?.(ref, capability) === true,
       send: async (ref, text, taskId) => { if (d.rosterSend === undefined) throw new Error('no roster send on this host'); await d.rosterSend(ref, text, taskId) },
-      handleOf: id => d.handleOf?.(id) ?? id, nameOf: id => d.sessionName?.(id), online: id => d.sessionLoaded?.(id) ?? false,
+      handleOf: id => d.handleOf?.(id) ?? id, nameOf: id => d.sessionName?.(id), online: id => d.sessionLoaded?.(id) ?? false, seatIdOf: id => this.named.seatIdOf(id),
       loadOf: id => this.executor.loadOf(id), hostFingerprint: () => d.hostFingerprint?.(), nowMs: () => Date.parse(this.now()), logger: d.logger,
     })
     const progressPath = join(dir, 'progress.json')
@@ -204,8 +207,20 @@ export class SuperagentHost {
       scope: teamScope(() => this.settingsValue),
       assessor, executor, outbox,
       // P2 light path: decided inside the intake's unit of work, before any pass can hand the message to the router.
-      emit: event => { if (event.type === 'trigger.received') this.lightPath((event.data as { triggerId: string }).triggerId) },
+      emit: event => { if (event.type !== 'trigger.received') return; const id = (event.data as { triggerId: string }).triggerId; if (!this.named.rework(id)) this.lightPath(id) },
       ...(d.now !== undefined ? { now: d.now } : {}),
+    })
+    this.named = new NamedDispatch({
+      path: join(dir, 'seats.json'), engine: this.engine, ticket: id => this.store.tickets.get(id), tickets: () => this.store.tickets.list(),
+      trigger: id => this.store.triggers.get(id), pool: () => this.pool(),
+      loaded: member => member.includes('@') || (d.sessionLoaded?.(member) ?? true),
+      resolveMember: value => this.resolveMember(value), memberName: member => this.memberName(member),
+      declares: (caller, capability) => d.callerDeclares?.(caller, capability) === true,
+      setMember: (ticketId, member) => this.executor.setMember(ticketId, member), clearMember: ticketId => this.executor.clearMember(ticketId),
+      lastMemberOf: ticketId => this.executor.lastMemberOf(ticketId),
+      fileQuestion: (ticketId, question) => this.decisions.forTicket({ ticketId, by: 'host', question, spec: { level: 'P1', options: [WAIT, SWAP], recommended: WAIT }, at: this.now() }),
+      profiled: () => this.membersProfiled(), tellRouter: text => { const router = this.settingsValue.router; if (router !== undefined && router !== '') this.d.deliverToSession(router, `${text}\n${this.memberListLine()}`) },
+      now: () => this.now(), logger: d.logger,
     })
   }
 
@@ -499,7 +514,9 @@ export class SuperagentHost {
         const decision = this.engine.decide(child.id, { kind: 'accept', title: part.title, scope: part.scope, reason, ...(rules.length > 0 ? { rules: [...rules] } : {}) } as never)
         if (decision.ticketId === undefined) return { ok: false, code: 'part', error: `part ${String(index + 1)} opened no ticket` }
         children.push(decision.ticketId)
+        const named = this.named.namedOf(parentId)
         if (part.member !== undefined) this.executor.setMember(decision.ticketId, part.member)
+        else if (named !== undefined) this.named.accepted(decision.ticketId, named)
       } catch (error) { return { ok: false, code: 'part', error: `part ${String(index + 1)}: ${String(error)}` } }
     }
     this.splits.record(parentId, children, asked, at)
@@ -581,6 +598,7 @@ export class SuperagentHost {
       try {
         this.engine.attach(target, triggerId)
         this.d.logger.info('superagent: %s from %s goes straight to ticket %s (light path)', triggerId, trigger.actor.id, ticketId)
+        this.named.answered(target, trigger.text)
         return
       } catch (error) { this.d.logger.warn('superagent: light path for %s into %s not taken: %s', triggerId, ticketId, String(error)) }
     }
@@ -678,6 +696,7 @@ export class SuperagentHost {
     const member = this.resolveMember(value)
     if (member === undefined) return { ok: false, code: 'member', error: `no such member: ${value}. ${this.memberListLine()}` }
     const latest = ticket.assignments.at(-1)
+    this.named.assigned(ticketId)
     if (latest?.state === 'pending') { this.executor.setMember(ticketId, member); return { ok: true, ticket_id: ticketId, member: this.memberName(member) } }
     this.executor.setMember(ticketId, member)
     try { this.engine.retryTicket(ticketId) } catch (error) { return { ok: false, code: error instanceof UserError ? error.code : 'refused', error: `the ticket is running and its member has not reported it cannot go on: ${error instanceof Error ? error.message : String(error)}` } }
@@ -1017,7 +1036,8 @@ export class SuperagentHost {
       return
     }
     const pool = new Set(this.pool())
-    const orphaned = this.executor.membersLeft(pool)
+    // Named dispatch N4: a dispatch-named ticket whose seat left asks the requester, not the router.
+    const orphaned = this.named.seatsLeft(this.executor.membersLeft(pool))
     const router = this.settingsValue.router
     if (orphaned.length > 0 && router !== undefined) this.d.deliverToSession(router, `[superagent] the member named for ${orphaned.map(id => `ticket ${id}`).join(', ')} has left the team. Choose another with superagent_assign (ticket_id, member).\n${this.memberListLine()}`)
     for (const binding of this.executor.list()) {
@@ -1162,6 +1182,7 @@ export class SuperagentHost {
     this.flushCandidates()
     this.flushOutbox()
     this.settleSplits()
+    this.named.tick()
     // Upstream: evaluation, dispatch and outbound delivery hold while paused.
     if (this.settingsValue.paused) return
     this.executor.tick()
@@ -1193,7 +1214,7 @@ export class SuperagentHost {
       if (entry.delivered) continue
       const open = this.store.tickets.list().filter(t => !t.ended)
       const requeued = new Set(entry.candidate.triggers.filter(t => this.store.triggers.disposition(t.id)?.requeued === true).map(t => t.id))
-      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue, open, requeued, [...this.teamCardLines(), ...this.yglRouterLines(router), ...this.promptCardLines('communication')]))) return
+      if (!this.d.deliverToSession(router, candidateCard(entry.candidate, this.settingsValue, open, requeued, [...this.teamCardLines(), ...this.named.cardLines(entry.candidate.triggers.map(t => t.id)), ...this.yglRouterLines(router), ...this.promptCardLines('communication')]))) return
       entry.delivered = true
       try { this.engine.candidateDelivered(evalId) } catch (error) { this.d.logger.warn('superagent: candidate %s delivered but not recorded: %s', evalId, String(error)) }
     }

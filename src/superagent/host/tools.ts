@@ -57,7 +57,9 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
     const evalId = candidate?.evalId
     const rules = Array.isArray(item.rules) ? [...new Set(item.rules.filter((r): r is string => typeof r === 'string' && r !== ''))] : []
     const repo = str(item.repo)
-    const memberName = str(item.member)
+    // Named dispatch N3: a request that names a seat goes to that seat; the router's member is not asked for, nor used.
+    const named = kind === 'accept' ? host.named.namedIn(candidate?.triggers.map(t => t.id) ?? [triggerId]) : undefined
+    const memberName = named === undefined ? str(item.member) : undefined
     const member = memberName !== undefined ? host.resolveMember(memberName) : undefined
     let outcome: Outcome
     if (kind === 'accept' && candidate?.strength === 'inferred' && host.settings.acceptMode !== 'auto') {
@@ -73,7 +75,7 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
         return { ok: false, trigger_id: triggerId, code: 'repo', error: `no member works in ${repo}; the team's repositories: ${known.length > 0 ? known.join(', ') : '(none — accept without repo)'}` }
       }
       if (memberName !== undefined && member === undefined) return { ok: false, trigger_id: triggerId, code: 'member', error: `no such member: ${memberName}. ${host.memberListLine()}` }
-      if (memberName === undefined && host.membersProfiled()) return { ok: false, trigger_id: triggerId, code: 'member', error: `this team's members have roles and rules: name the one this work fits as member. ${host.memberListLine()}` }
+      if (memberName === undefined && named === undefined && host.membersProfiled()) return { ok: false, trigger_id: triggerId, code: 'member', error: `this team's members have roles and rules: name the one this work fits as member. ${host.memberListLine()}` }
       const acknowledgement = str(item.acknowledgement), name = str(item.name), note = str(item.note)
       outcome = { kind: 'accept', title, scope, reason, ...(acknowledgement !== undefined ? { acknowledgement } : {}), ...(name !== undefined ? { name } : {}), ...(note !== undefined ? { note } : {}), ...(rules.length > 0 ? { rules } : {}) }
     } else if (kind === 'ignore') outcome = candidate?.strength === 'inferred' && rules.length === 0 && item.rules !== undefined
@@ -91,6 +93,7 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
     const repoSet = decision.kind === 'accept' && decision.ticketId !== undefined && repo !== undefined
     if (repoSet) host.executor.setRepo(decision.ticketId!, repo!)
     if (decision.kind === 'accept' && decision.ticketId !== undefined && member !== undefined) host.executor.setMember(decision.ticketId, member)
+    if (decision.kind === 'accept' && decision.ticketId !== undefined && named !== undefined) host.named.accepted(decision.ticketId, named)
     return { ok: true, trigger_id: triggerId, kind, decision_id: decision.id, decision: decision.kind, ...(decision.ticketId !== undefined ? { ticket_id: decision.ticketId } : {}), ...(repoSet ? { repo: repo! } : {}), reason: json(decision.reason) }
   } catch (error) { return { trigger_id: triggerId, ...refusal(host, error, { trigger: triggerId, ...(str(item.ticket_id) !== undefined ? { ticket: str(item.ticket_id)! } : {}) }) } }
 }
