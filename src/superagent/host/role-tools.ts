@@ -50,7 +50,7 @@ export const SELF_TOOLS: readonly string[] = ['a2a_whoami']
 export const YGL_READ_TOOLS: readonly string[] = ['mcp__ygl__read']
 export const YGL_WORK_TOOLS: readonly string[] = [...YGL_READ_TOOLS, 'mcp__ygl__write', 'mcp__ygl__verify', 'mcp__ygl__doctor']
 
-export const ROUTER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, ...SELF_TOOLS, ...YGL_READ_TOOLS, 'a2a_tool_request', 'a2a_outbound_request', 'superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose']
+export const ROUTER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, ...SELF_TOOLS, ...YGL_READ_TOOLS, 'a2a_tool_request', 'a2a_outbound_request', 'superagent_route', 'superagent_split', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose']
 
 /** Upstream `WORK_TOOLS` (src/app/sessions.ts) without the tools that start, list, message or interrupt other sessions. */
 export const MEMBER_WORK_TOOLS: readonly string[] = ['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list',
@@ -175,6 +175,8 @@ export class RoleTools {
 
   /** The role an agent acts in: its own, or the nearest parent session's (a subagent inherits it). */
   roleOfAgent(agent: RoleAgent | undefined): Role | undefined { return this.roleSessionOf(agent)?.role }
+  /** The team session an agent belongs to (itself, or the session a subagent descends from), with its role. */
+  heldBy(agent: RoleAgent | undefined): { role: Role; session: string } | undefined { return this.roleSessionOf(agent) }
 
   /** The role an agent acts in and the session that holds it (its own, or the nearest parent's). */
   private roleSessionOf(agent: RoleAgent | undefined): { role: Role; session: string } | undefined {

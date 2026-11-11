@@ -159,7 +159,7 @@ describe('candidate card', () => {
     expect(card).toContain('superagent_route')
     expect(card).toContain('do not add an implementation plan')
     // The team's one-request-one-ticket rule outranks generic router guidance loaded from elsewhere (agent-atelier allows splitting).
-    expect(card).toContain('never split it into several')
+    expect(card).toContain('unless the request itself explicitly asks for separate parts'); expect(card).toContain('superagent_split'); expect(card).toContain('Never split on your own judgement')
     expect(card).toContain('does not change them')
   })
 
@@ -383,7 +383,10 @@ describe('PR-B2b: the a2a Channel through the hosted a2a-watch', () => {
     expect(doneReceipts[0]!.slice(doneReceipts[0]!.indexOf('--by'), doneReceipts[0]!.indexOf('--by') + 2)).toEqual(['--by', 'session-m'])
     const ack = calls.find(a => a[0] === 'receipt' && a[1] === done.task && a.includes('--acknowledged'))!
     expect(ack.slice(ack.indexOf('--by'), ack.indexOf('--by') + 2)).toEqual(['--by', 'session-r'])
-    expect(host.seatOf(done.ticketId)).toEqual({ seat: 'session-m' })
+    expect(host.seatOf(done.ticketId)).toEqual({ seat: 'session-m', role: 'member' })
+    // The role says which seat this is: the acknowledgement's is the router's, the ending receipt's the member's.
+    expect(ack.slice(ack.indexOf('--by-role'), ack.indexOf('--by-role') + 2)).toEqual(['--by-role', 'router'])
+    expect(doneReceipts[0]!.slice(doneReceipts[0]!.indexOf('--by-role'), doneReceipts[0]!.indexOf('--by-role') + 2)).toEqual(['--by-role', 'member'])
   })
   it('a caller no longer linked makes the message gone (dropped), never sent', async () => {
     const h = await hostWith(args => args[0] === 'admission' ? JSON.stringify({ admitted: false }) : '{}')
@@ -1205,5 +1208,66 @@ describe('router acceptance follow-up: what a settings change means to each open
     expect(lines.join('\n')).toContain('accept mode is not auto')
     expect(lines.join('\n')).toContain('a2a:ops/x, who asked for this ticket, may no longer start work')
     expect(lines.join('\n')).not.toContain('{')
+  })
+})
+
+describe('a remote member listed as a bot is a caller, not a worker (market on the canvas)', () => {
+  it('the worker pool, the member list and the executor leave it out; other remote members stay workers', async () => {
+    const { SuperagentHost, workerRemotes } = await import('../../src/superagent/host/index.ts')
+    const market = { ref: 'market/fd417315@88679599', key: 'K1', url: 'http://127.0.0.1:1' }, peer = { ref: 'dsh/bbbb2222@89abcdef', key: 'K2', url: 'http://127.0.0.1:2' }
+    expect(workerRemotes({ remoteMembers: [market, peer], bots: { a2a: ['market/fd417315'] } })).toEqual(['dsh/bbbb2222@89abcdef'])
+    expect(workerRemotes({ remoteMembers: [market, peer], bots: { a2a: [] } })).toEqual(['market/fd417315@88679599', 'dsh/bbbb2222@89abcdef'])
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m'], [market, peer]), home: mkdtempSync(join(tmpdir(), 'sa-botworker-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, sessionName: (id: string) => id } as never)
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', bots: { a2a: ['market/fd417315'] } }, () => true)).toMatchObject({ ok: true })
+    expect(h.memberListLine()).toBe("The team's members: session-m; dsh/bbbb2222@89abcdef.")
+    await h.stop()
+  })
+})
+
+describe('market N1d: a member\'s question carries its answers to the requester', () => {
+  it('choicesOf gives the options and the recommendation of the card the question report raised', async () => {
+    const caller = { caller: 'market/0123456789abcdef' }
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const host = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home: mkdtempSync(join(tmpdir(), 'sa-choices-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1', runCli: async args => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' })
+    expect(host.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [caller.caller] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { host.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const channel = { source: 'a2a', thread: 'a2a:ctx-q', address: { caller: caller.caller, task: 'direct-000000000009', context: 'ctx-q' } }
+    host.engine.receive({ ...wb('9', 'ctx-q'), source: 'a2a', threads: [{ source: 'a2a', id: 'ctx-q' }], actor: { source: 'a2a', id: caller.caller }, human: false, channel, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: channel.address.task } })
+    host.pass()
+    const routed = routeItem(host, { trigger_id: '9', kind: 'accept', title: 'greet', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    await settle()
+    expect(host.choicesOf(routed.ticket_id)).toBeUndefined()
+    expect(host.report('session-m', { state: 'waiting', summary: '等发起方选风格', question: '问候语用哪种风格？', decision: { level: 'P1', options: ['正式', '口语', '俏皮'], recommended: '口语' } })).toMatchObject({ ok: true })
+    await settle()
+    expect(host.choicesOf(routed.ticket_id)).toEqual({ options: ['正式', '口语', '俏皮'], recommended: '口语' })
+    await host.stop()
+  })
+})
+
+describe('seatOf at boot reads no canvas (regression of #611 on the test host)', () => {
+  it('the seat and its role come from the executor and the preset, even when reading the canvas throws', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    let booting = false
+    const team = canvasOf(['session-r', 'session-o'])
+    const bot = 'market/0123456789abcdef'
+    const host = new SuperagentHost({ canvasTeam: (name: string) => { if (booting) throw new ReferenceError("Cannot access 'cardCache' before initialization"); return team(name) },
+      home: mkdtempSync(join(tmpdir(), 'sa-seatboot-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1',
+      presetOf: (id: string) => id === 'session-o' ? 'superagent-observer' : 'superagent-router', sessionName: (id: string) => id,
+      runCli: async (args: string[]) => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' } as never)
+    expect(host.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    const channel = { source: 'a2a', thread: 'a2a:ctx-b', address: { caller: bot, task: 'direct-00000000000b', context: 'ctx-b' } }
+    host.engine.receive({ ...wb('b', 'ctx-b'), source: 'a2a', threads: [{ source: 'a2a', id: 'ctx-b' }], actor: { source: 'a2a', id: bot }, human: false, channel, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: channel.address.task } } as never)
+    host.pass()
+    const routed = routeItem(host, { trigger_id: 'b', kind: 'accept', title: 'boot', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    for (let i = 0; i < 20; i++) { host.pass(); await new Promise(r => setTimeout(r, 5)) }
+    expect(host.seatOf(routed.ticket_id)).toEqual({ seat: 'session-o', role: 'observer' })
+    booting = true
+    // Before the fix the observer check read the canvas settings and threw here (the plugin's start failed with it).
+    expect(host.seatOf(routed.ticket_id)).toEqual({ seat: 'session-o', role: 'observer' })
+    booting = false
+    await host.stop()
   })
 })

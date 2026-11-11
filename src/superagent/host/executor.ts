@@ -25,6 +25,8 @@ import { waitsForPerson, type Assignment, type Engine, type Executor, type Polic
 
 export interface MemberExecutorDeps {
   readonly path: string
+  /** A ticket no member takes: a split parent, which only coordinates its children (docs/design/superagent-split.md). */
+  readonly held?: (ticketId: string) => boolean
   /** The members the owner named, in order (the order is the launch preference). */
   readonly members: () => readonly string[]
   /** The repository a member works in (`owner/name`), if the owner named one. */
@@ -303,6 +305,7 @@ export class MemberExecutor implements Executor {
         const ticket = this.d.ticket(next.ticketId)
         const assignment = ticket?.assignments.find(a => a.id === next.assignmentId)
         if (ticket === undefined || ticket.ended || assignment === undefined || assignment.state !== 'pending') { this.waiting = this.waiting.filter(w => w !== next); continue }
+        if (this.d.held?.(ticket.id) === true) { this.waiting = this.waiting.filter(w => w !== next); continue }
         // R5: at the cap a new ticket waits; a parked ticket coming back for a person's message (above) is not held.
         const cap = this.d.maxConcurrent?.() ?? 0
         if (cap > 0 && this.bindings.length >= cap) break

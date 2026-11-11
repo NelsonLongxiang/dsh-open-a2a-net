@@ -30,6 +30,25 @@ describe('the added envelope fields', () => {
       .toEqual({ idempotencyKey: 't1', disposition: 'attention', question: { id: 'q1', text: '哪个分支？', options: ['main', 'next'], default: 'main' } })
   })
 
+  it('by carries the seat\'s role; an unknown role is dropped, a bad --by-role is refused', () => {
+    const text = formatReceipt('t1', 'x', { idempotencyKey: 't1', disposition: 'acknowledged', by: { seat: 'dsh/aaaa1111', role: 'router' } })
+    expect(parseReceipt(text)?.envelope?.by).toEqual({ seat: 'dsh/aaaa1111', role: 'router' })
+    expect(parseReceipt(`[A2A receipt] task t1 x\n${JSON.stringify({ idempotencyKey: 't1', by: { seat: 's', role: 'boss' } })}`)?.envelope?.by).toEqual({ seat: 's' })
+    expect(receiptExtras(flags({ '--by': 'dsh/aaaa1111', '--by-role': 'member' }), false, 'x')).toEqual({ fields: { by: { seat: 'dsh/aaaa1111', role: 'member' } } })
+    expect(receiptExtras(flags({ '--by': 'dsh/aaaa1111', '--by-role': 'boss' }), false, 'x')).toHaveProperty('error')
+    expect(receiptExtras(flags({ '--by-role': 'member' }), false, 'x')).toHaveProperty('error')
+  })
+
+  it('an artifact may carry a title for people; an over-long or non-text one is dropped, the item kept', () => {
+    const text = formatReceipt('t1', 'x', { outcome: 'completed', idempotencyKey: 't1', disposition: 'result', artifacts: [{ kind: 'file', id: 'f1', title: '结论.txt, 179 字节' }, { kind: 'table', id: 'tb2' }] })
+    expect(parseReceipt(text)?.envelope?.artifacts).toEqual([{ kind: 'file', id: 'f1', title: '结论.txt, 179 字节' }, { kind: 'table', id: 'tb2' }])
+    expect(parseReceipt(`[A2A receipt] task t1 x\n${JSON.stringify({ idempotencyKey: 't1', artifacts: [{ kind: 'file', id: 'f1', title: 'x'.repeat(201) }, { kind: 'file', id: 'f2', title: 7 }] })}`)?.envelope?.artifacts)
+      .toEqual([{ kind: 'file', id: 'f1' }, { kind: 'file', id: 'f2' }])
+    expect(receiptExtras(flags({ '--artifacts': '[{"kind":"file","id":"f1","title":"a, b: c"},{"kind":"table","id":"t2"}]' }), false, 'x'))
+      .toEqual({ fields: { artifacts: [{ kind: 'file', id: 'f1', title: 'a, b: c' }, { kind: 'table', id: 't2' }] } })
+    for (const bad of ['[{"kind":"file"}]', '[not json', '[]']) expect(receiptExtras(flags({ '--artifacts': bad }), false, 'x'), bad).toHaveProperty('error')
+  })
+
   it('the switches build the fields or name what is wrong', () => {
     expect(receiptExtras(flags({ '--by': 'dsh/aaaa1111', '--by-name': '后端', '--artifacts': 'table:tb-9, sop-run:r1' }), false, 'x'))
       .toEqual({ fields: { by: { seat: 'dsh/aaaa1111', name: '后端' }, artifacts: [{ kind: 'table', id: 'tb-9' }, { kind: 'sop-run', id: 'r1' }] } })

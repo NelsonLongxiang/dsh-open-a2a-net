@@ -2123,6 +2123,10 @@ export function apply(ctx: Context, config: Config): void {
     // PR-F: an Input counts as read once the member's session takes the message carrying it into its history.
     ctx.on('agent/inbox/claimed', ({ agent }) => { superagentTeams!.ofSession(String(agent.id))?.memberClaimed(String(agent.id)) })
     ctx.tools.guard(exec => {
+      // The credential-access audit: a team session's call that touches credentials or another session's files is recorded
+      // and told to the owner; it is not refused here (the boundary is the owner's to set).
+      const held = superagentRoleTools.heldBy(exec.agent as unknown as RoleAgent | undefined)
+      if (held !== undefined) { try { superagentTeams!.ofSession(held.session)?.auditCall(held.session, held.role, exec.name, exec.arguments) } catch (error) { logger.warn('superagent: credential-access audit failed: %s', String(error)) } }
       const refusal = superagentRoleTools.guard(exec.name, exec.agent as unknown as RoleAgent | undefined, exec.arguments)
       if (refusal !== undefined) (exec.agent !== undefined ? superagentTeams!.ofSession(String(exec.agent.id)) ?? superagentHost! : superagentHost!).noteRefusal('superagent-role-tools', { ...(exec.agent !== undefined ? { caller: String(exec.agent.id) } : {}), target: exec.name })
       return refusal

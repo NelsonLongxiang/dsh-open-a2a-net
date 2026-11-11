@@ -19,6 +19,9 @@ import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candida
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
 import { ProgressReceipts } from './progress.ts'
+import { SplitBook } from './split.ts'
+import { progressState } from './progress.ts'
+import { credentialAccess, redactedPreview, type CredentialKind } from './credential-audit.ts'
 import { RosterReports } from './roster.ts'
 import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
@@ -51,6 +54,17 @@ const REFUSALS_KEPT = 50
 /** How long a working ticket may go without any change before the health check names it (reliability R6). */
 export const QUIET_MINUTES = 60
 
+/** A remote member's refs that take tickets: those whose handle is not on the team's A2A bot list. */
+export function workerRemotes(settings: Pick<TeamSettings, 'remoteMembers' | 'bots'>): string[] {
+  const bots = new Set(settings.bots.a2a.map(ref => ref.split('@')[0]))
+  return settings.remoteMembers.map(r => r.ref).filter(ref => !bots.has(ref.split('@')[0]))
+}
+
+/** The credential-access audit: at most one owner card per session and kind in this long, and how many hits are kept. */
+export const CREDENTIAL_CARD_GAP_MS = 10 * 60_000
+const CREDENTIAL_HITS_KEPT = 100
+const CREDENTIAL_KIND_TEXT: Record<CredentialKind, string> = { 'credential-file': '凭据类文件或目录', 'authorization-header': '带 Authorization 的请求', 'other-session': '别的会话的文件' }
+
 export class SuperagentHost {
   readonly store: JsonRepositories
   readonly engine: Engine
@@ -81,6 +95,8 @@ export class SuperagentHost {
   /** What the team owes A2A requesters (host/receipts.ts). */
   private readonly receipts: A2aReceipts
   private readonly progress: ProgressReceipts
+  /** docs/design/superagent-split.md: split parents and their children. */
+  readonly splits: SplitBook
   private readonly roster: RosterReports
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
   private readonly sending = new Set<string>()
@@ -88,6 +104,9 @@ export class SuperagentHost {
   /** Refusals at the team's edge by rule, and the latest ones (noteRefusal). */
   private readonly refusalCounts = new Map<string, number>()
   private readonly refusalRecent: Array<{ at: string; rule: string; caller?: string; target?: string }> = []
+  /** The credential-access audit's recent hits (kinds and a redacted preview, never what was read) and when each session last raised a card. */
+  private readonly credentialHits: Array<{ at: string; session: string; role: string; tool: string; kinds: readonly CredentialKind[]; preview: string; card?: string }> = []
+  private readonly credentialCardAt = new Map<string, number>()
 
   constructor(private readonly d: SuperagentHostDeps) {
     const dir = d.stateDir ?? join(d.home, 'superagent')
@@ -98,8 +117,10 @@ export class SuperagentHost {
       request: candidate => { this.candidates.set(candidate.evalId, { candidate, delivered: false }); queueMicrotask(() => this.flushCandidates()) },
       release: evalId => { this.candidates.delete(evalId) },
     }
+    this.splits = new SplitBook(join(dir, 'split.json'))
     const executor = this.executor = new MemberExecutor({
-      path: join(dir, 'executor.json'), members: () => { const now = this.settings; return [...now.members, ...now.remoteMembers.map(r => r.ref)] },
+      path: join(dir, 'executor.json'), members: () => this.pool(),
+      held: ticketId => this.splitHeld(ticketId),
       repoOf: member => this.settingsValue.repos[member],
       memberNotes: (member, ticket) => this.memberNotes(member, ticket),
       deliver: (member, text, kind, ticketId) => this.deliverToMember(member, text, kind, ticketId), engine: () => this.engine,
@@ -129,6 +150,8 @@ export class SuperagentHost {
       ticket: id => this.store.tickets.get(id) as never,
       resultPending: (ticketId, task) => this.resultPending(ticketId, task),
       seatOf: ticketId => this.seatOf(ticketId),
+      choicesOf: ticketId => this.choicesOf(ticketId),
+      splitOf: ticketId => this.splitView(ticketId),
       logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.teamSend !== undefined ? { teamSend: d.teamSend } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
     })
     this.roster = new RosterReports({
@@ -143,11 +166,13 @@ export class SuperagentHost {
     this.progress = new ProgressReceipts({
       store: this.store, a2a: this.a2a, on: () => this.settingsValue.sources.a2a && this.settingsValue.progressOff !== true, nowMs: () => Date.parse(this.now()),
       seatOf: ticketId => this.seatOf(ticketId), queueAhead: ticketId => this.executor.queueAhead(ticketId), answered: task => this.a2a.answered(task),
+      parentOf: ticketId => this.splits.parentOf(ticketId), splitView: ticketId => this.splitView(ticketId),
       load: () => { try { return existsSync(progressPath) ? JSON.parse(readFileSync(progressPath, 'utf8')) as never : undefined } catch { return undefined } },
       save: value => { try { mkdirSync(dir, { recursive: true }); const tmp = `${progressPath}.tmp-${randomUUID()}`; writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 }); renameSync(tmp, progressPath) } catch (error) { d.logger.warn('superagent: progress state not saved: %s', String(error)) } },
       logger: d.logger,
     })
-    this.receipts = new A2aReceipts({ store: this.store, a2a: this.a2a, a2aOn: () => this.settingsValue.sources.a2a, now: () => this.now(), seatOf: ticketId => this.seatOf(ticketId), logger: d.logger })
+    this.receipts = new A2aReceipts({ store: this.store, a2a: this.a2a, a2aOn: () => this.settingsValue.sources.a2a, now: () => this.now(), seatOf: ticketId => this.seatOf(ticketId),
+      parentOf: ticketId => this.splits.parentOf(ticketId), splitView: ticketId => this.splitView(ticketId), logger: d.logger })
     this.prs = new PrFollower({
       path: join(dir, 'pr-follow.json'), tickets: () => this.store.tickets.list(), engine: () => this.engine, gh: d.gh ?? defaultGh,
       allowed: () => this.settingsValue.allowed.github, paused: () => this.settingsValue.paused, logger: d.logger,
@@ -415,8 +440,126 @@ export class SuperagentHost {
     }
   }
 
-  private pool(): string[] { const now = this.settings; return [...now.members, ...now.remoteMembers.map(r => r.ref)] }
+  /**
+   * The team's workers: the canvas's local members and its remote members — except a remote member the team lists as an
+   * A2A bot, which is a caller (the workbench market sits on the canvas to be linked, docs/ops/superagent-market-team.md),
+   * never one that takes tickets.
+   */
+  private pool(): string[] { const now = this.settings; return [...now.members, ...workerRemotes(now)] }
   private memberName(id: string): string { return this.d.sessionName?.(id) ?? id }
+
+  /** A split that failed after its parent was accepted: the parent runs as an ordinary ticket after all. */
+  releaseSplit(parentId: string): void {
+    const ticket = this.store.tickets.get(parentId)
+    const latest = ticket?.assignments.at(-1)
+    if (ticket !== undefined && !ticket.ended && latest !== undefined && latest.state === 'pending') this.executor.start(ticket, latest)
+  }
+
+  /** S3: the part of a split that an answer goes to: the one with an open question, else the first still open. */
+  private splitTarget(parentId: string): string | undefined {
+    const open = this.splits.children(parentId).map(id => this.store.tickets.get(id)).filter((t): t is Ticket => t !== undefined && !t.ended)
+    return (open.find(t => t.attention !== undefined) ?? open[0])?.id
+  }
+
+  /** A ticket no member takes: a split parent, or the ticket of a request being split right now. */
+  private splitHeld(ticketId: string): boolean {
+    if (this.splits.isParent(ticketId)) return true
+    const ticket = this.store.tickets.get(ticketId)
+    return ticket !== undefined && this.splits.isSplitting(ticket.origin.triggerId)
+  }
+
+  /** S1: whether `asked` is the request's own words (whitespace aside), so a split happens only when the request asks for parts. */
+  askedIn(triggerId: string, asked: string): boolean {
+    const norm = (text: string): string => text.replace(/\s+/g, ' ').trim()
+    const words = norm(asked)
+    const trigger = this.store.triggers.get(triggerId)
+    return words.length >= 4 && trigger !== undefined && norm(trigger.text).includes(words)
+  }
+
+  /**
+   * S2: make the parts of a parent ticket. Each part is the parent's request cloned onto a thread of its own (so a part's
+   * start fans into nothing), accepted at once with the part's title and scope under the parent's rules: the router's
+   * split is the decision. A part may name its member. The parent is held from members from now on.
+   */
+  splitParent(parentId: string, asked: string, parts: ReadonlyArray<{ title: string; scope: string; member?: string }>, reason: string): { ok: true; children: string[] } | { ok: false; code: string; error: string } {
+    const parent = this.store.tickets.get(parentId)
+    const origin = parent === undefined ? undefined : this.store.triggers.get(parent.origin.triggerId)
+    if (parent === undefined || origin === undefined || parent.ended) return { ok: false, code: 'ticket', error: 'no open ticket with that id' }
+    const rules = parent.mandate.basis.rules ?? []
+    const children: string[] = []
+    const at = this.now()
+    for (const [index, part] of parts.entries()) {
+      const thread = origin.threads[0]!
+      const child = { ...origin, id: `split-${parentId.slice(0, 8)}-${String(index + 1)}-${randomUUID().slice(0, 8)}`, at,
+        threads: [{ source: thread.source, id: `${thread.id}#part${String(index + 1)}` }],
+        text: `[part ${String(index + 1)}/${String(parts.length)} of «${parent.title}»] ${part.scope}`, meta: { ...origin.meta, splitOf: parentId } }
+      try {
+        const received = this.engine.receive(child as Trigger)
+        if (received !== 'stored') return { ok: false, code: 'part', error: `part ${String(index + 1)} was not taken in (${received})` }
+        const decision = this.engine.decide(child.id, { kind: 'accept', title: part.title, scope: part.scope, reason, ...(rules.length > 0 ? { rules: [...rules] } : {}) } as never)
+        if (decision.ticketId === undefined) return { ok: false, code: 'part', error: `part ${String(index + 1)} opened no ticket` }
+        children.push(decision.ticketId)
+        if (part.member !== undefined) this.executor.setMember(decision.ticketId, part.member)
+      } catch (error) { return { ok: false, code: 'part', error: `part ${String(index + 1)}: ${String(error)}` } }
+    }
+    this.splits.record(parentId, children, asked, at)
+    this.d.logger.info('superagent: ticket %s split into %s', parentId, children.join(', '))
+    queueMicrotask(() => this.pass())
+    return { ok: true, children }
+  }
+
+  /**
+   * S4: a split parent whose parts have all ended ends too, with one combined report — \`ready\` when every part completed,
+   * else \`failed\` part by part and then stopped (its receipt says failed).
+   */
+  private settleSplits(): void {
+    for (const parentId of this.splits.parentIds()) {
+      const parent = this.store.tickets.get(parentId)
+      if (parent === undefined || parent.ended) continue
+      const children = this.splits.children(parentId).map(id => this.store.tickets.get(id))
+      if (children.length === 0 || children.some(child => child === undefined || child.ended === undefined)) continue
+      const done = children.every(child => child!.ended!.outcome === 'completed' || child!.ended!.outcome === 'merged')
+      const lines = children.map((child, index) => {
+        const seat = this.seatOf(child!.id)
+        const summary = [...child!.assignments].reverse().find(a => a.report !== undefined)?.report?.summary
+        return `${String(index + 1)}. ${child!.title} — ${seat?.name ?? seat?.seat ?? '?'}: ${child!.ended!.outcome}${summary !== undefined ? `；${summary}` : ''}`
+      })
+      const summary = clip(`${done ? '全部子项完成' : '部分完成（有子项未完成）'}：\n${lines.join('\n')}`, 3_000)
+      try {
+        if (done) this.engine.report(parentId, { state: 'ready', summary })
+        else {
+          this.splits.markFailed(parentId)
+          this.engine.report(parentId, { state: 'failed', summary })
+          this.engine.stopTicket(parentId, 'a part of the split did not complete')
+        }
+        this.d.logger.info('superagent: split ticket %s ended (%s)', parentId, done ? 'completed' : 'failed')
+      } catch (error) { this.d.logger.warn('superagent: split ticket %s not ended: %s', parentId, String(error)) }
+    }
+  }
+
+  /** S2/S4: a split parent's children as the requester sees them, and the parent's outcome once it ended. */
+  splitView(ticketId: string): { tickets: Array<{ id: string; title: string; seat?: string; state: 'queued' | 'working' | 'waiting' | 'blocked' | 'ended'; outcome?: string }>; outcome?: 'completed' | 'failed' } | undefined {
+    if (!this.splits.isParent(ticketId)) return undefined
+    const parent = this.store.tickets.get(ticketId)
+    const tickets = this.splits.children(ticketId).flatMap(id => {
+      const child = this.store.tickets.get(id)
+      if (child === undefined) return []
+      const seat = this.seatOf(id)?.seat
+      const state = child.ended ? 'ended' as const : (progressState(child) ?? 'working')
+      return [{ id, title: child.title.slice(0, 200), ...(seat !== undefined ? { seat } : {}), state, ...(child.ended ? { outcome: child.ended.outcome } : {}) }]
+    })
+    const outcome = parent?.ended === undefined ? undefined : this.splits.failed(ticketId) ? 'failed' as const : 'completed' as const
+    return { tickets, ...(outcome !== undefined ? { outcome } : {}) }
+  }
+
+  /** market N1d: the answers the ticket's open question offers, from the card the member's question report raised. */
+  choicesOf(ticketId: string): { options: string[]; recommended?: string } | undefined {
+    const ticket = this.store.tickets.get(ticketId)
+    if (ticket?.attention === undefined) return undefined
+    const card = this.decisions.get(ticketCardId(ticket.id, ticket.attention.question))
+    if (card === undefined || card.options.length === 0) return undefined
+    return { options: [...card.options], ...(card.recommended !== '' ? { recommended: card.recommended } : {}) }
+  }
 
   /**
    * superagent-market-progress-roster P2, the light path: an agent's message that reached a live ticket on that ticket's own
@@ -433,8 +576,10 @@ export class SuperagentHost {
       const ticket = this.store.tickets.get(ticketId)
       const origin = ticket !== undefined && !ticket.ended ? this.store.triggers.get(ticket.origin.triggerId) : undefined
       if (origin === undefined || origin.human || origin.actor.source !== trigger.actor.source || origin.actor.id !== trigger.actor.id) continue
+      // S3: a split parent takes no work; the answer goes to the part that asked (else the first open one).
+      const target = this.splits.isParent(ticketId) ? this.splitTarget(ticketId) ?? ticketId : ticketId
       try {
-        this.engine.attach(ticketId, triggerId)
+        this.engine.attach(target, triggerId)
         this.d.logger.info('superagent: %s from %s goes straight to ticket %s (light path)', triggerId, trigger.actor.id, ticketId)
         return
       } catch (error) { this.d.logger.warn('superagent: light path for %s into %s not taken: %s', triggerId, ticketId, String(error)) }
@@ -445,12 +590,17 @@ export class SuperagentHost {
    * market N1c: the seat a ticket's receipts name as the one that took it up — its member once one holds it (the one it
    * last ran on, after it ended), else the router that accepted it — as its A2A handle (the session id where the host has none) and its name.
    */
-  seatOf(ticketId: string): { seat: string; name?: string } | undefined {
-    const session = this.executor.memberOfTicket(ticketId)?.member ?? this.executor.lastMemberOf(ticketId) ?? this.settingsValue.router
+  seatOf(ticketId: string): { seat: string; name?: string; role: 'router' | 'member' | 'observer' } | undefined {
+    const worker = this.executor.memberOfTicket(ticketId)?.member ?? this.executor.lastMemberOf(ticketId)
+    const session = worker ?? this.settingsValue.router
     if (session === undefined || session === '') return undefined
+    // The market shows who does the work (its 承接) from a member's seat only: the role says which one this is.
+    // From the session's preset, not the canvas settings: this runs in the first pass at boot (a progress step for an open
+    // ticket), before the a2a plugin's card cache exists, and reading the canvas there failed the plugin's start.
+    const role = worker === undefined ? 'router' as const : this.d.presetOf?.(worker) === OBSERVER_PRESET ? 'observer' as const : 'member' as const
     const seat = this.d.handleOf?.(session) ?? session
     const name = this.d.sessionName?.(session)
-    return { seat, ...(name !== undefined && name !== '' && name !== seat ? { name } : {}) }
+    return { seat, ...(name !== undefined && name !== '' && name !== seat ? { name } : {}), role }
   }
   memberListLine(): string { return `The team's members: ${this.pool().map(id => this.memberName(id)).join('; ') || '(none)'}.` }
 
@@ -792,7 +942,7 @@ export class SuperagentHost {
     const out = new Map<string, string[]>()
     // Only members the canvas still has: a repository named for a member that left is kept for its return, not used.
     const now = this.settings
-    const pool = new Set([...now.members, ...now.remoteMembers.map(r => r.ref)])
+    const pool = new Set(this.pool())
     for (const [member, repo] of Object.entries(this.settingsValue.repos)) if (pool.has(member)) out.set(repo, [...(out.get(repo) ?? []), member])
     return out
   }
@@ -866,8 +1016,7 @@ export class SuperagentHost {
       try { this.d.onRolesChanged?.() } catch (error) { this.d.logger.warn('superagent: role change not applied: %s', String(error)) }
       return
     }
-    const now = this.settings
-    const pool = new Set([...now.members, ...now.remoteMembers.map(r => r.ref)])
+    const pool = new Set(this.pool())
     const orphaned = this.executor.membersLeft(pool)
     const router = this.settingsValue.router
     if (orphaned.length > 0 && router !== undefined) this.d.deliverToSession(router, `[superagent] the member named for ${orphaned.map(id => `ticket ${id}`).join(', ')} has left the team. Choose another with superagent_assign (ticket_id, member).\n${this.memberListLine()}`)
@@ -1012,6 +1161,7 @@ export class SuperagentHost {
     try { this.engine.evaluateDue() } catch (error) { this.d.logger.warn('superagent: evaluation pass failed: %s', String(error)) }
     this.flushCandidates()
     this.flushOutbox()
+    this.settleSplits()
     // Upstream: evaluation, dispatch and outbound delivery hold while paused.
     if (this.settingsValue.paused) return
     this.executor.tick()
@@ -1026,6 +1176,8 @@ export class SuperagentHost {
    * (the A2A Source then sends a reply on it as a follow-up and keeps the formal receipt for the result).
    */
   private resultPending(ticketId: string, task: string): boolean {
+    // S3: a part never sends the request's formal receipt; only its parent's end does.
+    if (this.splits.parentOf(ticketId) !== undefined) return true
     const ticket = this.store.tickets.get(ticketId)
     if (ticket === undefined || ticket.ended) return false
     const fromTask = ticket.origin.triggerIds.some(id => this.store.triggers.get(id)?.channel?.address?.task === task)
@@ -1067,6 +1219,34 @@ export class SuperagentHost {
     const closest = [...open].sort((a, b) => distance(a) - distance(b))[0]!
     const near = distance(closest) <= 4 ? ` Closest: ${closest}.` : ''
     return `${lead}${near} Open ${kind}s: ${open.slice(0, 20).join(', ')}. Copy the id exactly from this list or the card.`
+  }
+
+  /**
+   * The credential-access audit (local market trial, 2026-11-11): a team session's tool call that touches credential
+   * files, an Authorization header or another session's files is recorded — the kinds, the tool, a redacted preview,
+   * never what was read — and the owner gets a P1 card, at most one per session and kind every 10 minutes. It does not
+   * block: a team session's sandbox limits writes, not reads, and the boundary is the owner's to set.
+   */
+  auditCall(session: string, role: string, tool: string, args: unknown): CredentialKind[] {
+    const kinds = credentialAccess(args)
+    if (kinds.length === 0) return kinds
+    const at = this.now(), nowMs = Date.parse(at)
+    const preview = redactedPreview(args)
+    const key = `${session}|${kinds.join(',')}`
+    const last = this.credentialCardAt.get(key)
+    let card: string | undefined
+    if (last === undefined || nowMs - last >= CREDENTIAL_CARD_GAP_MS) {
+      this.credentialCardAt.set(key, nowMs)
+      const who = this.memberName(session)
+      const what = kinds.map(kind => CREDENTIAL_KIND_TEXT[kind]).join('、')
+      const out = this.decisions.propose({ source: 'health', by: `credential:${session}`, question: `${who} 的 ${tool} 调用触及${what}（${at}）`, reason: `宿主只记录不拦截；命令预览（已遮蔽）：${preview}`, at,
+        spec: { level: 'P1', options: ['知道了', '停掉这个会话的工单', '在团队设置里禁用这个工具'], recommended: '知道了' } })
+      if (out.ok) card = out.id
+    }
+    this.credentialHits.push({ at, session, role, tool, kinds, preview, ...(card !== undefined ? { card } : {}) })
+    if (this.credentialHits.length > CREDENTIAL_HITS_KEPT) this.credentialHits.splice(0, this.credentialHits.length - CREDENTIAL_HITS_KEPT)
+    this.d.logger.warn('superagent: credential-access audit: %s (%s) %s touched %s', session, role, tool, kinds.join(','))
+    return kinds
   }
 
   noteRefusal(rule: string, detail: { caller?: string; target?: string } = {}): void {
@@ -1229,6 +1409,7 @@ export class SuperagentHost {
       ruleChanges: this.ruleChanges.view(),
       a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },
       refusals: { counts: Object.fromEntries(this.refusalCounts), recent: [...this.refusalRecent] },
+      credentialAudit: [...this.credentialHits],
       settingsHistory: this.settingsHistory.list(),
       modelResults: Object.fromEntries(this.modelResults),
       ...(this.prs.problem !== undefined ? { pullRequestProblem: this.prs.problem } : {}),
