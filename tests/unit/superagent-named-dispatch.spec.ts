@@ -210,3 +210,22 @@ describe('rework the market returns', () => {
     await t.host.stop()
   })
 })
+
+describe('at boot', () => {
+  it('a pass while the canvas cannot be read yet does not throw, and the seats sync on a later pass (#617 class)', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    let booting = true
+    const host = new SuperagentHost({ canvasTeam: (name: string) => { if (booting) throw new ReferenceError("Cannot access 'cardCache' before initialization"); return name === 'team' ? { local: ['session-r', 'session-a'], remote: [] } : undefined },
+      home: mkdtempSync(join(tmpdir(), 'sa-named-boot-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1', sessionName: (id: string) => id, sessionLoaded: () => true, runCli: async () => '{}' } as never)
+    booting = false
+    expect(host.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true } }, () => true)).toMatchObject({ ok: true })
+    booting = true
+    expect(() => host.named.tick()).not.toThrow()
+    expect(() => host.pass()).not.toThrow()
+    booting = false
+    host.pass()
+    expect(host.named.seatIdOf('session-a')).toMatch(/^seat-/)
+    await host.stop()
+  })
+})

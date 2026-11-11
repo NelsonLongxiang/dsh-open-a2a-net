@@ -258,7 +258,9 @@ export class NamedDispatch {
 
   /** One pass: a held ticket whose seat can take work again goes to it; a question not asked yet is asked. */
   tick(): void {
-    this.syncSeats()
+    // The first pass runs while the plugin is still starting, before the canvas can be read: nothing is lost by trying again
+    // on a later pass, and a throw here would fail the plugin's start (as #617 did for the seat role).
+    try { this.syncSeats() } catch (error) { this.d.logger.warn('superagent: seats not synced yet: %s', String(error)); return }
     for (const [ticketId, hold] of Object.entries(this.data.holds)) {
       const ticket = this.d.ticket(ticketId)
       if (ticket === undefined || ticket.ended !== undefined) { Reflect.deleteProperty(this.data.holds, ticketId); this.save(); continue }
