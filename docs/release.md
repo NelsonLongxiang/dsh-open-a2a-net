@@ -5,6 +5,21 @@
 
 > 2026-11-10（#569）：预览版从 npm 回读、核对通过后，立即单独提交一次「记录已发布」：把该版本一节的标题改成「已发布到 npm 的 preview 标签」，并写上状态行（标签指向的提交、npm 发布时间、shasum、integrity、回读结果）。不要等到下一版发版时才顺手改。
 
+## 0.8.1-preview.10（预览版候选，待评审，未发布）
+
+- 基线：next/0.8 合入 master 后的合并提交（候选提交在发版 PR 里写明）。相对已发布的 0.8.1-preview.9 有下列改动。
+- 升级、回退照 [0.8.1 升级检查](ops/0.8.1-upgrade-check.md)。
+
+### 修复
+
+- 绕过 ygl-trees 的「ambiguous project」（#587）：ygl-trees 的 MCP 在 `agent brief` 和 `project show` 上丢掉显式的 project（ygl-trees#260，0.122.0 仍在），工作区里有多个项目时，每张工单的第一步都会失败。成员和观察者的人设与派单卡写明：遇到这个报错，先用 `mcp__ygl__write domain project action use` 为本会话选中项目，再调一次（每个团队会话有自己的选择，不影响其他会话）；总工只读，改用带 project 的 `kb search`。
+
+### 本版已披露限制
+
+- 0.8.1-preview.9 一节列出的限制仍然适用。
+- 这是人设和派单卡文字的变化，绕过办法在测试机上由成员自行验证过（先 `project use` 再 `agent brief`）；ygl-trees#260 修复并在各主机升级后，这几处会删掉。
+- 不用团队预设、自行挂载 ygl-trees MCP 的会话没有独立的 `YGL_SESSION`，在那里 `project use` 会影响共用默认选择的其他进程，不建议照做。
+
 ## 0.8.1-preview.9（预览版，已发布到 npm 的 preview 标签）
 
 - 状态（2026-11-11）：标签 `v0.8.1-preview.9` 指向 c89c48b（发版 PR #585）。2026-11-11T05:15:05Z 发布到 npmjs，dist-tag 为 `preview`，`latest` 仍是 0.7.0。shasum `7b8938ab9b388233eff342df9ac150c0f40c70bf`，integrity `sha512-6ZCEGAjFPdKgfQI2/nbAKvGpMD0XKQYjc7cLeTt+vqo21OZBY8bMQasFQmkuSWTTcIMBJKT1Y8Fk8Akt+ZINiw==`。从 npmjs 回读的包与审计过的包逐字节相同。GitHub Release 为 prerelease。未发布到 Gitea。

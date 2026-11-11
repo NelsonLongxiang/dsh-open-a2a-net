@@ -32,6 +32,8 @@ describe('ygl-trees on the assignment card', () => {
     const m = await team(true)
     expect(m.card).toContain('team memory (ygl-trees)')
     expect(m.card).toContain('mcp__ygl__read domain agent action brief')
+    // ygl-trees MCP drops an explicit project on agent brief (ygl-trees#260): select it for this session, then brief again.
+    expect(m.card).toContain('ambiguous project: mcp__ygl__write domain project action use')
     expect(m.card).toContain('pass the ids you wrote in ygl on a2a_ticket_report')
     await m.h.stop()
     const n = await team(false)
