@@ -9,6 +9,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { parseFileRef } from '../../blob-store.ts'
 
 export type DecisionLevel = 'P0' | 'P1' | 'P2' | 'P3'
 const LEVELS: readonly string[] = ['P0', 'P1', 'P2', 'P3']
@@ -27,7 +28,7 @@ export interface StoredCard extends DecisionSpec {
   readonly id: string
   readonly question: string
   readonly reason?: string
-  readonly source: 'router' | 'observer' | 'ticket' | 'health' | 'tool'
+  readonly source: 'router' | 'observer' | 'ticket' | 'health' | 'tool' | 'outbound'
   readonly by: string
   readonly ticketId?: string
   readonly at: string
@@ -56,6 +57,19 @@ export function parseDecision(raw: { options?: unknown; recommended?: unknown; l
 
 /** The stable id of a member's question on a ticket: a new question is a new card. */
 export const ticketCardId = (ticketId: string, question: string): string => `t-${createHash('sha256').update(`${ticketId}\n${question}`).digest('hex').slice(0, 12)}`
+
+/** The owner's files on a decision (C8): `[A2A file] v1 …` reference lines, at most DECISION_FILES_MAX. */
+export function decisionFiles(files: unknown): { ok: true; files: DecisionFile[] } | { ok: false; code: string; error: string } {
+  const lines = files === undefined || files === null ? [] : Array.isArray(files) ? files.map(f => String(f).trim()) : [String(files)]
+  if (lines.length > DECISION_FILES_MAX) return { ok: false, code: 'files', error: `a decision carries at most ${String(DECISION_FILES_MAX)} files` }
+  const attached: DecisionFile[] = []
+  for (const line of lines) {
+    const ref = parseFileRef(line)
+    if (ref === undefined) return { ok: false, code: 'files', error: 'each file must be an "[A2A file] v1 …" reference line' }
+    attached.push({ sha256: ref.sha256, size: ref.size, name: ref.name, ref: line })
+  }
+  return { ok: true, files: attached }
+}
 
 export class DecisionBook {
   private cards: StoredCard[]
@@ -106,7 +120,7 @@ export class DecisionBook {
   }
 
   /** A card of the router's or an observer's own. An identical open question returns the existing card. */
-  propose(input: { source: 'router' | 'observer' | 'health' | 'tool'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
+  propose(input: { source: 'router' | 'observer' | 'health' | 'tool' | 'outbound'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
     const question = input.question.trim()
     if (question === '' || question.length > QUESTION_MAX) return { ok: false, code: 'question', error: `question is required, at most ${String(QUESTION_MAX)} characters` }
     const mine = this.open().filter(card => card.source === input.source && card.by === input.by)

@@ -17,6 +17,7 @@ export interface TeamFieldValues {
   readonly sources?: { readonly workbench?: boolean; readonly a2a?: boolean; readonly github?: boolean }
   /** Tools the owner granted beyond each role's list (design tool-requests). */
   readonly extraTools?: { readonly router?: readonly string[]; readonly member?: readonly string[] }
+  readonly approvers?: readonly string[]
   readonly reviewer?: string
   readonly repos?: Readonly<Record<string, string>>
   readonly profiles?: Readonly<Record<string, { readonly role?: string; readonly rules: readonly TeamRule[] }>>
@@ -173,6 +174,10 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
   const memberTools = area('成员和观察者额外放行的工具', (s.extraTools?.member ?? []).join('\n'), 2, '一行一个工具名，例如 gitbash')
   toolsBox.append(routerTools, memberTools)
 
+  const approverBox = section('审批人', '团队想请别的团队做事时，会提一张「对外请求」P0 决策卡。除了你，这里列出的成员或观察者也能代为审批（必须写理由，不能批自己提的卡）。填会话 id，一行一个；总工不能当审批人。这一块的修改需要在已登录的界面里保存。')
+  const approvers = area('审批人', (s.approvers ?? []).join('\n'), 2, '一行一个会话 id，例如 session-0123abcd-…')
+  approverBox.appendChild(approvers)
+
   const reviewBox = section('送审地址', '填了之后，工单开的 PR 会在每个新提交上发一次评审请求，结论只供合并的人参考。必须是已建链的 A2A 地址，留空表示不送审。')
   const reviewer = input('送审地址', s.reviewer ?? '', 'dsh/xxxxxxxx')
   reviewBox.appendChild(reviewer)
@@ -230,9 +235,13 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
     const routerList = linesOf(routerTools.value), memberList = linesOf(memberTools.value)
     const toolsChanged = { router: !same(routerList, s.extraTools?.router ?? []), member: !same(memberList, s.extraTools?.member ?? []) }
     if (toolsChanged.router || toolsChanged.member) out.extraTools = { ...(toolsChanged.router ? { router: routerList } : {}), ...(toolsChanged.member ? { member: memberList } : {}) }
+    // Approvers go out only when the list changed, like granted tools (outbound-requests O3: owner-only).
+    const approverList = linesOf(approvers.value)
+    if (approverList.length > 10 || approverList.some(id => !/^session-[A-Za-z0-9-]{1,64}$/.test(id))) return { error: '审批人要写会话 id（session-…），最多 10 个' }
+    if (!same(approverList, s.approvers ?? [])) out.approvers = approverList
     const address = reviewer.value.trim()
     if (address !== (s.reviewer ?? '')) out.reviewer = address === '' ? null : address
     return { patch: out }
   }
-  return { nodes: [rulesBox, dispatchBox, profilesBox, execBox, botsBox, repoBox, githubBox, toolsBox, reviewBox], patch }
+  return { nodes: [rulesBox, dispatchBox, profilesBox, execBox, botsBox, repoBox, githubBox, toolsBox, approverBox, reviewBox], patch }
 }

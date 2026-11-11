@@ -101,6 +101,14 @@ Every role has `a2a_whoami` (which session and team it is). A member reads its o
 
 The three presets mount the ygl-trees MCP server as `ygl` (`ygl-trees mcp`, found on the host's PATH) and tell the team to keep what it learns there: a2a carries the work and its receipts, ygl-trees keeps the evidence, the judgements and the reusable notes. The MCP server runs outside the session's sandbox, so every team session reaches one shared workspace (the team's own: `SUPERAGENT_YGL_HOME`, or `~/.ygl-trees-superagent`; create it once with `ygl-trees db init`); the CLI in a session's shell reaches only its own directory. The router has `mcp__ygl__read` only and looks up earlier work before deciding; members and observers also have `mcp__ygl__write`, `mcp__ygl__verify` and `mcp__ygl__doctor`: they open a ticket with agent brief and a kb search, record evidence and claims as they go, kb add the reusable lesson before ready, and name the ids in their report. A check passes only from a verify run or the project's tests. Without ygl-trees on the host's PATH the tools do not appear; the session says so and installs nothing.
 
+## Asking another team
+
+A team session does not message other teams itself. When a ticket needs another team, it calls `a2a_outbound_request { ticket_id, address, text, why }`. The router may ask on any open ticket; a member or an observer only on the ticket it holds. The address is another team's: `<zone>/<id8>`, or `<zone>/canvas/<name>`, optionally with `@<fp8>`. The team's A2A Source must be on.
+
+The request becomes a P0 card with source `outbound`. It is decided by the owner on the team page, or by an approver: a member or observer the owner lists in the team setting `approvers` (owner-only). An approver lists the waiting outbound cards with `a2a_ticket_read` kind `outbound` and decides with `a2a_decision_decide { card_id, option, reason }`. It can decide only outbound cards, never one it raised itself, and always with a reason.
+
+On approval, the host sends exactly the card's text from the team's A2A identity, under a header naming the team and the ticket. The other team's formal receipt comes back to the ticket as a note. A ticket has at most three outbound requests waiting or unanswered. Design: `docs/design/superagent-outbound-requests.md`.
+
 ## Decision cards
 
 What the owner has to decide is a card: a question, 2 to 6 options, the option you recommend, and a level (P0 irreversible or production, P1 significant, P2 routine and easy to undo, P3 trivial; no level counts as P1). The cards wait in the right bar's **待决策** view. P2 and P3 can be approved with one click; P0 and P1 need an option chosen.
