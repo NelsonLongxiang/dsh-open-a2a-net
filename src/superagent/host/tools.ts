@@ -462,6 +462,43 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     },
   }))
 
+  // Design outbound-requests O1, O2: asking another team on a ticket, through a P0 card the owner or an approver decides.
+  ctx.tools.register(defineTool({
+    name: 'a2a_outbound_request',
+    description: 'Team session only: ask another team for something this ticket needs. You do not message other teams yourself: this raises a P0 decision card with the address and your exact text, and the host sends it from the team\'s A2A identity once the owner, or an approver the owner named, approves. Their formal receipt comes back to the ticket as a note. The router may ask on any open ticket; a member or an observer only on the ticket it holds. address: another team\'s, <zone>/<id8> or <zone>/canvas/<name> (optionally @<fp8>).',
+    parameters: {
+      ticket_id: { type: 'string', required: true, description: 'The open ticket this is for.' },
+      address: { type: 'string', required: true, description: 'The other team\'s A2A address.' },
+      text: { type: 'string', required: true, description: 'Exactly what to send (at most 4000 characters); nothing else from the ticket goes with it.' },
+      why: { type: 'string', required: true, description: 'Why the ticket needs it, for whoever decides.' },
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_outbound_request', value) },
+    presentCall: args => ({ card: 'generic', title: `a2a_outbound_request → ${String(args.address)}`, kind: 'other', rawInput: args }),
+    execute: async (args: { ticket_id?: string; address?: string; text?: string; why?: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host(exec), me = callerOf(exec)
+      if (h === undefined || me === undefined) return { ok: false, code: 'not-team', error: 'a2a_outbound_request serves only the sessions of a superagent team on this host' }
+      return h.requestOutbound(me, args) as Record<string, JsonValue>
+    },
+  }))
+
+  // Design outbound-requests O3: an approver the owner named decides outbound cards it did not raise, with a reason.
+  ctx.tools.register(defineTool({
+    name: 'a2a_decision_decide',
+    description: 'Approvers only (a member or observer the owner named in the team settings): decide a waiting outbound card, a request to send something to another team. Read the card first (a2a_ticket_read kind decisions, or the card text you were shown). option: 批准：以团队名义发出, or 拒绝. Give the reason. You cannot decide a card you raised, nor any other kind of card.',
+    parameters: {
+      card_id: { type: 'string', required: true, description: 'The card\'s id.' },
+      option: { type: 'string', required: true, description: 'One of the card\'s options.' },
+      reason: { type: 'string', required: true, description: 'Why, in a sentence or two; it is recorded with the decision.' },
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_decision_decide', value) },
+    presentCall: args => ({ card: 'generic', title: `a2a_decision_decide ${String(args.card_id)}`, kind: 'other', rawInput: args }),
+    execute: async (args: { card_id?: string; option?: string; reason?: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host(exec), me = callerOf(exec)
+      if (h === undefined || me === undefined) return { ok: false, code: 'not-team', error: 'a2a_decision_decide serves only the sessions of a superagent team on this host' }
+      return h.approverDecide(me, String(args.card_id ?? ''), args.option, args.reason) as Record<string, JsonValue>
+    },
+  }))
+
   // A member reads its own tickets, an observer its team's tickets and decisions; nobody but the router reads candidates or
   // acts on tickets through this (owner 2026-11-10: a scheduled turn reads where things stand before it acts).
   ctx.tools.register(defineTool({

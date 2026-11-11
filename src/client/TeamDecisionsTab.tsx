@@ -66,7 +66,7 @@ function Card({ row, t, done }: { readonly row: DecisionRow; readonly done: () =
     <article className={`${styles.card} ${dragging ? styles.dragging : ''}`} {...dropProps}>
       <header className={styles.cardHead}>
         <span className={styles.level} data-level={row.level}>{row.level}</span>
-        <span className={styles.hint}>{row.team} · {t(row.source === 'router' ? 'team.fromRouter' : row.source === 'observer' ? 'team.fromObserver' : row.source === 'health' ? 'team.fromHealth' : row.source === 'tool' ? 'team.fromTool' : 'team.fromMember')}{row.title !== undefined ? ` · ${row.title}` : ''}</span>
+        <span className={styles.hint}>{row.team} · {t(row.source === 'router' ? 'team.fromRouter' : row.source === 'observer' ? 'team.fromObserver' : row.source === 'health' ? 'team.fromHealth' : row.source === 'tool' ? 'team.fromTool' : row.source === 'outbound' ? 'team.fromOutbound' : 'team.fromMember')}{row.title !== undefined ? ` · ${row.title}` : ''}</span>
       </header>
       <p className={styles.question}>{row.question}</p>
       {row.reason !== undefined && <p className={styles.hint}>{row.reason}</p>}
