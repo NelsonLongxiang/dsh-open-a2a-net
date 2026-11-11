@@ -64,7 +64,7 @@ import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
 import {FollowupAcceptanceUnknown,ACCEPTANCE_UNKNOWN_NOTE,ACCEPTANCE_INSERTED_NOTE} from './followup-admission.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
-import { receiptFailure, retryReceiptDelivery, transientReceiptFailure, receiptRetryWait } from './receipt-retry.ts'
+import { receiptFailure, retryReceiptDelivery, transientReceiptFailure, receiptRetryWait, readReceiptReplay, RECEIPT_RETRYABLE } from './receipt-retry.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
@@ -4356,6 +4356,16 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       if (answer?.found === true && answer.status === 'failed') {
         return { ok: false, error: answer.error, code: -32000, task_id: taskIdFromCaller }
       }
+    }
+    // A receipt resent under its fixed transport id that comes back -32003 (same id, same fingerprint) was
+    // already taken by this receiver: read the replay through its query answer instead of resending into the
+    // same verdict until the budget runs out. Only receipts: any other message keeps its -32003 untouched.
+    if (!result.ok && result.code === WIRE_ERROR_REPLAY_REJECTED && taskIdFromCaller !== undefined && taskIdFromCaller !== '' && parseReceipt(message) !== null) {
+      const fingerprint = peerPayloadFingerprint({ caller: callerSession ?? session, message, noWait: asyncMode, team })
+      const reading = readReceiptReplay(await client.queryOutcome(url, taskIdFromCaller, fingerprint, signal))
+      if (reading === 'delivered') return { ok: true, team, reply: 'receipt already delivered: the receiver answered an idempotency replay for this transport id', task_id: taskIdFromCaller, context_id: contextId ?? '', task_status: 'TASK_STATE_COMPLETED', receipt: 'none' }
+      if (reading === 'retry') return { ...result, [RECEIPT_RETRYABLE]: true }
+      return { ...result, error: `${result.error} (the receiver recorded the prior attempt of this receipt as failed)` }
     }
     return result
   }
