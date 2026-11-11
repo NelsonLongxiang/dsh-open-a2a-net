@@ -123,8 +123,8 @@ export const SEAT_ROLES = ['router', 'member', 'observer'] as const
  * role — `router` until a member holds the work (an acknowledgement, a queued step), then the member.
  */
 export interface ReceiptBy { seat: string; name?: string; team?: string; role?: (typeof SEAT_ROLES)[number] }
-/** One product of the work, named by the system that keeps it (`kind` such as table, file, sop-run). */
-export interface ReceiptArtifact { kind: string; id: string }
+/** One product of the work, named by the system that keeps it (`kind` such as table, file, sop-run), with a title for people (display only). */
+export interface ReceiptArtifact { kind: string; id: string; title?: string }
 /** A question for the caller: its id, its text, the answers offered and the one taken when nobody answers. */
 export interface ReceiptQuestion { id: string; text: string; options?: string[]; default?: string }
 
@@ -157,7 +157,8 @@ export function parseArtifacts(value: unknown): ReceiptArtifact[] | undefined {
   for (const item of value.slice(0, RECEIPT_FIELD_LIMITS.artifacts)) {
     if (item === null || typeof item !== 'object' || Array.isArray(item)) continue
     const kind = shortText((item as Record<string, unknown>)['kind']), id = shortText((item as Record<string, unknown>)['id'])
-    if (kind !== undefined && id !== undefined) items.push({ kind, id })
+    const title = shortText((item as Record<string, unknown>)['title'])
+    if (kind !== undefined && id !== undefined) items.push({ kind, id, ...(title !== undefined ? { title } : {}) })
   }
   return items.length > 0 ? items : undefined
 }
@@ -340,10 +341,18 @@ export function receiptExtras(flag: (name: string) => string | undefined, attent
   } else if (flag('--by-name') !== undefined || flag('--by-team') !== undefined || flag('--by-role') !== undefined) return { error: '--by-name, --by-team and --by-role go with --by' }
   const artifacts = flag('--artifacts')
   if (artifacts !== undefined) {
-    const items = artifacts.split(',').map(item => item.trim()).filter(item => item !== '')
-    const parsed = items.map(item => { const at = item.indexOf(':'); return at > 0 ? { kind: item.slice(0, at), id: item.slice(at + 1) } : undefined })
-    if (items.length === 0 || items.length > RECEIPT_FIELD_LIMITS.artifacts || parsed.some(item => item === undefined || parseArtifacts([item]) === undefined)) {
-      return { error: `--artifacts takes up to ${String(RECEIPT_FIELD_LIMITS.artifacts)} KIND:ID items, comma-separated` }
+    // KIND:ID[,KIND:ID…], or a JSON array [{kind, id, title?}] when titles are wanted (a title may hold commas and colons).
+    let parsed: Array<{ kind: string; id: string; title?: string } | undefined>
+    if (artifacts.trim().startsWith('[')) {
+      let list: unknown
+      try { list = JSON.parse(artifacts) } catch { list = undefined }
+      parsed = Array.isArray(list) ? list.map(item => { const one = parseArtifacts([item]); return one?.[0] }) : [undefined]
+    } else {
+      const items = artifacts.split(',').map(item => item.trim()).filter(item => item !== '')
+      parsed = items.map(item => { const at = item.indexOf(':'); return at > 0 ? { kind: item.slice(0, at), id: item.slice(at + 1) } : undefined })
+    }
+    if (parsed.length === 0 || parsed.length > RECEIPT_FIELD_LIMITS.artifacts || parsed.some(item => item === undefined || parseArtifacts([item]) === undefined)) {
+      return { error: `--artifacts takes up to ${String(RECEIPT_FIELD_LIMITS.artifacts)} KIND:ID items, comma-separated, or a JSON array of {kind, id, title?}` }
     }
     fields.artifacts = parsed as ReceiptArtifact[]
   }
