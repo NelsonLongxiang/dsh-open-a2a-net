@@ -19,6 +19,7 @@ import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candida
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
 import { ProgressReceipts } from './progress.ts'
+import { credentialAccess, redactedPreview, type CredentialKind } from './credential-audit.ts'
 import { RosterReports } from './roster.ts'
 import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
 import { ReviewRequests } from './review-requests.ts'
@@ -57,6 +58,11 @@ export function workerRemotes(settings: Pick<TeamSettings, 'remoteMembers' | 'bo
   return settings.remoteMembers.map(r => r.ref).filter(ref => !bots.has(ref.split('@')[0]))
 }
 
+/** The credential-access audit: at most one owner card per session and kind in this long, and how many hits are kept. */
+export const CREDENTIAL_CARD_GAP_MS = 10 * 60_000
+const CREDENTIAL_HITS_KEPT = 100
+const CREDENTIAL_KIND_TEXT: Record<CredentialKind, string> = { 'credential-file': '凭据类文件或目录', 'authorization-header': '带 Authorization 的请求', 'other-session': '别的会话的文件' }
+
 export class SuperagentHost {
   readonly store: JsonRepositories
   readonly engine: Engine
@@ -94,6 +100,9 @@ export class SuperagentHost {
   /** Refusals at the team's edge by rule, and the latest ones (noteRefusal). */
   private readonly refusalCounts = new Map<string, number>()
   private readonly refusalRecent: Array<{ at: string; rule: string; caller?: string; target?: string }> = []
+  /** The credential-access audit's recent hits (kinds and a redacted preview, never what was read) and when each session last raised a card. */
+  private readonly credentialHits: Array<{ at: string; session: string; role: string; tool: string; kinds: readonly CredentialKind[]; preview: string; card?: string }> = []
+  private readonly credentialCardAt = new Map<string, number>()
 
   constructor(private readonly d: SuperagentHostDeps) {
     const dir = d.stateDir ?? join(d.home, 'superagent')
@@ -1082,6 +1091,34 @@ export class SuperagentHost {
     return `${lead}${near} Open ${kind}s: ${open.slice(0, 20).join(', ')}. Copy the id exactly from this list or the card.`
   }
 
+  /**
+   * The credential-access audit (local market trial, 2026-11-11): a team session's tool call that touches credential
+   * files, an Authorization header or another session's files is recorded — the kinds, the tool, a redacted preview,
+   * never what was read — and the owner gets a P1 card, at most one per session and kind every 10 minutes. It does not
+   * block: a team session's sandbox limits writes, not reads, and the boundary is the owner's to set.
+   */
+  auditCall(session: string, role: string, tool: string, args: unknown): CredentialKind[] {
+    const kinds = credentialAccess(args)
+    if (kinds.length === 0) return kinds
+    const at = this.now(), nowMs = Date.parse(at)
+    const preview = redactedPreview(args)
+    const key = `${session}|${kinds.join(',')}`
+    const last = this.credentialCardAt.get(key)
+    let card: string | undefined
+    if (last === undefined || nowMs - last >= CREDENTIAL_CARD_GAP_MS) {
+      this.credentialCardAt.set(key, nowMs)
+      const who = this.memberName(session)
+      const what = kinds.map(kind => CREDENTIAL_KIND_TEXT[kind]).join('、')
+      const out = this.decisions.propose({ source: 'health', by: `credential:${session}`, question: `${who} 的 ${tool} 调用触及${what}（${at}）`, reason: `宿主只记录不拦截；命令预览（已遮蔽）：${preview}`, at,
+        spec: { level: 'P1', options: ['知道了', '停掉这个会话的工单', '在团队设置里禁用这个工具'], recommended: '知道了' } })
+      if (out.ok) card = out.id
+    }
+    this.credentialHits.push({ at, session, role, tool, kinds, preview, ...(card !== undefined ? { card } : {}) })
+    if (this.credentialHits.length > CREDENTIAL_HITS_KEPT) this.credentialHits.splice(0, this.credentialHits.length - CREDENTIAL_HITS_KEPT)
+    this.d.logger.warn('superagent: credential-access audit: %s (%s) %s touched %s', session, role, tool, kinds.join(','))
+    return kinds
+  }
+
   noteRefusal(rule: string, detail: { caller?: string; target?: string } = {}): void {
     this.refusalCounts.set(rule, (this.refusalCounts.get(rule) ?? 0) + 1)
     this.refusalRecent.push({ at: (this.d.now ?? (() => new Date().toISOString()))(), rule, ...(detail.caller !== undefined ? { caller: detail.caller } : {}), ...(detail.target !== undefined ? { target: detail.target } : {}) })
@@ -1242,6 +1279,7 @@ export class SuperagentHost {
       ruleChanges: this.ruleChanges.view(),
       a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },
       refusals: { counts: Object.fromEntries(this.refusalCounts), recent: [...this.refusalRecent] },
+      credentialAudit: [...this.credentialHits],
       settingsHistory: this.settingsHistory.list(),
       modelResults: Object.fromEntries(this.modelResults),
       ...(this.prs.problem !== undefined ? { pullRequestProblem: this.prs.problem } : {}),

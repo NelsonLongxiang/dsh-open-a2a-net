@@ -175,6 +175,8 @@ export class RoleTools {
 
   /** The role an agent acts in: its own, or the nearest parent session's (a subagent inherits it). */
   roleOfAgent(agent: RoleAgent | undefined): Role | undefined { return this.roleSessionOf(agent)?.role }
+  /** The team session an agent belongs to (itself, or the session a subagent descends from), with its role. */
+  heldBy(agent: RoleAgent | undefined): { role: Role; session: string } | undefined { return this.roleSessionOf(agent) }
 
   /** The role an agent acts in and the session that holds it (its own, or the nearest parent's). */
   private roleSessionOf(agent: RoleAgent | undefined): { role: Role; session: string } | undefined {
