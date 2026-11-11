@@ -98,7 +98,7 @@ receipt:  receipt <task_id> [--attention | --acknowledged | --outcome O] [--to T
           task id ack-<task_id>, so the later receipt is not refused
           --attention --question-id ID [--options 'A|B'] [--default X]: a question (the one line is its text) that
           marks the caller's row instead of settling it; it rides attention-<task_id>-<ID>, so the result still follows
-          --by SEAT [--by-name N] [--by-team T] [--by-role router|member|observer]: who took the work up; --artifacts KIND:ID[,…]: what it produced
+          --by SEAT [--by-name N] [--by-team T] [--by-role router|member|observer]: who took the work up; --artifacts KIND:ID[,…] or '[{"kind","id","title"}]': what it produced
           --progress N --state queued|working|waiting|blocked [--ahead K] [--tickets JSON]: a progress step (the one
           line is its summary) that marks the caller's row and settles nothing; it rides progress-<task_id>-<N>
 
@@ -588,8 +588,12 @@ function receiptExtras(attention, text) {
   } else if (name !== undefined || team !== undefined || role !== undefined) usage('receipt: --by-name, --by-team and --by-role go with --by')
   const artifacts = flag('--artifacts')
   if (artifacts !== undefined) {
-    const items = artifacts.split(',').map(i => i.trim()).filter(i => i !== '').map(i => { const at = i.indexOf(':'); return at > 0 ? { kind: i.slice(0, at), id: i.slice(at + 1) } : undefined })
-    if (items.length === 0 || items.length > MAX_ARTIFACTS || items.some(i => i === undefined || !ok(i.kind) || !ok(i.id))) usage(`receipt: --artifacts takes up to ${MAX_ARTIFACTS} KIND:ID items, comma-separated`)
+    let items
+    if (artifacts.trim().startsWith('[')) {
+      try { items = JSON.parse(artifacts) } catch { items = undefined }
+      items = Array.isArray(items) ? items.map(i => i !== null && typeof i === 'object' ? { kind: i.kind, id: i.id, ...(ok(i.title) ? { title: i.title } : {}) } : undefined) : [undefined]
+    } else items = artifacts.split(',').map(i => i.trim()).filter(i => i !== '').map(i => { const at = i.indexOf(':'); return at > 0 ? { kind: i.slice(0, at), id: i.slice(at + 1) } : undefined })
+    if (items.length === 0 || items.length > MAX_ARTIFACTS || items.some(i => i === undefined || !ok(i.kind) || !ok(i.id))) usage(`receipt: --artifacts takes up to ${MAX_ARTIFACTS} KIND:ID items, comma-separated, or a JSON array of {kind, id, title?}`)
     out.artifacts = items
   }
   const id = flag('--question-id'), options = flag('--options'), fallback = flag('--default')
