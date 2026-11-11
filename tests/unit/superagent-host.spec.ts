@@ -378,6 +378,12 @@ describe('PR-B2b: the a2a Channel through the hosted a2a-watch', () => {
     const doneReceipts = endings().filter(a => a[1] === done.task)
     expect(doneReceipts).toHaveLength(1)
     expect(doneReceipts[0]!.at(-1)).toContain('ticket/t7 0123abc')
+    // market N1c: the ending receipt names the member that did the work, even though the ticket has ended; the
+    // acknowledgement, sent before any member held it, names the router.
+    expect(doneReceipts[0]!.slice(doneReceipts[0]!.indexOf('--by'), doneReceipts[0]!.indexOf('--by') + 2)).toEqual(['--by', 'session-m'])
+    const ack = calls.find(a => a[0] === 'receipt' && a[1] === done.task && a.includes('--acknowledged'))!
+    expect(ack.slice(ack.indexOf('--by'), ack.indexOf('--by') + 2)).toEqual(['--by', 'session-r'])
+    expect(host.seatOf(done.ticketId)).toEqual({ seat: 'session-m' })
   })
   it('a caller no longer linked makes the message gone (dropped), never sent', async () => {
     const h = await hostWith(args => args[0] === 'admission' ? JSON.stringify({ admitted: false }) : '{}')

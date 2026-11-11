@@ -396,11 +396,11 @@ export class SuperagentHost {
   private memberName(id: string): string { return this.d.sessionName?.(id) ?? id }
 
   /**
-   * market N1c: the seat a ticket's receipts name as the one that took it up — its member once one holds it, else the
-   * router that accepted it — as its A2A handle (the session id where the host has none) and its name.
+   * market N1c: the seat a ticket's receipts name as the one that took it up — its member once one holds it (the one it
+   * last ran on, after it ended), else the router that accepted it — as its A2A handle (the session id where the host has none) and its name.
    */
   seatOf(ticketId: string): { seat: string; name?: string } | undefined {
-    const session = this.executor.memberOfTicket(ticketId)?.member ?? this.settingsValue.router
+    const session = this.executor.memberOfTicket(ticketId)?.member ?? this.executor.lastMemberOf(ticketId) ?? this.settingsValue.router
     if (session === undefined || session === '') return undefined
     const seat = this.d.handleOf?.(session) ?? session
     const name = this.d.sessionName?.(session)
