@@ -50,6 +50,8 @@ export interface A2aSourceDeps {
   readonly resultPending?: (ticketId: string, task: string) => boolean
   /** market N1c: the seat a ticket's receipts name as the one that took it up (its member, else the router). */
   readonly seatOf?: (ticketId: string) => ReceiptSeat | undefined
+  /** superagent-split S4: a split parent's parts and, once it ended, its outcome — every receipt for it carries them. */
+  readonly splitOf?: (ticketId: string) => { tickets: readonly unknown[]; outcome?: 'completed' | 'failed' } | undefined
   /** market N1d: the answers a ticket's open question offers (from the member's question report) and the recommended one. */
   readonly choicesOf?: (ticketId: string) => SendOptions['choices']
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
@@ -281,9 +283,20 @@ export class A2aSource {
   async send(message: OutboundMessage, options: { outcome?: ReceiptOutcome; tickets?: readonly unknown[] } = {}): Promise<'sent' | 'gone'> {
     const task = message.channel.address.task
     const hold = task !== undefined && message.ticketId !== undefined && this.d.resultPending?.(message.ticketId, task) === true
+    // superagent-split S4: whoever sends a split request's result (the router's reply or the host's ending receipt), it
+    // carries the parts and the combined outcome, and starts with the marker the requester reads.
+    const split = message.ticketId !== undefined ? this.d.splitOf?.(message.ticketId) : undefined
+    if (split !== undefined) {
+      if (options.tickets === undefined) options = { ...options, tickets: split.tickets }
+      if (split.outcome !== undefined) {
+        if (options.outcome === undefined) options = { ...options, outcome: split.outcome }
+        const marker = split.outcome === 'failed' ? '部分完成（有子项未完成）' : '全部子项完成'
+        if (!message.text.trimStart().startsWith(marker)) message = { ...message, text: `${marker}：${message.text}` }
+      }
+    }
     const by = message.ticketId !== undefined ? this.d.seatOf?.(message.ticketId) : undefined
     const choices = message.ticketId !== undefined ? this.d.choicesOf?.(message.ticketId) : undefined
-    if (!hold && options.outcome === undefined && by === undefined && choices === undefined) return await this.kindValue.channel.send({ commands: this.context.commands }, message)
+    if (!hold && options.outcome === undefined && options.tickets === undefined && by === undefined && choices === undefined) return await this.kindValue.channel.send({ commands: this.context.commands }, message)
     return await sendReply(this.context, this.context.commands, message, undefined, { ...(hold ? { holdReceipt: true } : {}), ...(by !== undefined ? { by } : {}), ...(choices !== undefined ? { choices } : {}), ...options })
   }
 }

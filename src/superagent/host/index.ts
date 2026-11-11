@@ -151,6 +151,7 @@ export class SuperagentHost {
       resultPending: (ticketId, task) => this.resultPending(ticketId, task),
       seatOf: ticketId => this.seatOf(ticketId),
       choicesOf: ticketId => this.choicesOf(ticketId),
+      splitOf: ticketId => this.splitView(ticketId),
       logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.teamSend !== undefined ? { teamSend: d.teamSend } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
     })
     this.roster = new RosterReports({
