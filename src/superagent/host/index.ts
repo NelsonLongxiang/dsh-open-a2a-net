@@ -144,6 +144,7 @@ export class SuperagentHost {
       ticket: id => this.store.tickets.get(id) as never,
       resultPending: (ticketId, task) => this.resultPending(ticketId, task),
       seatOf: ticketId => this.seatOf(ticketId),
+      choicesOf: ticketId => this.choicesOf(ticketId),
       logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.teamSend !== undefined ? { teamSend: d.teamSend } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
     })
     this.roster = new RosterReports({
@@ -437,6 +438,15 @@ export class SuperagentHost {
    */
   private pool(): string[] { const now = this.settings; return [...now.members, ...workerRemotes(now)] }
   private memberName(id: string): string { return this.d.sessionName?.(id) ?? id }
+
+  /** market N1d: the answers the ticket's open question offers, from the card the member's question report raised. */
+  choicesOf(ticketId: string): { options: string[]; recommended?: string } | undefined {
+    const ticket = this.store.tickets.get(ticketId)
+    if (ticket?.attention === undefined) return undefined
+    const card = this.decisions.get(ticketCardId(ticket.id, ticket.attention.question))
+    if (card === undefined || card.options.length === 0) return undefined
+    return { options: [...card.options], ...(card.recommended !== '' ? { recommended: card.recommended } : {}) }
+  }
 
   /**
    * superagent-market-progress-roster P2, the light path: an agent's message that reached a live ticket on that ticket's own
