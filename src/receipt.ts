@@ -116,8 +116,13 @@ export interface ReceiptTicket { id: string; title?: string; seat?: string; stat
 /** Bounds on the added fields: what a parser keeps, and what a sender may claim. */
 export const RECEIPT_FIELD_LIMITS = { text: 2000, short: 200, artifacts: 16, options: 6, questionId: 24, tickets: 16 } as const
 
-/** Who took the work up: a seat id (a session id or a qualified member ref), its display name, the team it serves. */
-export interface ReceiptBy { seat: string; name?: string; team?: string }
+/** The roles a seat can have in its team: the router decides and hands out, a member or an observer does the work. */
+export const SEAT_ROLES = ['router', 'member', 'observer'] as const
+/**
+ * Who took the work up: a seat id (a session id or a qualified member ref), its display name, the team it serves, and its
+ * role — `router` until a member holds the work (an acknowledgement, a queued step), then the member.
+ */
+export interface ReceiptBy { seat: string; name?: string; team?: string; role?: (typeof SEAT_ROLES)[number] }
 /** One product of the work, named by the system that keeps it (`kind` such as table, file, sop-run). */
 export interface ReceiptArtifact { kind: string; id: string }
 /** A question for the caller: its id, its text, the answers offered and the one taken when nobody answers. */
@@ -141,7 +146,8 @@ export function parseBy(value: unknown): ReceiptBy | undefined {
   const seat = shortText(r['seat'])
   if (seat === undefined) return undefined
   const name = shortText(r['name']), team = shortText(r['team'])
-  return { seat, ...(name !== undefined ? { name } : {}), ...(team !== undefined ? { team } : {}) }
+  const role = typeof r['role'] === 'string' && (SEAT_ROLES as readonly string[]).includes(r['role']) ? r['role'] as ReceiptBy['role'] : undefined
+  return { seat, ...(name !== undefined ? { name } : {}), ...(team !== undefined ? { team } : {}), ...(role !== undefined ? { role } : {}) }
 }
 
 /** The `artifacts` field, or undefined when it holds no well-formed item; malformed items are dropped. */
@@ -326,10 +332,12 @@ export function receiptExtras(flag: (name: string) => string | undefined, attent
   }
   const seat = flag('--by')
   if (seat !== undefined) {
-    const by = parseBy({ seat, name: flag('--by-name'), team: flag('--by-team') })
+    const role = flag('--by-role')
+    if (role !== undefined && !(SEAT_ROLES as readonly string[]).includes(role)) return { error: `--by-role takes ${SEAT_ROLES.join(', ')}` }
+    const by = parseBy({ seat, name: flag('--by-name'), team: flag('--by-team'), role })
     if (by === undefined) return { error: `--by takes a seat id of at most ${String(RECEIPT_FIELD_LIMITS.short)} characters` }
     fields.by = by
-  } else if (flag('--by-name') !== undefined || flag('--by-team') !== undefined) return { error: '--by-name and --by-team go with --by' }
+  } else if (flag('--by-name') !== undefined || flag('--by-team') !== undefined || flag('--by-role') !== undefined) return { error: '--by-name, --by-team and --by-role go with --by' }
   const artifacts = flag('--artifacts')
   if (artifacts !== undefined) {
     const items = artifacts.split(',').map(item => item.trim()).filter(item => item !== '')

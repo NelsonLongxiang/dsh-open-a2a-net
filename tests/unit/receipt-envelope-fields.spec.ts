@@ -30,6 +30,15 @@ describe('the added envelope fields', () => {
       .toEqual({ idempotencyKey: 't1', disposition: 'attention', question: { id: 'q1', text: '哪个分支？', options: ['main', 'next'], default: 'main' } })
   })
 
+  it('by carries the seat\'s role; an unknown role is dropped, a bad --by-role is refused', () => {
+    const text = formatReceipt('t1', 'x', { idempotencyKey: 't1', disposition: 'acknowledged', by: { seat: 'dsh/aaaa1111', role: 'router' } })
+    expect(parseReceipt(text)?.envelope?.by).toEqual({ seat: 'dsh/aaaa1111', role: 'router' })
+    expect(parseReceipt(`[A2A receipt] task t1 x\n${JSON.stringify({ idempotencyKey: 't1', by: { seat: 's', role: 'boss' } })}`)?.envelope?.by).toEqual({ seat: 's' })
+    expect(receiptExtras(flags({ '--by': 'dsh/aaaa1111', '--by-role': 'member' }), false, 'x')).toEqual({ fields: { by: { seat: 'dsh/aaaa1111', role: 'member' } } })
+    expect(receiptExtras(flags({ '--by': 'dsh/aaaa1111', '--by-role': 'boss' }), false, 'x')).toHaveProperty('error')
+    expect(receiptExtras(flags({ '--by-role': 'member' }), false, 'x')).toHaveProperty('error')
+  })
+
   it('the switches build the fields or name what is wrong', () => {
     expect(receiptExtras(flags({ '--by': 'dsh/aaaa1111', '--by-name': '后端', '--artifacts': 'table:tb-9, sop-run:r1' }), false, 'x'))
       .toEqual({ fields: { by: { seat: 'dsh/aaaa1111', name: '后端' }, artifacts: [{ kind: 'table', id: 'tb-9' }, { kind: 'sop-run', id: 'r1' }] } })
