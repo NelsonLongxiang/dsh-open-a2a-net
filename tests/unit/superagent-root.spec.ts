@@ -15,7 +15,7 @@ import { formatReceipt } from '../../src/receipt.ts'
 const bot = 'market/0123456789abcdef'
 const DOCS = 'dsh/canvas/docs@0a1b2c3d', SALES = 'ext/canvas/sales@4e5f6a7b'
 
-async function root(options: { slots?: number } = {}) {
+async function root(options: { slots?: number; home?: string } = {}) {
   const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
   const { routeItem } = await import('../../src/superagent/host/tools.ts')
   const routes: Array<{ address: string; text: string; context?: string; task: string }> = []
@@ -23,7 +23,7 @@ async function root(options: { slots?: number } = {}) {
   let n = 0
   const host = new SuperagentHost({
     canvasTeam: (name: string) => name === 'root' ? { local: ['session-r'], remote: [], children: [{ ref: DOCS, slots: options.slots ?? 3 }, { ref: SALES, slots: 1 }] } : undefined,
-    home: mkdtempSync(join(tmpdir(), 'sa-root-')), logger: { info: () => {}, warn: () => {} }, interval: () => () => {},
+    home: options.home ?? mkdtempSync(join(tmpdir(), 'sa-root-')), logger: { info: () => {}, warn: () => {} }, interval: () => () => {},
     deliverToSession: (id: string, text: string) => { if (id === 'session-r') told.push(text); return true },
     homeUrl: () => 'http://127.0.0.1:1', sessionName: (id: string) => id, sessionLoaded: () => true, hostFingerprint: () => '0a1b2c3d',
     runCli: async (args: string[]) => {
@@ -164,6 +164,25 @@ describe('the child\'s receipts move the root ticket', () => {
     expect(t.host.childAuthorizes('dsh/canvas/docs')).toBe(true)
     expect(t.host.childAuthorizes('dsh/canvas/other')).toBe(false)
     await t.host.stop()
+  })
+
+  it('a restart of the root host does not send a child the ticket again: the child is still working on it', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-root-restart-'))
+    const first = await root({ home })
+    const out = first.accept(first.request().trigger, DOCS)
+    await first.settle()
+    expect(first.routes).toHaveLength(1)
+    await first.host.stop()
+    const again = await root({ home })
+    again.host.start()
+    await again.settle()
+    expect(again.routes).toHaveLength(0)
+    // The child's result still lands on the same root ticket.
+    again.receipt(first.routes[0]!.task, 'dsh/canvas/docs', '报告已写好', { outcome: 'completed' })
+    await again.settle()
+    const last = [...again.host.store.tickets.get(out.ticket_id as string)!.assignments].reverse().find(a => a.report !== undefined)!.report!
+    expect(last.state).toBe('ready')
+    await again.host.stop()
   })
 
   it('a failed result fails the root ticket; a receipt for a task the root never sent changes nothing', async () => {

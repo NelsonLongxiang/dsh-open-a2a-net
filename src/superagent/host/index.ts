@@ -141,7 +141,7 @@ export class SuperagentHost {
       cancelTurn: member => this.d.cancelTurn?.(member) === true,
       reportFor: (ticketId, member, state, summary) => { this.engine.report(ticketId, { state, summary: clip(summary, 2_000) }); this.relayReport(ticketId, state, summary); this.pass(); void member },
       ticket: id => this.store.tickets.get(id), trigger: id => this.store.triggers.get(id), logger: d.logger,
-      prepare: () => this.settingsValue.prepare, workspaceOf: member => this.d.workspaceOf?.(member), maxConcurrent: () => this.settingsValue.maxConcurrent ?? 0, capacity: member => this.childSlots(member) ?? 1,
+      prepare: () => this.settingsValue.prepare, workspaceOf: member => this.d.workspaceOf?.(member), maxConcurrent: () => this.settingsValue.maxConcurrent ?? 0, capacity: member => this.childSlots(member) ?? 1, outlivesRestart: isChildTeam,
       ...(d.runPrepare !== undefined ? { runPrepare: d.runPrepare } : {}),
     })
     const outbox: Outbox = {
