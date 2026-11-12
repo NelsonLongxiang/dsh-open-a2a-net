@@ -19,12 +19,13 @@ describe('S3 batch 2: menu and chips wiring (source-level pins)', () => {
     expect(menus).toContain('取消根团队')
   })
 
-  it('a root frame renders child chips with a slots stepper bound to set-team-slots (1–16)', () => {
+  it('a root frame renders child chips with a slots stepper bound to set-team-slots (1–16), reading the CURRENT slots each click (review F1)', () => {
     expect(view).toContain('buildChildChip(document, child')
-    expect(view).toContain("emitAction({ type: 'set-team-slots', name, team: child.ref, slots: child.slots - 1 })")
-    expect(view).toContain("emitAction({ type: 'set-team-slots', name, team: child.ref, slots: child.slots + 1 })")
-    expect(view).toContain('child.slots <= 1')
-    expect(view).toContain('child.slots >= 16')
+    expect(view).toContain('chip.dataset.slots = String(child.slots)')
+    expect(view).toContain('const s = slotsOf(); if (s > 1) emitAction({ type: \'set-team-slots\', name, team: child.ref, slots: s - 1 })')
+    expect(view).toContain('const s = slotsOf(); if (s < 16) emitAction({ type: \'set-team-slots\', name, team: child.ref, slots: s + 1 })')
+    expect(view).toContain('downEl.disabled = child.slots <= 1')
+    expect(view).toContain('upEl.disabled = child.slots >= 16')
   })
 
   it('the drop dispatch moved out unchanged in behaviour (same 入队/reorder/leave emits)', () => {

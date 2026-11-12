@@ -28,7 +28,7 @@
 import type { LampState } from './layout-wire'
 import { buildLayoutDoc, clampDoc, type LayoutDoc, type LayoutRect } from './layout-doc'
 import { FRAME_HEAD_LIFT } from './edges'
-import { drawMemberEdges } from './planning-edges'
+import { drawMemberEdges, drawRootEdges, type RootEdgeInput } from './planning-edges'
 import { createFederationOverlay } from './federation-overlay'
 import { joinedLocalIdsByHandle, membershipIndex, mirrorMemberIds, remoteMemberBoardId } from './planning-member-handles'
 import { attachSessionDrop } from './session-drag'
@@ -40,7 +40,7 @@ import {
 } from './federation'
 import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt, type LayoutViewport } from './viewport'
 import { dropDispatch, localXY } from './planning-drop'
-import { buildChildChip } from './planning-root'
+import { buildChildChip, childChipTitle } from './planning-root'
 import { boardBounds, fitBelowHud, hudBottomOf } from './planning-fit'
 import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters, NODE_W, NODE_H } from './world'
 import { applyAction, settleAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
@@ -311,6 +311,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       renderNodes()
       deps.decorate?.(frameEls, nodeEls)
       drawMemberEdges(svg, model) // planning-edges
+      // superagent-root-team S3 batch 3: the root's dispatch edges, one per child frame this canvas hosts.
+      { const frames = new Map(model.allFrames()); const edges: RootEdgeInput[] = []
+        for (const t of lastTeams) if (t.root === true) for (const c of t.children ?? []) { const childFrame = c.ref.split('/canvas/')[1]?.split('@')[0] ?? ''; if (frames.has(childFrame)) edges.push({ rootFrame: t.name, childFrame, label: c.label, open: c.open }) }
+        drawRootEdges(svg, edges, frames, childCanvas => { window.dispatchEvent(new CustomEvent('dsh-root-child-picked', { detail: { canvas: childCanvas } })) })
+      }
     }
     renderFederation()
   }
@@ -404,14 +409,29 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
           seen.add(child.ref)
           let chip = chipBox.querySelector<HTMLElement>(`[data-ref="${CSS.escape(child.ref)}"]`)
           if (chip === null) {
-            chip = buildChildChip(document, child, () => { notice('info', `${child.label}：只读席位请到该团队自己的页面`) }, () => { emitAction({ type: 'set-team-slots', name, team: child.ref, slots: child.slots }) /* focus follows in batch 3 */ })
-            const down = document.createElement('button'); down.type = 'button'; down.className = 'p-root-step'; down.setAttribute('aria-label', `${child.label} 减一名额`); down.textContent = '−'; down.disabled = child.slots <= 1
-            const up = document.createElement('button'); up.type = 'button'; up.className = 'p-root-step'; up.setAttribute('aria-label', `${child.label} 加一名额`); up.textContent = '+'; up.disabled = child.slots >= 16
-            down.addEventListener('click', () => { emitAction({ type: 'set-team-slots', name, team: child.ref, slots: child.slots - 1 }) })
-            up.addEventListener('click', () => { emitAction({ type: 'set-team-slots', name, team: child.ref, slots: child.slots + 1 }) })
+            chip = buildChildChip(document, child, () => { notice('info', `${child.label}：只读席位请到该团队自己的页面`) })
+            const label = chip.querySelector<HTMLElement>('.planning-root-chip-label')!
+            // S3 review F1/F3: the stepper buttons read the CURRENT slots from dataset each click (a re-render updates
+            // it before the label repaints), so consecutive clicks count from the latest value; they are the chip's
+            // siblings-in-container, not nested buttons (valid HTML, screen readers read the pair).
+            const down = document.createElement('button'); down.type = 'button'; down.className = 'p-root-step'; down.setAttribute('aria-label', `${child.label} 减一名额`); down.textContent = '−'
+            const up = document.createElement('button'); up.type = 'button'; up.className = 'p-root-step'; up.setAttribute('aria-label', `${child.label} 加一名额`); up.textContent = '+'
+            const slotsOf = (): number => Number((chip as HTMLElement).dataset.slots ?? String(child.slots))
+            down.addEventListener('click', () => { const s = slotsOf(); if (s > 1) emitAction({ type: 'set-team-slots', name, team: child.ref, slots: s - 1 }) })
+            up.addEventListener('click', () => { const s = slotsOf(); if (s < 16) emitAction({ type: 'set-team-slots', name, team: child.ref, slots: s + 1 }) })
             chip.append(down, up)
             chipBox.appendChild(chip)
           }
+          // F1: every render refreshes the existing chip — label text, aria, and the clamps — from the fresh child.
+          chip.dataset.slots = String(child.slots)
+          const labelEl = chip.querySelector<HTMLElement>('.planning-root-chip-label')!
+          const title = childChipTitle(child)
+          if (labelEl.textContent !== title) labelEl.textContent = title
+          if (labelEl.getAttribute('aria-label') !== title) labelEl.setAttribute('aria-label', title)
+          const steps = Array.from(chip.querySelectorAll<HTMLButtonElement>('.p-root-step'))
+          const downEl = steps[0], upEl = steps[1]
+          if (downEl !== undefined) downEl.disabled = child.slots <= 1
+          if (upEl !== undefined) upEl.disabled = child.slots >= 16
         }
         for (const chip of Array.from(chipBox.children)) if (!seen.has((chip as HTMLElement).dataset.ref ?? '')) chip.remove()
       } else if (chipBox !== null) chipBox.remove()

@@ -1818,6 +1818,20 @@ export function apply(ctx: Context, config: Config): void {
         indexUrl: import.meta.url, enforceRefused,
         teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
         rootChildrenOpen: canvas => { const open = new Map<string, number>(); for (const row of superagentTeams?.all().find(team => team.settings.canvas === canvas)?.root.open() ?? []) open.set(row.child, (open.get(row.child) ?? 0) + 1); return open },
+        rootIdentityOf: canvas => superagentTeams?.all().find(team => team.settings.canvas === canvas)?.a2a.address,
+        rootChildRegistration: (canvas, childRef, rootHandle) => {
+          const childKey = canvasStore.ownerKeyOf(childRef)
+          if (childKey === undefined) return 'unreachable' as const
+          const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))
+          if (childKey === ownKey) return 'ready' as const // a same-host child: #654's admit-root already registered the root here
+          const entry = [...cardCache.entries()].find(([, e]) => e.card?.publicKey === childKey)
+          if (entry === undefined) return 'unreachable' as const
+          const childHost = entry[1].card as { canvasOrg?: Array<{ name: string; team: string; admits?: string[] }> } | undefined
+          const childCanvas = childRef.split('/canvas/')[1]?.split('@')[0] ?? ''
+          const org = childHost?.canvasOrg?.find(row => row.name === childCanvas)
+          const listed = rootHandle !== undefined && (org?.admits?.includes(rootHandle) ?? false)
+          return (listed ? 'ready' : 'pending-registration') as 'ready' | 'pending-registration'
+        },
         canvasRoot: { store: canvasStore, zone: config.team, ownKey: encodePublicKey(createPublicKey(nodePrivateKey)),
           localSuperagentCanvas: (name: string) => superagentTeams?.all().some(team => team.a2aAddress !== undefined && team.settings.canvas === name) === true,
           peerCards: async () => (await freshCliHomeCards()).flatMap(row => row.card !== undefined ? [{ url: row.url, card: row.card, linked: peerAdmissionLinkState(row.url).link === 'linked' }] : []) },

@@ -14,11 +14,15 @@ describe('planning-root: chips, badges, edges', () => {
     expect(childChipTitle(child({ open: 2, slots: 3 }))).toBe('子团队 docs（z@a1b2c3d4） 2/3 已就绪')
     expect(inFlightLine('root', child({ open: 1 }))).toBe('root → 子团队 docs（z@a1b2c3d4）（在办 1）')
   })
-  it('builds a chip button with the title as its aria label, textContent only', () => {
-    const chip = buildChildChip(document, child(), () => {}, () => {})
-    expect(chip.tagName).toBe('BUTTON')
-    expect(chip.getAttribute('aria-label')).toBe('子团队 docs（z@a1b2c3d4） 0/3 已就绪')
+  it('builds a chip CONTAINER (valid HTML: the stepper buttons are siblings, not nested), textContent only', () => {
+    const chip = buildChildChip(document, child(), () => {})
+    expect(chip.tagName).toBe('DIV')
+    const label = chip.querySelector<HTMLElement>('.planning-root-chip-label')
+    expect(label?.getAttribute('aria-label')).toBe('子团队 docs（z@a1b2c3d4） 0/3 已就绪')
+    expect(label?.getAttribute('role')).toBe('button')
     expect(chip.textContent).not.toMatch(/</)
+    // double-click does nothing until focusing the child frame lands (review F2): no meaningless write
+    expect(chip.querySelector('button')).toBeNull()
   })
 })
 
@@ -37,7 +41,26 @@ describe('planning-root: drop refusals in words', () => {
   })
 })
 
-describe('planning-root-drop: remove with a confirm, refusal shown on the frame', () => {
+// S3 review F1: consecutive stepper clicks count from the LATEST value (dataset.slots), not the first render's.
+describe('planning-root: stepper reads the current slots', () => {
+  it('two consecutive + clicks emit 4 then 5 from a first-render slots of 3', () => {
+    const sent: number[] = []
+    const emit = (n: number): void => { sent.push(n) }
+    const chip = buildChildChip(document, child(), () => {})
+    const down = document.createElement('button'); down.type = 'button'; down.className = 'p-root-step'; down.textContent = '−'
+    const up = document.createElement('button'); up.type = 'button'; up.className = 'p-root-step'; up.textContent = '+'
+    ;(chip as HTMLElement).dataset.slots = '3'
+    const slotsOf = (): number => Number((chip as HTMLElement).dataset.slots ?? '3')
+    up.addEventListener('click', () => { const s = slotsOf(); if (s < 16) emit(s + 1) })
+    down.addEventListener('click', () => { const s = slotsOf(); if (s > 1) emit(s - 1) })
+    chip.append(down, up)
+    up.click(); (chip as HTMLElement).dataset.slots = '4' // the re-render writes the fresh value before the next click
+    up.click()
+    expect(sent).toEqual([4, 5])
+  })
+})
+
+describe('planning-root-drop: remove with a confirm (kept)', () => {
   it('a declined confirm removes nothing; a refused removal lands on the frame in words', async () => {
     const errors: Array<[string, string]> = []
     let removed = 0

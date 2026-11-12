@@ -43,18 +43,22 @@ export function dropRefusal(root: { name: string; root?: boolean; children?: Rea
   return { ok: true, preview: '加入为子团队' }
 }
 
-/** Build one child chip (a button: click opens the child's seats read-only, double-click focuses its frame). */
-export function buildChildChip(doc: Document, child: RootChildRow, onOpenSeats: () => void, onFocusFrame: () => void): HTMLElement {
-  const chip = doc.createElement('button')
-  chip.type = 'button'
+/**
+ * Build one child chip: a CONTAINER (not a button — the stepper buttons sit as siblings inside it, valid HTML),
+ * with a label span the caller keeps updated (childChipTitle) and `dataset.slots` the stepper reads each click, so a
+ * re-render's fresh value is used even before the label repaints. Clicking the label opens the child's seats
+ * read-only; double-click does nothing until focusing its frame lands (a no-op beats a meaningless write).
+ */
+export function buildChildChip(doc: Document, child: RootChildRow, onOpenSeats: () => void): HTMLElement {
+  const chip = doc.createElement('div')
   chip.className = 'planning-root-chip'
   chip.dataset.ref = child.ref
-  chip.setAttribute('aria-label', childChipTitle(child))
   const label = doc.createElement('span')
   label.className = 'planning-root-chip-label'
+  label.setAttribute('role', 'button')
+  label.setAttribute('aria-label', childChipTitle(child))
   label.textContent = childChipTitle(child)
+  label.addEventListener('click', onOpenSeats)
   chip.append(label)
-  chip.addEventListener('click', onOpenSeats)
-  chip.addEventListener('dblclick', onFocusFrame)
   return chip
 }
