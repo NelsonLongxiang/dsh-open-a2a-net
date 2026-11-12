@@ -93,30 +93,48 @@ function Card({ row, t, done }: { readonly row: DecisionRow; readonly done: () =
   )
 }
 
+/** What one read of the waiting decisions gave: the cards, or why there are none to show. */
+export type DecisionsRead = { readonly state: 'ready'; readonly rows: readonly DecisionRow[] } | { readonly state: 'denied' | 'failed' }
+
 /**
- * The waiting decisions, as a section of the right bar's one team view: nothing at all while none waits.
+ * One read of the waiting decisions. Only a 200 with a `decisions` array is a list; anything else is a failure, never an
+ * empty list (feedback 2026-11-12: a refused or failed read looked like nothing waiting).
+ * @returns the cards, or why they could not be read.
+ */
+export async function readDecisions(): Promise<DecisionsRead> {
+  try {
+    const response = await fetch(ROUTE, { cache: 'no-store' })
+    if (response.status === 401 || response.status === 403) return { state: 'denied' }
+    if (!response.ok) return { state: 'failed' }
+    const out = await response.json() as { decisions?: unknown }
+    return Array.isArray(out.decisions) ? { state: 'ready', rows: out.decisions as DecisionRow[] } : { state: 'failed' }
+  } catch { return { state: 'failed' } }
+}
+
+/**
+ * The waiting decisions, as a section of the right bar's one team view: nothing at all once a read says none waits. A read
+ * that fails says so — the cards from the last good read stay, marked as possibly out of date — and the next poll tries again.
  * @param props - the slot's locale.
- * @returns the cards under a heading that counts them.
+ * @returns the cards under a heading that counts them, and why the last read failed if it did.
  */
 export function DecisionList({ t }: TeamDecisionsTabProps) {
   const [rows, setRows] = useState<readonly DecisionRow[]>([])
+  const [problem, setProblem] = useState<'denied' | 'failed' | undefined>(undefined)
   const load = useCallback(async (): Promise<void> => {
-    try {
-      const response = await fetch(ROUTE, { cache: 'no-store' })
-      if (!response.ok) return
-      const out = await response.json() as { decisions?: DecisionRow[] }
-      setRows(out.decisions ?? [])
-    } catch { /* the next poll tries again */ }
+    const read = await readDecisions()
+    if (read.state === 'ready') { setRows(read.rows); setProblem(undefined); return }
+    setProblem(read.state)
   }, [])
   useEffect(() => {
     void load()
     const timer = setInterval(() => { void load() }, POLL_MS)
     return () => { clearInterval(timer) }
   }, [load])
-  if (rows.length === 0) return null
+  if (rows.length === 0 && problem === undefined) return null
   return (
     <section className={styles.decisions} aria-label={t('team.decisions')}>
-      <span className={styles.label}>{t('team.decisionsCount', { count: String(rows.length) })}</span>
+      {rows.length > 0 && <span className={styles.label}>{t('team.decisionsCount', { count: String(rows.length) })}</span>}
+      {problem !== undefined && <p role="alert" className={styles.error}>{t(problem === 'denied' ? 'team.decisionsDenied' : 'team.decisionsUnreadable')}{rows.length > 0 ? ` ${t('team.decisionsStale')}` : ''}</p>}
       {rows.map(row => <Card key={row.id} row={row} t={t} done={() => { void load() }} />)}
     </section>
   )
@@ -132,14 +150,10 @@ export function TeamDecisionsTab({ t }: TeamDecisionsTabProps) {
   const [state, setState] = useState<'ok' | 'denied' | 'failed'>('ok')
 
   const load = useCallback(async (): Promise<void> => {
-    try {
-      const response = await fetch(ROUTE, { cache: 'no-store' })
-      if (response.status === 401 || response.status === 403) { setState('denied'); return }
-      if (!response.ok) { setState('failed'); return }
-      const out = await response.json() as { decisions?: DecisionRow[] }
-      setRows(out.decisions ?? [])
-      setState('ok')
-    } catch { setState('failed') }
+    const read = await readDecisions()
+    if (read.state !== 'ready') { setState(read.state); return }
+    setRows(read.rows)
+    setState('ok')
   }, [])
 
   useEffect(() => {
