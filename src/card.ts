@@ -205,10 +205,10 @@ export function verifyCard(candidate: unknown, now: number): CardVerification {
   // gh#41: the unsigned canvas-org listing (full card only) passes through
   // with the same drop-on-malformed posture as sessionTeams — cards from
   // pre-0.6.26 nodes carry none.
-  const canvasOrg: Array<{ name: string; team: string; members: string[]; superagentTeam?: true }> = []
+  const canvasOrg: Array<{ name: string; team: string; members: string[]; superagentTeam?: true; root?: true }> = []
   if (Array.isArray((wire as { canvasOrg?: unknown }).canvasOrg)) {
     for (const entry of (wire as { canvasOrg: unknown[] }).canvasOrg) {
-      const org = entry as Partial<{ name: unknown; team: unknown; members: unknown; superagentTeam: unknown }> | null
+      const org = entry as Partial<{ name: unknown; team: unknown; members: unknown; superagentTeam: unknown; root: unknown }> | null
       if (typeof org?.team !== 'string' || org.team === '') continue
       canvasOrg.push({
         name: typeof org.name === 'string' ? org.name : '',
@@ -216,6 +216,8 @@ export function verifyCard(candidate: unknown, now: number): CardVerification {
         members: Array.isArray(org.members) ? org.members.filter((m): m is string => typeof m === 'string') : [],
         // Design v5 (v5-B2): the publisher's superagent team canvas, open to requests from its linked callers.
         ...(org.superagentTeam === true ? { superagentTeam: true as const } : {}),
+        // superagent-root-team R7: a root team (one level: a root is never another root's child).
+        ...(org.root === true ? { root: true as const } : {}),
       })
     }
   }

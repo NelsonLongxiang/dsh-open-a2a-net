@@ -22,7 +22,7 @@ import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import { dirname } from 'node:path'
 import { CLI_HANDLE_RE } from './cli-deposit.ts'
-import { splitQualifiedMember, validMemberOwner, memberProvenance } from './canvas-member.ts'
+import { splitQualifiedMember, validMemberOwner, memberProvenance, splitTeamRef, validTeamOwner } from './canvas-member.ts'
 
 /** On-disk shape: ordered team entries, each an ordered member id list. */
 export interface SuspendedCanvasMember {
@@ -43,7 +43,17 @@ export interface CanvasSnapshot {
   readonly cliHome?: Readonly<Record<string, string>>
   /** Local publish cleared an older pin; kept for the owner inspector until membership is removed or re-pinned. */
   readonly cliHomeCleared?: readonly string[]
+  /** docs/design/superagent-root-team.md R7: the teams marked as roots, and each root's child teams. */
+  readonly roots?: readonly string[]
+  readonly children?: Readonly<Record<string, readonly CanvasChild[]>>
 }
+
+/** A root team's child: another team (`<zone>/canvas/<name>@<fp8>`), the key of its owning host, and how many root tickets it takes at once. */
+export interface CanvasChild { readonly ref: string; readonly key: string; readonly slots: number }
+/** A child's slots: 1 to 16, 3 unless the owner sets it. */
+export const CHILD_SLOTS_DEFAULT = 3
+export const CHILD_SLOTS_MAX = 16
+const validSlots = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= CHILD_SLOTS_MAX
 
 /** Upper bounds: a canvas taxonomy, not a database. */
 export const CANVAS_TEAM_CAP = 64
@@ -105,6 +115,8 @@ export class CanvasStore {
   private revision = 0
   private committed = ''
   private memberOwners: Record<string, string> = {}
+  private roots = new Set<string>()
+  private children: Record<string, CanvasChild[]> = {}
   private disk: string | undefined
   private readOnlyReason = ''
   private lastWriteError = ''
@@ -191,6 +203,7 @@ export class CanvasStore {
           if (CLI_HANDLE_RE.test(handle) && typeof home === 'string' && validHomeOrigin(home) && this.teams.some(t => t.members.includes(handle))) this.cliHome[handle] = home
         }
       }
+      this.restoreRoots(snapshot)
       if (Array.isArray(snapshot.cliHomeCleared)) for (const handle of snapshot.cliHomeCleared) {
         if (typeof handle === 'string' && CLI_HANDLE_RE.test(handle) && this.cliHome[handle] === undefined && this.teams.some(t => t.members.includes(handle))) this.cliHomeCleared.add(handle)
       }
@@ -198,6 +211,24 @@ export class CanvasStore {
       this.teams = []; this.suspended = []
       // A malformed v2 suspension must never silently reactivate members.
       if (this.disk?.includes('suspendedMembers') || this.disk?.includes('formatVersion')) this.readOnlyReason = 'invalid canvas v2 snapshot'
+    }
+  }
+
+  /** R7: roots must be existing teams; a child is a well-formed team ref under its own key; malformed entries are dropped. */
+  private restoreRoots(snapshot: Partial<CanvasSnapshot>): void {
+    this.roots = new Set((Array.isArray(snapshot.roots) ? snapshot.roots : []).filter((name): name is string => typeof name === 'string' && this.teams.some(t => t.name === name)))
+    this.children = {}
+    const raw = snapshot.children
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return
+    for (const [name, list] of Object.entries(raw)) {
+      if (!this.roots.has(name) || !Array.isArray(list)) continue
+      const kept: CanvasChild[] = []
+      for (const row of list as unknown[]) {
+        const child = row as Partial<CanvasChild> | null
+        if (typeof child?.ref !== 'string' || typeof child.key !== 'string' || !validTeamOwner(child.ref, child.key) || !validSlots(child.slots) || kept.some(k => k.ref === child.ref)) continue
+        kept.push({ ref: child.ref, key: child.key, slots: child.slots })
+      }
+      if (kept.length > 0) this.children[name] = kept.slice(0, CANVAS_MEMBER_CAP)
     }
   }
 
@@ -210,6 +241,8 @@ export class CanvasStore {
       this.suspended = [...previous.suspendedMembers ?? []]
       this.memberOwners = { ...previous.memberOwners }
       this.cliHome = { ...previous.cliHome }; this.cliHomeCleared = new Set(previous.cliHomeCleared)
+      this.roots = new Set(previous.roots ?? [])
+      this.children = Object.fromEntries(Object.entries(previous.children ?? {}).map(([name, list]) => [name, list.map(c => ({ ...c }))]))
       this.revision = previous.revision ?? 0
       throw error
     }
@@ -219,7 +252,7 @@ export class CanvasStore {
   }
 
   private serialize(): string {
-    return JSON.stringify({ teams: this.teams, memberOwners: this.memberOwners, suspendedMembers: this.suspended, cliHome: this.cliHome, cliHomeCleared: [...this.cliHomeCleared], revision: this.revision })
+    return JSON.stringify({ teams: this.teams, memberOwners: this.memberOwners, suspendedMembers: this.suspended, cliHome: this.cliHome, cliHomeCleared: [...this.cliHomeCleared], roots: [...this.roots], children: this.children, revision: this.revision })
   }
   private write(): void {
     if (this.readOnlyReason) throw Error(this.readOnlyReason)
@@ -229,7 +262,9 @@ export class CanvasStore {
       suspendedMembers: this.suspended.map(r => ({ ...r })),
       ...(Object.keys(this.memberOwners).length ? { memberOwners: this.memberOwners } : {}),
       ...(Object.keys(this.cliHome).length ? { cliHome: { ...this.cliHome } } : {}),
-      ...(this.cliHomeCleared.size ? { cliHomeCleared: [...this.cliHomeCleared] } : {}) }
+      ...(this.cliHomeCleared.size ? { cliHomeCleared: [...this.cliHomeCleared] } : {}),
+      ...(this.roots.size ? { roots: [...this.roots] } : {}),
+      ...(Object.keys(this.children).length ? { children: Object.fromEntries(Object.entries(this.children).map(([name, list]) => [name, list.map(c => ({ ...c }))])) } : {}) }
     const bytes = JSON.stringify(snapshot)
     if (this.path !== '') {
       mkdirSync(dirname(this.path), { recursive: true })
@@ -421,8 +456,67 @@ export class CanvasStore {
     if (this.suspended.some(r => r.team === name)) return false
     const [removed] = this.teams.splice(index, 1)
     for (const id of removed!.members) this.forgetUnusedHome(id)
+    this.roots.delete(name)
+    Reflect.deleteProperty(this.children, name)
     this.persist()
     return true
+  }
+
+  // ── R7: roots and their child teams ──
+
+  /** Whether the named team is a root. */
+  isRoot(name: string): boolean { return this.roots.has(name) }
+  /** Every root, in creation order of its team. */
+  rootNames(): readonly string[] { return this.teams.filter(t => this.roots.has(t.name)).map(t => t.name) }
+  /** A root's child teams (a copy). */
+  childrenOf(name: string): readonly CanvasChild[] { return (this.children[name] ?? []).map(c => ({ ...c })) }
+
+  /** Mark a team as a root, or a root back as a plain team (only once it has no child left). */
+  setRoot(name: string, root: boolean): { ok: true } | { ok: false; error: string } {
+    if (!this.hasTeam(name)) return { ok: false, error: `no canvas team ${name}` }
+    if (root === this.roots.has(name)) return { ok: true }
+    if (!root && (this.children[name]?.length ?? 0) > 0) return { ok: false, error: `${name} still has child teams: remove them first` }
+    if (root) this.roots.add(name); else this.roots.delete(name)
+    this.persist()
+    return { ok: true }
+  }
+
+  /** Add a child team to a root, under the key of the host that owns it (proved by the caller). Idempotent for the same ref and key. */
+  addChild(name: string, ref: string, key: string, slots: number = CHILD_SLOTS_DEFAULT): { ok: true } | { ok: false; error: string } {
+    if (!this.roots.has(name)) return { ok: false, error: `${name} is not a root team` }
+    if (!validTeamOwner(ref, key)) return { ok: false, error: `${ref} is not a team address under that key` }
+    if (!validSlots(slots)) return { ok: false, error: `slots must be 1 to ${String(CHILD_SLOTS_MAX)}` }
+    const list = this.children[name] ?? []
+    const existing = list.find(c => c.ref === ref)
+    if (existing !== undefined) return existing.key === key ? { ok: true } : { ok: false, error: `${ref} is already a child under another key` }
+    if (list.length >= CANVAS_MEMBER_CAP) return { ok: false, error: `a root holds at most ${String(CANVAS_MEMBER_CAP)} child teams` }
+    const fingerprint = splitTeamRef(ref)!.fingerprint
+    const clash = Object.entries(this.memberOwners).some(([member, owner]) => splitQualifiedMember(member)?.fingerprint === fingerprint && owner !== key)
+      || Object.values(this.children).some(rows => rows.some(c => splitTeamRef(c.ref)?.fingerprint === fingerprint && c.key !== key))
+    if (clash) return { ok: false, error: `another key is already pinned for fingerprint ${fingerprint}` }
+    this.children[name] = [...list, { ref, key, slots }]
+    this.persist()
+    return { ok: true }
+  }
+
+  removeChild(name: string, ref: string): boolean {
+    const list = this.children[name]
+    if (list === undefined || !list.some(c => c.ref === ref)) return false
+    const kept = list.filter(c => c.ref !== ref)
+    if (kept.length > 0) this.children[name] = kept; else Reflect.deleteProperty(this.children, name)
+    this.persist()
+    return true
+  }
+
+  setChildSlots(name: string, ref: string, slots: number): { ok: true } | { ok: false; error: string } {
+    if (!validSlots(slots)) return { ok: false, error: `slots must be 1 to ${String(CHILD_SLOTS_MAX)}` }
+    const list = this.children[name]
+    const index = list?.findIndex(c => c.ref === ref) ?? -1
+    if (list === undefined || index < 0) return { ok: false, error: `${ref} is not a child of ${name}` }
+    if (list[index]!.slots === slots) return { ok: true }
+    list[index] = { ...list[index]!, slots }
+    this.persist()
+    return { ok: true }
   }
 
   /**
