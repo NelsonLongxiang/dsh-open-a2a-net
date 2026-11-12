@@ -44,6 +44,9 @@ export const TOOL_ASK_AGAIN_MS = 24 * 3_600_000
 import { agentLedEnd, clip, TEXT_CAP, presetRefusal, notTakenText, OTHER_TICKETS_SHOWN, ORIGIN_LINE_NOTE, OBSERVER_LINE, candidateCard, YGL_WRITE, yglCardLines, yglRouterLine } from './cards.ts'
 import { teamYglProject } from './ygl-home.ts'
 import { NamedDispatch, WAIT, SWAP } from './named-dispatch.ts'
+
+/** A session's name for the market (roster, receipt `by`): without the ` (<id8>)` the host adds for the router's cards; the seat carries the handle. */
+const plainName = (name: string | undefined): string | undefined => name?.replace(/ \([0-9a-f]{8}\)$/, '')
 import type { SuperagentHostDeps, PersonMessage, WorkbenchVia } from './deps.ts'
 export * from './cards.ts'
 export type * from './deps.ts'
@@ -162,7 +165,7 @@ export class SuperagentHost {
       remotes: canvas => (d.canvasTeam?.(canvas)?.remote ?? []).map(r => r.ref),
       declares: (ref, capability) => d.memberDeclares?.(ref, capability) === true,
       send: async (ref, text, taskId) => { if (d.rosterSend === undefined) throw new Error('no roster send on this host'); await d.rosterSend(ref, text, taskId) },
-      handleOf: id => d.handleOf?.(id) ?? id, nameOf: id => d.sessionName?.(id), online: id => d.sessionLoaded?.(id) ?? false, seatIdOf: id => this.named.seatIdOf(id),
+      handleOf: id => d.handleOf?.(id) ?? id, nameOf: id => plainName(d.sessionName?.(id)), online: id => d.sessionLoaded?.(id) ?? false, seatIdOf: id => this.named.seatIdOf(id),
       loadOf: id => this.executor.loadOf(id), hostFingerprint: () => d.hostFingerprint?.(), nowMs: () => Date.parse(this.now()), logger: d.logger,
     })
     const progressPath = join(dir, 'progress.json')
@@ -212,7 +215,7 @@ export class SuperagentHost {
     })
     this.named = new NamedDispatch({
       path: join(dir, 'seats.json'), engine: this.engine, ticket: id => this.store.tickets.get(id), tickets: () => this.store.tickets.list(),
-      trigger: id => this.store.triggers.get(id), pool: () => this.pool(),
+      trigger: id => this.store.triggers.get(id), pool: () => this.pool(), router: () => this.settingsValue.router,
       loaded: member => member.includes('@') || (d.sessionLoaded?.(member) ?? true),
       resolveMember: value => this.resolveMember(value), memberName: member => this.memberName(member),
       declares: (caller, capability) => d.callerDeclares?.(caller, capability) === true,
@@ -617,7 +620,7 @@ export class SuperagentHost {
     // ticket), before the a2a plugin's card cache exists, and reading the canvas there failed the plugin's start.
     const role = worker === undefined ? 'router' as const : this.d.presetOf?.(worker) === OBSERVER_PRESET ? 'observer' as const : 'member' as const
     const seat = this.d.handleOf?.(session) ?? session
-    const name = this.d.sessionName?.(session)
+    const name = plainName(this.d.sessionName?.(session))
     return { seat, ...(name !== undefined && name !== '' && name !== seat ? { name } : {}), role }
   }
   memberListLine(): string { return `The team's members: ${this.pool().map(id => this.memberName(id)).join('; ') || '(none)'}.` }
