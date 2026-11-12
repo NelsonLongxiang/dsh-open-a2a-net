@@ -29,6 +29,9 @@ export type CanvasAction = (
   /** Network-level join/leave (the session joins the A2A mesh) — distinct from canvas-team membership. */
   | { type: 'join-network'; id: string }
   | { type: 'leave-network'; id: string }
+  /** superagent-root-team S3: the owner's root actions on a canvas team (the wire posts them to the canvas route). */
+  | { type: 'set-root'; name: string; root: boolean }
+  | { type: 'set-team-slots'; name: string; team: string; slots: number }
 ) & { roster?: boolean }
 
 /** Reverts exactly what one applyAction did (team-scoped). */
@@ -39,6 +42,8 @@ export function actionTeam(a: CanvasAction): string {
   // Network join/leave are session-scoped, not team-scoped: one shared
   // queue key keeps them serial against each other.
   if (a.type === 'join-network' || a.type === 'leave-network') return '$network'
+  if (a.type === 'set-root') return a.name
+  if (a.type === 'set-team-slots') return a.name
   return a.type === 'create-team' || a.type === 'remove-team' ? a.name : a.team
 }
 
@@ -98,6 +103,11 @@ export function applyAction(model: WorldModel, a: CanvasAction): Undo {
   // Network join/leave: no optimistic canvas mutation — the next inventory
   // poll absorbs the host's truth (the node appears/disappears on the
   // reconcile after the host accepts), so the undo is a no-op.
+  // superagent-root-team S3: the owner's root actions have no local geometry to flip — the next poll brings the
+  // server's truth (root flag, children), so the optimistic apply is a no-op with a no-op undo.
+  if (a.type === 'set-root' || a.type === 'set-team-slots') {
+    return () => {}
+  }
   if (a.type === 'join-network' || a.type === 'leave-network') {
     return () => {}
   }

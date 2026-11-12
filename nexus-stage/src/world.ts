@@ -163,6 +163,8 @@ export interface SessionLite {
 /** Minimal team shape (topology.CanvasTeam satisfies it). `team` is the
  * mono route alias `<host>/canvas/<name>` when the payload carries it. */
 export interface TeamLite { name: string; team?: string; members: ReadonlyArray<{ id: string }> }
+/** superagent-root-team R8 (S3): a root team's children as the state carries them (label, slots, the open count, the state). */
+export interface RootChildRow { readonly ref: string; readonly label: string; readonly slots: number; readonly open: number; readonly state: 'ready' | 'pending-registration' | 'unreachable' | 'full' }
 
 /** One node's memberships in state order: team name + index (member order = routing priority). */
 export interface Membership { readonly team: string; readonly index: number }

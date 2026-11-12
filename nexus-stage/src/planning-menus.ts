@@ -25,6 +25,8 @@ export interface MenusDeps {
   teams(): ReadonlyArray<PlanningTeam>
   joined(id: string): boolean
   isRoster(frame: string): boolean
+  /** superagent-root-team S3: whether the frame's team is marked a root (for 设为/取消 root). */
+  isRoot(frame: string): boolean
   /** The card or frame-head element a menu re-focuses on close. */
   anchorFor(target: MenuTarget): HTMLElement | null
   emit(a: CanvasAction): void
@@ -300,6 +302,9 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
     let items: HTMLButtonElement[] = []
     if (target.kind === 'frame') {
       items = [menuItem(`解散团队「${titleOf(target.name)}」`, true, () => d.emit({ type: 'remove-team', name: target.name }))]
+      // superagent-root-team S3: the owner marks a team as a root (or unmarks it) right where the team lives.
+      const root = d.isRoot(target.name)
+      items.push(menuItem(root ? `取消根团队「${titleOf(target.name)}」` : `设为根团队「${titleOf(target.name)}」`, true, () => d.emit({ type: 'set-root', name: target.name, root: !root })))
     } else {
       const id = target.id
       if (level === 'root') {

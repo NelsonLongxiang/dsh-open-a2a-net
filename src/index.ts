@@ -37,7 +37,7 @@ export function resolveCallerLabel(input: {
 import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef, legacyBareMember } from './canvas-store.ts'
-import { linkRootRequester } from './canvas-root.ts'
+import { childRegistration, linkRootRequester } from './canvas-root.ts'
 import { inactiveContextError } from './context-live.ts'
 import { splitQualifiedMember, memberProvenance, qualifiedSessionMember, pinnedCallerDeclares } from './canvas-member.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
@@ -1824,6 +1824,9 @@ export function apply(ctx: Context, config: Config): void {
         ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
+        rootChildrenOpen: canvas => { const open = new Map<string, number>(); for (const row of superagentTeams?.all().find(team => team.settings.canvas === canvas)?.root.open() ?? []) open.set(row.child, (open.get(row.child) ?? 0) + 1); return open },
+        rootIdentityOf: canvas => superagentTeams?.all().find(team => team.settings.canvas === canvas)?.a2a.address,
+        rootChildRegistration: (canvas, childRef, rootHandle) => childRegistration({ keyOf: ref => canvasStore.ownerKeyOf(ref), ownKey: encodePublicKey(createPublicKey(nodePrivateKey)), cards: [...cardCache.values()].map(entry => ({ card: entry.card ?? {} })) }, childRef, rootHandle),
         canvasRoot: { store: canvasStore, zone: config.team, ownKey: encodePublicKey(createPublicKey(nodePrivateKey)),
           localSuperagentCanvas: (name: string) => superagentTeams?.all().some(team => team.a2aAddress !== undefined && team.settings.canvas === name) === true,
           peerCards: async () => (await freshCliHomeCards()).flatMap(row => row.card !== undefined ? [{ url: row.url, card: row.card, linked: peerAdmissionLinkState(row.url).link === 'linked' }] : []) },

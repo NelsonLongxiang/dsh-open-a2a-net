@@ -60,6 +60,12 @@
    frame head opts back in for group-drag/menu/Delete). */
 #dsh-plan .p-frame{pointer-events:none}
 #dsh-plan .p-frame-head{pointer-events:auto}
+/* superagent-root-team S3: a root frame's child-team chips and the slots stepper. */
+#dsh-plan .p-root-children{position:absolute; left:4px; right:4px; bottom:4px; display:flex; flex-wrap:wrap; gap:4px; pointer-events:auto}
+#dsh-plan .p-root-chip{display:inline-flex; align-items:center; gap:4px; border:1px solid var(--frame-line, #888); background:var(--frame-bg, rgba(255,255,255,.75)); border-radius:8px; padding:1px 6px; font-size:11px; line-height:1.5; max-width:100%}
+#dsh-plan .p-root-chip .planning-root-chip-label{white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+#dsh-plan .p-root-step{border:none; background:transparent; font-size:12px; line-height:1; padding:0 3px; cursor:pointer}
+#dsh-plan .p-root-step:disabled{opacity:.35; cursor:default}
 #dsh-plan .p-node{pointer-events:auto}
 #dsh-plan .e-member{stroke:var(--uupm-edge-member); stroke-opacity:.38; stroke-width:1.5}
 #dsh-plan .e-member.dashed{stroke-dasharray:3 4}
