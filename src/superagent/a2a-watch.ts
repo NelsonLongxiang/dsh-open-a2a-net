@@ -438,10 +438,10 @@ export const choiceArgs = (choices: SendOptions['choices']): string[] => {
 }
 
 /** market N1c: who took the work up (a seat id, its name), as a receipt's `by`. */
-export interface ReceiptSeat { readonly seat: string; readonly name?: string; readonly role?: 'router' | 'member' | 'observer' }
+export interface ReceiptSeat { readonly seat: string; readonly seatId?: string; readonly name?: string; readonly role?: 'router' | 'member' | 'observer' }
 
 /** The receipt switches that carry a seat. */
-export const seatArgs = (by: ReceiptSeat | undefined): string[] => by === undefined ? [] : ['--by', by.seat, ...(by.name !== undefined && by.name !== by.seat ? ['--by-name', by.name] : []), ...(by.role !== undefined ? ['--by-role', by.role] : [])]
+export const seatArgs = (by: ReceiptSeat | undefined): string[] => by === undefined ? [] : ['--by', by.seat, ...(by.name !== undefined && by.name !== by.seat ? ['--by-name', by.name] : []), ...(by.role !== undefined ? ['--by-role', by.role] : []), ...(by.seatId !== undefined ? ['--by-seat-id', by.seatId] : [])]
 
 /**
  * market N2c: the question id an attention receipt rides (`attention-<task>-<id>`), cut from the ticket's attention id;

@@ -98,7 +98,7 @@ receipt:  receipt <task_id> [--attention | --acknowledged | --outcome O] [--to T
           task id ack-<task_id>, so the later receipt is not refused
           --attention --question-id ID [--options 'A|B'] [--default X]: a question (the one line is its text) that
           marks the caller's row instead of settling it; it rides attention-<task_id>-<ID>, so the result still follows
-          --by SEAT [--by-name N] [--by-team T] [--by-role router|member|observer]: who took the work up; --artifacts KIND:ID[,…] or '[{"kind","id","title"}]': what it produced
+          --by SEAT [--by-name N] [--by-team T] [--by-role router|member|observer] [--by-seat-id ID]: who took the work up; --artifacts KIND:ID[,…] or '[{"kind","id","title"}]': what it produced
           --progress N --state queued|working|waiting|blocked [--ahead K] [--tickets JSON]: a progress step (the one
           line is its summary) that marks the caller's row and settles nothing; it rides progress-<task_id>-<N>
 
@@ -109,7 +109,7 @@ admission: admission <caller> [--local] [--json]   how <caller> would be admitte
           host refuses or does not know the query`
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
-const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets'])
+const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets'])
 const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
@@ -580,12 +580,13 @@ function receiptExtras(attention, text) {
   const SHORT = 200, TEXT = 2000, MAX_ARTIFACTS = 16, MAX_OPTIONS = 6
   const ok = (v, cap = SHORT) => typeof v === 'string' && v.trim() !== '' && v.length <= cap
   const out = {}
-  const seat = flag('--by'), name = flag('--by-name'), team = flag('--by-team'), role = flag('--by-role')
+  const seat = flag('--by'), name = flag('--by-name'), team = flag('--by-team'), role = flag('--by-role'), seatId = flag('--by-seat-id')
   if (seat !== undefined) {
     if (!ok(seat)) usage(`receipt: --by takes a seat id of at most ${SHORT} characters`)
     if (role !== undefined && !['router', 'member', 'observer'].includes(role)) usage('receipt: --by-role takes router, member, observer')
-    out.by = { seat, ...(ok(name) ? { name } : {}), ...(ok(team) ? { team } : {}), ...(role !== undefined ? { role } : {}) }
-  } else if (name !== undefined || team !== undefined || role !== undefined) usage('receipt: --by-name, --by-team and --by-role go with --by')
+    if (seatId !== undefined && !/^[A-Za-z0-9._:-]{1,64}$/.test(seatId)) usage('receipt: --by-seat-id takes 1 to 64 of A-Z a-z 0-9 . _ : -')
+    out.by = { seat, ...(seatId !== undefined ? { seatId } : {}), ...(ok(name) ? { name } : {}), ...(ok(team) ? { team } : {}), ...(role !== undefined ? { role } : {}) }
+  } else if (name !== undefined || team !== undefined || role !== undefined || seatId !== undefined) usage('receipt: --by-name, --by-team, --by-role and --by-seat-id go with --by')
   const artifacts = flag('--artifacts')
   if (artifacts !== undefined) {
     let items
