@@ -1862,7 +1862,9 @@ export function apply(ctx: Context, config: Config): void {
         // roster: the team-roster face (a2a_team_join/leave, card
         // teamMemberships, team-scope routing admission) ships — peers read
         // its absence as a pre-roster legacy node (0.5.43 and older).
-        capabilities: { route: true, async: true, roster: true, canvasMemberProvenance: true, sourcedFollowup: true, queuedTaskCancellation: true },
+        // superagent named dispatch: a host running superagent teams reads a request's [A2A dispatch] line (for, rework), so a
+        // requester (the workbench market) writes one only to a host that declares it — the same names a requester declares.
+        capabilities: { route: true, async: true, roster: true, canvasMemberProvenance: true, sourcedFollowup: true, queuedTaskCancellation: true, ...(config.superagent === true ? { directedSeats: true, reworkReturns: true } : {}) },
         expiresAt: Date.now() + config.cardTtlMs,
         ...(records.length > 0 ? { records: [...records] } : {}),
       })
