@@ -292,6 +292,16 @@ export class A2aSource {
   async askReview(address: string, text: string, context?: string): Promise<string | undefined> {
     const check = JSON.parse(await this.context.commands.run('a2a-net', ['admission', address, '--json'])) as { admitted?: unknown; rule?: unknown }
     if (check.admitted !== true || typeof check.rule !== 'string' || !LINK_RULES.has(check.rule)) return undefined
+    return await this.routeAs(address, text, context)
+  }
+
+  /**
+   * superagent-root-team S2: send to a child team from the team's identity. No admission precheck: that check asks
+   * whether the address would be let into this identity's mailbox as a sender (right for a reviewer, who answers from
+   * that address), while a child team answers from its host's face, never from its canvas address — the check said no
+   * and nothing was sent (test host, 2026-11-12). The child's own admission of this identity still applies to the send.
+   */
+  async routeAs(address: string, text: string, context?: string): Promise<string | undefined> {
     const route = async (): Promise<string | undefined> => {
       const sent = JSON.parse(await this.context.commands.run('a2a-net', ['route', address, '--json', ...(context !== undefined ? ['--context', context] : []), '--', text])) as { task_id?: unknown }
       return typeof sent.task_id === 'string' ? sent.task_id : undefined

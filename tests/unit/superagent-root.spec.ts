@@ -27,7 +27,8 @@ async function root(options: { slots?: number } = {}) {
     deliverToSession: (id: string, text: string) => { if (id === 'session-r') told.push(text); return true },
     homeUrl: () => 'http://127.0.0.1:1', sessionName: (id: string) => id, sessionLoaded: () => true, hostFingerprint: () => '0a1b2c3d',
     runCli: async (args: string[]) => {
-      if (args[0] === 'admission') return JSON.stringify({ admitted: true, rule: 'cli-deposit' })
+      // As on the test host: a child's canvas address is never a sender let into the root identity's mailbox.
+      if (args[0] === 'admission') return JSON.stringify({ admitted: false })
       if (args[0] === 'route') {
         const dash = args.indexOf('--'), ctx = args.indexOf('--context')
         const task = `direct-${String(++n).padStart(12, '0')}`
