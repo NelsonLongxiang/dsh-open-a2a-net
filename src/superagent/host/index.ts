@@ -611,7 +611,7 @@ export class SuperagentHost {
    * market N1c: the seat a ticket's receipts name as the one that took it up — its member once one holds it (the one it
    * last ran on, after it ended), else the router that accepted it — as its A2A handle (the session id where the host has none) and its name.
    */
-  seatOf(ticketId: string): { seat: string; name?: string; role: 'router' | 'member' | 'observer' } | undefined {
+  seatOf(ticketId: string): { seat: string; seatId?: string; name?: string; role: 'router' | 'member' | 'observer' } | undefined {
     const worker = this.executor.memberOfTicket(ticketId)?.member ?? this.executor.lastMemberOf(ticketId)
     const session = worker ?? this.settingsValue.router
     if (session === undefined || session === '') return undefined
@@ -621,7 +621,9 @@ export class SuperagentHost {
     const role = worker === undefined ? 'router' as const : this.d.presetOf?.(worker) === OBSERVER_PRESET ? 'observer' as const : 'member' as const
     const seat = this.d.handleOf?.(session) ?? session
     const name = plainName(this.d.sessionName?.(session))
-    return { seat, ...(name !== undefined && name !== '' && name !== seat ? { name } : {}), role }
+    // The seat's stable id (named dispatch N2), as the roster gives it: the market keys its records on it, not the handle.
+    const seatId = this.named.seatIdOf(session)
+    return { seat, ...(seatId !== undefined ? { seatId } : {}), ...(name !== undefined && name !== '' && name !== seat ? { name } : {}), role }
   }
   memberListLine(): string { return `The team's members: ${this.pool().map(id => this.memberName(id)).join('; ') || '(none)'}.` }
 

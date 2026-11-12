@@ -307,8 +307,9 @@ Files do not go through session messages: use the file channel below, never JPFI
     caller still gets it, with `disposition` on its mailbox row. A receipt
     settles a debt only where the caller tracked one.
   - Added fields (market N1c/N1d, [receipt-envelope-fields](../../../docs/design/receipt-envelope-fields.md)):
-    `--by SEAT [--by-name N] [--by-team T] [--by-role router|member|observer]`
-    says who took the work up (the router until a member holds the work), and
+    `--by SEAT [--by-name N] [--by-team T] [--by-role router|member|observer] [--by-seat-id ID]`
+    says who took the work up (the router until a member holds the work; `--by-seat-id`
+    is the seat's stable id, the roster's `seatId`, which outlives its session), and
     `--artifacts KIND:ID[,KIND:ID…]` names what it produced, as ids in the
     caller's system (or a JSON array `[{"kind","id","title"}]`, where `title`
     is display text for people, at most 200 characters). With `--attention`, `--question-id ID [--options 'A|B']

@@ -383,9 +383,12 @@ describe('PR-B2b: the a2a Channel through the hosted a2a-watch', () => {
     expect(doneReceipts[0]!.slice(doneReceipts[0]!.indexOf('--by'), doneReceipts[0]!.indexOf('--by') + 2)).toEqual(['--by', 'session-m'])
     const ack = calls.find(a => a[0] === 'receipt' && a[1] === done.task && a.includes('--acknowledged'))!
     expect(ack.slice(ack.indexOf('--by'), ack.indexOf('--by') + 2)).toEqual(['--by', 'session-r'])
-    expect(host.seatOf(done.ticketId)).toEqual({ seat: 'session-m', role: 'member' })
+    expect(host.seatOf(done.ticketId)).toEqual({ seat: 'session-m', seatId: expect.stringMatching(/^seat-/), role: 'member' })
     // The role says which seat this is: the acknowledgement's is the router's, the ending receipt's the member's.
     expect(ack.slice(ack.indexOf('--by-role'), ack.indexOf('--by-role') + 2)).toEqual(['--by-role', 'router'])
+    // The seat's stable id rides along (named dispatch N2): the market keys its records on it, not the handle.
+    expect(ack[ack.indexOf('--by-seat-id') + 1]).toMatch(/^seat-[0-9a-f]{8}$/)
+    expect(doneReceipts[0]![doneReceipts[0]!.indexOf('--by-seat-id') + 1]).toMatch(/^seat-[0-9a-f]{8}$/)
     expect(doneReceipts[0]!.slice(doneReceipts[0]!.indexOf('--by-role'), doneReceipts[0]!.indexOf('--by-role') + 2)).toEqual(['--by-role', 'member'])
   })
   it('a caller no longer linked makes the message gone (dropped), never sent', async () => {
@@ -1263,10 +1266,10 @@ describe('seatOf at boot reads no canvas (regression of #611 on the test host)',
     host.pass()
     const routed = routeItem(host, { trigger_id: 'b', kind: 'accept', title: 'boot', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
     for (let i = 0; i < 20; i++) { host.pass(); await new Promise(r => setTimeout(r, 5)) }
-    expect(host.seatOf(routed.ticket_id)).toEqual({ seat: 'session-o', role: 'observer' })
+    expect(host.seatOf(routed.ticket_id)).toEqual({ seat: 'session-o', seatId: expect.stringMatching(/^seat-/), role: 'observer' })
     booting = true
     // Before the fix the observer check read the canvas settings and threw here (the plugin's start failed with it).
-    expect(host.seatOf(routed.ticket_id)).toEqual({ seat: 'session-o', role: 'observer' })
+    expect(host.seatOf(routed.ticket_id)).toEqual({ seat: 'session-o', seatId: expect.stringMatching(/^seat-/), role: 'observer' })
     booting = false
     await host.stop()
   })
