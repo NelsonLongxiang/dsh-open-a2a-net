@@ -48,7 +48,7 @@ import { ExposureStore } from './exposure-store.ts'
 import { applyOwnerSettings, loadSeatNames, type OwnerSettings } from './owner-settings.ts'
 import { CLI_HANDLE_RE, CliDepositStore } from './cli-deposit.ts'
 import { cliHomeChoices, decideCliHome } from './cli-home.ts'
-import { outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
+import { forwardScope, outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
 import { createDirectForward, ForwardBirths } from './direct-forward.ts'
 import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
@@ -3909,12 +3909,20 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const forwardDirect = createDirectForward({
     births: forwardingBirths,
     enabled: () => config.forwardDirect === true, isolated: () => config.isolated, deposited: handle => cliDeposits.get(handle) !== undefined,
-    scope: (handle, team) => config.teamScopeRouting ? outboundScope(senderScopeRecords, handle, handle, team) : Promise.resolve({ ok: true as const }),
+    scope: (handle, team) => config.teamScopeRouting ? forwardScope(cardAuthorizedSend, () => outboundScope(senderScopeRecords, handle, handle, team), handle, team) : Promise.resolve({ ok: true as const }),
     candidates: async (team, failures, caller) => { const fetch = memoizedCardFetch(); return { urls: await directoryPeerCandidates(fetch, team, failures, { id: caller, handle: caller }), card: fetch } },
     dispatch: (url, request, guard) => dispatchPeerCandidate(url, request.team, request.message, request.contextId, new AbortController().signal, request.caller, request.noWait, request.taskId, request.caller, guard),
     ledger: taskLedger, activity: (team, peer, ok) => recordActivity('fwd', team, peer, ok),
   })
 
+  /**
+   * Owner ruling 2026-11-12 (superagent outbound, O4): a superagent team's own A2A identity sits in no canvas team, so it
+   * declares no scope of its own; an approved outbound card is its scope — for that card's exact address, while the host
+   * sends it. Signature, deposit and the receiving host's admission still apply.
+   */
+  function cardAuthorizedSend(handle: string, team: string): boolean {
+    return superagentTeams?.all().some(host => host.a2aAddress === handle && host.outboundAuthorizes(team)) === true
+  }
   const senderScopeRecords: OutboundScopeRecords = {
     zone: config.team, id8, teamsOf: id => teamMemberships.teamsOf(id), membersOf: team => teamMemberships.membersOf(team),
     canvasNames: () => canvasStore.list(), canvasMembers: name => canvasStore.membersOf(name), canvasTeam: canvasTeamOf,
