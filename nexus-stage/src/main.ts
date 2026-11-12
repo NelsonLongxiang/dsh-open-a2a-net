@@ -217,6 +217,8 @@ function runCanvasAction(a: CanvasAction): Promise<boolean> {
     case 'add-member': return canvasWire.addMembers(a.team, a.ids)
     case 'remove-member': return canvasWire.removeMembers(a.team, a.ids)
     case 'remove-team': return canvasWire.removeTeam(a.name)
+    case 'set-root': return canvasWire.setRoot(a.name, a.root)
+    case 'set-team-slots': return canvasWire.setTeamSlots(a.name, a.team, a.slots)
     case 'reorder': return canvasWire.runRosterOps(a.team, a.ops)
     case 'join-network':
     case 'leave-network': return postNetworkJoin(a.type === 'join-network' ? 'join' : 'leave', a.id)

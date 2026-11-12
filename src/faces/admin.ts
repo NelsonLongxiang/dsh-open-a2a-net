@@ -16,6 +16,7 @@
  * @module src/faces/admin
  */
 import { isRootAction, rootAction, type CanvasRootDeps } from '../canvas-root.ts'
+import { childLabel } from '../superagent/host/root-dispatch.ts'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
@@ -81,6 +82,12 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly teamCanvasRefusal?: (canvas: string, member: string) => string | undefined
   /** docs/design/superagent-root-team.md R7: the root operations on the canvas route. */
   readonly canvasRoot?: CanvasRootDeps
+  /** superagent-root-team R8 (S3): the root tickets each child of a root canvas holds now, for the board's state. */
+  readonly rootChildrenOpen?: (canvas: string) => ReadonlyMap<string, number>
+  /** The root team identity's handle bound to this canvas (its A2A address), for the registration check. */
+  readonly rootIdentityOf?: (canvas: string) => string | undefined
+  /** superagent-root-team R8/S5 (S3 review F4): a child's registration as the board reads it — 'ready', 'pending-registration' (its host's card does not list the root identity in `admits` yet), or 'unreachable' (no linked peer card for its key). */
+  readonly rootChildRegistration?: (canvas: string, childRef: string, rootHandle: string | undefined) => 'ready' | 'pending-registration' | 'unreachable'
   readonly cliHomeForAdd: (handle: string, requested?: unknown) => Promise<CliHomeDecision>
   readonly cliHomeOptions: (handle: string) => Promise<{ homes: string[]; unreadable: number; held?: true }>
   readonly layoutStore: LayoutStore
@@ -319,6 +326,22 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
                 }
                 return rows
               })(),
+              // superagent-root-team R8 (S3): the board reads a root and its children from the state.
+              ...(canvasStore.isRoot(name) ? { root: true as const } : {}),
+              ...(canvasStore.isRoot(name) ? {
+                children: canvasStore.childrenOf(name).map(child => {
+                  const open = d.rootChildrenOpen?.(name)?.get(child.ref) ?? 0
+                  const rootHandle = d.rootIdentityOf?.(name)
+                  const registration = d.rootChildRegistration?.(name, child.ref, rootHandle) ?? 'ready'
+                  return {
+                    ref: child.ref,
+                    label: childLabel(child.ref),
+                    slots: child.slots,
+                    open,
+                    state: open >= child.slots ? 'full' as const : registration,
+                  }
+                }),
+              } : {}),
             })),
           },
           // #332: home-controlled aliases, never inferred from peer cards or a file reference.

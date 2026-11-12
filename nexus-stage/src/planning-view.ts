@@ -28,7 +28,7 @@
 import type { LampState } from './layout-wire'
 import { buildLayoutDoc, clampDoc, type LayoutDoc, type LayoutRect } from './layout-doc'
 import { FRAME_HEAD_LIFT } from './edges'
-import { drawMemberEdges } from './planning-edges'
+import { drawMemberEdges, drawRootEdges, type RootEdgeInput } from './planning-edges'
 import { createFederationOverlay } from './federation-overlay'
 import { joinedLocalIdsByHandle, membershipIndex, mirrorMemberIds, remoteMemberBoardId } from './planning-member-handles'
 import { attachSessionDrop } from './session-drag'
@@ -39,6 +39,8 @@ import {
   type RemoteTeamRow,
 } from './federation'
 import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt, type LayoutViewport } from './viewport'
+import { dropDispatch, localXY } from './planning-drop'
+import { buildChildChip, childChipTitle } from './planning-root'
 import { boardBounds, fitBelowHud, hudBottomOf } from './planning-fit'
 import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters, NODE_W, NODE_H } from './world'
 import { applyAction, settleAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
@@ -309,6 +311,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       renderNodes()
       deps.decorate?.(frameEls, nodeEls)
       drawMemberEdges(svg, model) // planning-edges
+      // superagent-root-team S3 batch 3: the root's dispatch edges, one per child frame this canvas hosts.
+      { const frames = new Map(model.allFrames()); const edges: RootEdgeInput[] = []
+        for (const t of lastTeams) if (t.root === true) for (const c of t.children ?? []) { const childFrame = c.ref.split('/canvas/')[1]?.split('@')[0] ?? ''; if (frames.has(childFrame)) edges.push({ rootFrame: t.name, childFrame, label: c.label, open: c.open }) }
+        drawRootEdges(svg, edges, frames, childCanvas => { window.dispatchEvent(new CustomEvent('dsh-root-child-picked', { detail: { canvas: childCanvas } })) })
+      }
     }
     renderFederation()
   }
@@ -388,9 +395,47 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       showFrameReachability(el, unavailable)
       el.classList.toggle('is-mirror', mirror !== undefined)
       el.classList.toggle('is-syncing', mirror?.syncing === true)
-      const label = `团队框 ${name}${mirror !== undefined ? `（${mirror.text}）` : ''}${unavailable ? `（${UNREACHABLE_HINT}）` : ''}（拖动整组，回车菜单）`
+      const label = `团队框 ${name}${mirror !== undefined ? `（${mirror.text}）` : ''}${unavailable ? `（${UNREACHABLE_HINT}）` : ''}${lastTeams.find(t => t.name === name)?.root === true ? '（根团队）' : ''}（拖动整组，回车菜单）`
       const headEl = el.querySelector('.p-frame-head')!
       if (headEl.getAttribute('aria-label') !== label) headEl.setAttribute('aria-label', label) // a rewrite re-announces
+      // superagent-root-team S3: a root frame shows its child teams as chips (label, open/slots, state) with a slots
+      // stepper — the owner's set-team-slots action, no other write path. Non-root frames render no chips.
+      const team = lastTeams.find(t => t.name === name)
+      let chipBox = el.querySelector<HTMLElement>('.p-root-children')
+      if (team?.root === true && (team.children?.length ?? 0) > 0) {
+        if (chipBox === null) { chipBox = document.createElement('div'); chipBox.className = 'p-root-children'; el.appendChild(chipBox) }
+        const seen = new Set<string>()
+        for (const child of team.children ?? []) {
+          seen.add(child.ref)
+          let chip = chipBox.querySelector<HTMLElement>(`[data-ref="${CSS.escape(child.ref)}"]`)
+          if (chip === null) {
+            chip = buildChildChip(document, child, () => { notice('info', `${child.label}：只读席位请到该团队自己的页面`) })
+            // S3 review F1/F3: the stepper buttons read the CURRENT slots from dataset each click (a re-render updates
+            // it before the label repaints), so consecutive clicks count from the latest value; they are the chip's
+            // siblings-in-container, not nested buttons (valid HTML, screen readers read the pair).
+            const down = document.createElement('button'); down.type = 'button'; down.className = 'p-root-step'; down.setAttribute('aria-label', `${child.label} 减一名额`); down.textContent = '−'
+            const up = document.createElement('button'); up.type = 'button'; up.className = 'p-root-step'; up.setAttribute('aria-label', `${child.label} 加一名额`); up.textContent = '+'
+            // Clicks between two polls read the same dataset value (3,3 → 4,4): harmless — the server clamps and the
+            // next poll repaints; racing the poll is not worth debouncing for a 1–16 stepper.
+            const slotsOf = (): number => Number((chip as HTMLElement).dataset.slots ?? String(child.slots))
+            down.addEventListener('click', () => { const s = slotsOf(); if (s > 1) emitAction({ type: 'set-team-slots', name, team: child.ref, slots: s - 1 }) })
+            up.addEventListener('click', () => { const s = slotsOf(); if (s < 16) emitAction({ type: 'set-team-slots', name, team: child.ref, slots: s + 1 }) })
+            chip.append(down, up)
+            chipBox.appendChild(chip)
+          }
+          // F1: every render refreshes the existing chip — label text, aria, and the clamps — from the fresh child.
+          chip.dataset.slots = String(child.slots)
+          const labelEl = chip.querySelector<HTMLElement>('.planning-root-chip-label')!
+          const title = childChipTitle(child)
+          if (labelEl.textContent !== title) labelEl.textContent = title
+          if (labelEl.getAttribute('aria-label') !== title) labelEl.setAttribute('aria-label', title)
+          const steps = Array.from(chip.querySelectorAll<HTMLButtonElement>('.p-root-step'))
+          const downEl = steps[0], upEl = steps[1]
+          if (downEl !== undefined) downEl.disabled = child.slots <= 1
+          if (upEl !== undefined) upEl.disabled = child.slots >= 16
+        }
+        for (const chip of Array.from(chipBox.children)) if (!seen.has((chip as HTMLElement).dataset.ref ?? '')) chip.remove()
+      } else if (chipBox !== null) chipBox.remove()
     }
     for (const [name, el] of [...frameEls]) {
       if (!seen.has(name)) { el.remove(); frameEls.delete(name) }
@@ -611,6 +656,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     teams: () => lastTeams,
     joined: id => lastSessions.some(s => s.id === id && s.joined === true),
     isRoster: name => rosterFramesRef.has(name),
+    isRoot: name => lastTeams.find(t => t.name === name)?.root === true,
     anchorFor: (t) => (t.kind === 'node' ? nodeEls.get(t.id) : frameEls.get(t.name)) ?? null,
     emit: emitAction,
     notice,
@@ -630,7 +676,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   // A rail 本机会话 row dropped on a frame joins that team, like a card drop (session-drag).
   attachSessionDrop(root, {
     signal, frames: () => frameEls,
-    frameAt: (clientX, clientY) => { const p = localXY({ clientX, clientY }); return innermostFrameAt(new Map(model.allFrames()), screenToWorld(vp, p.x, p.y)) },
+    frameAt: (clientX, clientY) => { const p = localXY(root, { clientX, clientY }); return innermostFrameAt(new Map(model.allFrames()), screenToWorld(vp, p.x, p.y)) },
     drop: (team, id) => model.getNode(id)?.memberships.some(m => m.team === team) === true ? notice('info', '该会话已在这个队里') : emitAction({ type: 'add-member', team, ids: [id] }),
   })
 
@@ -647,53 +693,6 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   // ── gestures ──
-  function localXY(ev: { clientX: number; clientY: number }): { x: number; y: number } {
-    const rect = root.getBoundingClientRect()
-    return { x: ev.clientX - rect.left, y: ev.clientY - rect.top }
-  }
-
-  /** Drop dispatch for a moved node drag: 入队 / 队内 y 排序. Leaving a team
-   * is an explicit menu action only — dragging out to blank is a position
-   * move (owner removal 2026-09-02: the drag-out-to-blank 离队 path is
-   * removed; accidental blank drops wrote whole-group removals). */
-  function dropDispatch(gesture: Extract<Gesture, { kind: 'node' }>, ev: SeamPointer): void {
-    const p = localXY(ev)
-    const w = screenToWorld(vp, p.x, p.y)
-    const f = innermostFrameAt(new Map(model.allFrames()), w)
-    // gh#20 W-B: peer cards join canvas teams too — a mixed local+remote
-    // drop composes a cross-host team; the server boundary translates
-    // peer ids to zone/id8 handles (emitAction's serverAction). Reorder
-    // stays local-only (roster priority is a local-session fact).
-    const memberIds = gesture.ids.filter(id => {
-      const node = model.getNode(id)
-      if (node === undefined) return false
-      if (node.remote !== true) return true
-      return node.remoteHandle !== undefined && node.remoteHandle !== ''
-    })
-    if (f !== undefined) {
-      const fresh = memberIds.filter(id => !(model.getNode(id)?.memberships.some(m => m.team === f)))
-      if (fresh.length > 0) {
-        emitAction({ type: 'add-member', team: f, ids: fresh }) // 入队：不自动离原队（多对多）
-        return
-      }
-      // Reorder only for LOCAL single-card drops: dropping a peer card is a
-      // position move, never a roster write (P2 from the incremental seat).
-      if (gesture.ids.length === 1 && model.getNode(gesture.clicked)?.remote !== true) {
-        // Already a member: an in-frame drop sorts that frame's members by y.
-        const current = model.teamMemberIds(f)
-        const desired = yOrderedMembers(model, f)
-        if (desired.join('\u0000') !== current.join('\u0000')) {
-          emitAction({ type: 'reorder', team: f, ops: reorderOps(current, desired) })
-        }
-      }
-    }
-    // Canvas blank drops move only; leaving a roster frame explicitly retracts those declarations.
-    if (gesture.rosterOrigin !== undefined && f !== gesture.rosterOrigin) {
-      const leaving = gesture.ids.filter(id => model.teamMemberIds(gesture.rosterOrigin!).includes(id))
-      if (leaving.length > 0) emitAction({ type: 'remove-member', team: gesture.rosterOrigin, ids: leaving })
-    }
-  }
-
   function pointerDown(ev: SeamPointer): void {
     if (viewW === 0) syncViewSize()
     if (menus.isDialogOpen()) { ev.preventDefault(); return } // modal: no gestures behind the dialog
@@ -709,7 +708,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
     if (target !== null && target.closest('button, input, textarea, select, .p-toolbar, .p-search, .p-lamp, .p-status, .p-legend') !== null) return // HUD chrome owns its presses (no marquee / preventDefault: that stole the search box's focus — and, first, its native right-click menu)
     undoBefore = layoutUndo.capture() // committed at pointerUp only if this press moved something
-    const p = localXY(ev)
+    const p = localXY(root, ev)
     // 右键按下：按住拖动 = 平移（Figma 惯例），原地抬起 = 上下文菜单。
     // Pan actually starts on the first move beyond RIGHT_DRAG_THRESHOLD px;
     // a clean press falls through to the context menu at pointerup.
@@ -789,7 +788,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   }
 
   function pointerMove(ev: SeamPointer): void {
-    const p = localXY(ev)
+    const p = localXY(root, ev)
     if (rightPress !== null) {
       // Right-hold pan: incremental viewport follow once past the threshold.
       // User ruling (2026-08-30): the drag moves the CONTENT, not the window —
@@ -908,7 +907,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
           deps.onNodePick?.(id)
         }
       } else {
-        dropDispatch(gesture, ev)
+        dropDispatch({ root, vp, model, emitAction }, gesture, ev)
         markDirty()
       }
       for (const el of frameEls.values()) el.classList.remove('drop-target')
@@ -948,7 +947,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
 
   function wheel(ev: SeamPointer): void {
     if (menus.isMenuOpen()) menus.closeMenu()
-    const p = localXY(ev)
+    const p = localXY(root, ev)
     // Wheel = pointer-anchored zoom (owner ruling 2026-09-01: 鼠标滚动 =
     // 放大缩小), with or without Ctrl — both muscle memories land on the
     // same action. Shift+wheel keeps the natural-scroll pan as the escape

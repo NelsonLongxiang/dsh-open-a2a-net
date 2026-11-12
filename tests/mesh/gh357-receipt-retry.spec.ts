@@ -46,8 +46,9 @@ it.each(['ledger','lost-response','ledger-lost-response','permanent','exhausted'
    expect((await state(bu)).tasks.find((r:any)=>r.taskId===task)).toMatchObject({status:'pending',receiptDelivery:'receipt-undelivered'});expect((await state(bu)).archived.some((r:any)=>r.taskId===task)).toBe(false);expect(new Set(bodies).size).toBe(1);return
   }
   if(mode==='ledger'||mode==='ledger-lost-response'){
-   expect(statuses[0]).toBe(503);expect((await state(au)).tasks.some((r:any)=>r.taskId===task)).toBe(true)
-   expect((await state(bu)).tasks.find((r:any)=>r.taskId===task)).toMatchObject({status:'pending',receiptDelivery:'receipt-undelivered'})
+   // The first attempt's answer and the undelivered mark land after the request is sent: wait for them, do not race them.
+   await vi.waitFor(async()=>{expect(statuses[0]).toBe(503);expect((await state(bu)).tasks.find((r:any)=>r.taskId===task)).toMatchObject({status:'pending',receiptDelivery:'receipt-undelivered'})},{timeout:3000})
+   expect((await state(au)).tasks.some((r:any)=>r.taskId===task)).toBe(true)
    expect((await state(bu)).tasks.find((r:any)=>r.taskId===task).reminderAttempts).toBeUndefined()
    expect((await state(bu)).archived.some((r:any)=>r.taskId===task)).toBe(false);fault.active=false
   }
