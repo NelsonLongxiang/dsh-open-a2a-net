@@ -222,7 +222,7 @@ export class SuperagentHost {
     })
     this.root = new RootDispatch({
       path: join(dir, 'root.json'), now: () => this.now(), logger: d.logger,
-      route: (address, text, context) => this.a2a.askReview(address, text, context),
+      route: (address, text, context) => this.a2a.routeAs(address, text, context),
       forwarded: ticketId => { try { this.engine.report(ticketId, { state: 'progress', summary: '答复已转给子团队', question: null }) } catch (error) { this.d.logger.warn('superagent: question on %s not cleared: %s', ticketId, String(error)) } },
       report: (ticketId, child, state, summary) => { this.engine.report(ticketId, { state, summary: clip(summary, 2_000) }); this.relayReport(ticketId, state, summary); this.pass(); void child },
       ask: (ticketId, child, question, options, recommended) => {
