@@ -15,6 +15,10 @@ const CREDENTIAL_FILE: readonly RegExp[] = [
   /(^|[\s"'=/~])\.a2a\//, /\bhost\.env\b/, /\/secrets?(\/|["'\s]|$)/, /\.token\b/, /(^|[\s"'=/~])\.netrc\b/, /(^|[\s"'=/~])\.npmrc\b/,
   /\.config\/gh\b/, /(^|[\s"'=/~])\.aws\//, /\.docker\/config\.json/, /\bgateway\.env\b/, /(^|[\s"'=/~])\.env(\.[a-z]+)?\b/,
   /\/keys?\/[^\s"']*\.(json|pem|key)\b/, /\bkeychain\b/i, /security\s+find-(generic|internet)-password/,
+  // 2026-11-12 (one system user, measured on a test node): an A2A identity's private key (any team's `team-cli/cli.json`
+  // or another CLI home's `cli.json`), the host's own state directory, the profile overrides that carry provider keys,
+  // and the ygl workspace database files.
+  /\bcli\.json\b/, /\.dsh\/state\//, /\.dsh\/profiles\/[^\s"']*cordis[^\s"'/]*\.ya?ml/, /ygl[^\s"']*\.db\b/,
 ]
 const AUTH_HEADER = /\bAuthorization\s*:|\bBearer\s+[A-Za-z0-9._~+/-]{8,}|\bx-api-key\s*:/i
 /** Places other sessions keep their files: Claude Code scratch directories, DSH session logs, shared side-session notes. */
