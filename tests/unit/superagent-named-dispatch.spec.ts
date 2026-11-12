@@ -8,7 +8,7 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { parseDispatch } from '../../src/superagent/host/named-dispatch.ts'
+import { answerChoice, parseDispatch } from '../../src/superagent/host/named-dispatch.ts'
 import { key } from '../../src/superagent/source-types.ts'
 
 const bot = 'market/0123456789abcdef'
@@ -59,6 +59,20 @@ describe('the dispatch line', () => {
     expect(parseDispatch(delivered)).toEqual({ line: { rework: { of: 'wbe-1.d26.a1' } }, body: '[打回重做] 原事项《安排九》：请改成晚安问候。' })
     // A header-shaped line inside the message is not skipped twice: only the host's one header comes off.
     expect(parseDispatch('[A2A direct] (task x) sent:\n\n[A2A direct] (task y) sent:\n\n[A2A dispatch] {"for":"a"}')).toBeUndefined()
+  })
+})
+
+describe('the answer to 等 / 换人', () => {
+  const header = '[A2A direct] (task t) 已验证来源 http://127.0.0.1:9890 from "market/fd417315" (routed to dsh/canvas/team) sent:\n\n'
+  it('is the option the answer picks, not any 等 elsewhere in the message', () => {
+    expect(answerChoice(header + '换人')).toBe('换人')
+    expect(answerChoice(header + '等\n（他回来再做）')).toBe('等')
+    expect(answerChoice(header + '换人（不指名重派）')).toBe('换人')
+    // The market's workbench event: only answer.text is read; a 等 in a name or another field is not.
+    expect(answerChoice(header + JSON.stringify({ type: 'workbench-event', v: 2, kind: 'answer', answer: { qid: 'q1', text: '换人', by: 'user:等等' } }))).toBe('换人')
+    expect(answerChoice(header + JSON.stringify({ kind: 'answer', answer: { qid: 'q1', text: '等', by: 'user:换人王' } }))).toBe('等')
+    expect(answerChoice(header + JSON.stringify({ kind: 'answer', answer: { qid: 'q1', text: '再想想', by: 'user:等' } }))).toBeUndefined()
+    expect(answerChoice(header + '我们再等等看，换人也行')).toBeUndefined()
   })
 })
 
