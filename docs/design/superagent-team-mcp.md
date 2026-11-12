@@ -1,12 +1,20 @@
 # superagent team MCP: the host calls an MCP server for its members, the token stays with the host
 
-Status: proposed, 2026-11-11, after the local market trial. In that trial a team member found no market tool, read another session's token file and called the market's MCP with it. The owner then decided that team sessions run as a separate system user ([superagent-team-user](../ops/superagent-team-user.md)). Agreed with the workbench market: a team's MCP token goes only to the host, is scoped to the team, short-lived and revocable, and the host learns when it is revoked. Until this is built, no team gets an MCP token.
+Status: proposed, 2026-11-11; revised 2026-11-12 for one system user. Not implemented.
+
+- **Why it exists.** In the local market trial a team member found no market tool, read another session's token file and called the market's MCP with it.
+- **The topology changed.** On 2026-11-11 the owner had decided that team sessions run as a separate system user. On 2026-11-12 he withdrew that ([superagent-team-user](../ops/superagent-team-user.md), not pursued): team sessions stay under the host's own user. This design no longer relies on a second user.
+- **Agreed with the workbench market:** a team's MCP token goes only to the host, is scoped to the team, short-lived and revocable, and the host learns when it is revoked. Until this is built, no team gets an MCP token.
 
 ## Context
 
 - **A token in a file is a token for every session of that user.** A team session's sandbox limits writes, not reads. Whatever a member's system user can read, the member can read and use.
 - **A host-level MCP server does not reach the team.** A team preset carries its own plugin list, so a host-level `dsh-mcp-client` row does not reach a team session. A profile overlay also takes no `!!js`, so a token cannot come from the environment there. Both were met in the trial; [superagent-mcp](../ops/superagent-mcp.md) 1.4 is wrong on both.
-- **The topology.** Per the separate-user guide, the router and the team's A2A face run in the team host instance (`dsh-team`). Members run in the member host instance (`dsh-member`), which serves the team host. Members cannot read `dsh-team`'s files.
+- **The topology (2026-11-12).** The router, the members and the team's A2A face run in one DSH instance under one system user. A member can read every file that user can read.
+  - **Measured on a test node** (categories only, no values): the GitHub CLI login, the npm token, the host's API key, every A2A CLI identity key on the machine, other teams' identity keys, the node key, the profile overrides, other agents' scratch files (where the trial's token was found), other sessions' transcripts, and the ygl workspace databases.
+  - No credential-looking variable was in the host process's environment.
+  - **So the token must never be written to any file, log or environment variable that user can read.** Process memory is the one place left. Another process of the same user cannot read it without debugger rights, and the credential-access audit records attempts.
+  - Members on another instance (`serves`) are still supported and go through the signed face.
 
 ## Decisions
 
@@ -23,7 +31,8 @@ Status: proposed, 2026-11-11, after the local market trial. In that trial a team
 ### M2. Members call through the host; they never hold the token
 
 - **Two team tools.** Members and observers get `team_mcp_tools {server}` (the tool list, filtered by `tools`) and `team_mcp_call {server, tool, arguments, ticket_id}`.
-- **On a member host,** the call travels to the team host as a signed host-to-host request: `/a2a/superagent-team`, `op: 'mcp-call'`, the existing signed face, which counts only under the pinned key.
+- **A member on the team host** (the usual case) calls the host in-process, through its role tool.
+- **A member on another host** sends the call to the team host as a signed host-to-host request: `/a2a/superagent-team`, `op: 'mcp-call'`, on the existing signed face, which counts only under the pinned key.
 - **The team host checks** that the caller is on the canvas, that it holds `ticket_id` as a running ticket, and that the tool is allowed.
 - **Then the team host calls the server** with the token in its own process and returns the result, capped at 64 KiB.
 - **The member never sees the token, the URL's credentials or the server's headers.**
@@ -45,8 +54,9 @@ Status: proposed, 2026-11-11, after the local market trial. In that trial a team
 
 ## Consequences
 
-- **Members get market tools without any file they could read holding a credential.** With the two-user topology the token sits only in `dsh-team`'s process.
-- **The router is in that process's user.** If the router were driven to read process memory, it could reach the token. On macOS and Linux a process cannot read another process's memory without debugger rights, and the credential-access audit records attempts at it. Accepted for now.
+- **Members get market tools without any file they could read holding a credential.** The token sits only in the host process's memory.
+- **Every team session runs under the host's user.** If one were driven to read the host's process memory, it could reach the token. On macOS and Linux that needs debugger rights, and the credential-access audit records attempts at it. Accepted by the owner (2026-11-12): he knows members can read that user's files.
+- **The persona still says it:** members use only the tools and credentials they are given.
 - **After a team host restart,** tools are unavailable until the owner re-enters the token. The team page says so and members are told `token-needed`.
 - **Not in this design:**
   - an MCP server that needs the member's own identity (per-seat tokens);

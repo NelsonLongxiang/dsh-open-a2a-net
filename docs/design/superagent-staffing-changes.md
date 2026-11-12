@@ -68,7 +68,8 @@ The market may ask for six operations. Each has a policy on the node, `auto | co
    - `name` is a label (`NODE_NAME` charset, length-capped). It is never a path, URL, command or tool name.
    - `rules` are text. Rules cannot grant a tool, a credential or a destination: those are enforced by the preset, role tools, the credential audit and the outbound rules, whatever the text says.
    - That is also why `team.rules.set` defaults to **confirm**: text can still steer a team within what it is allowed to do.
-3. **Isolation does not move.** A new member session starts on the member host the template names: the `dsh-member` instance under its own system user, as in `superagent-team-user.md`.
+3. **Isolation does not move.** A new member session starts on the member host the template names, inside whatever isolation that host already has.
+   - *2026-11-12:* the owner withdrew separate system users for team sessions (`superagent-team-user.md`, not pursued). A member therefore runs under the host's user and can read what that user reads. The token rule ([superagent-team-mcp](superagent-team-mcp.md): in the host's memory only) and the credential-access audit carry this instead.
    - The node never creates a system user, never changes file permissions, and never copies a credential because of a staffing message. Creating OS users stays the owner's administrator act, done once.
    - A template that would start members under the owner's own user is marked `local-owner` in the catalogue, and `member.add` with it is always **confirm**, whatever the policy says.
 4. **Quotas bound the damage.** These are owner-set limits on the node:
@@ -113,7 +114,7 @@ It cannot read or move credentials, widen tools, or reach the owner's user.
 
 1. **S1: entry, ledger, policy and confirmation cards** (`staffing.sources`, `staffingChanges`, receipts, `rosterSeq`), with `member.retire` and `team.rules.set`. High tier. About 1.5 days.
 2. **S2: templates and `member.add`/`member.retemplate` on this instance**, with node identities as seats and the roster `templates` catalogue. High tier. About 2 days.
-3. **S3: `member.add` on a member host under another system user, and `team.create`/`team.retire`.** High tier. About 2 days. It can only be accepted live after the owner has set up `dsh-member` per `superagent-team-user.md`, which nobody has walked from scratch yet.
+3. **S3: `member.add` on a member host under another system user, and `team.create`/`team.retire`.** High tier. About 2 days. The separate-user precondition is gone (2026-11-12); a linked member instance is still a valid member host.
 
 **Place in the queue:** after B1 (named dispatch, which brings `seatId`) and `reworkReturns`, in parallel with or after C (streaming status). Each step needs a non-self review PASS. Until S1 ships, teams are built on the node and the market claims them, as §8.5 of the market document says.
 
