@@ -104,6 +104,8 @@ export interface SuperagentHostDeps {
   readonly callerDeclares?: (caller: string, capability: string) => boolean
   readonly rosterSend?: (ref: string, text: string, taskId: string) => Promise<void>
   readonly hostFingerprint?: () => string | undefined
+  /** Refresh the peers' verified cards in the host's card cache (at most once a minute each); the roster's targets are read from it. */
+  readonly warmPeerCards?: () => void
   /** The canvas teams this host owns, by name (the owner binds one of them). */
   readonly canvasNames?: () => readonly string[]
   /** The agent preset a live local session runs (undefined: not loaded, or no preset registry). */

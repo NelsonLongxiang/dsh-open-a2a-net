@@ -2103,6 +2103,7 @@ export function apply(ctx: Context, config: Config): void {
     callerDeclares: (caller, capability) => callerCapability(caller, capability),
     rosterSend: async (ref, text, taskId) => { await dispatchAnywhere(ref, text, session, undefined, AbortSignal.timeout(15_000), true, taskId) },
     hostFingerprint: () => canvasOwnerFingerprint(encodePublicKey(createPublicKey(nodePrivateKey))),
+    warmPeerCards: () => { for (const url of peerStore.list()) void cachedCardFetch(url).catch(() => undefined) },
   }) : undefined
   teamsHandle = superagentTeams
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
