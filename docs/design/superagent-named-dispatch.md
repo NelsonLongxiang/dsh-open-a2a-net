@@ -29,6 +29,7 @@ Status: implemented, 2026-11-11.
   - the request came over the wire with a verified OriginClaim (proof `origin-claim`, Sig3);
   - the caller is a canvas remote member whose key this host pinned (a registered peer);
   - its verified card declares the capability: `directedSeats` for `for`, `reworkReturns` for `rework`.
+- **The host says it reads them.** A host running superagent declares `directedSeats` and `reworkReturns` on its own card (2026-11-12). A requester writes a dispatch line only to a host that declares the capability it uses; to any other host it dispatches to the whole team and leaves the line out.
 - **Anything else is plain text.** Any other caller's dispatch line is only text. Nothing acts on it, and the router reads it as part of the request.
 - **The router sees the line**, and the candidate card says what it means: "this request names a seat; if you accept it, the host gives it to that seat; do not name a member".
 
