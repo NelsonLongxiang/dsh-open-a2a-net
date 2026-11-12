@@ -126,6 +126,34 @@ describe('a dispatch that names a seat', () => {
   })
 })
 
+describe('the roster', () => {
+  it('gives the router a seat id too, yet a dispatch naming the router\'s seat does not make it the worker', async () => {
+    const t = await team()
+    t.host.pass()
+    const routerSeat = t.host.named.seatIdOf('session-r')
+    expect(routerSeat).toMatch(/^seat-[0-9a-f]{8}$/)
+    const task = 'direct-000000000040'
+    const ticketId = t.accept(t.receive(task, named(routerSeat!))).ticket_id as string
+    await t.settle()
+    expect(t.holder(ticketId)).toBeUndefined()
+    expect(t.calls.some(a => a[0] === 'receipt' && a[1] === task && a.includes('--attention'))).toBe(true)
+    await t.host.stop()
+  })
+  it('names a seat for the market without the handle suffix the router\'s cards carry', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const host = new SuperagentHost({ canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', 'session-a0000000aaaa'], remote: [] } : undefined,
+      home: mkdtempSync(join(tmpdir(), 'sa-named-name-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1', sessionLoaded: () => true, runCli: async () => '{}',
+      sessionName: (id: string) => id === 'session-r' ? '总工 (26b40ae2)' : '市场试联成员二就绪 (a0000000)' } as never)
+    expect(host.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true } }, () => true)).toMatchObject({ ok: true })
+    host.engine.receive({ id: 'w1', source: 'workbench', threads: [{ source: 'workbench', id: 'w1' }], actor: { source: 'workbench', id: 'owner' }, human: true, addressed: 'direct', at: new Date().toISOString(), text: 'x' } as never)
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const out = routeItem(host, { trigger_id: 'w1', kind: 'accept', title: 't', scope: 's', reason: 'r' } as never)
+    expect(host.seatOf(out.ticket_id as string)?.name).toBe('总工')
+    await host.stop()
+  })
+})
+
 describe('a named seat that cannot take the ticket', () => {
   const attention = (calls: string[][], task: string) => calls.filter(a => a[0] === 'receipt' && a[1] === task && a.includes('--attention'))
 

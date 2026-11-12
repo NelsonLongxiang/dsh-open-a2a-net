@@ -61,6 +61,8 @@ export interface NamedDeps {
   readonly tickets: () => readonly Ticket[]
   readonly trigger: (id: string) => Trigger | undefined
   readonly pool: () => readonly string[]
+  /** The team's router: it has a seat too (the roster names it), but a dispatch never makes it the worker. */
+  readonly router?: () => string | undefined
   /** Whether a member can take work now: a local session that is loaded, or a member on another host. */
   readonly loaded: (member: string) => boolean
   readonly resolveMember: (value: string) => string | undefined
@@ -99,7 +101,8 @@ export class NamedDispatch {
 
   /** Every member in the pool has a seat; a seat whose member left is marked, and forgotten after SEAT_LEFT_KEEP_MS. */
   syncSeats(): void {
-    const pool = new Set(this.d.pool())
+    const router = this.d.router?.()
+    const pool = new Set([...this.d.pool(), ...(router !== undefined && router !== '' ? [router] : [])])
     const now = this.d.now()
     let changed = false
     const held = new Set<string>()
@@ -138,7 +141,8 @@ export class NamedDispatch {
   /** What a `for` names: a seat id first, then a handle or name. `member` is undefined when it is not on the team now. */
   private resolve(wanted: string): { member?: string; label: string } {
     const row = this.data.seats[wanted]
-    if (row !== undefined) return row.left === undefined ? { member: row.member, label: wanted } : { label: wanted }
+    // A seat names a worker only while its session is in the pool: the router's seat, or a seat that left, is not one.
+    if (row !== undefined) return row.left === undefined && this.d.pool().includes(row.member) ? { member: row.member, label: wanted } : { label: wanted }
     const member = this.d.resolveMember(wanted)
     return member !== undefined ? { member, label: this.d.memberName(member) } : { label: wanted }
   }
