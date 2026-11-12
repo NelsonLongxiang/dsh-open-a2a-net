@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CanvasStore } from '../../src/canvas-store.ts'
 import { linkRootRequester } from '../../src/canvas-root.ts'
-import { callerAdmission, type AdmissionRecords } from '../../src/task-auth.ts'
+import { callerAdmission, recheckCallerAdmission, recheckRemoteCliAuthorization, type AdmissionRecords } from '../../src/task-auth.ts'
 
 const ROOT = 'superagent-team/48296a44ab6849c9', HOME = 'http://127.0.0.1:3084', OTHER = 'http://127.0.0.1:3090'
 
@@ -81,7 +81,7 @@ describe('the wire admits a linked root from its home host only', () => {
   const records = (s: CanvasStore): AdmissionRecords => ({
     zone: 'dsh', teamScopeRouting: true, id8: id => id.slice(0, 8), canvasTeamOf: name => `dsh/canvas/${name}`,
     memberships: () => [], joined: () => [], canvasNames: () => ['docs'], canvasTeamsOf: () => [], canvasMembersOf: () => [],
-    canvasRemoteMembersOf: name => [...s.remoteMembersOf(name), ...s.requestersOf(name)], peerOrgs: () => [], liveNodeIds: () => [],
+    canvasRemoteMembersOf: name => s.remoteMembersOf(name), canvasRequestersOf: name => s.requestersOf(name), peerOrgs: () => [], liveNodeIds: () => [],
     cliDeposited: () => false, cliHomeOf: handle => s.cliHomeOf(handle),
   })
 
@@ -92,5 +92,15 @@ describe('the wire admits a linked root from its home host only', () => {
     s.addRequester('docs', ROOT, HOME)
     expect(callerAdmission(records(s), ROOT, 'dsh/canvas/docs', proof)).toMatchObject({ ok: true, rule: 'remote-ref-cli' })
     expect(callerAdmission(records(s), ROOT, 'dsh/canvas/docs', { ...proof, origin: OTHER, viaUrl: OTHER })).toMatchObject({ ok: false })
+  })
+
+  it('the identity\'s admission query and the settlement recheck see the link too, and lose it with the link', () => {
+    const { s } = store()
+    expect(recheckCallerAdmission(records(s), ROOT, 'superagent-team/9d13b6d5330742b9', false)).toMatchObject({ ok: false })
+    s.addRequester('docs', ROOT, HOME)
+    expect(recheckCallerAdmission(records(s), ROOT, 'superagent-team/9d13b6d5330742b9', false)).toMatchObject({ ok: true, rule: 'remote-ref-cli' })
+    expect(recheckRemoteCliAuthorization(records(s), { caller: ROOT, carrier_url: HOME } as never)).toMatchObject({ ok: true })
+    s.removeRequester('docs', ROOT)
+    expect(recheckRemoteCliAuthorization(records(s), { caller: ROOT, carrier_url: HOME } as never)).toMatchObject({ ok: false })
   })
 })

@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "ea071021fd3e7441465826993235c889fd0cec12f2d21f4b513ebdde5cc712c8",
+    "src/index.ts": "c42b3ade9fcbcc33f562ffcc0b74df18f10b216a85f3fdb2a11e16667b75b149",
     "src/faces/admin.ts": "af1a2ce28a7d2135bdc6eb44a302c70f1d47b3c21c6374e0bb28eb74f0a7134f",
     "src/canvas-store.ts": "58f0ca4b3af80043ca6cabc9e541db58774cfd0e6ccccc536cddcd0d36771d88",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
@@ -21,7 +21,7 @@
     "src/flood-guard.ts": "b4f92c9ce3237019ab3c7ab71f0624c3306e8c316cb15d119d4e7c57f65e604f",
     "src/faces/wire.ts": "c546c695711a9b622e1d9b0c6e598292bfc28acefdf3558b120041d0171c262b",
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
-    "src/task-auth.ts": "1ab8aa09763b70e921704fd066ebc834d501f4bdf81fcf938a90a2906e01cd70",
+    "src/task-auth.ts": "052e26f6b996f039f64404ba36047258fd7d9882d2ab92441f43df30ca66d392",
     "src/origin-claim.ts": "54079e01ec324ea1054bc892ef403ba813fa52c480bd99ecb9cf8b73190c376a",
     "src/tools/info.ts": "1928f36db8674b6f2fd2b9dcce0d178690b244fa2d6ebe523800dbbeb7aac584",
     "src/tools/act.ts": "983f78c58b8c886b39b5af3f2cf474a1a47e4d03b91fedf5ed581aba3225bed2",
@@ -87,7 +87,7 @@
     {
       "page": "p1-arch",
       "cell": "b5",
-      "ref": "src/task-auth.ts:121",
+      "ref": "src/task-auth.ts:131",
       "expect": "export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTeam?: string): Admission {"
     },
     {
@@ -147,7 +147,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:3277",
+      "ref": "src/index.ts:3276",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -225,19 +225,19 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4213",
+      "ref": "src/index.ts:4212",
       "expect": "const callerNodeId = originAgentId"
     },
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/task-auth.ts:148",
+      "ref": "src/task-auth.ts:158",
       "expect": "if (r.canvasRemoteMembersOf(name).includes(caller)) declare(r.canvasTeamOf(name), 'remote-ref-samezone')"
     },
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/task-auth.ts:150",
+      "ref": "src/task-auth.ts:160",
       "expect": "const ownHandles = new Set<string>([r.zone, ...r.joined().map(id => `${r.zone}/${r.id8(id)}`)])"
     },
     {
@@ -267,7 +267,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3627",
+      "ref": "src/index.ts:3626",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {

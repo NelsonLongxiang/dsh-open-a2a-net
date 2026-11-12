@@ -2922,9 +2922,8 @@ export function apply(ctx: Context, config: Config): void {
     canvasNames: () => canvasStore.list(),
     canvasTeamsOf: sessionId => canvasTeamsOfSession(sessionId),
     canvasMembersOf: name => canvasLocalMembersOf(name),
-    // S5: a requester link (a root team's identity on another host, admitted by the owner) is an operator-established
-    // link for admission only: it is no member, so routing and rosters never see it.
-    canvasRemoteMembersOf: name => [...canvasStore.remoteMembersOf(name), ...canvasStore.requestersOf(name)],
+    canvasRemoteMembersOf: name => canvasStore.remoteMembersOf(name),
+    canvasRequestersOf: name => canvasStore.requestersOf(name),
     peerOrgs: function * () {
       for (const cached of cardCache.values()) {
         const org = (cached.card as { canvasOrg?: PeerOrgEntry[] } | undefined)?.canvasOrg
