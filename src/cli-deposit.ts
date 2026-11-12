@@ -34,6 +34,13 @@ export const CLI_TOMBSTONE_CAP = 16
 /** Owner ruling ①: <agent-name>/<uuid·8B>. The name is [a-z0-9-]{1,32}. */
 export const CLI_HANDLE_RE = /^([a-z0-9-]{1,32})\/([0-9a-f]{16})$/
 
+/**
+ * superagent-root-team S5: whether `to` is a CLI identity deposited on another host. A team identity's receipt or follow-up
+ * to one goes out from the team identity (its CLI), not in-process: the in-process send speaks for this host, and the
+ * identity's home host has an operator link for the team identity only (a root team's requester link), not for this host.
+ */
+export const remoteCliTarget = (to: string, depositedHere: (handle: string) => boolean): boolean => CLI_HANDLE_RE.test(to) && !depositedHere(to)
+
 /** One deposited CLI identity. */
 export interface CliDeposit {
   readonly handle: string

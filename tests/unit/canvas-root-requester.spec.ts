@@ -129,3 +129,13 @@ describe('a root adding a child on another host links the child\'s identity', ()
     expect(s.cliHomeOf(CHILD)).toBeUndefined()
   })
 })
+
+describe('a child team\'s answers to a root on another host go out from the team identity', () => {
+  it('a CLI identity not deposited here is a remote target (the CLI sends); a local deposit or a session address is not', async () => {
+    const { remoteCliTarget } = await import('../../src/cli-deposit.ts')
+    expect(remoteCliTarget(ROOT, () => false)).toBe(true)
+    expect(remoteCliTarget(ROOT, handle => handle === ROOT)).toBe(false)
+    expect(remoteCliTarget('dsh/canvas/docs', () => false)).toBe(false)
+    expect(remoteCliTarget('dsh/1234abcd', () => false)).toBe(false)
+  })
+})
