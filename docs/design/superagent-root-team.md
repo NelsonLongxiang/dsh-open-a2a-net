@@ -101,6 +101,66 @@ The child's receipts arrive at the root host on the task it sent, and the root t
 - **Any entry works.** The root takes work wherever any team does: its A2A address, the workbench request box, GitHub issues (when on), and the owner's chat with its router.
 - **The market can use either.** It can send to the root and let it choose, or keep sending straight to a team. The roster tells it which teams exist.
 
+### R7. On the canvas: the data and the operations
+
+- **The canvas holds the hierarchy.** A root is a canvas team flagged `root: true` in the canvas store, with no separate registry. Its children are canvas members of a third kind, team refs (`<zone>/canvas/<name>@<fp8>`), next to local sessions and remote session refs.
+  - A team ref is confirmed the way a remote session ref is: the child host's signed card advertises that canvas in `canvasOrg`, under the pinned key.
+  - It shows `confirmed-remote` / `unconfirmed` as remote members do today.
+- **Operations on the owner's canvas route** (`POST /__dsh_a2a/canvas`), each with the store's revision check:
+  - `set-root {name, root}`;
+  - `add-team {name, team}` and `remove-team {name, team}`;
+  - `set-team-slots {name, team, slots}`.
+
+  Mirrors of a remote root are edited through the existing fleet relay, as other mirrored edits are.
+- **Both sides in one step where the owner owns both.** `add-team` checks the child side: is the root registered on the child's canvas (remote member, bot list, capabilities, R5)?
+  - When the child team is on this host, or on a linked host whose card has the same owner key, the host does the child side too: it adds the root as a remote member of the child's canvas and puts it on the child's bot list, through the fleet relay.
+  - When the owner keys differ, the child side is left to the child's owner. The child shows as 「待子团队登记」 until its card says the root is admitted.
+- **Removing.** Removing a child, or turning a root back into a plain team, never touches the child's own team. Open root tickets on that child are told to stop (R4), and the child's side registration stays until its owner removes it.
+
+### R8. On the canvas: the board, made quick to use
+
+The planning board is where the owner builds teams today: 建队 from a selection, dragging sessions into frames, mirrors of other hosts' teams. The root uses the same gestures, with the team frame as the unit:
+
+- **Making a root.**
+  - Select two or more team frames (local or mirrored) and press 建队 (G). The board offers 「组成 root 团队」: it creates a root frame, asks for its router (a free local session, picked in the same picker as today), and adds the selected teams as its children.
+  - On a single team frame, the menu has 「设为 root 团队」.
+- **Adding and removing a child.**
+  - Drag a team frame onto a root frame. While dragging, the root frame shows a drop preview: 「加入为子团队」, or the reason it cannot, such as 「这是一个 root」 or 「已是子团队」.
+  - The frame menu has 「加入 root…」 with the roots listed.
+  - Dragging a child chip out of the root, or 「移出 root」, removes it after a one-line confirmation. As with membership changes today, it is not on the layout undo stack.
+- **What a root frame shows.** A child appears as a compact chip, not as its sessions:
+  - its name and host;
+  - its router;
+  - seats online out of total;
+  - open root tickets out of `slots`, with a small stepper to change `slots` in place;
+  - the age of its last roster.
+
+  A click opens the chip into the child's seats from its roster, read-only; a double click focuses the child's own frame. One status badge per child: 已就绪 / 待子团队登记 / 不可达 / 满载.
+- **Work in flight.** An edge runs from the root router to each child carrying root tickets, labelled with their count. Hovering lists them, and a click opens the root's 工单 tab filtered to that child.
+- **Errors where they happen.** Every refusal of a canvas operation shows on the frame it concerns, in words, with the next step: 「子团队宿主未互加 seed」, 「子团队所有者不同：请对方在其画布上登记本 root」. A refusal never appears only in a toast or the console.
+- **Size and modules.** `planning-view.ts` is at its line cap (1500 of 1507, frontend verifier M1). The root UI goes into new modules (`planning-root.ts` for the frame, chips and badges; `planning-root-drop.ts` for drag and drop), and `planning-view.ts` gets only the hooks. If even the hooks do not fit, a block is moved out first in its own PR.
+
+### R9. An SDK, for the market and for owner tools
+
+- **Why two parts.** The market holds no node credential and changes nothing on a node directly (the boundary in `superagent-staffing-changes.md`). So the SDK has two parts with different trust, and the market gets only the first.
+- **`@nelsonlongxiang/dsh-open-a2a-net/sdk/wire`: for any requester, the market included.** Pure functions and types, with no network and no credentials:
+  - `formatDispatch({ for?, rework? }, text)` and `parseDispatch` (the `[A2A dispatch]` line);
+  - `parseReceipt` and the envelope types (`by` with `seatId`, `artifacts`, `question`, `progress`, `tickets`), plus the task id helpers (`ack-` / `progress-` / `attention-` / `receipt-`);
+  - `parseRoster(text)` returning typed seats `{ seat, seatId, name, team, role, online, active, queued }`;
+  - the capability names (`progressReceipts`, `teamRoster`, `directedSeats`, `reworkReturns`) and a helper that reads them from a verified card;
+  - for a root, the same: the market sends to the root's address and reads the root's receipts, whose `tickets` name the children.
+- **`@nelsonlongxiang/dsh-open-a2a-net/sdk/owner`: for the node's owner, with the owner's API key.** A typed client for the control routes:
+  - `canvas.*`: create, add or remove members, `setRoot`, `addTeam`, `setTeamSlots`;
+  - `superagent.*`: list teams, add a team, read state, settings, `moveSeat`;
+  - the node's state and roster reads.
+
+  Uses: the nexus board (which hand-writes these fetches today, and would then share one implementation), the owner's scripts, and on the node the executor of staffing changes. It is never given to the market.
+- **Contract.**
+  - Both parts are exported from the package and versioned with it. Their shapes are pinned by tests.
+  - A breaking change waits for a minor version and is called out in the release notes.
+  - `docs/sdk.md` gives worked examples: the market building a named dispatch and reading a roster; an owner script making a root and adding two children.
+- **The wire part is useful before any root exists.** The market writes dispatch lines and reads rosters and receipts today, by hand. The SDK's wire part can ship first.
+
 ## Consequences
 
 - **Ten teams look like one.** A requester sends to one address and gets acknowledgement, progress, questions and one result. The work goes to the team the root router chooses, or to several when the request asks for parts.
@@ -118,10 +178,13 @@ The child's receipts arrive at the root host on the task it sent, and the root t
 2. **Registering a child replaces per-message approval** for dispatch from the root to that child (R2). It is a standing permission, revocable by removing the child.
 3. **Capacity per child** (`slots`, default 3) is owner-set rather than read from the child's roster. The roster may suggest it but never sets it.
 4. **A child's question goes up to the root's requester** (R3), not to the root's owner. A question meant for the owner is still a decision card on the child's own page.
+5. **Registering the child side automatically when the owner owns both hosts** (R7). Otherwise each child's owner registers the root by hand.
+6. **The SDK split** (R9): the market gets only the wire part, never the owner part. This matches the staffing-change boundary.
 
 ## Order and size (if approved)
 
-1. **Root flag, team member refs on the canvas, the executor's team slots, and dispatch by A2A from the host face.** High tier; about 2 days.
-2. **Receipts mapped onto root tickets** (acknowledgement, progress, questions, result, failure), and combined results for split roots. High tier; about 2 days.
-3. **Child rosters on the root router's card, rework and stop forwarding, and the team page for a root.** Mid tier; about 1.5 days.
-4. **Live check** on the test host with two child teams on the same instance, then with one on another instance.
+0. **SDK wire part.** `sdk/wire` with its tests and `docs/sdk.md`, useful to the market now and independent of the root. Mid tier; about 1 day.
+1. **Canvas model and operations** (R7): root flag, team refs, `slots`, child-side registration for same-owner hosts. Plus `sdk/owner` for them. High tier; about 2 days.
+2. **Root dispatch and receipts** (R2, R3, R4): the executor's team slots, the A2A send from the host face, the child's acknowledgement / progress / question / result / failure mapped onto root tickets, and combined results. High tier; about 2.5 days.
+3. **The board** (R8): root frames, child chips with roster and capacity, drag and drop, menus, in-flight edges, refusals on the frame; nexus switched to `sdk/owner`. Mid tier; about 2 days, plus a module move first if `planning-view.ts` needs room.
+4. **Live check** on the test host with two child teams on the same instance, then one on another instance, then the market sending to the root.
