@@ -39,6 +39,12 @@ export interface RosterDeps {
   readonly seatIdOf?: (sessionId: string) => string | undefined
   readonly loadOf: (sessionId: string) => { active: number; queued: number; since?: string }
   readonly hostFingerprint: () => string | undefined
+  /**
+   * Keep the peers' verified cards fresh. Whether a remote member is confirmed and declares teamRoster is read from the
+   * host's card cache, which a restart empties and only an unrelated read refilled (market trial: no roster for 2.5 hours
+   * after a restart). Cheap: the cache fetches a peer at most once a minute.
+   */
+  readonly warm?: () => void
   readonly nowMs: () => number
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
 }
@@ -85,6 +91,7 @@ export class RosterReports {
   /** One look at the team: a snapshot goes out when it is due (5 minutes on, or a change settled for 30 seconds). */
   async tick(): Promise<void> {
     if (this.sending) return
+    try { this.d.warm?.() } catch (error) { this.d.logger.warn('superagent: peer cards not refreshed: %s', String(error)) }
     const team = this.d.team()
     const host = this.d.hostFingerprint()
     if (team === undefined || host === undefined) return
