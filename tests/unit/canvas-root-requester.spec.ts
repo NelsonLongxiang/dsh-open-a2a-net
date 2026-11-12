@@ -104,3 +104,28 @@ describe('the wire admits a linked root from its home host only', () => {
     expect(recheckRemoteCliAuthorization(records(s), { caller: ROOT, carrier_url: HOME } as never)).toMatchObject({ ok: false })
   })
 })
+
+describe('a root adding a child on another host links the child\'s identity', () => {
+  it('as a requester of the root canvas, pinned to the child\'s host; removing the child drops the link', async () => {
+    const { generateKeyPairSync } = await import('node:crypto')
+    const { canvasOwnerFingerprint } = await import('../../src/canvas-id.ts')
+    const { rootAction } = await import('../../src/canvas-root.ts')
+    const peer = generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
+    const own = generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
+    const CHILD = 'superagent-team/9d13b6d5330742b9', ref = `ext/canvas/sales@${canvasOwnerFingerprint(peer)}`
+    const { s, path } = store()
+    s.create('root'); s.setRoot('root', true)
+    const card = (identity?: string) => ({ publicKey: peer, canvasOrg: [{ name: 'sales', team: 'ext/canvas/sales', superagentTeam: true as const, ...(identity !== undefined ? { identity } : {}) }] })
+    const deps = (identity?: string) => ({ store: s, zone: 'dsh', ownKey: own, localSuperagentCanvas: () => false, peerCards: async () => [{ url: 'http://127.0.0.1:3086/', card: card(identity), linked: true }] })
+    // An older child host names no identity: the child is added, nothing is linked.
+    expect(await rootAction('add-team', { name: 'root', team: ref }, deps())).toMatchObject({ ok: true })
+    expect(s.requestersOf('root')).toEqual([])
+    expect(await rootAction('add-team', { name: 'root', team: ref }, deps(CHILD))).toMatchObject({ ok: true, identity: CHILD, identityLinked: true })
+    expect(s.requestersOf('root')).toEqual([CHILD])
+    expect(s.cliHomeOf(CHILD)).toBe('http://127.0.0.1:3086')
+    expect(new CanvasStore(path).childrenOf('root')[0]).toMatchObject({ ref, identity: CHILD })
+    expect(await rootAction('remove-team', { name: 'root', team: ref }, deps(CHILD))).toMatchObject({ ok: true })
+    expect(s.requestersOf('root')).toEqual([])
+    expect(s.cliHomeOf(CHILD)).toBeUndefined()
+  })
+})

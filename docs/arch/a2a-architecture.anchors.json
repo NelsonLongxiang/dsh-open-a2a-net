@@ -3,9 +3,9 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "c42b3ade9fcbcc33f562ffcc0b74df18f10b216a85f3fdb2a11e16667b75b149",
+    "src/index.ts": "5921064417432f9333d38ca9519855490ee27fb9f394184a0a76cb2443030cc1",
     "src/faces/admin.ts": "af1a2ce28a7d2135bdc6eb44a302c70f1d47b3c21c6374e0bb28eb74f0a7134f",
-    "src/canvas-store.ts": "58f0ca4b3af80043ca6cabc9e541db58774cfd0e6ccccc536cddcd0d36771d88",
+    "src/canvas-store.ts": "90e7f61232eed695f69eab935a0b55d7e14acc246ad8a135cd552f5e164a64c4",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
     "src/cli-deposit.ts": "a75ad0c60232e686717efc93aba2c2713253e6bac768d03d6acbdcc56172c882",
     "nexus-stage/src/workbench.ts": "d82d987511a8acb9aec004befbdac5121517da89cba67080d272a1c9d6bff0b4",
@@ -26,7 +26,7 @@
     "src/tools/info.ts": "1928f36db8674b6f2fd2b9dcce0d178690b244fa2d6ebe523800dbbeb7aac584",
     "src/tools/act.ts": "983f78c58b8c886b39b5af3f2cf474a1a47e4d03b91fedf5ed581aba3225bed2",
     "src/peer-directory.ts": "1f5eb4c1b19edcb834c168f8e9c36928128085cb92aa75b52e0f040ab2c5f009",
-    "src/card.ts": "c25b3876a2b98106b10ff639179387dfac8012fc9b11036e8b6034bf42536958",
+    "src/card.ts": "e22a998925b4a9ab7c7f514e4b39b68bf64b1838e408d7254d794ba5a4e9221a",
     "src/outbound-scope.ts": "ee6c5764bcc16fdddf6690c01b4d2b4f5d3797e703673aa36889aa8da5c5847c"
   },
   "anchors": [

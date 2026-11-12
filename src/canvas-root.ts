@@ -7,16 +7,17 @@
 import { canvasOwnerFingerprint } from './canvas-id.ts'
 import { splitTeamRef, validTeamOwner } from './canvas-member.ts'
 import { CHILD_SLOTS_DEFAULT, type CanvasStore } from './canvas-store.ts'
+import { cliHomeOrigin } from './cli-home.ts'
 
 export const ROOT_ACTIONS = ['set-root', 'add-team', 'remove-team', 'set-team-slots'] as const
 export type RootAction = typeof ROOT_ACTIONS[number]
 export const isRootAction = (action: unknown): action is RootAction => typeof action === 'string' && (ROOT_ACTIONS as readonly string[]).includes(action)
 
 /** A peer's verified card, as far as a child proof reads it. */
-export interface ChildCard { readonly publicKey?: string; readonly canvasOrg?: ReadonlyArray<{ readonly name: string; readonly team: string; readonly superagentTeam?: true; readonly root?: true }> }
+export interface ChildCard { readonly publicKey?: string; readonly canvasOrg?: ReadonlyArray<{ readonly name: string; readonly team: string; readonly superagentTeam?: true; readonly root?: true; readonly identity?: string }> }
 
 export interface CanvasRootDeps {
-  readonly store: Pick<CanvasStore, 'hasTeam' | 'isRoot' | 'setRoot' | 'addChild' | 'removeChild' | 'setChildSlots' | 'childrenOf' | 'rootNames'>
+  readonly store: Pick<CanvasStore, 'hasTeam' | 'isRoot' | 'setRoot' | 'addChild' | 'removeChild' | 'setChildSlots' | 'childrenOf' | 'rootNames' | 'addRequester' | 'removeRequester'>
   /** This host's zone (the `<zone>` of its addresses) and its public key. */
   readonly zone: string
   readonly ownKey: string
@@ -26,7 +27,8 @@ export interface CanvasRootDeps {
   readonly peerCards: () => Promise<ReadonlyArray<{ readonly url: string; readonly card: ChildCard; readonly linked: boolean }>>
 }
 
-export type ChildProof = { ok: true; key: string } | { ok: false; error: string }
+/** A child on another host also gives its team identity and its host's origin: the root's canvas links it as a requester. */
+export type ChildProof = { ok: true; key: string; identity?: string; home?: string } | { ok: false; error: string }
 
 /**
  * A child must be a superagent team that takes requests, owned by the host whose key the ref's fingerprint names: this
@@ -51,7 +53,9 @@ export async function childProof(root: string, ref: string, d: CanvasRootDeps): 
   if (entry === undefined) return { ok: false, error: `${host.url} does not list ${team.team} on its card` }
   if (entry.root === true) return { ok: false, error: `${team.team} is a root itself: a root has one level of children` }
   if (entry.superagentTeam !== true) return { ok: false, error: `${team.team} is not a superagent team taking requests on its host` }
-  return validTeamOwner(ref, host.card.publicKey!) ? { ok: true, key: host.card.publicKey! } : { ok: false, error: 'the host key does not match the fingerprint' }
+  if (!validTeamOwner(ref, host.card.publicKey!)) return { ok: false, error: 'the host key does not match the fingerprint' }
+  const home = cliHomeOrigin(host.url)
+  return { ok: true, key: host.card.publicKey!, ...(entry.identity !== undefined && home !== undefined ? { identity: entry.identity, home } : {}) }
 }
 
 const str = (value: unknown): string => typeof value === 'string' ? value.trim() : ''
@@ -68,7 +72,12 @@ export async function rootAction(action: RootAction, body: Record<string, unknow
   }
   const ref = str(body.team)
   if (ref === '') return { ok: false, error: 'team (the child team address <zone>/canvas/<name>@<8 hex>) is required' }
-  if (action === 'remove-team') return { ok: d.store.removeChild(name, ref), ...view() }
+  if (action === 'remove-team') {
+    const identity = d.store.childrenOf(name).find(c => c.ref === ref)?.identity
+    const removed = d.store.removeChild(name, ref)
+    if (removed && identity !== undefined && !d.store.childrenOf(name).some(c => c.identity === identity)) d.store.removeRequester(name, identity)
+    return { ok: removed, ...view() }
+  }
   const slots = body.slots === undefined ? undefined : Number(body.slots)
   if (action === 'set-team-slots') {
     if (slots === undefined) return { ok: false, error: 'slots is required' }
@@ -77,7 +86,11 @@ export async function rootAction(action: RootAction, body: Record<string, unknow
   if (!d.store.isRoot(name)) return { ok: false, error: `${name} is not a root team: mark it first (set-root)` }
   const proof = await childProof(name, ref, d)
   if (!proof.ok) return { ...proof, ...view() }
-  return { ...d.store.addChild(name, ref, proof.key, slots ?? CHILD_SLOTS_DEFAULT), ...view() }
+  const added = d.store.addChild(name, ref, proof.key, slots ?? CHILD_SLOTS_DEFAULT, proof.identity)
+  // S5: the child's answers come from its team identity on its host; the root's canvas links it there as a requester.
+  // A child host that does not name its identity yet (an older build) is added all the same; its answers wait for it.
+  const linked = added.ok && proof.identity !== undefined && proof.home !== undefined ? d.store.addRequester(name, proof.identity, proof.home) : undefined
+  return { ...added, ...(linked !== undefined ? { identity: proof.identity, identityLinked: linked } : {}), ...view() }
 }
 
 /**

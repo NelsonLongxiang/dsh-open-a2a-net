@@ -51,7 +51,7 @@ export interface CanvasSnapshot {
 }
 
 /** A root team's child: another team (`<zone>/canvas/<name>@<fp8>`), the key of its owning host, and how many root tickets it takes at once. */
-export interface CanvasChild { readonly ref: string; readonly key: string; readonly slots: number }
+export interface CanvasChild { readonly ref: string; readonly key: string; readonly slots: number; /** S5: a child on another host: its team identity, a requester of the root's canvas. */ readonly identity?: string }
 /** A child's slots: 1 to 16, 3 unless the owner sets it. */
 export const CHILD_SLOTS_DEFAULT = 3
 export const CHILD_SLOTS_MAX = 16
@@ -233,7 +233,7 @@ export class CanvasStore {
       for (const row of list as unknown[]) {
         const child = row as Partial<CanvasChild> | null
         if (typeof child?.ref !== 'string' || typeof child.key !== 'string' || !validTeamOwner(child.ref, child.key) || !validSlots(child.slots) || kept.some(k => k.ref === child.ref)) continue
-        kept.push({ ref: child.ref, key: child.key, slots: child.slots })
+        kept.push({ ref: child.ref, key: child.key, slots: child.slots, ...(typeof child.identity === 'string' && CLI_HANDLE_RE.test(child.identity) ? { identity: child.identity } : {}) })
       }
       if (kept.length > 0) this.children[name] = kept.slice(0, CANVAS_MEMBER_CAP)
     }
@@ -544,19 +544,23 @@ export class CanvasStore {
   }
 
   /** Add a child team to a root, under the key of the host that owns it (proved by the caller). Idempotent for the same ref and key. */
-  addChild(name: string, ref: string, key: string, slots: number = CHILD_SLOTS_DEFAULT): { ok: true } | { ok: false; error: string } {
+  addChild(name: string, ref: string, key: string, slots: number = CHILD_SLOTS_DEFAULT, identity?: string): { ok: true } | { ok: false; error: string } {
     if (!this.roots.has(name)) return { ok: false, error: `${name} is not a root team` }
     if (!validTeamOwner(ref, key)) return { ok: false, error: `${ref} is not a team address under that key` }
     if (!validSlots(slots)) return { ok: false, error: `slots must be 1 to ${String(CHILD_SLOTS_MAX)}` }
     const list = this.children[name] ?? []
     const existing = list.find(c => c.ref === ref)
-    if (existing !== undefined) return existing.key === key ? { ok: true } : { ok: false, error: `${ref} is already a child under another key` }
+    if (existing !== undefined) {
+      if (existing.key !== key) return { ok: false, error: `${ref} is already a child under another key` }
+      if (identity !== undefined && existing.identity !== identity) { this.children[name] = list.map(c => c === existing ? { ...c, identity } : c); this.persist() }
+      return { ok: true }
+    }
     if (list.length >= CANVAS_MEMBER_CAP) return { ok: false, error: `a root holds at most ${String(CANVAS_MEMBER_CAP)} child teams` }
     const fingerprint = splitTeamRef(ref)!.fingerprint
     const clash = Object.entries(this.memberOwners).some(([member, owner]) => splitQualifiedMember(member)?.fingerprint === fingerprint && owner !== key)
       || Object.values(this.children).some(rows => rows.some(c => splitTeamRef(c.ref)?.fingerprint === fingerprint && c.key !== key))
     if (clash) return { ok: false, error: `another key is already pinned for fingerprint ${fingerprint}` }
-    this.children[name] = [...list, { ref, key, slots }]
+    this.children[name] = [...list, { ref, key, slots, ...(identity !== undefined ? { identity } : {}) }]
     this.persist()
     return { ok: true }
   }
