@@ -338,7 +338,7 @@ const SECTION_DEFS: ReadonlyArray<{ key: WorkbenchSection; label: string }> = [
   { key: 'hosts', label: '主机' },
   { key: 'ledger', label: '台账' },
   { key: 'activity', label: '活动' },
-  { key: 'plan', label: '规划' },
+  { key: 'plan', label: '待办' },
   { key: 'team', label: '团队' },
 ]
 
@@ -1251,7 +1251,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     const conflicts = last.idempotency?.conflicts ?? 0
     if (conflicts > 0) alerts.push({ text: `幂等冲突 ${conflicts}`, tone: 'danger', title: '同一幂等键对应了不同载荷，需人工核查', tab: 'ledger', group: '取证' })
     const repair = (last.reconcile?.rows ?? []).filter(row => row.needsRepair === true).length
-    if (repair > 0) alerts.push({ text: `需修复 ${repair}`, tone: 'danger', title: 'reconcile 无法自动恢复的会话，见行动计划', tab: 'plan' })
+    if (repair > 0) alerts.push({ text: `需修复 ${repair}`, tone: 'danger', title: 'reconcile 无法自动恢复的会话，见「待办」', tab: 'plan' })
     if (alerts.length === 0) {
       box.appendChild(el('span', 'wb-header-ok')).textContent = '● 无异常'
       return
