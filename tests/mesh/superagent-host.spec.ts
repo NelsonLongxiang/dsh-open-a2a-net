@@ -325,6 +325,37 @@ describe('superagent engine in the a2a host', () => {
     } finally { await m.dispose() }
   }, 200_000)
 
+  it('owner ruling 2026-11-12: with no approved card being sent, the team identity still has no sender scope of its own', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-out-scope-'))
+    // As shipped: scope on, forwardDirect on (the default since 0.6.38).
+    const m = await mount(home, { teamScopeRouting: true, forwardDirect: true })
+    try {
+      expect(await m.team(R_ID, [], { sources: { a2a: true } })).toMatchObject({ ok: true })
+      let address = ''
+      await vi.waitFor(async () => { const s = await m.state(); address = s.a2a.address ?? ''; expect(address !== '' && s.a2a.health['a2a-deposit']?.state === 'ready').toBe(true) }, { timeout: 20_000 })
+      const { readdirSync, statSync } = await import('node:fs')
+      const find = (dir: string): string | undefined => {
+        for (const name of readdirSync(dir)) {
+          const path = join(dir, name)
+          if (statSync(path).isDirectory()) { const hit = find(path); if (hit !== undefined) return hit }
+          else if (name === 'cli.json' && (JSON.parse(readFileSync(path, 'utf8')) as { handle?: string }).handle === address) return dir
+        }
+        return undefined
+      }
+      const identity = find(home)!
+      // Its own deposit and a bound claim (signed for the host's published origin) pass; the scope gate is what stops it.
+      const direct = await new Promise<{ status: number | null; stdout: string }>(resolve => {
+        const child = spawn(process.execPath, [join(process.cwd(), 'cli/a2a.mjs'), 'route', 'dsh/9abcdef0', '--json', '--', '没有卡片'], { env: { ...cliEnv(identity), A2A_HOME: `http://127.0.0.1:${m.port}` } })
+        let stdout = ''
+        child.stdout.on('data', d => { stdout += String(d) })
+        child.on('close', status => resolve({ status, stdout }))
+      })
+      expect(direct.status).not.toBe(0)
+      expect(direct.stdout).toContain('outside sender scope')
+      expect(direct.stdout).not.toContain('no bound CLI signature')
+    } finally { await m.dispose() }
+  }, 60_000)
+
   it('PR-C1: the A2A executor runs tickets on the fixed members — one slot each, queue, report, relay, follow-ups — and never opens a session', async () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-exec-'))
     const m = await mount(home)

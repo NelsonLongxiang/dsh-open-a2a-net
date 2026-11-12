@@ -113,12 +113,22 @@ describe('a dispatch that names a seat', () => {
     await t.host.stop()
   })
 
-  it('is plain text from a caller that does not declare directedSeats, or that is not signed', async () => {
-    for (const setup of [{ declares: [] as string[], proof: 'origin-claim' }, { declares: ['directedSeats'], proof: 'cli-identity' }]) {
+  it('is plain text from a caller that does not declare directedSeats, or whose proof is not trusted', async () => {
+    for (const setup of [{ declares: [] as string[], proof: 'origin-claim' }, { declares: ['directedSeats'], proof: 'unbound' }, { declares: [] as string[], proof: 'cli-identity' }]) {
       const t = await team({ declares: setup.declares })
       const out = t.accept(t.receive('direct-000000000006', named('session-b'), { proof: setup.proof }), 'session-a')
       await t.settle()
       expect(t.holder(out.ticket_id as string)).toBe('session-a')
+      await t.host.stop()
+    }
+  })
+
+  it('is believed from a root team\'s CLI identity (cli-identity) or this host (in-process) that declares directedSeats (root-team S5)', async () => {
+    for (const proof of ['cli-identity', 'in-process']) {
+      const t = await team()
+      const out = t.accept(t.receive(`direct-00000000009${proof.length % 10}`, named('session-b'), { proof }), 'session-a')
+      await t.settle()
+      expect(t.holder(out.ticket_id as string)).toBe('session-b')
       await t.host.stop()
     }
   })

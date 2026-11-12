@@ -133,6 +133,35 @@ A member can sit on another host: another physical node, or another DSH instance
 - **On the member host:** `POST { action: 'serve', team: '<zone>/canvas/<name>@<fp8>', members: [<local session ids>] }` — the team's canvas id, whose fingerprint names its owner. The host finds the linked peer whose signed card has that key and advertises that canvas, and pins the key. Only that key may assign work to those sessions (`/a2a/superagent-member`). Those sessions report with `a2a_ticket_report` as usual, and the host forwards the report, signed. `team: null` leaves the team. This is the member host owner's consent: a team host cannot take another host's sessions on its own. A served session on another preset than `superagent-member` (a serve stored before presets) takes no new work — a stop still reaches it — and the state reports it as `servesProblem` until it is served from a member-preset session.
 - Serving sessions are isolated from A2A like any member.
 
+## Root teams (in progress)
+
+A root team's workers are other teams (docs/design/superagent-root-team.md).
+
+- **Choosing a child.** The root router names a child team as `member`, by its label 子团队 <name>（<zone>@<fp8>） or its address. Each child takes up to its `slots` tickets at once.
+- **Sending.** The host sends the child the ticket as an A2A request from the root team's identity. Input to the root ticket follows in that conversation.
+- **What comes back.**
+  - The child's question becomes the root ticket's question to its requester, with the child's options.
+  - Its result becomes the root ticket's `ready` or `failed` report.
+  - A refusal or no outcome hands the ticket back to the root router as blocked, to name another child with `superagent_assign`.
+- **Same-instance children.** A child team on the same instance admits the root identity automatically (its bot list and a `root-dispatch` rule).
+- **Declarations.** A root's identity declares `progressReceipts`, `directedSeats` and `reworkReturns` on its card.
+  - A child believes those from a CLI identity on its bot list.
+  - The child's progress steps become the root ticket's progress.
+- **Children on other hosts.**
+  - **Registering the root.** The child's owner runs `POST /__dsh_a2a/superagent { action: 'admit-root', handle: '<root team identity>', home?: '<root host origin>' }` on the child's host. This links the identity to the team's canvas as a requester pinned to its home host (the wire admits it from there), and puts it on the bot list. `home` is needed only when no single linked host lists the identity.
+  - **What the card shows.** The child's card then lists the root under `admits`, and names the child team's own identity (`identity`).
+  - **The root's side.** `add-team` on the root host links that `identity` to the root's canvas as a requester pinned to the child's host, so the child's acknowledgement, questions and results are admitted there. `remove-team` drops the link.
+  - **Sending.** The root identity may forward to its registered children.
+
+
+- **Marking a root.** `POST /__dsh_a2a/canvas { action: 'set-root', name, root: true|false }`. A root with child teams stays a root until they are removed.
+- **Adding a child.** `{ action: 'add-team', name, team: '<zone>/canvas/<name>@<fp8>', slots? }`. The child must be one of two things, and must not be a root or the root itself:
+  - a superagent team on this host taking requests;
+  - a superagent team on a linked peer's signed card under that key.
+- **Removing and sizing a child.** `{ action: 'remove-team', name, team }` and `{ action: 'set-team-slots', name, team, slots }`. `slots` is 1 to 16, default 3: how many root tickets that child takes at once.
+- **Where they are kept.** Children are kept apart from the canvas's members and never route as members.
+- **On the card.** The host's card lists a root with `root: true` in `canvasOrg`, so no other host takes it as a child.
+
 ## Named dispatch and rework returns
 
 A request whose first line is `[A2A dispatch] {json}` is read by the host, not only by the router, when it comes signed from a pinned canvas remote member whose card declares the capability (docs/design/superagent-named-dispatch.md).

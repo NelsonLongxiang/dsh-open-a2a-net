@@ -44,6 +44,11 @@ export const TOOL_ASK_AGAIN_MS = 24 * 3_600_000
 import { agentLedEnd, clip, TEXT_CAP, presetRefusal, notTakenText, OTHER_TICKETS_SHOWN, ORIGIN_LINE_NOTE, OBSERVER_LINE, candidateCard, YGL_WRITE, yglCardLines, yglRouterLine } from './cards.ts'
 import { teamYglProject } from './ygl-home.ts'
 import { NamedDispatch, WAIT, SWAP } from './named-dispatch.ts'
+import { RootDispatch, childLabel, isChildTeam } from './root-dispatch.ts'
+import { splitTeamRef } from '../../canvas-member.ts'
+
+/** superagent-root-team R7: the rule a child team on this instance gets for its root's requests. */
+const ROOT_RULE = 'root-dispatch'
 
 /** A session's name for the market (roster, receipt `by`): without the ` (<id8>)` the host adds for the router's cards; the seat carries the handle. */
 const plainName = (name: string | undefined): string | undefined => name?.replace(/ \([0-9a-f]{8}\)$/, '')
@@ -103,6 +108,8 @@ export class SuperagentHost {
   readonly splits: SplitBook
   /** docs/design/superagent-named-dispatch.md: seats, named dispatch and rework returns. */
   readonly named: NamedDispatch
+  /** docs/design/superagent-root-team.md R2-R4: this team's child teams, when it is a root. */
+  readonly root: RootDispatch
   private readonly roster: RosterReports
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
   private readonly sending = new Set<string>()
@@ -134,7 +141,7 @@ export class SuperagentHost {
       cancelTurn: member => this.d.cancelTurn?.(member) === true,
       reportFor: (ticketId, member, state, summary) => { this.engine.report(ticketId, { state, summary: clip(summary, 2_000) }); this.relayReport(ticketId, state, summary); this.pass(); void member },
       ticket: id => this.store.tickets.get(id), trigger: id => this.store.triggers.get(id), logger: d.logger,
-      prepare: () => this.settingsValue.prepare, workspaceOf: member => this.d.workspaceOf?.(member), maxConcurrent: () => this.settingsValue.maxConcurrent ?? 0,
+      prepare: () => this.settingsValue.prepare, workspaceOf: member => this.d.workspaceOf?.(member), maxConcurrent: () => this.settingsValue.maxConcurrent ?? 0, capacity: member => this.childSlots(member) ?? 1, outlivesRestart: isChildTeam,
       ...(d.runPrepare !== undefined ? { runPrepare: d.runPrepare } : {}),
     })
     const outbox: Outbox = {
@@ -151,8 +158,8 @@ export class SuperagentHost {
       },
     }
     this.a2a = new A2aSource({
-      dir, homeUrl: () => d.homeUrl?.(), apiKey: () => d.apiKey?.(), claimAudience: () => d.claimAudience?.(), enabled: () => this.settingsValue.sources.a2a,
-      receive: trigger => { this.reviews.received(trigger as unknown as Trigger); this.outbound.received(trigger as unknown as Trigger); const result = this.engine.receive(trigger as unknown as Trigger); queueMicrotask(() => this.pass()); return result },
+      dir, homeUrl: () => d.homeUrl?.(), apiKey: () => d.apiKey?.(), claimAudience: () => d.claimAudience?.(), declares: () => { try { return this.childTeams().length > 0 ? ['progressReceipts', 'directedSeats', 'reworkReturns'] : [] } catch { return [] } }, enabled: () => this.settingsValue.sources.a2a,
+      receive: trigger => { this.reviews.received(trigger as unknown as Trigger); this.outbound.received(trigger as unknown as Trigger); this.root.received(trigger as unknown as Trigger); const result = this.engine.receive(trigger as unknown as Trigger); queueMicrotask(() => this.pass()); return result },
       ticket: id => this.store.tickets.get(id) as never,
       resultPending: (ticketId, task) => this.resultPending(ticketId, task),
       seatOf: ticketId => this.seatOf(ticketId),
@@ -212,6 +219,20 @@ export class SuperagentHost {
       // P2 light path: decided inside the intake's unit of work, before any pass can hand the message to the router.
       emit: event => { if (event.type !== 'trigger.received') return; const id = (event.data as { triggerId: string }).triggerId; if (!this.named.rework(id)) this.lightPath(id) },
       ...(d.now !== undefined ? { now: d.now } : {}),
+    })
+    this.root = new RootDispatch({
+      path: join(dir, 'root.json'), now: () => this.now(), logger: d.logger,
+      route: (address, text, context) => this.a2a.routeAs(address, text, context),
+      progress: (ticketId, summary) => { try { this.engine.report(ticketId, { state: 'progress', summary: clip(summary, 2_000) }); this.pass() } catch (error) { this.d.logger.warn('superagent: child progress on %s not recorded: %s', ticketId, String(error)) } },
+      forwarded: ticketId => { try { this.engine.report(ticketId, { state: 'progress', summary: '答复已转给子团队', question: null }) } catch (error) { this.d.logger.warn('superagent: question on %s not cleared: %s', ticketId, String(error)) } },
+      report: (ticketId, child, state, summary) => { this.engine.report(ticketId, { state, summary: clip(summary, 2_000) }); this.relayReport(ticketId, state, summary); this.pass(); void child },
+      ask: (ticketId, child, question, options, recommended) => {
+        this.engine.report(ticketId, { state: 'waiting', summary: clip(question, 2_000), question })
+        if (options.length > 0) this.decisions.forTicket({ ticketId, by: child, question, spec: { level: 'P1', options: [...options], recommended: recommended ?? '' }, at: this.now() })
+        try { this.engine.reply({ purpose: 'attention', ticketId, question, text: question }) } catch (error) { this.d.logger.warn('superagent: a child team\'s question on %s not relayed: %s', ticketId, String(error)) }
+        this.relayReport(ticketId, 'waiting', question)
+        this.pass()
+      },
     })
     this.named = new NamedDispatch({
       path: join(dir, 'seats.json'), engine: this.engine, ticket: id => this.store.tickets.get(id), tickets: () => this.store.tickets.list(),
@@ -334,6 +355,7 @@ export class SuperagentHost {
 
   /** PR-C2: put a card into a member's session — local by host relay, remote by a signed request to its host. */
   private async deliverToMember(member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string): Promise<boolean> {
+    if (isChildTeam(member)) return await this.root.send(member, text, kind, ticketId)
     const remote = this.settings.remoteMembers.find(r => r.ref === member)
     if (remote === undefined) return this.d.deliverToSession(member, text)
     if (this.d.signedPost === undefined || remote.url === '') return false
@@ -463,8 +485,14 @@ export class SuperagentHost {
    * A2A bot, which is a caller (the workbench market sits on the canvas to be linked, docs/ops/superagent-market-team.md),
    * never one that takes tickets.
    */
-  private pool(): string[] { const now = this.settings; return [...now.members, ...workerRemotes(now)] }
-  private memberName(id: string): string { return this.d.sessionName?.(id) ?? id }
+  private pool(): string[] { const now = this.settings; return [...now.members, ...workerRemotes(now), ...this.childTeams().map(c => c.ref)] }
+  /** superagent-root-team: a root team's child teams, from its canvas (none for a plain team). */
+  private childTeams(): ReadonlyArray<{ ref: string; slots: number }> {
+    const canvas = this.settingsValue.canvas
+    return canvas === undefined ? [] : this.d.canvasTeam?.(canvas)?.children ?? []
+  }
+  private childSlots(member: string): number | undefined { return isChildTeam(member) ? this.childTeams().find(c => c.ref === member)?.slots : undefined }
+  private memberName(id: string): string { return isChildTeam(id) ? childLabel(id) : this.d.sessionName?.(id) ?? id }
 
   /** A split that failed after its parent was accepted: the parent runs as an ordinary ticket after all. */
   releaseSplit(parentId: string): void {
@@ -655,8 +683,11 @@ export class SuperagentHost {
   private teamCardLines(): string[] {
     const pool = this.pool()
     const dispatch = this.settingsValue.dispatch
-    if (dispatch === '' && !this.membersProfiled()) return []
+    const children = this.childTeams()
+    if (dispatch === '' && !this.membersProfiled() && children.length === 0) return []
     const lines = ['The team\'s members. When you accept, name the one the work fits as member, by the dispatch rules and each member\'s role and rules:']
+    // superagent-root-team R1: a root's members are teams; the host sends each ticket to the team named, and the team's own router decides inside it.
+    if (children.length > 0) lines.unshift(`This team is a root: its members include other teams (${children.map(c => `${childLabel(c.ref)}, up to ${String(c.slots)} at once`).join('; ')}). Name the team the work fits as member; the host sends it there and the team's own router decides who does it. To have several teams work on one request that asks for parts, split it with superagent_split.`)
     for (const id of pool) {
       const profile = this.settingsValue.profiles[id]
       const held = this.executor.bindingOf(id)
@@ -1143,6 +1174,17 @@ export class SuperagentHost {
 
   /** The team's A2A address: requests to it are Triggers, so they take no target queue slot. */
   get a2aAddress(): string | undefined { return this.settingsValue.sources.a2a ? this.a2a.address : undefined }
+  /** Whether an approved outbound card is being sent to `target` right now (its decision is the sender scope then). */
+  outboundAuthorizes(target: string): boolean { return this.outbound.authorizes(target) }
+  /** superagent-root-team S5: whether `target` is one of this root's child teams (its address, with or without `@<fp8>`). */
+  childAuthorizes(target: string): boolean {
+    try { return this.childTeams().some(child => target === child.ref || target === child.ref.replace(/@[0-9a-f]{8}$/, '')) } catch { return false }
+  }
+  /** S5: the root team identities this team takes requests from (on its bot list, with the root rule). */
+  admittedRoots(): string[] {
+    const now = this.settingsValue
+    return now.rules.some(rule => rule.name === ROOT_RULE && rule.enabled) ? now.bots.a2a.filter(handle => handle.startsWith('superagent-team/')) : []
+  }
 
   /** Send pending a2a Channel messages; a thrown send stays pending for the next pass (a2a-watch gives up after 24h). */
   private flushOutbox(): void {
@@ -1187,6 +1229,8 @@ export class SuperagentHost {
     this.flushCandidates()
     this.flushOutbox()
     this.settleSplits()
+    try { this.admitChildren() } catch (error) { this.d.logger.warn('superagent: child teams not checked yet: %s', String(error)) }
+    try { this.a2a.syncDeclarations() } catch (error) { this.d.logger.warn('superagent: declarations not synced yet: %s', String(error)) }
     try { this.named.tick() } catch (error) { this.d.logger.warn('superagent: named dispatch pass failed: %s', String(error)) }
     // Upstream: evaluation, dispatch and outbound delivery hold while paused.
     if (this.settingsValue.paused) return
@@ -1312,6 +1356,33 @@ export class SuperagentHost {
   get routerSession(): string | undefined { return this.settingsValue.router }
 
   /** Owner control: replace the team settings; a Policy version change is reported to the engine as upstream does. */
+  /**
+   * superagent-root-team R7: a root team on this instance sends this team requests from its A2A identity. The identity
+   * goes on the bot list and a rule takes its requests, as the owner would set them for the market; recorded as the
+   * root's change. Nothing changes when both are there already.
+   */
+  admitRequester(handle: string): void {
+    if (!CLI_HANDLE_RE.test(handle) || handle === this.a2a.address) return
+    const now = this.settingsValue
+    const listed = now.bots.a2a.includes(handle), ruled = now.rules.some(rule => rule.name === ROOT_RULE)
+    if (listed && ruled) return
+    const out = this.saveSettings({ bots: { ...now.bots, a2a: listed ? now.bots.a2a : [...now.bots.a2a, handle] },
+      rules: ruled ? now.rules : [...now.rules, { name: ROOT_RULE, text: '根团队派来的工作：照派工里写的要求做；需要人决定的先提问；做不了就如实回报。', enabled: true }] },
+      () => true, this.d.presetOf ?? (() => undefined), `root team ${handle}`)
+    if (out.ok) this.d.logger.info('superagent: root team %s may now send this team requests', handle)
+    else this.d.logger.warn('superagent: root team %s not admitted here: %s', handle, out.error)
+  }
+
+  /** A root team: each child team on this instance admits this root's identity (R7, same owner). */
+  private admitChildren(): void {
+    const handle = this.a2a.address, own = this.d.hostFingerprint?.()
+    if (handle === undefined || own === undefined || this.d.admitAtChild === undefined) return
+    for (const child of this.childTeams()) {
+      const team = splitTeamRef(child.ref)
+      if (team !== undefined && team.fingerprint === own) this.d.admitAtChild(team.name, handle)
+    }
+  }
+
   saveSettings(raw: unknown, sessionValid: (id: string) => boolean, presetOf: (id: string) => string | undefined = () => undefined, by = 'owner'): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
     // Repositories are checked against the pool this write leads to: the canvas and router it names, or the current ones.
     const fields = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}

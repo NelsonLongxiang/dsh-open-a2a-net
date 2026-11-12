@@ -21,6 +21,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXIT_GONE, EXIT_RECEIPT_CONFLICT, HEALTH, KIND, KV, LINK_RULES, createA2aKind, replyAllowed, seatArgs, sendReply, watch, type A2aConfig, type ReceiptOutcome, type ReceiptSeat, type SendOptions } from '../a2a-watch.ts'
 import type { Commands, Health, OutboundMessage, ReceiveResult, SourceContext, TicketView, Trigger } from '../source-types.ts'
+/** The declarations last handed to a publish (superagent-root-team S5). */
+const DECLARED = 'superagent.declared'
 
 /** The packaged CLI, from both src/superagent/host and lib/superagent/host. */
 export const CLI_PATH = fileURLToPath(new URL('../../../cli/a2a.mjs', import.meta.url))
@@ -46,6 +48,8 @@ export interface A2aSourceDeps {
    * the claim to this very host either way.
    */
   readonly claimAudience?: () => string | undefined
+  /** superagent-root-team S5: the capabilities this team's identity declares on its card (a root: progress, seats, rework). */
+  readonly declares?: () => readonly string[]
   readonly enabled: () => boolean
   readonly receive: (trigger: Trigger) => ReceiveResult
   readonly ticket: (id: string) => TicketView | undefined
@@ -161,8 +165,8 @@ export class A2aSource {
   private env(): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {}
     for (const [name, value] of Object.entries(process.env)) if (!name.startsWith('A2A_')) env[name] = value
-    const home = this.d.homeUrl(), key = this.d.apiKey(), audience = this.d.claimAudience?.()
-    return { ...env, A2A_CLI_HOME: this.identityDir, ...(home !== undefined ? { A2A_HOME: home } : {}), ...(key !== undefined && key !== '' ? { A2A_KEY: key } : {}), ...(audience !== undefined && audience !== '' ? { A2A_CLAIM_AUDIENCE: audience } : {}) }
+    const home = this.d.homeUrl(), key = this.d.apiKey(), audience = this.d.claimAudience?.(), declared = this.d.declares?.() ?? []
+    return { ...env, A2A_CLI_HOME: this.identityDir, ...(home !== undefined ? { A2A_HOME: home } : {}), ...(key !== undefined && key !== '' ? { A2A_KEY: key } : {}), ...(audience !== undefined && audience !== '' ? { A2A_CLAIM_AUDIENCE: audience } : {}), ...(declared.length > 0 ? { A2A_DECLARE: declared.join(',') } : {}) }
   }
 
   private commands(signal?: AbortSignal): Commands {
@@ -289,11 +293,21 @@ export class A2aSource {
    * Design D5: ask the owner's reviewer about a pull request. The address is the owner's and must still be linked. The task
    * id, or undefined when the reviewer is not linked; a thrown error is tried again on a later read.
    */
-  async askReview(address: string, text: string): Promise<string | undefined> {
+  async askReview(address: string, text: string, context?: string): Promise<string | undefined> {
     const check = JSON.parse(await this.context.commands.run('a2a-net', ['admission', address, '--json'])) as { admitted?: unknown; rule?: unknown }
     if (check.admitted !== true || typeof check.rule !== 'string' || !LINK_RULES.has(check.rule)) return undefined
+    return await this.routeAs(address, text, context)
+  }
+
+  /**
+   * superagent-root-team S2: send to a child team from the team's identity. No admission precheck: that check asks
+   * whether the address would be let into this identity's mailbox as a sender (right for a reviewer, who answers from
+   * that address), while a child team answers from its host's face, never from its canvas address — the check said no
+   * and nothing was sent (test host, 2026-11-12). The child's own admission of this identity still applies to the send.
+   */
+  async routeAs(address: string, text: string, context?: string): Promise<string | undefined> {
     const route = async (): Promise<string | undefined> => {
-      const sent = JSON.parse(await this.context.commands.run('a2a-net', ['route', address, '--json', '--', text])) as { task_id?: unknown }
+      const sent = JSON.parse(await this.context.commands.run('a2a-net', ['route', address, '--json', ...(context !== undefined ? ['--context', context] : []), '--', text])) as { task_id?: unknown }
       return typeof sent.task_id === 'string' ? sent.task_id : undefined
     }
     try { return await route() } catch (error) {
@@ -313,6 +327,17 @@ export class A2aSource {
   private refused(error: unknown, refusal: ReturnType<typeof cliRefusal>, note?: string): Error {
     const base = refusal.error !== undefined ? `a2a-net route refused: ${refusal.summary}` : String(error instanceof Error ? error.message : error)
     return new RouteRefused(note !== undefined ? `${base} (${note})` : base, refusal.task)
+  }
+
+  /**
+   * superagent-root-team S5: when what this identity declares changed since it was last published (the team became a
+   * root, or stopped being one), the next watch round publishes again instead of waiting for the renewal.
+   */
+  syncDeclarations(): void {
+    const now = (this.d.declares?.() ?? []).join(',')
+    if (this.stateValue[DECLARED] === now) return
+    this.context.state.set(KV.renewedAt, 0)
+    this.context.state.set(DECLARED, now)
   }
 
   /** Whether the A2A request `task` has had its one formal receipt (a2a-watch records it once it went out). */

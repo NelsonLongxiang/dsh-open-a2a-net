@@ -29,7 +29,7 @@ export interface A2aPeerCard {
    * fresh on the FULL card (linked callers only) — each entry names a team
    * and its member handles so any linked peer's board can render the org.
    */
-  readonly canvasOrg?: ReadonlyArray<{ name: string; team: string; members: readonly string[]; /** Design v5: this canvas is the publisher's superagent team, taking requests from linked callers. */ superagentTeam?: true }>
+  readonly canvasOrg?: ReadonlyArray<{ name: string; team: string; members: readonly string[]; /** Design v5: this canvas is the publisher's superagent team, taking requests from linked callers. */ superagentTeam?: true; /** superagent-root-team R7: a root team (never another root's child). */ root?: true; /** S5: the root team identities it admits. */ admits?: readonly string[]; /** S5: the superagent team's own A2A identity. */ identity?: string }>
   /**
    * Joined session teams this peer currently dispatches. Unsigned and
    * optional: served fresh at read time, each entry is a team name the

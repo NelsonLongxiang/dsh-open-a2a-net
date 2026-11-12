@@ -48,8 +48,8 @@ function cliHome(node: MeshNode, id: Id): string {
   writeFileSync(join(home, 'cli.json'), JSON.stringify({ name: id.name, uuid: id.uuid, handle: handleOf(id), home: node.baseUrl, privateKeyPem: id.key.export({ format: 'pem', type: 'pkcs8' }) }), { mode: 0o600 })
   return home
 }
-const cli = (home: string, args: string[]) => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-  const child = spawn(process.execPath, [join(process.cwd(), 'cli/a2a.mjs'), ...args], { env: cliEnv(home) })
+const cli = (home: string, args: string[], extra: Record<string, string> = {}) => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+  const child = spawn(process.execPath, [join(process.cwd(), 'cli/a2a.mjs'), ...args], { env: { ...cliEnv(home), ...extra } })
   let stdout = '', stderr = ''
   child.stdout.on('data', d => { stdout += String(d) }); child.stderr.on('data', d => { stderr += String(d) })
   child.on('error', reject); child.on('close', code => resolve({ code, stdout, stderr }))
@@ -249,6 +249,22 @@ describe('superagent p1-mailbox-owes: a deposit that owes receipts', () => {
       expect((await send(a, WRITERS[0]!, handleOf(OWER), 'd-1')).body).toMatchObject({ task_status: 'TASK_STATE_DELIVERED' })
       expect((await cli(home, ['publish'])).code).toBe(0)
       expect((await send(a, WRITERS[0]!, handleOf(OWER), 'd-2')).body).toMatchObject({ task_status: 'TASK_STATE_COMPLETED' })
+    } finally {
+      await a.dispose()
+    }
+  }, 60_000)
+
+  it('superagent-root-team S5: `publish --declare` (or A2A_DECLARE) signs the requester capabilities — only the known four', async () => {
+    const a = await bootNode({ name: 'A', session: 'mesh-declare', team: 'dsh', sessionNodes: true, port: await reservePort() })
+    try {
+      const home = cliHome(a, OWER)
+      const card = async () => (await (await globalThis.fetch(`${a.baseUrl}/a2a/cli/${encodeURIComponent(handleOf(OWER))}/.well-known/agent-card.json`)).json()) as { capabilities?: Record<string, unknown> }
+      expect((await cli(home, ['publish', '--declare', 'progressReceipts,reworkReturns,admin'])).code).toBe(0)
+      expect((await card()).capabilities).toEqual({ route: true, async: true, progressReceipts: true, reworkReturns: true })
+      expect((await cli(home, ['publish'], { A2A_DECLARE: 'directedSeats' })).code).toBe(0)
+      expect((await card()).capabilities).toEqual({ route: true, async: true, directedSeats: true })
+      expect((await cli(home, ['publish'])).code).toBe(0)
+      expect((await card()).capabilities).toEqual({ route: true, async: true })
     } finally {
       await a.dispose()
     }
