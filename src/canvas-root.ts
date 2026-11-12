@@ -79,3 +79,19 @@ export async function rootAction(action: RootAction, body: Record<string, unknow
   if (!proof.ok) return { ...proof, ...view() }
   return { ...d.store.addChild(name, ref, proof.key, slots ?? CHILD_SLOTS_DEFAULT), ...view() }
 }
+
+/**
+ * superagent-root-team S5: the wire's half of admitting a root team on another host. Its identity becomes a requester of
+ * the child team's canvas, pinned to its home host (a requested home must be a linked host listing it; without one, the
+ * only such host). An identity deposited on this host is admitted as a deposit and needs no link.
+ */
+export async function linkRootRequester(
+  d: { readonly store: Pick<CanvasStore, 'addRequester'>; readonly deposited: (handle: string) => boolean; readonly pinHome: (handle: string, requested?: unknown) => Promise<{ ok: true; home?: string } | { ok: false; error: string }> },
+  canvas: string, handle: string, home: unknown,
+): Promise<{ ok: true; home?: string } | { ok: false; error: string }> {
+  if (d.deposited(handle)) return home === undefined ? { ok: true } : { ok: false, error: 'the root identity is deposited on this host: it needs no home' }
+  const pin = await d.pinHome(handle, home)
+  if (!pin.ok) return pin
+  if (pin.home === undefined) return { ok: false, error: 'no single linked host lists this root identity: pass home (the root host it is deposited on)' }
+  return d.store.addRequester(canvas, handle, pin.home) ? { ok: true, home: pin.home } : { ok: false, error: `the root identity cannot be linked to ${canvas}: it is a member there, or pinned to another home` }
+}

@@ -148,7 +148,7 @@ A root team's workers are other teams (docs/design/superagent-root-team.md).
   - A child believes those from a CLI identity on its bot list.
   - The child's progress steps become the root ticket's progress.
 - **Children on other hosts.**
-  - **Registering the root.** The child's owner runs `POST /__dsh_a2a/superagent { action: 'admit-root', handle: '<root team identity>' }` on the child's host.
+  - **Registering the root.** The child's owner runs `POST /__dsh_a2a/superagent { action: 'admit-root', handle: '<root team identity>', home?: '<root host origin>' }` on the child's host. This links the identity to the team's canvas as a requester pinned to its home host (the wire admits it from there), and puts it on the bot list. `home` is needed only when no single linked host lists the identity.
   - **What the card shows.** The child's card then lists the root under `admits`.
   - **Sending.** The root identity may forward to its registered children.
 
