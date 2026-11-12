@@ -11,40 +11,14 @@ import { dirname } from 'node:path'
 import type { Engine, Ticket, Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
 import { key } from '../source-types.ts'
 
-export const DISPATCH_PREFIX = '[A2A dispatch] '
+import { DISPATCH_PREFIX, ID_MAX, DIRECT_HEADER, parseDispatch, type DispatchLine } from '../../dispatch.ts'
+export { DISPATCH_PREFIX, ID_MAX, DIRECT_HEADER, parseDispatch }
+export type { DispatchLine }
 export const NAMED_CAPABILITY = 'directedSeats'
 export const REWORK_CAPABILITY = 'reworkReturns'
-/** The answers a seat-held ticket's question offers. */
 export const WAIT = '等'
 export const SWAP = '换人'
-/** How long a seat that left keeps its id (a dispatch naming it then gets the question, not an unknown name). */
 export const SEAT_LEFT_KEEP_MS = 30 * 86_400_000
-const ID_MAX = 128
-
-export interface DispatchLine { readonly for?: string; readonly rework?: { readonly of: string } }
-
-/**
- * The network's own header on a delivered request — `[A2A direct] (task …) <verdict> from "…" (routed to …) sent:` and a
- * blank line — written by the receiving host above the caller's message. The dispatch line is the message's first line.
- */
-const DIRECT_HEADER = /^\[A2A direct\][^\n]* sent:\n\n/
-
-/** The request's dispatch line, if its message's first line is one; `body` is the message without it. */
-export function parseDispatch(delivered: string): { line: DispatchLine; body: string } | undefined {
-  const text = delivered.replace(DIRECT_HEADER, '')
-  if (!text.startsWith(DISPATCH_PREFIX)) return undefined
-  const newline = text.indexOf('\n')
-  const head = (newline === -1 ? text : text.slice(0, newline)).slice(DISPATCH_PREFIX.length).trim()
-  let raw: unknown
-  try { raw = JSON.parse(head) } catch { return undefined }
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
-  const value = raw as { for?: unknown; rework?: unknown }
-  const named = typeof value.for === 'string' && value.for.trim() !== '' && value.for.length <= ID_MAX ? value.for.trim() : undefined
-  const of = typeof value.rework === 'object' && value.rework !== null && typeof (value.rework as { of?: unknown }).of === 'string' ? (value.rework as { of: string }).of.trim() : undefined
-  const rework = of !== undefined && of !== '' && of.length <= ID_MAX ? { of } : undefined
-  if (named === undefined && rework === undefined) return undefined
-  return { line: { ...(named !== undefined ? { for: named } : {}), ...(rework !== undefined ? { rework } : {}) }, body: newline === -1 ? '' : text.slice(newline + 1).trim() }
-}
 
 /**
  * The option a requester's answer picks, read from the answer itself: under the network's header, a JSON envelope's
