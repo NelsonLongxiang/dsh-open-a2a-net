@@ -135,7 +135,17 @@ A member can sit on another host: another physical node, or another DSH instance
 
 ## Root teams (in progress)
 
-A root team's workers are other teams (docs/design/superagent-root-team.md). So far the canvas holds them; dispatch to child teams comes next.
+A root team's workers are other teams (docs/design/superagent-root-team.md).
+
+- **Choosing a child.** The root router names a child team as `member`, by its label 子团队 <name>（<zone>@<fp8>） or its address. Each child takes up to its `slots` tickets at once.
+- **Sending.** The host sends the child the ticket as an A2A request from the root team's identity. Input to the root ticket follows in that conversation.
+- **What comes back.**
+  - The child's question becomes the root ticket's question to its requester, with the child's options.
+  - Its result becomes the root ticket's `ready` or `failed` report.
+  - A refusal or no outcome hands the ticket back to the root router as blocked, to name another child with `superagent_assign`.
+- **Same-instance children.** A child team on the same instance admits the root identity automatically (its bot list and a `root-dispatch` rule).
+- **Not yet.** Progress steps from children, and children on other hosts registering the root.
+
 
 - **Marking a root.** `POST /__dsh_a2a/canvas { action: 'set-root', name, root: true|false }`. A root with child teams stays a root until they are removed.
 - **Adding a child.** `{ action: 'add-team', name, team: '<zone>/canvas/<name>@<fp8>', slots? }`. The child must be one of two things, and must not be a root or the root itself:

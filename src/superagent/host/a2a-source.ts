@@ -289,11 +289,11 @@ export class A2aSource {
    * Design D5: ask the owner's reviewer about a pull request. The address is the owner's and must still be linked. The task
    * id, or undefined when the reviewer is not linked; a thrown error is tried again on a later read.
    */
-  async askReview(address: string, text: string): Promise<string | undefined> {
+  async askReview(address: string, text: string, context?: string): Promise<string | undefined> {
     const check = JSON.parse(await this.context.commands.run('a2a-net', ['admission', address, '--json'])) as { admitted?: unknown; rule?: unknown }
     if (check.admitted !== true || typeof check.rule !== 'string' || !LINK_RULES.has(check.rule)) return undefined
     const route = async (): Promise<string | undefined> => {
-      const sent = JSON.parse(await this.context.commands.run('a2a-net', ['route', address, '--json', '--', text])) as { task_id?: unknown }
+      const sent = JSON.parse(await this.context.commands.run('a2a-net', ['route', address, '--json', ...(context !== undefined ? ['--context', context] : []), '--', text])) as { task_id?: unknown }
       return typeof sent.task_id === 'string' ? sent.task_id : undefined
     }
     try { return await route() } catch (error) {

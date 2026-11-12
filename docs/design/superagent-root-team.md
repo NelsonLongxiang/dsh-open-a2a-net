@@ -62,6 +62,12 @@ It depends on where work enters.
 - **No per-message card.** The owner registered the children, so dispatch to them is the root's normal work. The owner's approval is the registration itself (R5). Outbound requests to anyone else still need their card.
 - **The child decides as it always does.** Its router judges the request against its rules and accept mode, names its member, and may split. The root never reaches inside a child.
 
+**As built in S2 (2026-11-12).** The root sends from the root team's own A2A identity, the path approved outbound requests use, rather than from the host face. Its receipts arrive in the team's mailbox, matched by task.
+- **What this covers:** acknowledgement, questions with options, and results.
+- **What it leaves out:** that identity's card declares no capabilities, so the child sends no progress steps, and a `for` seat or a `rework` line from the root would not be believed.
+- **Same-instance children.** A child team on the same instance admits the root identity as the owner would: it goes on the child's bot list, with a `root-dispatch` rule.
+- **Later.** Sending from the host face with a pinned, capable card, so progress, `for` and `rework` work too. It comes with the cross-host child registration.
+
 ### R3. What comes back maps onto the root ticket
 
 The child's receipts arrive at the root host on the task it sent, and the root ticket follows them:
