@@ -92,6 +92,8 @@ export class SuperagentHost {
   readonly ruleChanges: RuleChanges
   private disposeTimer: (() => void) | undefined
   private healthTimer: (() => void) | undefined
+  /** The router's latest failed turn (its model refused: a quota, an outage), until it decides again. In memory only. */
+  private routerFailure: { at: string; error: string } | undefined
   /** The A2A executor (PR-C1): the owner's fixed member pool, one worker slot each. */
   readonly executor: MemberExecutor
   private readonly decisions: DecisionBook
@@ -326,6 +328,12 @@ export class SuperagentHost {
   /** A member's turn failed (agent error): retried or reported as failed — by the team host when it is theirs. */
   memberFailed(sessionId: string, error: unknown): void {
     if (this.settings.members.includes(sessionId)) { this.executor.memberError(sessionId, error); return }
+    // The router's failed turn judged nothing: requests wait for it, and only the team's health says why.
+    if (sessionId === this.settingsValue.router) {
+      this.routerFailure = { at: this.now(), error: clip(String((error as { message?: unknown } | undefined)?.message ?? error), 300) }
+      this.d.logger.warn('superagent: the router\'s turn failed: %s', this.routerFailure.error)
+      return
+    }
     const serves = this.settingsValue.serves
     if (serves?.members.includes(sessionId) === true && this.d.signedPost !== undefined && this.d.handleOf !== undefined) {
       void this.d.signedPost(serves.url, '/a2a/superagent-team', { op: 'error', member: this.d.handleOf(sessionId), report: { error: String(error).slice(0, 500), transient: transientError(error) } })
@@ -1222,6 +1230,9 @@ export class SuperagentHost {
     return { ok: true, queued }
   }
 
+  /** The router decided (a routing call): its turns work again, and a failure it had is over. */
+  routerDecided(): void { this.routerFailure = undefined }
+
   /** One pass: expire or start due Evals, then deliver what waits for the router. */
   pass(): void {
     if (this.store.loadError !== undefined) return
@@ -1475,8 +1486,8 @@ export class SuperagentHost {
    * @param now - the clock, in milliseconds.
    * @returns the team's problems.
    */
-  health(now = Date.now()): Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number }> {
-    const out: Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number }> = []
+  health(now = Date.now()): Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> {
+    const out: Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> = []
     const loaded = this.d.sessionLoaded
     if (loaded === undefined || !this.teamBound()) return out
     const { router, members } = this.settings
@@ -1484,6 +1495,7 @@ export class SuperagentHost {
       if (router !== undefined && !loaded(router)) out.push({ code: 'router-not-loaded', session: router })
       for (const member of members) if (!loaded(member)) out.push({ code: 'member-not-loaded', session: member })
     }
+    if (this.routerFailure !== undefined && router !== undefined) out.push({ code: 'router-turn-failed', session: router, minutes: Math.max(0, Math.floor((now - Date.parse(this.routerFailure.at)) / 60_000)), detail: this.routerFailure.error })
     for (const binding of this.executor.list()) {
       const ticket = this.store.tickets.get(binding.ticketId)
       if (ticket === undefined || ticket.ended !== undefined || ticketStage(ticket).stage !== 'working') continue

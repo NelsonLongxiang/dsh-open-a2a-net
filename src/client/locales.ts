@@ -40,6 +40,7 @@ export type A2aNetKey =
   | 'team.fromOutbound'
   | 'team.healthTitle'
   | 'team.healthRouter'
+  | 'team.healthRouterFailed'
   | 'team.healthMember'
   | 'team.healthQuiet'
   | 'team.decisionsCount'
@@ -86,6 +87,7 @@ export const zh: Record<A2aNetKey, string> = {
   'team.fromOutbound': '对外请求',
   'team.healthTitle': '团队有 {count} 个问题',
   'team.healthRouter': '总工会话 {session} 没有加载，需求送不到它，打开这个会话即可',
+  'team.healthRouterFailed': '总工会话 {session} 上一回合失败（{detail}），需求在等它判断；常见原因是模型额度用完或服务中断',
   'team.healthMember': '成员会话 {session} 没有加载，工单派不给它，打开这个会话即可',
   'team.healthQuiet': '工单「{title}」已经 {minutes} 分钟没有动静',
   'team.decisionsCount': '待你决定（{count}）',
@@ -145,6 +147,7 @@ export const en: Record<A2aNetKey, string> = {
   'team.fromOutbound': 'Outbound request',
   'team.healthTitle': 'The team has {count} problem(s)',
   'team.healthRouter': 'Router session {session} is not loaded, so requests cannot reach it. Open that session',
+  'team.healthRouterFailed': 'Router session {session}\'s last turn failed ({detail}); requests wait for its judgement. A used-up model quota or an outage is the usual cause',
   'team.healthMember': 'Member session {session} is not loaded, so tickets cannot reach it. Open that session',
   'team.healthQuiet': 'Ticket “{title}” has had no activity for {minutes} minutes',
   'team.decisionsCount': 'Waiting for your decision ({count})',
