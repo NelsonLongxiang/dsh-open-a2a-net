@@ -58,6 +58,10 @@ export interface MemberExecutorDeps {
   readonly runPrepare?: PrepareRunner
   /** How many tickets may run at once; 0 is no cap (design reliability R5). */
   readonly maxConcurrent?: () => number
+  /** superagent-root-team S2: how many tickets a member holds at once (a child team: its slots); 1 when unset. */
+  readonly capacity?: (member: string) => number
+  /** superagent-root-team: a member whose work goes on through this host's restart (a child team on its own host). */
+  readonly outlivesRestart?: (member: string) => boolean
 }
 
 /** Runs a prepare command: whether it exited 0, and the end of what it printed. */
@@ -185,7 +189,8 @@ export class MemberExecutor implements Executor {
   private available(member: string): boolean {
     const stopping = this.stopping.get(member)
     if (stopping !== undefined && Date.now() - stopping >= STOPPING_MS) this.stopping.delete(member)
-    return !this.bindings.some(b => b.member === member) && !this.stopping.has(member) && !this.background.has(member)
+    const held = this.bindings.filter(b => b.member === member).length
+    return held < (this.d.capacity?.(member) ?? 1) && !this.stopping.has(member) && !this.background.has(member)
   }
 
   /** The repository a ticket was accepted for. */
@@ -206,6 +211,13 @@ export class MemberExecutor implements Executor {
     this.ticketMembers[ticketId] = { member, named: true }
     this.save()
     queueMicrotask(() => this.launch())
+  }
+
+  /** Named dispatch N4: the ticket is no longer kept for a member (the requester chose another one). */
+  clearMember(ticketId: string): void {
+    if (this.ticketMembers[ticketId] === undefined) return
+    Reflect.deleteProperty(this.ticketMembers, ticketId)
+    this.save()
   }
 
   memberOfTicket(ticketId: string): { member: string; named: boolean } | undefined { return this.ticketMembers[ticketId] }
@@ -507,6 +519,8 @@ export class MemberExecutor implements Executor {
         this.bindings = this.bindings.filter(b => b !== binding)
         continue
       }
+      // A child team keeps working on its own host: nothing was interrupted, and a new Assignment would send it the ticket again.
+      if (this.d.outlivesRestart?.(binding.member) === true) continue
       if (assignment.state === 'running') {
         try { engine.assignmentInterrupted(ticket.id, assignment.id) } catch (error) { this.d.logger.warn('superagent: interrupted %s not recorded: %s', assignment.id, String(error)) }
       }

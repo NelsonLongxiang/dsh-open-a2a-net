@@ -48,6 +48,10 @@ model tools.
   withdraws it — so only an identity that does answer every task (the
   superagent Source) should declare it. A host that predates it ignores the
   field and keeps the mailbox final.
+- `a2a-net publish --declare progressReceipts,directedSeats,reworkReturns,teamRoster` (or the same list in
+  `A2A_DECLARE`) declares what this identity takes as a requester (superagent-root-team S5): only these four names. A
+  team host on its bot list then sends it progress steps and believes its `[A2A dispatch]` lines. A superagent root
+  team's Source sets it while the team is a root. Like `--owes`, every publish states it afresh.
 - A handle stays pinned to the key it was published with, live or offline
   (gh#137): publishing it with a different key (e.g. after `init --force
   --uuid <same>`) is refused with "held by another key". Run `a2a-net revoke`
@@ -122,7 +126,11 @@ Files do not go through session messages: use the file channel below, never JPFI
   more than ±5 min (fix its NTP); the caller fields are the sender's own claim. Once the window is closed the route is refused as
   `wrong-audience`: stderr names the dialled origin and the fix — the host
   operator adds it to `originClaimAudiences`, or `--home` / `$A2A_HOME`
-  points at an address the host lists. A proxy that rewrites the path
+  points at an address the host lists. `$A2A_CLAIM_AUDIENCE` (an origin)
+  makes the bound form name that origin instead of the one dialled: a host
+  that runs the CLI against itself on loopback (the superagent team
+  identity) sets it to its own card URL's origin, which it always lists.
+  `a2a-net status` then prints `signed for <origin>`. A proxy that rewrites the path
   (`<home>` with a path prefix) fails the same way as `bad-sig`. These
   refusals are never resent unsigned. A redirect from the home is never
   followed either, on any command (the API key, pocket cookie and claim
@@ -307,8 +315,9 @@ Files do not go through session messages: use the file channel below, never JPFI
     caller still gets it, with `disposition` on its mailbox row. A receipt
     settles a debt only where the caller tracked one.
   - Added fields (market N1c/N1d, [receipt-envelope-fields](../../../docs/design/receipt-envelope-fields.md)):
-    `--by SEAT [--by-name N] [--by-team T] [--by-role router|member|observer]`
-    says who took the work up (the router until a member holds the work), and
+    `--by SEAT [--by-name N] [--by-team T] [--by-role router|member|observer] [--by-seat-id ID]`
+    says who took the work up (the router until a member holds the work; `--by-seat-id`
+    is the seat's stable id, the roster's `seatId`, which outlives its session), and
     `--artifacts KIND:ID[,KIND:ID…]` names what it produced, as ids in the
     caller's system (or a JSON array `[{"kind","id","title"}]`, where `title`
     is display text for people, at most 200 characters). With `--attention`, `--question-id ID [--options 'A|B']

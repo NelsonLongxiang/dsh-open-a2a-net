@@ -70,6 +70,8 @@ export interface SuperagentHostDeps {
   readonly homeUrl?: () => string | undefined
   /** This host's API key (the CLI's control credential). */
   readonly apiKey?: () => string | undefined
+  /** The origin this host publishes as its own (its card URL's): what the team identity's claims are bound to. */
+  readonly claimAudience?: () => string | undefined
   /**
    * PR-C2: a signed request to another a2a host (OriginClaim, body-bound, on this host's card key). Absent: no remote
    * members can be reached and no team can be served.
@@ -89,7 +91,7 @@ export interface SuperagentHostDeps {
    * on other hosts with the key the canvas pinned and that host's base URL (empty while unknown). CLI handle slots are
    * not team members. Undefined when no canvas team has that name. Absent: no team can be bound.
    */
-  readonly canvasTeam?: (name: string) => { readonly local: readonly string[]; readonly remote: readonly RemoteMember[] } | undefined
+  readonly canvasTeam?: (name: string) => { readonly local: readonly string[]; readonly remote: readonly RemoteMember[]; /** superagent-root-team: a root's child teams. */ readonly children?: ReadonlyArray<{ readonly ref: string; readonly slots: number }> } | undefined
   /** Design v5 (D2): the host-face sender of the team's replies to requests that came through its canvas address. */
   readonly teamSend?: (args: readonly string[]) => Promise<string | undefined>
   /**
@@ -98,8 +100,14 @@ export interface SuperagentHostDeps {
    * debt booked, no queue slot), on its own task id. The host's card key fingerprint names the host in the report.
    */
   readonly memberDeclares?: (ref: string, capability: string) => boolean
+  /** Named dispatch N1: whether an A2A caller (its handle) is a pinned canvas remote member whose verified card declares a capability. */
+  readonly callerDeclares?: (caller: string, capability: string) => boolean
   readonly rosterSend?: (ref: string, text: string, taskId: string) => Promise<void>
   readonly hostFingerprint?: () => string | undefined
+  /** superagent-root-team R7: let a root team's identity send requests to a child team on this instance (its bot list and a rule). */
+  readonly admitAtChild?: (childCanvas: string, rootHandle: string) => void
+  /** Refresh the peers' verified cards in the host's card cache (at most once a minute each); the roster's targets are read from it. */
+  readonly warmPeerCards?: () => void
   /** The canvas teams this host owns, by name (the owner binds one of them). */
   readonly canvasNames?: () => readonly string[]
   /** The agent preset a live local session runs (undefined: not loaded, or no preset registry). */

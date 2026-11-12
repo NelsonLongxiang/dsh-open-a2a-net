@@ -21,6 +21,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXIT_GONE, EXIT_RECEIPT_CONFLICT, HEALTH, KIND, KV, LINK_RULES, createA2aKind, replyAllowed, seatArgs, sendReply, watch, type A2aConfig, type ReceiptOutcome, type ReceiptSeat, type SendOptions } from '../a2a-watch.ts'
 import type { Commands, Health, OutboundMessage, ReceiveResult, SourceContext, TicketView, Trigger } from '../source-types.ts'
+/** The declarations last handed to a publish (superagent-root-team S5). */
+const DECLARED = 'superagent.declared'
 
 /** The packaged CLI, from both src/superagent/host and lib/superagent/host. */
 export const CLI_PATH = fileURLToPath(new URL('../../../cli/a2a.mjs', import.meta.url))
@@ -40,6 +42,14 @@ export interface A2aSourceDeps {
   readonly homeUrl: () => string | undefined
   /** The host's own API key (the CLI's control credential), if it has one. */
   readonly apiKey: () => string | undefined
+  /**
+   * The origin this host publishes as its own (its card URL's). The team identity dials the host on loopback, which a host
+   * whose originClaimUrl declares a tunnel or proxy does not accept as an audience; signing for the published origin binds
+   * the claim to this very host either way.
+   */
+  readonly claimAudience?: () => string | undefined
+  /** superagent-root-team S5: the capabilities this team's identity declares on its card (a root: progress, seats, rework). */
+  readonly declares?: () => readonly string[]
   readonly enabled: () => boolean
   readonly receive: (trigger: Trigger) => ReceiveResult
   readonly ticket: (id: string) => TicketView | undefined
@@ -78,9 +88,32 @@ export function runCli(args: string[], env: NodeJS.ProcessEnv, signal?: AbortSig
     child.on('close', code => {
       clearTimeout(timer)
       if (code === 0) resolve(stdout)
-      else reject(Object.assign(new Error(`a2a-net ${args[0] ?? ''} exited ${String(code)}: ${stderr.trim().slice(0, 400)}`), { exitCode: code ?? undefined, stdout }))
+      else reject(Object.assign(new Error(`a2a-net ${args[0] ?? ''} exited ${String(code)}: ${(stderr.trim() || cliRefusal(stdout).summary).slice(0, 400)}`), { exitCode: code ?? undefined, stdout }))
     })
   })
+}
+
+/**
+ * The refusal a `--json` run printed on stdout before exiting non-zero (its `error`, `next` and `task_id`): with `--json`
+ * the CLI writes nothing to stderr, so this is the only reason there is.
+ */
+export function cliRefusal(stdout: unknown): { summary: string; error?: string; task?: string } {
+  let out: Record<string, unknown> = {}
+  try { const parsed = JSON.parse(typeof stdout === 'string' ? stdout : '') as unknown; if (typeof parsed === 'object' && parsed !== null) out = parsed as Record<string, unknown> } catch { /* not JSON */ }
+  const error = typeof out.error === 'string' && out.error !== '' ? out.error : undefined
+  const next = typeof out.next === 'string' && out.next !== '' ? out.next : undefined
+  const task = typeof out.task_id === 'string' && out.task_id !== '' ? out.task_id : undefined
+  const summary = [error ?? (typeof stdout === 'string' && stdout.trim() !== '' ? stdout.trim() : 'no reason given'), ...(next !== undefined ? [`next: ${next}`] : []), ...(task !== undefined ? [`task ${task}`] : [])].join(' · ')
+  return { summary, ...(error !== undefined ? { error } : {}), ...(task !== undefined ? { task } : {}) }
+}
+
+/** The home host refused to forward because the team identity's CLI deposit is not online there (direct-forward.ts). */
+/** The deposit cause only (direct-forward.ts); an unbound signature is its own refusal, which a renewal cannot repair. */
+const DEPOSIT_REFUSAL = /not an online local CLI deposit|local CLI deposit expired/
+
+/** A route that did not go out: the reason the CLI gave and the task id it used, when it printed one. */
+export class RouteRefused extends Error {
+  constructor(message: string, readonly task?: string) { super(message) }
 }
 
 export class A2aSource {
@@ -132,8 +165,8 @@ export class A2aSource {
   private env(): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {}
     for (const [name, value] of Object.entries(process.env)) if (!name.startsWith('A2A_')) env[name] = value
-    const home = this.d.homeUrl(), key = this.d.apiKey()
-    return { ...env, A2A_CLI_HOME: this.identityDir, ...(home !== undefined ? { A2A_HOME: home } : {}), ...(key !== undefined && key !== '' ? { A2A_KEY: key } : {}) }
+    const home = this.d.homeUrl(), key = this.d.apiKey(), audience = this.d.claimAudience?.(), declared = this.d.declares?.() ?? []
+    return { ...env, A2A_CLI_HOME: this.identityDir, ...(home !== undefined ? { A2A_HOME: home } : {}), ...(key !== undefined && key !== '' ? { A2A_KEY: key } : {}), ...(audience !== undefined && audience !== '' ? { A2A_CLAIM_AUDIENCE: audience } : {}), ...(declared.length > 0 ? { A2A_DECLARE: declared.join(',') } : {}) }
   }
 
   private commands(signal?: AbortSignal): Commands {
@@ -260,11 +293,51 @@ export class A2aSource {
    * Design D5: ask the owner's reviewer about a pull request. The address is the owner's and must still be linked. The task
    * id, or undefined when the reviewer is not linked; a thrown error is tried again on a later read.
    */
-  async askReview(address: string, text: string): Promise<string | undefined> {
+  async askReview(address: string, text: string, context?: string): Promise<string | undefined> {
     const check = JSON.parse(await this.context.commands.run('a2a-net', ['admission', address, '--json'])) as { admitted?: unknown; rule?: unknown }
     if (check.admitted !== true || typeof check.rule !== 'string' || !LINK_RULES.has(check.rule)) return undefined
-    const sent = JSON.parse(await this.context.commands.run('a2a-net', ['route', address, '--json', '--', text])) as { task_id?: unknown }
-    return typeof sent.task_id === 'string' ? sent.task_id : undefined
+    return await this.routeAs(address, text, context)
+  }
+
+  /**
+   * superagent-root-team S2: send to a child team from the team's identity. No admission precheck: that check asks
+   * whether the address would be let into this identity's mailbox as a sender (right for a reviewer, who answers from
+   * that address), while a child team answers from its host's face, never from its canvas address — the check said no
+   * and nothing was sent (test host, 2026-11-12). The child's own admission of this identity still applies to the send.
+   */
+  async routeAs(address: string, text: string, context?: string): Promise<string | undefined> {
+    const route = async (): Promise<string | undefined> => {
+      const sent = JSON.parse(await this.context.commands.run('a2a-net', ['route', address, '--json', ...(context !== undefined ? ['--context', context] : []), '--', text])) as { task_id?: unknown }
+      return typeof sent.task_id === 'string' ? sent.task_id : undefined
+    }
+    try { return await route() } catch (error) {
+      const refusal = cliRefusal((error as { stdout?: unknown }).stdout)
+      if (refusal.error === undefined || !DEPOSIT_REFUSAL.test(refusal.error)) throw this.refused(error, refusal)
+      // The home host refused before any dispatch: nothing reached the address. Renew the team identity's deposit there
+      // (as the watch loop does, which does not run while the Source is off or setup is pending) and send once more.
+      try {
+        const config = this.context.config<A2aConfig>(KIND)
+        await this.context.commands.run('a2a-net', config?.mode === 'reply' ? ['publish', '--owes'] : ['publish'])
+        this.context.state.set(KV.renewedAt, Date.now())
+      } catch (publishError) { throw this.refused(error, refusal, `deposit renewal failed: ${String(publishError).slice(0, 200)}`) }
+      try { return await route() } catch (again) { throw this.refused(again, cliRefusal((again as { stdout?: unknown }).stdout), 'after renewing the deposit') }
+    }
+  }
+
+  private refused(error: unknown, refusal: ReturnType<typeof cliRefusal>, note?: string): Error {
+    const base = refusal.error !== undefined ? `a2a-net route refused: ${refusal.summary}` : String(error instanceof Error ? error.message : error)
+    return new RouteRefused(note !== undefined ? `${base} (${note})` : base, refusal.task)
+  }
+
+  /**
+   * superagent-root-team S5: when what this identity declares changed since it was last published (the team became a
+   * root, or stopped being one), the next watch round publishes again instead of waiting for the renewal.
+   */
+  syncDeclarations(): void {
+    const now = (this.d.declares?.() ?? []).join(',')
+    if (this.stateValue[DECLARED] === now) return
+    this.context.state.set(KV.renewedAt, 0)
+    this.context.state.set(DECLARED, now)
   }
 
   /** Whether the A2A request `task` has had its one formal receipt (a2a-watch records it once it went out). */

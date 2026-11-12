@@ -74,8 +74,13 @@ export function approverCheck(input: { readonly approvers: readonly string[]; re
   return reason === '' ? { ok: false, code: 'reason', error: 'give the reason for the decision' } : { ok: true, reason: reason.slice(0, 500) }
 }
 
+/** The address an approved card names, as a scope check sees it: canvas targets lose their owner suffix there. */
+const bare = (address: string): string => address.replace(/@[0-9a-f]{8}$/, '')
+
 export class OutboundRequests {
   private records: Record<string, OutboundRecord>
+  /** Approved cards being sent right now, by address: the owner's (or an approver's) decision is the scope for that send. */
+  private readonly sending = new Map<string, number>()
 
   constructor(private readonly d: OutboundDeps) {
     let stored: Record<string, OutboundRecord> = {}
@@ -90,6 +95,16 @@ export class OutboundRequests {
   }
 
   list(): readonly OutboundRecord[] { return Object.values(this.records) }
+
+  /**
+   * Owner ruling 2026-11-12: an approved card authorizes the sender scope for its exact address, while that approved
+   * text is being sent — and for nothing else, at no other time. The target as a scope check names it (a canvas team
+   * without its `@<fp8>`, a member handle with or without it).
+   */
+  authorizes(target: string): boolean {
+    for (const address of this.sending.keys()) if (target === address || target === bare(address)) return true
+    return false
+  }
 
   /**
    * Check a request (O1, O2) and shape its card, or say why not.
@@ -128,12 +143,22 @@ export class OutboundRequests {
     const header = `[来自 superagent 团队 ${team} 的请求 · 工单「${clip(titleOf(record.ticketId) ?? '', 80)}」]`
     if (!approved) { record.state = 'declined'; this.save(); this.d.note(record.ticketId, `对外请求（发往 ${record.address}）未获批准，没有发出。`); return undefined }
     let task: string | undefined
-    try { task = await this.d.ask(record.address, `${header}\n${record.text}`) } catch (error) { record.error = clip(String(error), 300) }
+    this.sending.set(record.address, (this.sending.get(record.address) ?? 0) + 1)
+    try { task = await this.d.ask(record.address, `${header}\n${record.text}`) } catch (error) {
+      record.error = clip(error instanceof Error ? error.message : String(error), 600)
+      // The task id the refused attempt used, for reconciliation with the host's ledger; never matched as an answer (O5 reads sent only).
+      const used = (error as { task?: unknown }).task
+      if (typeof used === 'string' && used !== '') record.task = used
+    } finally {
+      const left = (this.sending.get(record.address) ?? 1) - 1
+      if (left > 0) this.sending.set(record.address, left)
+      else this.sending.delete(record.address)
+    }
     if (task === undefined) {
       record.state = 'failed'
       record.error ??= 'the address is not reachable from this host, or this host is not admitted there'
       this.save()
-      this.d.note(record.ticketId, `对外请求（发往 ${record.address}）已获批准，但没能发出：${record.error}`)
+      this.d.note(record.ticketId, `对外请求（发往 ${record.address}${record.task !== undefined ? `，task ${record.task}` : ''}）已获批准，但没能发出：${record.error}`)
       return undefined
     }
     record.state = 'sent'

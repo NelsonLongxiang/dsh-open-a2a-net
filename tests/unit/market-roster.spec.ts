@@ -7,7 +7,7 @@ import { RosterReports, rosterSeats, rosterText, ROSTER_EVERY_MS, ROSTER_SETTLE_
 
 const T0 = Date.parse('2026-11-11T14:00:00.000Z')
 
-function roster(options: { declares?: (ref: string) => boolean; fail?: boolean } = {}) {
+function roster(options: { declares?: (ref: string) => boolean; fail?: boolean; warm?: () => void } = {}) {
   let now = T0
   const team = { canvas: 'ops', router: 'session-r', members: ['session-m1', 'session-m2'], observers: ['session-o'] }
   const load: Record<string, { active: number; queued: number; since?: string }> = { 'session-m1': { active: 1, queued: 2, since: '2026-11-11T13:50:00.000Z' }, 'session-m2': { active: 0, queued: 0 } }
@@ -19,6 +19,7 @@ function roster(options: { declares?: (ref: string) => boolean; fail?: boolean }
     send: async (ref, text, taskId) => { if (options.fail) throw new Error('unreachable'); sent.push({ ref, text, taskId }) },
     handleOf: id => `dsh/${id.slice(8, 16).padEnd(8, '0')}`, nameOf: id => ({ 'session-m1': '后端' } as Record<string, string>)[id], online: id => online.has(id),
     loadOf: id => load[id] ?? { active: 0, queued: 0 }, hostFingerprint: () => '0123456789abcdef', nowMs: () => now, logger: { info: () => {}, warn: () => {} },
+    ...(options.warm !== undefined ? { warm: options.warm } : {}),
   })
   return { r, sent, load, online, team, advance: (ms: number) => { now += ms } }
 }
@@ -59,6 +60,21 @@ describe('the roster report', () => {
     h.advance(ROSTER_SETTLE_MS); await h.r.tick()
     expect(h.sent).toHaveLength(3)
     expect(JSON.parse(h.sent[2]!.text.split('\n')[1]!).seats.find((s: { role: string; online: boolean; queued: number }) => s.queued === 2).online).toBe(false)
+  })
+
+  it('refreshes the peers\' cards on every look, so a restart\'s empty card cache does not stop the roster (market trial)', async () => {
+    // After a restart the host knows no card until something fetches it: the market is neither confirmed nor declaring.
+    let cached = false, warmed = 0
+    const h = roster({ declares: ref => cached && ref.startsWith('market/'), warm: () => { warmed++; queueMicrotask(() => { cached = true }) } })
+    await h.r.tick()
+    expect(h.sent).toEqual([])
+    h.advance(10_000); await h.r.tick()
+    expect(h.sent.map(x => x.ref)).toEqual(['market/aaaa1111@0123abcd'])
+    expect(warmed).toBe(2)
+    // A refresh that throws is logged, and the look goes on.
+    const t = roster({ warm: () => { throw new Error('peer store busy') } })
+    await t.r.tick()
+    expect(t.sent).toHaveLength(1)
   })
 
   it('no declaring member, no canvas, or no host key: nothing is sent; a failed send is retried on the next due tick', async () => {

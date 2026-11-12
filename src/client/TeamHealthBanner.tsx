@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import styles from './TeamRequestTab.module.css'
 
-export interface HealthRow { readonly code: string; readonly team: string; readonly session?: string; readonly title?: string; readonly ticketId?: string; readonly minutes?: number }
+export interface HealthRow { readonly code: string; readonly team: string; readonly session?: string; readonly title?: string; readonly ticketId?: string; readonly minutes?: number; readonly detail?: string }
 
 const POLL_MS = 30_000
 
@@ -14,6 +14,7 @@ const POLL_MS = 30_000
 export function healthLine(row: HealthRow, t: PropsLocale<'a2aNet'>['t']): string {
   const team = row.team === '' ? '' : `${row.team}：`
   if (row.code === 'router-not-loaded') return team + t('team.healthRouter', { session: (row.session ?? '').slice(8, 16) })
+  if (row.code === 'router-turn-failed') return team + t('team.healthRouterFailed', { session: (row.session ?? '').slice(8, 16), detail: (row.detail ?? '').slice(0, 120) })
   if (row.code === 'member-not-loaded') return team + t('team.healthMember', { session: (row.session ?? '').slice(8, 16) })
   if (row.code === 'ticket-quiet') return team + t('team.healthQuiet', { title: row.title ?? row.ticketId ?? '', minutes: String(row.minutes ?? 0) })
   return team + row.code

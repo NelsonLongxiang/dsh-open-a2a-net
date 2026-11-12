@@ -37,6 +37,7 @@ export function resolveCallerLabel(input: {
 import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef, legacyBareMember } from './canvas-store.ts'
+import { linkRootRequester } from './canvas-root.ts'
 import { splitQualifiedMember, memberProvenance, qualifiedSessionMember, pinnedCallerDeclares } from './canvas-member.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
 import { LayoutStore } from './layout-store.ts'
@@ -48,7 +49,7 @@ import { ExposureStore } from './exposure-store.ts'
 import { applyOwnerSettings, loadSeatNames, type OwnerSettings } from './owner-settings.ts'
 import { CLI_HANDLE_RE, CliDepositStore } from './cli-deposit.ts'
 import { cliHomeChoices, decideCliHome } from './cli-home.ts'
-import { outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
+import { forwardScope, outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
 import { createDirectForward, ForwardBirths } from './direct-forward.ts'
 import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
@@ -1816,6 +1817,9 @@ export function apply(ctx: Context, config: Config): void {
         ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
+        canvasRoot: { store: canvasStore, zone: config.team, ownKey: encodePublicKey(createPublicKey(nodePrivateKey)),
+          localSuperagentCanvas: (name: string) => superagentTeams?.all().some(team => team.a2aAddress !== undefined && team.settings.canvas === name) === true,
+          peerCards: async () => (await freshCliHomeCards()).flatMap(row => row.card !== undefined ? [{ url: row.url, card: row.card, linked: peerAdmissionLinkState(row.url).link === 'linked' }] : []) },
         admissionRecheck: (caller: string, handle: string, local: boolean) => recheckCallerAdmission(linkRecheckRecords, caller, handle, local),
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
@@ -1859,7 +1863,9 @@ export function apply(ctx: Context, config: Config): void {
         // roster: the team-roster face (a2a_team_join/leave, card
         // teamMemberships, team-scope routing admission) ships — peers read
         // its absence as a pre-roster legacy node (0.5.43 and older).
-        capabilities: { route: true, async: true, roster: true, canvasMemberProvenance: true, sourcedFollowup: true, queuedTaskCancellation: true },
+        // superagent named dispatch: a host running superagent teams reads a request's [A2A dispatch] line (for, rework), so a
+        // requester (the workbench market) writes one only to a host that declares it — the same names a requester declares.
+        capabilities: { route: true, async: true, roster: true, canvasMemberProvenance: true, sourcedFollowup: true, queuedTaskCancellation: true, ...(config.superagent === true ? { directedSeats: true, reworkReturns: true } : {}) },
         expiresAt: Date.now() + config.cardTtlMs,
         ...(records.length > 0 ? { records: [...records] } : {}),
       })
@@ -1979,7 +1985,7 @@ export function apply(ctx: Context, config: Config): void {
             // gh#152: members are read through the local tiers' lens — one of
             // this host's own handles resolves to the session it names, and
             // the two stored shapes of one session publish as ONE handle.
-            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...(superagentTeams?.all().some(team => team.a2aAddress !== undefined && team.settings.canvas === name) === true ? { superagentTeam: true as const } : {}) })) } : {}),
+            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...((team => team?.a2aAddress !== undefined ? { superagentTeam: true as const, identity: team.a2aAddress } : {})(superagentTeams?.all().find(team => team.a2aAddress !== undefined && team.settings.canvas === name))), ...(canvasStore.isRoot(name) ? { root: true as const } : {}), ...((admits => admits.length > 0 ? { admits } : {})(superagentTeams?.all().find(team => team.a2aAddress !== undefined && team.settings.canvas === name)?.admittedRoots() ?? [])) })) } : {}),
             ...(named && lanIp !== '' ? { lanIp } : {}),
             ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
             description: `A2A node exposing team ${config.team}${named ? '' : ' (minimal card — OriginClaim envelope required for the full card: X-A2A-Caller/-Url/-Ts/-Sig signed with your card key)'}`,
@@ -2047,6 +2053,7 @@ export function apply(ctx: Context, config: Config): void {
     interval: (fn, ms) => ctx.timer.interval(fn, ms),
     // The team's A2A address (PR-B2b) is a CLI identity the a2a-net CLI runs against this very host.
     homeUrl: () => superagentHomeUrl,
+    claimAudience: () => (ownCardUrl !== '' ? originOf(ownCardUrl) : undefined),
     apiKey: () => config.apiKey,
     // PR-C2: remote members and served teams talk host to host, signed with this host's card key and bound to the body.
     signedPost: async (baseUrl, path, body) => {
@@ -2073,8 +2080,11 @@ export function apply(ctx: Context, config: Config): void {
         const url = [...cardCache.entries()].find(([, entry]) => entry.card?.publicKey === key)?.[0]
         return [{ ref, key, url: url !== undefined ? new URL(url).origin : '' }]
       })
-      return { local, remote }
+      // superagent-root-team: a root's child teams are its workers too (kept apart from the canvas members).
+      const children = canvasStore.isRoot(name) ? canvasStore.childrenOf(name).map(child => ({ ref: child.ref, slots: child.slots })) : []
+      return { local, remote, children }
     },
+    admitAtChild: (childCanvas, rootHandle) => { superagentTeams?.all().find(team => team.settings.canvas === childCanvas)?.admitRequester(rootHandle) },
     canvasesOf: id => canvasTeamsOfSession(id),
     canvasNames: () => canvasStore.list(),
     presetOf: id => sessionPresetOf(id),
@@ -2099,8 +2109,10 @@ export function apply(ctx: Context, config: Config): void {
     memberTurn: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : memberTurnFrom(id, sessionEventsOf(agent), ctx.get('jobs' as never)) },
     teamSend: args => teamCanvasSend(args),
     memberDeclares: (ref, capability) => { const member = splitQualifiedMember(ref); return member !== undefined && callerCapability(member.handle, capability) },
+    callerDeclares: (caller, capability) => callerCapability(caller, capability),
     rosterSend: async (ref, text, taskId) => { await dispatchAnywhere(ref, text, session, undefined, AbortSignal.timeout(15_000), true, taskId) },
     hostFingerprint: () => canvasOwnerFingerprint(encodePublicKey(createPublicKey(nodePrivateKey))),
+    warmPeerCards: () => { for (const url of peerStore.list()) void cachedCardFetch(url).catch(() => undefined) },
   }) : undefined
   teamsHandle = superagentTeams
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
@@ -2187,8 +2199,17 @@ export function apply(ctx: Context, config: Config): void {
    * and whose card (fetched and verified, in the card cache) carries `capabilities[name] === true`. Anything else — a
    * CLI identity, an unpinned or unknown caller, a card not fetched yet — declares nothing.
    */
+  /** superagent-root-team S5: the capabilities verified remote CLI identities declared, by handle. */
+  const cliCapabilities = new Map<string, { capabilities: Record<string, unknown>; expiresAt: number }>()
   function callerCapability(caller: string, name: string): boolean {
-    return pinnedCallerDeclares(caller, name, canvasStore.list().flatMap(canvas => canvasStore.membersOf(canvas)), ref => canvasStore.ownerKeyOf(ref), [...cardCache.values()].map(entry => entry.card))
+    if (pinnedCallerDeclares(caller, name, canvasStore.list().flatMap(canvas => canvasStore.membersOf(canvas)), ref => canvasStore.ownerKeyOf(ref), [...cardCache.values()].map(entry => entry.card))) return true
+    // superagent-root-team S5: a CLI identity (a root team's) declares on its own signed card — read from the deposit on
+    // this host, or from the card verified when its request arrived from another host. The team's bot list still gates it.
+    if (!CLI_HANDLE_RE.test(caller)) return false
+    const local = cliDeposits.get(caller)
+    if (local !== undefined) { try { return (JSON.parse(local.cardJson) as { capabilities?: Record<string, unknown> } | null)?.capabilities?.[name] === true } catch { return false } }
+    const seen = cliCapabilities.get(caller)
+    return seen !== undefined && seen.expiresAt > Date.now() && seen.capabilities[name] === true
   }
 
   async function teamCanvasSend(args: readonly string[]): Promise<string | undefined> {
@@ -2733,6 +2754,14 @@ export function apply(ctx: Context, config: Config): void {
       ...(options?.rawBody !== undefined ? { rawBody: options.rawBody } : {}),
     })
     if (!claim.ok && claim.reason !== 'absent') noteClaimReject(req, claim.reason)
+    // superagent-root-team S5: what a verified remote CLI identity declares, for callerCapability (bounded, newest kept).
+    if (claim.ok && claim.cli === true && claim.bound && typeof claim.caller === 'string') {
+      const card = claim.card as { capabilities?: unknown; expiresAt?: unknown }
+      const capabilities = typeof card.capabilities === 'object' && card.capabilities !== null ? card.capabilities as Record<string, unknown> : {}
+      cliCapabilities.delete(claim.caller)
+      cliCapabilities.set(claim.caller, { capabilities, expiresAt: typeof card.expiresAt === 'number' ? card.expiresAt : Date.now() + 3_600_000 })
+      if (cliCapabilities.size > 256) cliCapabilities.delete(cliCapabilities.keys().next().value!)
+    }
     // #312: recover bilateral seed evidence from a signed, reduction-only card,
     // never from a caller-selected unseeded URL and never recursively.
     const discovery = new URL(req.url ?? '/', 'http://x').searchParams.get('discovery') === '1'
@@ -2894,6 +2923,7 @@ export function apply(ctx: Context, config: Config): void {
     canvasTeamsOf: sessionId => canvasTeamsOfSession(sessionId),
     canvasMembersOf: name => canvasLocalMembersOf(name),
     canvasRemoteMembersOf: name => canvasStore.remoteMembersOf(name),
+    canvasRequestersOf: name => canvasStore.requestersOf(name),
     peerOrgs: function * () {
       for (const cached of cardCache.values()) {
         const org = (cached.card as { canvasOrg?: PeerOrgEntry[] } | undefined)?.canvasOrg
@@ -3373,6 +3403,7 @@ export function apply(ctx: Context, config: Config): void {
       ctx, config, superagentHost, superagentTeams, homeUrl: () => superagentHomeUrl, controlRoute, readJsonBody, recordActivity, routeTrunk,
       sessionNodes, sessionPresetOf, sessionTeamOf, joinedSessions, archivedSessionFilter, verifyOriginClaim, fetchPeerCard, peerStore, cardCache,
       ownCanvasFingerprint, peerAdmissionLinkState, blobStore,
+      linkRequester: (canvas: string, handle: string, home: unknown) => linkRootRequester({ store: canvasStore, deposited: h => cliDeposits.directoryRows().some(row => row.team === h), pinHome: cliHomeForAdd }, canvas, handle, home),
     })
   })
   const cardCacheInFlight = new Map<string, Promise<A2aPeerCard | undefined>>()
@@ -3906,12 +3937,22 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const forwardDirect = createDirectForward({
     births: forwardingBirths,
     enabled: () => config.forwardDirect === true, isolated: () => config.isolated, deposited: handle => cliDeposits.get(handle) !== undefined,
-    scope: (handle, team) => config.teamScopeRouting ? outboundScope(senderScopeRecords, handle, handle, team) : Promise.resolve({ ok: true as const }),
+    scope: (handle, team) => config.teamScopeRouting ? forwardScope(cardAuthorizedSend, () => outboundScope(senderScopeRecords, handle, handle, team), handle, team) : Promise.resolve({ ok: true as const }),
     candidates: async (team, failures, caller) => { const fetch = memoizedCardFetch(); return { urls: await directoryPeerCandidates(fetch, team, failures, { id: caller, handle: caller }), card: fetch } },
     dispatch: (url, request, guard) => dispatchPeerCandidate(url, request.team, request.message, request.contextId, new AbortController().signal, request.caller, request.noWait, request.taskId, request.caller, guard),
     ledger: taskLedger, activity: (team, peer, ok) => recordActivity('fwd', team, peer, ok),
   })
 
+  /**
+   * Owner ruling 2026-11-12 (superagent outbound, O4): a superagent team's own A2A identity sits in no canvas team, so it
+   * declares no scope of its own; an approved outbound card is its scope — for that card's exact address, while the host
+   * sends it. Signature, deposit and the receiving host's admission still apply.
+   */
+  function cardAuthorizedSend(handle: string, team: string): boolean {
+    // superagent-root-team S5: a root's registered child teams are its standing sender scope (R2), like an approved card's
+    // address; a child's admitted roots are its own, for the receipts and questions that answer them.
+    return superagentTeams?.all().some(host => host.a2aAddress === handle && (host.outboundAuthorizes(team) || host.childAuthorizes(team) || host.admittedRoots().includes(team))) === true
+  }
   const senderScopeRecords: OutboundScopeRecords = {
     zone: config.team, id8, teamsOf: id => teamMemberships.teamsOf(id), membersOf: team => teamMemberships.membersOf(team),
     canvasNames: () => canvasStore.list(), canvasMembers: name => canvasStore.membersOf(name), canvasTeam: canvasTeamOf,

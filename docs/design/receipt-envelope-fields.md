@@ -20,11 +20,12 @@ All three are additive: every older reader ignores them.
 
 | Key | Shape | On |
 |---|---|---|
-| `by` | `{seat, name?, team?, role?}` | any receipt; superagent sets it on acknowledgements, questions, progress and results |
+| `by` | `{seat, seatId?, name?, team?, role?}` | any receipt; superagent sets it on acknowledgements, questions, progress and results |
 | `artifacts` | `[{kind, id, title?}]`, at most 16; `title` is display text for people (added 2026-11-11) | any receipt; `kind` such as `table`, `file`, `sop-run`, `id` in the requester's system |
 | `question` | `{id, text, options?, default?}` | `attention` only; dropped on any other disposition |
 
 - **`seat`** is the seat's A2A handle (`<zone>/<id8>`), or its session id where the host has none. `name` is its display name.
+- **`seatId`** is the seat's stable id (superagent's `seat-<8 hex>`, the same as the roster's `seatId`; added 2026-11-12 for the market, which keys its assignments on it). It outlives the session behind the seat, which `seat` does not. 1 to 64 of `A-Z a-z 0-9 . _ : -`; `--by-seat-id`.
 - **`role`** is `router`, `member` or `observer` (added 2026-11-11 for the market, which shows only the seat that does the work). superagent names the router until a member holds the work: on an acknowledgement and on a `queued` progress step it is the router.
 - **Limits.** Strings are at most 200 characters, a question's text at most 2000, a question has at most 6 options, and a question id is at most 24 characters of `[A-Za-z0-9._:-]`.
 - **Malformed values** are dropped key by key, never the whole envelope.

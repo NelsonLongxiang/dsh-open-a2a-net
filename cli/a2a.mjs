@@ -48,7 +48,7 @@ const USAGE = `a2a-net CLI — aligned with the plugin's model tools ('a2a tools
 
 usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 
-户口制:   init <name> [--uuid 16hex] [--force] · publish [--owes] · inbox [--new|--wait|--hook] · thread <context_id> · receipt <task_id> <result…> · admission <caller> [--local] · revoke
+户口制:   init <name> [--uuid 16hex] [--force] · publish [--owes] [--declare progressReceipts,directedSeats,reworkReturns,teamRoster] · inbox [--new|--wait|--hook] · thread <context_id> · receipt <task_id> <result…> · admission <caller> [--local] · revoke
 对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…> [--task ID]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
@@ -98,7 +98,7 @@ receipt:  receipt <task_id> [--attention | --acknowledged | --outcome O] [--to T
           task id ack-<task_id>, so the later receipt is not refused
           --attention --question-id ID [--options 'A|B'] [--default X]: a question (the one line is its text) that
           marks the caller's row instead of settling it; it rides attention-<task_id>-<ID>, so the result still follows
-          --by SEAT [--by-name N] [--by-team T] [--by-role router|member|observer]: who took the work up; --artifacts KIND:ID[,…] or '[{"kind","id","title"}]': what it produced
+          --by SEAT [--by-name N] [--by-team T] [--by-role router|member|observer] [--by-seat-id ID]: who took the work up; --artifacts KIND:ID[,…] or '[{"kind","id","title"}]': what it produced
           --progress N --state queued|working|waiting|blocked [--ahead K] [--tickets JSON]: a progress step (the one
           line is its summary) that marks the caller's row and settles nothing; it rides progress-<task_id>-<N>
 
@@ -109,7 +109,9 @@ admission: admission <caller> [--local] [--json]   how <caller> would be admitte
           host refuses or does not know the query`
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
-const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets'])
+/** The capabilities a CLI identity may declare on its card (superagent-root-team S5). */
+const DECLARABLE = ['progressReceipts', 'teamRoster', 'directedSeats', 'reworkReturns']
+const VALUE_FLAGS = new Set(['--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets'])
 const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
@@ -205,6 +207,16 @@ function claimTarget(url) {
  * signing v1: a host from before PR #130 reads only that one, and a host
  * whose originClaimUnboundWindow is closed never consults it.
  */
+/**
+ * $A2A_CLAIM_AUDIENCE: the origin the bound (v2) form names instead of the one dialled — set by a host that runs this
+ * CLI against itself on loopback, so the claim binds to the origin that host publishes (its card URL's). An origin only.
+ */
+function claimAudienceOverride() {
+  const value = envValue('A2A_CLAIM_AUDIENCE')
+  if (value === undefined) return undefined
+  try { const parsed = new URL(value); return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : undefined } catch { return undefined }
+}
+
 function originClaimFor(base) {
   const id = identity()
   const privateKey = createPrivateKey(id.privateKeyPem)
@@ -212,7 +224,8 @@ function originClaimFor(base) {
   const sign = (form) => edSign(undefined, Buffer.from(JSON.stringify(form)), privateKey).toString('base64')
   return (url, method) => {
     const ts = Date.now()
-    const target = claimTarget(url)
+    const dialled = claimTarget(url), audience = claimAudienceOverride()
+    const target = dialled !== undefined && audience !== undefined ? { ...dialled, audience } : dialled
     // gh#133: the header names the host verifies (X-A2A-Ts/-Sig were never read, so every envelope looked absent).
     return {
       'X-A2A-Caller': id.name, 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts),
@@ -580,12 +593,13 @@ function receiptExtras(attention, text) {
   const SHORT = 200, TEXT = 2000, MAX_ARTIFACTS = 16, MAX_OPTIONS = 6
   const ok = (v, cap = SHORT) => typeof v === 'string' && v.trim() !== '' && v.length <= cap
   const out = {}
-  const seat = flag('--by'), name = flag('--by-name'), team = flag('--by-team'), role = flag('--by-role')
+  const seat = flag('--by'), name = flag('--by-name'), team = flag('--by-team'), role = flag('--by-role'), seatId = flag('--by-seat-id')
   if (seat !== undefined) {
     if (!ok(seat)) usage(`receipt: --by takes a seat id of at most ${SHORT} characters`)
     if (role !== undefined && !['router', 'member', 'observer'].includes(role)) usage('receipt: --by-role takes router, member, observer')
-    out.by = { seat, ...(ok(name) ? { name } : {}), ...(ok(team) ? { team } : {}), ...(role !== undefined ? { role } : {}) }
-  } else if (name !== undefined || team !== undefined || role !== undefined) usage('receipt: --by-name, --by-team and --by-role go with --by')
+    if (seatId !== undefined && !/^[A-Za-z0-9._:-]{1,64}$/.test(seatId)) usage('receipt: --by-seat-id takes 1 to 64 of A-Z a-z 0-9 . _ : -')
+    out.by = { seat, ...(seatId !== undefined ? { seatId } : {}), ...(ok(name) ? { name } : {}), ...(ok(team) ? { team } : {}), ...(role !== undefined ? { role } : {}) }
+  } else if (name !== undefined || team !== undefined || role !== undefined || seatId !== undefined) usage('receipt: --by-name, --by-team, --by-role and --by-seat-id go with --by')
   const artifacts = flag('--artifacts')
   if (artifacts !== undefined) {
     let items
@@ -850,7 +864,9 @@ async function publishDeposit() {
   const privateKey = createPrivateKey(id.privateKeyPem)
   // superagent p1-mailbox-owes (S33): --owes declares, in the signed card, that this identity owes a receipt for what
   // its mailbox takes; every publish (and --renew) states it afresh, so a publish without it withdraws the declaration.
-  const capabilities = { route: true, async: true, ...(has('--owes') ? { owes: true } : {}) }
+  // superagent-root-team S5: --declare (or A2A_DECLARE) adds the capabilities a requester takes — only these names.
+  const declared = (flag('--declare') ?? process.env.A2A_DECLARE ?? '').split(',').map(name => name.trim()).filter(name => DECLARABLE.includes(name))
+  const capabilities = { route: true, async: true, ...(has('--owes') ? { owes: true } : {}), ...Object.fromEntries(declared.map(name => [name, true])) }
   const card = signCard({ name: id.name, session: `cli-${id.name}`, team: id.handle, capabilities, expiresAt: Date.now() + 2 * 24 * 60 * 60 * 1000 }, privateKey)
   return await control({ action: 'publish', card: JSON.stringify(card) })
 }
@@ -1441,7 +1457,7 @@ async function main() {
     // §2.1 gauges, host-wide: a boundMissInbound that grows with this CLI's routes means
     // the address it dials is missing from the host's originClaimAudiences.
     if (typeof s.unboundInbound === 'number') {
-      console.log(`claims      unboundInbound=${String(s.unboundInbound)}  boundMissInbound=${String(s.boundMissInbound ?? 0)}  (dialled as ${claimTarget(home())?.audience ?? home()})`)
+      console.log(`claims      unboundInbound=${String(s.unboundInbound)}  boundMissInbound=${String(s.boundMissInbound ?? 0)}  (dialled as ${claimTarget(home())?.audience ?? home()}${claimAudienceOverride() !== undefined ? `, signed for ${claimAudienceOverride()}` : ''})`)
       // Who missed and by which origin: add that origin to the host's originClaimAudiences.
       for (const m of (Array.isArray(s.boundMissRecent) ? s.boundMissRecent : []).slice(0, 5)) {
         console.log(`  miss      ${String(m.caller)} dialled ${String(m.audience) || '(no origin)'} ×${String(m.count)}`)

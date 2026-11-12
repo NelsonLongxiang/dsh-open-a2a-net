@@ -27,6 +27,9 @@ export type A2aNetKey =
   | 'team.decisions'
   | 'team.decisionsGuide'
   | 'team.noDecisions'
+  | 'team.decisionsDenied'
+  | 'team.decisionsUnreadable'
+  | 'team.decisionsStale'
   | 'team.recommended'
   | 'team.approve'
   | 'team.confirmChoice'
@@ -40,6 +43,7 @@ export type A2aNetKey =
   | 'team.fromOutbound'
   | 'team.healthTitle'
   | 'team.healthRouter'
+  | 'team.healthRouterFailed'
   | 'team.healthMember'
   | 'team.healthQuiet'
   | 'team.decisionsCount'
@@ -73,6 +77,9 @@ export const zh: Record<A2aNetKey, string> = {
   'team.decisions': '待决策',
   'team.decisionsGuide': '各团队等你拍板的事，附推荐选项',
   'team.noDecisions': '现在没有等你决定的事。',
+  'team.decisionsDenied': '这个页面没有权限读取待决策（这台 DSH 设了控制密钥）。待决策没有消失，请到 A2A 工作台的「团队」页处理。',
+  'team.decisionsUnreadable': '暂时读不到待决策，这不代表没有等你决定的事；稍后会自动重试。',
+  'team.decisionsStale': '下面是上次读到的内容，可能已过期。',
   'team.recommended': '推荐',
   'team.approve': '批准推荐',
   'team.confirmChoice': '确认选择',
@@ -86,6 +93,7 @@ export const zh: Record<A2aNetKey, string> = {
   'team.fromOutbound': '对外请求',
   'team.healthTitle': '团队有 {count} 个问题',
   'team.healthRouter': '总工会话 {session} 没有加载，需求送不到它，打开这个会话即可',
+  'team.healthRouterFailed': '总工会话 {session} 上一回合失败（{detail}），需求在等它判断；常见原因是模型额度用完或服务中断',
   'team.healthMember': '成员会话 {session} 没有加载，工单派不给它，打开这个会话即可',
   'team.healthQuiet': '工单「{title}」已经 {minutes} 分钟没有动静',
   'team.decisionsCount': '待你决定（{count}）',
@@ -132,6 +140,9 @@ export const en: Record<A2aNetKey, string> = {
   'team.decisions': 'Decisions',
   'team.decisionsGuide': 'What your teams need you to decide, each with a recommendation',
   'team.noDecisions': 'Nothing is waiting for your decision.',
+  'team.decisionsDenied': 'This page cannot read the decisions (this DSH has a control key). They are still waiting: open the Team page of the A2A workbench.',
+  'team.decisionsUnreadable': 'The decisions cannot be read right now. That does not mean none is waiting; this tries again shortly.',
+  'team.decisionsStale': 'Below is what was read last; it may be out of date.',
   'team.recommended': 'Recommended',
   'team.approve': 'Approve recommendation',
   'team.confirmChoice': 'Confirm choice',
@@ -145,6 +156,7 @@ export const en: Record<A2aNetKey, string> = {
   'team.fromOutbound': 'Outbound request',
   'team.healthTitle': 'The team has {count} problem(s)',
   'team.healthRouter': 'Router session {session} is not loaded, so requests cannot reach it. Open that session',
+  'team.healthRouterFailed': 'Router session {session}\'s last turn failed ({detail}); requests wait for its judgement. A used-up model quota or an outage is the usual cause',
   'team.healthMember': 'Member session {session} is not loaded, so tickets cannot reach it. Open that session',
   'team.healthQuiet': 'Ticket “{title}” has had no activity for {minutes} minutes',
   'team.decisionsCount': 'Waiting for your decision ({count})',

@@ -10,7 +10,7 @@
  */
 
 /** One health problem, as health() reports it. */
-export interface HealthProblem { readonly code: string; readonly session?: string; readonly ticketId?: string }
+export interface HealthProblem { readonly code: string; readonly session?: string; readonly ticketId?: string; readonly detail?: string }
 
 /** How often the host looks (reliability R7: 对照上游的每小时,这里 15 分钟). */
 export const HEALTH_TICK_MS = 15 * 60_000
@@ -23,6 +23,7 @@ export const problemKey = (problem: HealthProblem): string => `${problem.code}:$
 /** What a problem's card says, in the words the health banner already uses (no internal codes). */
 export const problemText = (problem: HealthProblem): string =>
   problem.code === 'router-not-loaded' ? `总工会话 ${problem.session ?? ''} 没有加载，需求送不到它，打开这个会话即可`
+  : problem.code === 'router-turn-failed' ? `总工会话 ${problem.session ?? ''} 上一回合失败（${problem.detail ?? '未知原因'}），需求在等它判断；常见原因是模型额度用完或服务中断`
   : problem.code === 'member-not-loaded' ? `成员会话 ${problem.session ?? ''} 没有加载，工单派不给它，打开这个会话即可`
   : problem.ticketId !== undefined ? `工单 ${problem.ticketId} 很久没有动静`
   : `问题 ${problem.code}`
