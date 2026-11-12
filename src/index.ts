@@ -38,6 +38,7 @@ import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef, legacyBareMember } from './canvas-store.ts'
 import { linkRootRequester } from './canvas-root.ts'
+import { inactiveContextError } from './context-live.ts'
 import { splitQualifiedMember, memberProvenance, qualifiedSessionMember, pinnedCallerDeclares } from './canvas-member.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
 import { LayoutStore } from './layout-store.ts'
@@ -520,7 +521,13 @@ export function apply(ctx: Context, config: Config): void {
     const settled = ctx.get('loader')?.await()
     if (settled === undefined) read()
     else void settled.then(() => {
-      if (ctx.fiber.uid !== null) read()
+      if (ctx.fiber.uid === null) return
+      try { read() } catch (error) {
+        // The plugin's fiber went inactive while this waited (a reload swapped a service it injects): a late read must not
+        // take the host down. The fiber's next activation runs the plugin again and redoes this work.
+        if (!inactiveContextError(error)) throw error
+        logger.warn('a2a: the plugin context went inactive before the web server settled; skipped (the next activation redoes it)')
+      }
     }, () => {
       // A failed boot never mounts the web server row; the absent path stays
       // silent so a dying tree logs its own failure once.
