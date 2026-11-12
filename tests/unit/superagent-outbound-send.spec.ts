@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { A2aSource, cliRefusal } from '../../src/superagent/host/a2a-source.ts'
 import { OutboundRequests } from '../../src/superagent/host/outbound.ts'
+import { forwardScope } from '../../src/outbound-scope.ts'
 import { KV } from '../../src/superagent/a2a-watch.ts'
 
 const quiet = { info: () => {}, warn: () => {} }
@@ -117,5 +118,47 @@ describe('the outbound record of a refused send', () => {
     // A failed request's task is never read as answered by a receipt (O5 reads sent records only).
     out.received({ meta: { receiptFor: 'direct-ec79f7226b29', proof: 'origin-claim' }, text: 'x', at: 'now' } as never)
     expect(out.list()[0]!.state).toBe('failed')
+  })
+})
+
+describe('owner ruling 2026-11-12: an approved card is the team identity\'s sender scope for its address, while it is sent', () => {
+  it('authorizes only during the send of an approved card, only its address (a canvas target without its owner suffix too)', async () => {
+    let during: boolean[] = []
+    let out!: OutboundRequests
+    const ask = vi.fn(async () => { during = [out.authorizes('dsh/420a84a3'), out.authorizes('dsh/canvas/fin'), out.authorizes('dsh/canvas/fin@0123abcd'), out.authorizes('dsh/99999999')]; return 'direct-ok0000001' })
+    out = new OutboundRequests({ path: join(mkdtempSync(join(tmpdir(), 'sa-outauth-')), 'outbound.json'), ask, note: () => {}, logger: quiet, now: () => '2026-11-12T00:00:00.000Z' })
+    out.waiting('c1', 't1', 'dsh/420a84a3', '请补材料', 'session-m')
+    expect(out.authorizes('dsh/420a84a3')).toBe(false)
+    await out.decided('c1', true, 'team', () => '成本')
+    expect(during).toEqual([true, false, false, false])
+    expect(out.authorizes('dsh/420a84a3')).toBe(false)
+
+    out.waiting('c2', 't1', 'dsh/canvas/fin@0123abcd', '请补材料', 'session-m')
+    const seen: boolean[] = []
+    ask.mockImplementationOnce(async () => { seen.push(out.authorizes('dsh/canvas/fin'), out.authorizes('dsh/canvas/fin@0123abcd')); return 'direct-ok0000002' })
+    await out.decided('c2', true, 'team', () => '成本')
+    expect(seen).toEqual([true, true])
+  })
+  it('a declined card authorizes nothing; a failed send closes the window as well', async () => {
+    let during = false
+    let out!: OutboundRequests
+    const ask = vi.fn(async () => { during = out.authorizes('dsh/420a84a3'); throw new Error('refused') })
+    out = new OutboundRequests({ path: join(mkdtempSync(join(tmpdir(), 'sa-outauth2-')), 'outbound.json'), ask, note: () => {}, logger: quiet, now: () => '2026-11-12T00:00:00.000Z' })
+    out.waiting('c1', 't1', 'dsh/420a84a3', 'x', 'session-m')
+    await out.decided('c1', false, 'team', () => '')
+    expect(ask).not.toHaveBeenCalled()
+    out.waiting('c2', 't1', 'dsh/420a84a3', 'x', 'session-m')
+    await out.decided('c2', true, 'team', () => '')
+    expect(during).toBe(true)
+    expect(out.authorizes('dsh/420a84a3')).toBe(false)
+  })
+  it('forwardScope: the card answers for the identity it names; anyone else, or no card, runs the ordinary scope', async () => {
+    const scope = vi.fn(async () => ({ ok: false as const, error: 'outside sender scope' }))
+    const card = (handle: string, team: string): boolean => handle === 'superagent-team/abc' && team === 'dsh/420a84a3'
+    await expect(forwardScope(card, scope, 'superagent-team/abc', 'dsh/420a84a3')).resolves.toEqual({ ok: true })
+    expect(scope).not.toHaveBeenCalled()
+    await expect(forwardScope(card, scope, 'superagent-team/abc', 'dsh/99999999')).resolves.toMatchObject({ ok: false })
+    await expect(forwardScope(card, scope, 'ops-cli/xyz', 'dsh/420a84a3')).resolves.toMatchObject({ ok: false })
+    expect(scope).toHaveBeenCalledTimes(2)
   })
 })
