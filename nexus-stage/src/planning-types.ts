@@ -12,7 +12,7 @@ import type { SessionLite, TeamLite } from './world'
 
 /** Minimal session/team shapes consumed here (topology rows satisfy them). */
 export interface PlanningSession extends SessionLite {}
-export interface PlanningTeam extends TeamLite { kind?: 'roster' }
+export interface PlanningTeam extends TeamLite { kind?: 'roster'; root?: boolean; children?: ReadonlyArray<import('./world.ts').RootChildRow> }
 
 export interface PlanningInput {
   sessions: ReadonlyArray<PlanningSession>
