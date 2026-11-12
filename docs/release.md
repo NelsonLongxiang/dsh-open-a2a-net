@@ -5,6 +5,23 @@
 
 > 2026-11-10（#569）：预览版从 npm 回读、核对通过后，立即单独提交一次「记录已发布」：把该版本一节的标题改成「已发布到 npm 的 preview 标签」，并写上状态行（标签指向的提交、npm 发布时间、shasum、integrity、回读结果）。不要等到下一版发版时才顺手改。
 
+## 0.8.1-preview.16（预览版候选，待评审，未发布）
+
+- 基线：next/0.8 合入 master 后的合并提交（候选提交在发版 PR 里写明）。相对已发布的 0.8.1-preview.15 有下列改动。
+- 升级、回退照 [0.8.1 升级检查](ops/0.8.1-upgrade-check.md)。升级后只需重启，不用改配置。
+
+### 修复
+
+- 宿主声明了 `originClaimUrl`（在隧道或代理之后）时，团队以自身名义发出的对外请求被本机转发闸拒绝（#638）。团队 CLI 走本机回环拨号，签名的受众是回环地址，而这类宿主不认回环受众，签名只算未绑定，转发闸因此在派发前拒绝；#635 的续期重试对它无效。
+  - CLI 新增环境变量 `A2A_CLAIM_AUDIENCE`（只取 origin）：设置后，签名的受众用它代替实际拨号的地址；`a2a-net status` 显示 `signed for <origin>`。
+  - superagent 把它设为宿主自己名片的 origin，团队身份的签名因此绑定到本宿主。不新增回环别名，不改 `originClaimUrl` / `originClaimAudiences`。
+  - 转发闸的两种拒绝分开说明：「no bound CLI signature」（改拨号地址或 `originClaimAudiences`）和「not an online local CLI deposit」（执行 `a2a-net publish`）；#635 的续期重试只在后一种时触发。线上错误码不变。
+
+### 本版已披露限制
+
+- 0.8.1-preview.15 一节列出的限制仍然适用。
+- 升级前已失败的对外请求不会自动重发；升级后由总工沿原批准记录恢复，或重新提卡。
+
 ## 0.8.1-preview.15（预览版，已发布到 npm 的 preview 标签）
 
 - 状态（2026-11-12）：标签 `v0.8.1-preview.15` 指向 20f6fa6（发版 PR #636）。2026-11-12T03:16:51Z 发布到 npmjs，dist-tag 为 `preview`，`latest` 仍是 0.7.0。shasum `1c5131abfd95e795a2fc22a23dfd73ead56dbc7c`，integrity `sha512-/M17Tt6UTIfA3jL8hTp6fr0IR70npn5FMH57KNFlzDIm2YKL8JrfoQd5JtLEooEx3DAQR9omw26M3bvlyVP8VQ==`。从 npmjs 回读的包与审计过的包逐字节相同。GitHub Release 为 prerelease。未发布到 Gitea。

@@ -205,6 +205,16 @@ function claimTarget(url) {
  * signing v1: a host from before PR #130 reads only that one, and a host
  * whose originClaimUnboundWindow is closed never consults it.
  */
+/**
+ * $A2A_CLAIM_AUDIENCE: the origin the bound (v2) form names instead of the one dialled — set by a host that runs this
+ * CLI against itself on loopback, so the claim binds to the origin that host publishes (its card URL's). An origin only.
+ */
+function claimAudienceOverride() {
+  const value = envValue('A2A_CLAIM_AUDIENCE')
+  if (value === undefined) return undefined
+  try { const parsed = new URL(value); return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : undefined } catch { return undefined }
+}
+
 function originClaimFor(base) {
   const id = identity()
   const privateKey = createPrivateKey(id.privateKeyPem)
@@ -212,7 +222,8 @@ function originClaimFor(base) {
   const sign = (form) => edSign(undefined, Buffer.from(JSON.stringify(form)), privateKey).toString('base64')
   return (url, method) => {
     const ts = Date.now()
-    const target = claimTarget(url)
+    const dialled = claimTarget(url), audience = claimAudienceOverride()
+    const target = dialled !== undefined && audience !== undefined ? { ...dialled, audience } : dialled
     // gh#133: the header names the host verifies (X-A2A-Ts/-Sig were never read, so every envelope looked absent).
     return {
       'X-A2A-Caller': id.name, 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts),
@@ -1442,7 +1453,7 @@ async function main() {
     // §2.1 gauges, host-wide: a boundMissInbound that grows with this CLI's routes means
     // the address it dials is missing from the host's originClaimAudiences.
     if (typeof s.unboundInbound === 'number') {
-      console.log(`claims      unboundInbound=${String(s.unboundInbound)}  boundMissInbound=${String(s.boundMissInbound ?? 0)}  (dialled as ${claimTarget(home())?.audience ?? home()})`)
+      console.log(`claims      unboundInbound=${String(s.unboundInbound)}  boundMissInbound=${String(s.boundMissInbound ?? 0)}  (dialled as ${claimTarget(home())?.audience ?? home()}${claimAudienceOverride() !== undefined ? `, signed for ${claimAudienceOverride()}` : ''})`)
       // Who missed and by which origin: add that origin to the host's originClaimAudiences.
       for (const m of (Array.isArray(s.boundMissRecent) ? s.boundMissRecent : []).slice(0, 5)) {
         console.log(`  miss      ${String(m.caller)} dialled ${String(m.audience) || '(no origin)'} ×${String(m.count)}`)

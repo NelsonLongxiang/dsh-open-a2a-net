@@ -40,6 +40,12 @@ export interface A2aSourceDeps {
   readonly homeUrl: () => string | undefined
   /** The host's own API key (the CLI's control credential), if it has one. */
   readonly apiKey: () => string | undefined
+  /**
+   * The origin this host publishes as its own (its card URL's). The team identity dials the host on loopback, which a host
+   * whose originClaimUrl declares a tunnel or proxy does not accept as an audience; signing for the published origin binds
+   * the claim to this very host either way.
+   */
+  readonly claimAudience?: () => string | undefined
   readonly enabled: () => boolean
   readonly receive: (trigger: Trigger) => ReceiveResult
   readonly ticket: (id: string) => TicketView | undefined
@@ -98,7 +104,8 @@ export function cliRefusal(stdout: unknown): { summary: string; error?: string; 
 }
 
 /** The home host refused to forward because the team identity's CLI deposit is not online there (direct-forward.ts). */
-const DEPOSIT_REFUSAL = /not a proven online local CLI deposit|local CLI deposit expired/
+/** The deposit cause only (direct-forward.ts); an unbound signature is its own refusal, which a renewal cannot repair. */
+const DEPOSIT_REFUSAL = /not an online local CLI deposit|local CLI deposit expired/
 
 /** A route that did not go out: the reason the CLI gave and the task id it used, when it printed one. */
 export class RouteRefused extends Error {
@@ -154,8 +161,8 @@ export class A2aSource {
   private env(): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {}
     for (const [name, value] of Object.entries(process.env)) if (!name.startsWith('A2A_')) env[name] = value
-    const home = this.d.homeUrl(), key = this.d.apiKey()
-    return { ...env, A2A_CLI_HOME: this.identityDir, ...(home !== undefined ? { A2A_HOME: home } : {}), ...(key !== undefined && key !== '' ? { A2A_KEY: key } : {}) }
+    const home = this.d.homeUrl(), key = this.d.apiKey(), audience = this.d.claimAudience?.()
+    return { ...env, A2A_CLI_HOME: this.identityDir, ...(home !== undefined ? { A2A_HOME: home } : {}), ...(key !== undefined && key !== '' ? { A2A_KEY: key } : {}), ...(audience !== undefined && audience !== '' ? { A2A_CLAIM_AUDIENCE: audience } : {}) }
   }
 
   private commands(signal?: AbortSignal): Commands {
