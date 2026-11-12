@@ -37,7 +37,7 @@ export function resolveCallerLabel(input: {
 import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef, legacyBareMember } from './canvas-store.ts'
-import { linkRootRequester } from './canvas-root.ts'
+import { childRegistration, linkRootRequester } from './canvas-root.ts'
 import { inactiveContextError } from './context-live.ts'
 import { splitQualifiedMember, memberProvenance, qualifiedSessionMember, pinnedCallerDeclares } from './canvas-member.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
@@ -1826,19 +1826,7 @@ export function apply(ctx: Context, config: Config): void {
         teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
         rootChildrenOpen: canvas => { const open = new Map<string, number>(); for (const row of superagentTeams?.all().find(team => team.settings.canvas === canvas)?.root.open() ?? []) open.set(row.child, (open.get(row.child) ?? 0) + 1); return open },
         rootIdentityOf: canvas => superagentTeams?.all().find(team => team.settings.canvas === canvas)?.a2a.address,
-        rootChildRegistration: (canvas, childRef, rootHandle) => {
-          const childKey = canvasStore.ownerKeyOf(childRef)
-          if (childKey === undefined) return 'unreachable' as const
-          const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))
-          if (childKey === ownKey) return 'ready' as const // a same-host child: #654's admit-root already registered the root here
-          const entry = [...cardCache.entries()].find(([, e]) => e.card?.publicKey === childKey)
-          if (entry === undefined) return 'unreachable' as const
-          const childHost = entry[1].card as { canvasOrg?: Array<{ name: string; team: string; admits?: string[] }> } | undefined
-          const childCanvas = childRef.split('/canvas/')[1]?.split('@')[0] ?? ''
-          const org = childHost?.canvasOrg?.find(row => row.name === childCanvas)
-          const listed = rootHandle !== undefined && (org?.admits?.includes(rootHandle) ?? false)
-          return (listed ? 'ready' : 'pending-registration') as 'ready' | 'pending-registration'
-        },
+        rootChildRegistration: (canvas, childRef, rootHandle) => childRegistration({ keyOf: ref => canvasStore.ownerKeyOf(ref), ownKey: encodePublicKey(createPublicKey(nodePrivateKey)), cards: [...cardCache.values()].map(entry => ({ card: entry.card ?? {} })) }, childRef, rootHandle),
         canvasRoot: { store: canvasStore, zone: config.team, ownKey: encodePublicKey(createPublicKey(nodePrivateKey)),
           localSuperagentCanvas: (name: string) => superagentTeams?.all().some(team => team.a2aAddress !== undefined && team.settings.canvas === name) === true,
           peerCards: async () => (await freshCliHomeCards()).flatMap(row => row.card !== undefined ? [{ url: row.url, card: row.card, linked: peerAdmissionLinkState(row.url).link === 'linked' }] : []) },

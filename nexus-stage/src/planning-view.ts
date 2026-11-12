@@ -410,12 +410,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
           let chip = chipBox.querySelector<HTMLElement>(`[data-ref="${CSS.escape(child.ref)}"]`)
           if (chip === null) {
             chip = buildChildChip(document, child, () => { notice('info', `${child.label}：只读席位请到该团队自己的页面`) })
-            const label = chip.querySelector<HTMLElement>('.planning-root-chip-label')!
             // S3 review F1/F3: the stepper buttons read the CURRENT slots from dataset each click (a re-render updates
             // it before the label repaints), so consecutive clicks count from the latest value; they are the chip's
             // siblings-in-container, not nested buttons (valid HTML, screen readers read the pair).
             const down = document.createElement('button'); down.type = 'button'; down.className = 'p-root-step'; down.setAttribute('aria-label', `${child.label} 减一名额`); down.textContent = '−'
             const up = document.createElement('button'); up.type = 'button'; up.className = 'p-root-step'; up.setAttribute('aria-label', `${child.label} 加一名额`); up.textContent = '+'
+            // Clicks between two polls read the same dataset value (3,3 → 4,4): harmless — the server clamps and the
+            // next poll repaints; racing the poll is not worth debouncing for a 1–16 stepper.
             const slotsOf = (): number => Number((chip as HTMLElement).dataset.slots ?? String(child.slots))
             down.addEventListener('click', () => { const s = slotsOf(); if (s > 1) emitAction({ type: 'set-team-slots', name, team: child.ref, slots: s - 1 }) })
             up.addEventListener('click', () => { const s = slotsOf(); if (s < 16) emitAction({ type: 'set-team-slots', name, team: child.ref, slots: s + 1 }) })
