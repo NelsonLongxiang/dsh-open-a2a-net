@@ -205,10 +205,10 @@ export function verifyCard(candidate: unknown, now: number): CardVerification {
   // gh#41: the unsigned canvas-org listing (full card only) passes through
   // with the same drop-on-malformed posture as sessionTeams — cards from
   // pre-0.6.26 nodes carry none.
-  const canvasOrg: Array<{ name: string; team: string; members: string[]; superagentTeam?: true; root?: true }> = []
+  const canvasOrg: Array<{ name: string; team: string; members: string[]; superagentTeam?: true; root?: true; admits?: string[] }> = []
   if (Array.isArray((wire as { canvasOrg?: unknown }).canvasOrg)) {
     for (const entry of (wire as { canvasOrg: unknown[] }).canvasOrg) {
-      const org = entry as Partial<{ name: unknown; team: unknown; members: unknown; superagentTeam: unknown; root: unknown }> | null
+      const org = entry as Partial<{ name: unknown; team: unknown; members: unknown; superagentTeam: unknown; root: unknown; admits: unknown }> | null
       if (typeof org?.team !== 'string' || org.team === '') continue
       canvasOrg.push({
         name: typeof org.name === 'string' ? org.name : '',
@@ -218,6 +218,8 @@ export function verifyCard(candidate: unknown, now: number): CardVerification {
         ...(org.superagentTeam === true ? { superagentTeam: true as const } : {}),
         // superagent-root-team R7: a root team (one level: a root is never another root's child).
         ...(org.root === true ? { root: true as const } : {}),
+        // superagent-root-team S5: the root team identities this superagent team takes requests from.
+        ...(Array.isArray(org.admits) ? { admits: org.admits.filter((h): h is string => typeof h === 'string').slice(0, 16) } : {}),
       })
     }
   }

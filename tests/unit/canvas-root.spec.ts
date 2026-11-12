@@ -129,5 +129,7 @@ describe('the card', () => {
     const org = (verified as { card: { canvasOrg?: Array<{ name: string; root?: true }> } }).card.canvasOrg ?? []
     expect(org.find(row => row.name === 'root')?.root).toBe(true)
     expect(org.find(row => row.name === 'docs')?.root).toBeUndefined()
+    const admitting = verifyCard({ ...card, canvasOrg: [{ name: 'docs', team: 'dsh/canvas/docs', members: [], superagentTeam: true, admits: ['superagent-team/0123456789abcdef', 7] }] }, Date.now())
+    expect((admitting as { card: { canvasOrg?: Array<{ admits?: string[] }> } }).card.canvasOrg?.[0]?.admits).toEqual(['superagent-team/0123456789abcdef'])
   })
 })

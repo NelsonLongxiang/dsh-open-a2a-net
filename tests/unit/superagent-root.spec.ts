@@ -146,6 +146,26 @@ describe('the child\'s receipts move the root ticket', () => {
     await t.host.stop()
   })
 
+  it('a child\'s progress step is the root ticket\'s progress (S5): its requester sees it through the root\'s own steps', async () => {
+    const t = await root()
+    const out = t.accept(t.request().trigger, DOCS)
+    await t.settle()
+    t.receipt(t.routes[0]!.task, 'dsh/canvas/docs', '正在汇总三季度数据', { disposition: 'progress', progress: { n: 1, state: 'working', summary: '正在汇总三季度数据', at: new Date().toISOString() } })
+    await t.settle()
+    const last = [...t.host.store.tickets.get(out.ticket_id as string)!.assignments].reverse().find(a => a.report !== undefined)!.report!
+    expect(last.state).toBe('progress')
+    expect(last.summary).toContain('正在汇总三季度数据')
+    await t.host.stop()
+  })
+
+  it('a root\'s children are its identity\'s standing sender scope, and it declares what it takes (S5)', async () => {
+    const t = await root()
+    expect(t.host.childAuthorizes(DOCS)).toBe(true)
+    expect(t.host.childAuthorizes('dsh/canvas/docs')).toBe(true)
+    expect(t.host.childAuthorizes('dsh/canvas/other')).toBe(false)
+    await t.host.stop()
+  })
+
   it('a failed result fails the root ticket; a receipt for a task the root never sent changes nothing', async () => {
     const t = await root()
     const out = t.accept(t.request().trigger, DOCS)
@@ -172,6 +192,33 @@ describe('a child team on the same instance', () => {
     expect(child.settings.rules.filter(rule => rule.name === 'root-dispatch')).toHaveLength(1)
     child.admitRequester('not a handle')
     expect(child.settings.bots.a2a).toHaveLength(1)
+    // S5: the card lists the root identities it admits; a plain bot is not one.
+    expect(child.admittedRoots()).toEqual(['root/0123456789abcdef'].filter(h => h.startsWith('superagent-team/')))
+    child.admitRequester('superagent-team/0123456789abcdef')
+    expect(child.admittedRoots()).toEqual(['superagent-team/0123456789abcdef'])
     await child.stop()
+  })
+})
+
+describe('the root identity\'s declarations (S5)', () => {
+  it('a change in what it declares re-arms the publish; the CLI runs with A2A_DECLARE', async () => {
+    const { A2aSource } = await import('../../src/superagent/host/a2a-source.ts')
+    const { KV } = await import('../../src/superagent/a2a-watch.ts')
+    let declared: string[] = []
+    const envs: Array<Record<string, string | undefined>> = []
+    const a2a = new A2aSource({ dir: mkdtempSync(join(tmpdir(), 'sa-declare-')), homeUrl: () => 'http://127.0.0.1:1', apiKey: () => undefined, enabled: () => true,
+      declares: () => declared, receive: () => 'accepted' as never, ticket: () => undefined, logger: { info: () => {}, warn: () => {} },
+      run: async (_args: string[], env: Record<string, string | undefined>) => { envs.push(env); return '{}' } } as never)
+    a2a.context.state.set(KV.renewedAt, 123)
+    a2a.syncDeclarations()
+    expect(a2a.context.state.get(KV.renewedAt)).toBe(0)
+    a2a.context.state.set(KV.renewedAt, 456)
+    a2a.syncDeclarations()
+    expect(a2a.context.state.get(KV.renewedAt)).toBe(456)
+    declared = ['progressReceipts', 'directedSeats']
+    a2a.syncDeclarations()
+    expect(a2a.context.state.get(KV.renewedAt)).toBe(0)
+    await a2a.context.commands.run('a2a-net', ['publish'])
+    expect(envs.at(-1)?.A2A_DECLARE).toBe('progressReceipts,directedSeats')
   })
 })

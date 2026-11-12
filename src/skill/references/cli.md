@@ -48,6 +48,10 @@ model tools.
   withdraws it — so only an identity that does answer every task (the
   superagent Source) should declare it. A host that predates it ignores the
   field and keeps the mailbox final.
+- `a2a-net publish --declare progressReceipts,directedSeats,reworkReturns,teamRoster` (or the same list in
+  `A2A_DECLARE`) declares what this identity takes as a requester (superagent-root-team S5): only these four names. A
+  team host on its bot list then sends it progress steps and believes its `[A2A dispatch]` lines. A superagent root
+  team's Source sets it while the team is a root. Like `--owes`, every publish states it afresh.
 - A handle stays pinned to the key it was published with, live or offline
   (gh#137): publishing it with a different key (e.g. after `init --force
   --uuid <same>`) is refused with "held by another key". Run `a2a-net revoke`

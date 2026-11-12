@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "e6e8eeb5321a0e35268a9405eecbd5b878518f881e16cf7ab32f51bd8ef01fae",
+    "src/index.ts": "b27b4cc1e7d0a2087210d6796869763e3a1b693e22b7781f3b5273dac47e2b84",
     "src/faces/admin.ts": "af1a2ce28a7d2135bdc6eb44a302c70f1d47b3c21c6374e0bb28eb74f0a7134f",
     "src/canvas-store.ts": "1f5b5006956d0a0b9d42b51ea8fbb88f993adbc7a41e947be35b6532daf863b1",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
@@ -26,7 +26,7 @@
     "src/tools/info.ts": "1928f36db8674b6f2fd2b9dcce0d178690b244fa2d6ebe523800dbbeb7aac584",
     "src/tools/act.ts": "983f78c58b8c886b39b5af3f2cf474a1a47e4d03b91fedf5ed581aba3225bed2",
     "src/peer-directory.ts": "1f5eb4c1b19edcb834c168f8e9c36928128085cb92aa75b52e0f040ab2c5f009",
-    "src/card.ts": "933f38ddb0233f2214259a1361616728cb0fdd335fa820d2ded777af60a2b0d5",
+    "src/card.ts": "c25b3876a2b98106b10ff639179387dfac8012fc9b11036e8b6034bf42536958",
     "src/outbound-scope.ts": "ee6c5764bcc16fdddf6690c01b4d2b4f5d3797e703673aa36889aa8da5c5847c"
   },
   "anchors": [
@@ -63,7 +63,7 @@
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:2824",
+      "ref": "src/index.ts:2841",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
@@ -147,7 +147,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:3257",
+      "ref": "src/index.ts:3274",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4190",
+      "ref": "src/index.ts:4208",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -267,7 +267,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3606",
+      "ref": "src/index.ts:3623",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -279,13 +279,13 @@
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2543",
+      "ref": "src/index.ts:2552",
       "expect": "void retryReceiptDelivery({"
     },
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2463",
+      "ref": "src/index.ts:2472",
       "expect": "function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {"
     },
     {
