@@ -16,6 +16,11 @@ describe('the health banner', () => {
     expect(screen.getByText(/ops：Router session a0000000/)).toBeTruthy()
     expect(screen.getByText(/docs：Ticket “写文档” has had no activity for 75 minutes/)).toBeTruthy()
   })
+  it('says a router\'s turn failed, and why', async () => {
+    serve([{ code: 'router-turn-failed', team: 'ops', session: 'session-a0000000aaaa', detail: 'GoUsageLimitError: usage limit reached' }])
+    render(<TeamHealthBanner t={t} />)
+    expect(await screen.findByText(/ops：Router session a0000000's last turn failed \(GoUsageLimitError: usage limit reached\)/)).toBeTruthy()
+  })
   it('shows nothing when the teams are healthy', async () => {
     serve([])
     render(<TeamHealthBanner t={t} />)

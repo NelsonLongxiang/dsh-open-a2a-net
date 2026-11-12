@@ -44,6 +44,7 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
   const triggerId = str(item.trigger_id)
   const kind = str(item.kind)
   if (triggerId === undefined) return { ok: false, code: 'missing', error: 'trigger_id is required' }
+  host.routerDecided()
   try {
     if (kind === 'attach') {
       const ticketId = str(item.ticket_id)
