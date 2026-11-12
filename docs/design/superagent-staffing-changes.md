@@ -1,6 +1,9 @@
 # superagent: staffing changes the market proposes and the node carries out
 
-Status: **design, for the owner's review.** Not implemented. 2026-11-11.
+Status: **approved by the owner, 2026-11-12** (「都交给你办吧，你都可以的」, handing the review seat the open owner items). Not implemented. Written 2026-11-11.
+
+- **Rulings:** the five boundary points below are taken as proposed: the W2 defaults, rules proposed from the market and confirmed on the node, the node's approvers confirming, and a retired member's open ticket finishing.
+- **Next:** S1 is queued behind the root-team work. Each step is high tier and needs a non-self review PASS.
 
 - **Asked for by** the workbench market's design session, after the owner's direction (2026-11-11): building an A2A team should be possible from the market; the canvas is easy for the owner but does not suit management. The market's side is `docs/productization/14-team-and-assignment.md` §8 in the market repository: management sees a staffing table (department → team → members, members added from job templates), not a canvas.
 - **The boundary the market proposes, kept here:** the market holds no node credential and changes nothing on a node directly. It **proposes** a staffing change. The node checks where it came from, carries it out with its own authority, and the roster it reports is what counts as done.
@@ -12,7 +15,7 @@ Status: **design, for the owner's review.** Not implemented. 2026-11-11.
 - **Role presets.** `superagent-router`, `superagent-member` and `superagent-observer` (in `cordis.patch.yml`) fix what each role may do. Tool limits, credential audit (#612) and the outbound rules follow the preset, not the session's text.
 - **Node identities** (`docs/design/node-identity.md`, `src/node-store.ts`). A node record is long-lived and human-named, its name is never reused, and it carries a session's workplace: checkout (`cwd`), agent preset and model. A session can carry a node, and a new session can be started for it. This is the natural place for a stable seat and for job templates.
 - **Roster** (#606, `docs/design/superagent-market-progress-roster.md` P3). The node sends a full snapshot of its seats to peers that declare `teamRoster`, every 5 minutes and 30 s after a change.
-- **Named dispatch (B1, designed next).** It gives each member slot a stable `seatId`. This design depends on it.
+- **Named dispatch (B1, implemented 2026-11-11, `superagent-named-dispatch.md`).** It gives each member slot a stable `seatId`. This design depends on it.
 
 ## Decisions
 
@@ -114,7 +117,7 @@ It cannot read or move credentials, widen tools, or reach the owner's user.
 
 **Place in the queue:** after B1 (named dispatch, which brings `seatId`) and `reworkReturns`, in parallel with or after C (streaming status). Each step needs a non-self review PASS. Until S1 ships, teams are built on the node and the market claims them, as §8.5 of the market document says.
 
-## Points that change a boundary: the owner decides
+## Points that change a boundary: the owner decided (2026-11-12, as proposed)
 
 1. **A market may cause a node to start sessions** (and spend model budget), within quotas and templates the owner set. Until now only the owner added members.
 2. **The defaults in W2:**
