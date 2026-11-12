@@ -21,6 +21,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXIT_GONE, EXIT_RECEIPT_CONFLICT, HEALTH, KIND, KV, LINK_RULES, createA2aKind, replyAllowed, seatArgs, sendReply, watch, type A2aConfig, type ReceiptOutcome, type ReceiptSeat, type SendOptions } from '../a2a-watch.ts'
 import type { Commands, Health, OutboundMessage, ReceiveResult, SourceContext, TicketView, Trigger } from '../source-types.ts'
+/** The declarations last handed to a publish (superagent-root-team S5). */
+const DECLARED = 'superagent.declared'
 
 /** The packaged CLI, from both src/superagent/host and lib/superagent/host. */
 export const CLI_PATH = fileURLToPath(new URL('../../../cli/a2a.mjs', import.meta.url))
@@ -325,6 +327,17 @@ export class A2aSource {
   private refused(error: unknown, refusal: ReturnType<typeof cliRefusal>, note?: string): Error {
     const base = refusal.error !== undefined ? `a2a-net route refused: ${refusal.summary}` : String(error instanceof Error ? error.message : error)
     return new RouteRefused(note !== undefined ? `${base} (${note})` : base, refusal.task)
+  }
+
+  /**
+   * superagent-root-team S5: when what this identity declares changed since it was last published (the team became a
+   * root, or stopped being one), the next watch round publishes again instead of waiting for the renewal.
+   */
+  syncDeclarations(): void {
+    const now = (this.d.declares?.() ?? []).join(',')
+    if (this.stateValue[DECLARED] === now) return
+    this.context.state.set(KV.renewedAt, 0)
+    this.context.state.set(DECLARED, now)
   }
 
   /** Whether the A2A request `task` has had its one formal receipt (a2a-watch records it once it went out). */

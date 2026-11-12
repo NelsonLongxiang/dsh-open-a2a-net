@@ -1230,6 +1230,7 @@ export class SuperagentHost {
     this.flushOutbox()
     this.settleSplits()
     try { this.admitChildren() } catch (error) { this.d.logger.warn('superagent: child teams not checked yet: %s', String(error)) }
+    try { this.a2a.syncDeclarations() } catch (error) { this.d.logger.warn('superagent: declarations not synced yet: %s', String(error)) }
     try { this.named.tick() } catch (error) { this.d.logger.warn('superagent: named dispatch pass failed: %s', String(error)) }
     // Upstream: evaluation, dispatch and outbound delivery hold while paused.
     if (this.settingsValue.paused) return

@@ -199,3 +199,26 @@ describe('a child team on the same instance', () => {
     await child.stop()
   })
 })
+
+describe('the root identity\'s declarations (S5)', () => {
+  it('a change in what it declares re-arms the publish; the CLI runs with A2A_DECLARE', async () => {
+    const { A2aSource } = await import('../../src/superagent/host/a2a-source.ts')
+    const { KV } = await import('../../src/superagent/a2a-watch.ts')
+    let declared: string[] = []
+    const envs: Array<Record<string, string | undefined>> = []
+    const a2a = new A2aSource({ dir: mkdtempSync(join(tmpdir(), 'sa-declare-')), homeUrl: () => 'http://127.0.0.1:1', apiKey: () => undefined, enabled: () => true,
+      declares: () => declared, receive: () => 'accepted' as never, ticket: () => undefined, logger: { info: () => {}, warn: () => {} },
+      run: async (_args: string[], env: Record<string, string | undefined>) => { envs.push(env); return '{}' } } as never)
+    a2a.context.state.set(KV.renewedAt, 123)
+    a2a.syncDeclarations()
+    expect(a2a.context.state.get(KV.renewedAt)).toBe(0)
+    a2a.context.state.set(KV.renewedAt, 456)
+    a2a.syncDeclarations()
+    expect(a2a.context.state.get(KV.renewedAt)).toBe(456)
+    declared = ['progressReceipts', 'directedSeats']
+    a2a.syncDeclarations()
+    expect(a2a.context.state.get(KV.renewedAt)).toBe(0)
+    await a2a.context.commands.run('a2a-net', ['publish'])
+    expect(envs.at(-1)?.A2A_DECLARE).toBe('progressReceipts,directedSeats')
+  })
+})
