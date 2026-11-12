@@ -4,6 +4,7 @@ Status: **approved by the owner, 2026-11-12** (「都交给你办吧，你都可
 
 - **Rulings:** the five boundary points below are taken as proposed: the W2 defaults, rules proposed from the market and confirmed on the node, the node's approvers confirming, and a retired member's open ticket finishing.
 - **Next:** S1 is queued behind the root-team work. Each step is high tier and needs a non-self review PASS.
+- **2026-11-12, the team builder** ([superagent-builder](superagent-builder.md)): S1 is split into S1a (the core, with the source as a field) and S1b (the market's entry). The builder is a second source, `owner-local`, of the same changes. `team.rules.set` gains a `scope` and `member.add` a `profile`, for both sources (W2, W6).
 
 - **Asked for by** the workbench market's design session, after the owner's direction (2026-11-11): building an A2A team should be possible from the market; the canvas is easy for the owner but does not suit management. The market's side is `docs/productization/14-team-and-assignment.md` §8 in the market repository: management sees a staffing table (department → team → members, members added from job templates), not a canvas.
 - **The boundary the market proposes, kept here:** the market holds no node credential and changes nothing on a node directly. It **proposes** a staffing change. The node checks where it came from, carries it out with its own authority, and the roster it reports is what counts as done.
@@ -51,6 +52,8 @@ The market may ask for six operations. Each has a policy on the node, `auto | co
 | `member.retire` {team, seatId} | the seat takes no new work, finishes its ticket, leaves the canvas; its node is archived, never deleted | **auto** |
 | `member.retemplate` {team, seatId, template} | changes the seat's template; the next ticket starts on a session from the new template | **confirm** |
 | `team.rules.set` {team, rules[]} | replaces the team's intake rules (text only) | **confirm** |
+
+- **Extensions (2026-11-12, [superagent-builder](superagent-builder.md) TB3).** `team.rules.set` takes `scope`: `team` (the intake rules above, the default), `dispatch` or `member:<seatId>`, matching the rule sets' three scopes. `member.add` takes an optional `profile` (role, intake rules, repository); with a template it defaults to the template's rules. Both stay text only and `team.rules.set` stays **confirm** whatever its scope.
 
 - **What `confirm` means.** The node puts a P0 decision card on its own workbench showing the change, the diff, and who asked (`by`). The owner, or an approver the owner named, accepts or refuses it there. The market sees `awaiting-owner` until then.
 - **What the market can never change through this entry:**
@@ -112,7 +115,9 @@ It cannot read or move credentials, widen tools, or reach the owner's user.
 
 ### W6. Order and size
 
-1. **S1: entry, ledger, policy and confirmation cards** (`staffing.sources`, `staffingChanges`, receipts, `rosterSeq`), with `member.retire` and `team.rules.set`. High tier. About 1.5 days.
+1. **S1: entry, ledger, policy and confirmation cards**, with `member.retire` and `team.rules.set`. High tier. About 1.5 days. Split on 2026-11-12 ([superagent-builder](superagent-builder.md) TB6):
+   - **S1a, the core:** the executor (host-run), the ledger with parent and child entries, the policy, the confirmation cards, `source` as a field (`owner-local | market:<handle>`), and the W2 extensions. The team builder's first real source.
+   - **S1b, the market's entry:** `staffing.sources`, Sig3, `staffingChanges`, receipts and `rosterSeq`.
 2. **S2: templates and `member.add`/`member.retemplate` on this instance**, with node identities as seats and the roster `templates` catalogue. High tier. About 2 days.
 3. **S3: `member.add` on a member host under another system user, and `team.create`/`team.retire`.** High tier. About 2 days. The separate-user precondition is gone (2026-11-12); a linked member instance is still a valid member host.
 
