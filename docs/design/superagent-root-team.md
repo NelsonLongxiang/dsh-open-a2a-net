@@ -1,6 +1,6 @@
 # superagent: a root team whose workers are other teams
 
-Status: **design, for the owner's review.** Not implemented. 2026-11-12.
+Status: **approved by the owner 2026-11-12 (「那么开始规划并安排执行吧」), being built.** The points below were taken as recommended.
 
 - **Asked by the owner (2026-11-12):** with about ten superagent teams, a layer above them is needed to take work in and dispatch it to the teams. The owner's first idea was a root team with its own router, whose members are the routers of the teams.
 - **What this document proposes instead:** a root team whose members are the teams themselves, reached by their canvas addresses. Each team's router stays in its own team and keeps judging what that team takes.
