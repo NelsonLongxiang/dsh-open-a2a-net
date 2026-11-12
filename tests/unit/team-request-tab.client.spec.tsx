@@ -95,6 +95,60 @@ describe('one view for requests and decisions', () => {
   })
 })
 
+describe('decisions are never hidden by the request box (feedback 2026-11-12)', () => {
+  const decisions = [{ id: 'd-1', teamId: '', team: 'ops', question: '要不要升级？', level: 'P2', options: ['升级', '不升'], recommended: '升级', source: 'router' }]
+  const split = (teams: { status: number; body: unknown }, cards: () => { status: number; body: unknown }) => vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const reply = url.startsWith('/__dsh_a2a/superagent/decisions') ? cards() : url.startsWith('/__dsh_a2a/superagent/teams') ? teams : { status: 200, body: { health: [] } }
+    return { ok: reply.status < 300, status: reply.status, json: async () => reply.body } as Response
+  }))
+
+  it.each([
+    ['the team list is refused', { status: 401, body: {} }, en['team.denied']],
+    ['the team list fails', { status: 500, body: {} }, en['team.unreadable']],
+    ['no team can take a request', { status: 200, body: { teams: [] } }, en['team.none']],
+  ])('shows the waiting card when %s', async (_name, teams, hint) => {
+    split(teams, () => ({ status: 200, body: { decisions } }))
+    render(<TeamRequestTab t={t} />)
+    expect(await screen.findByText('要不要升级？')).toBeTruthy()
+    expect(screen.getByText(hint)).toBeTruthy()
+    expect(screen.queryByRole('textbox', { name: en['team.request'] })).toBeNull()
+  })
+
+  it.each([
+    ['refused', 403, en['team.decisionsDenied']],
+    ['failing', 500, en['team.decisionsUnreadable']],
+  ])('says a %s read of the decisions failed instead of showing nothing', async (_name, status, text) => {
+    split({ status: 200, body: bound }, () => ({ status, body: {} }))
+    render(<TeamRequestTab t={t} />)
+    expect((await screen.findByRole('alert')).textContent).toBe(text)
+    expect(screen.queryByText(/Waiting for your decision/)).toBeNull()
+  })
+
+  it('a reply without a decisions array is a failure, not an empty list', async () => {
+    split({ status: 200, body: bound }, () => ({ status: 200, body: { error: 'x' } }))
+    render(<TeamRequestTab t={t} />)
+    expect((await screen.findByRole('alert')).textContent).toBe(en['team.decisionsUnreadable'])
+  })
+
+  it('a failed poll keeps the last cards, marked as possibly out of date, and the next good read clears the mark', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let reply: { status: number; body: unknown } = { status: 200, body: { decisions } }
+      split({ status: 200, body: bound }, () => reply)
+      render(<TeamRequestTab t={t} />)
+      expect(await screen.findByText('要不要升级？')).toBeTruthy()
+      reply = { status: 500, body: {} }
+      await vi.advanceTimersByTimeAsync(8_000)
+      expect((await screen.findByRole('alert')).textContent).toBe(`${en['team.decisionsUnreadable']} ${en['team.decisionsStale']}`)
+      expect(screen.getByText('要不要升级？')).toBeTruthy()
+      reply = { status: 200, body: { decisions: [] } }
+      await vi.advanceTimersByTimeAsync(8_000)
+      await waitFor(() => { expect(screen.queryByText('要不要升级？')).toBeNull() })
+      expect(screen.queryByRole('alert')).toBeNull()
+    } finally { vi.useRealTimers() }
+  })
+})
+
 describe('several teams', () => {
   it('lists those that can take a request, and sends to the one chosen', async () => {
     const f = serve({ teams: [row('', 'ops'), row('aaaaaaaa', 'docs'), row('bbbbbbbb', 'idle', false)] })

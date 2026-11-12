@@ -27,6 +27,9 @@ export type A2aNetKey =
   | 'team.decisions'
   | 'team.decisionsGuide'
   | 'team.noDecisions'
+  | 'team.decisionsDenied'
+  | 'team.decisionsUnreadable'
+  | 'team.decisionsStale'
   | 'team.recommended'
   | 'team.approve'
   | 'team.confirmChoice'
@@ -73,6 +76,9 @@ export const zh: Record<A2aNetKey, string> = {
   'team.decisions': '待决策',
   'team.decisionsGuide': '各团队等你拍板的事，附推荐选项',
   'team.noDecisions': '现在没有等你决定的事。',
+  'team.decisionsDenied': '这个页面没有权限读取待决策（这台 DSH 设了控制密钥）。待决策没有消失，请到 A2A 工作台的「团队」页处理。',
+  'team.decisionsUnreadable': '暂时读不到待决策，这不代表没有等你决定的事；稍后会自动重试。',
+  'team.decisionsStale': '下面是上次读到的内容，可能已过期。',
   'team.recommended': '推荐',
   'team.approve': '批准推荐',
   'team.confirmChoice': '确认选择',
@@ -132,6 +138,9 @@ export const en: Record<A2aNetKey, string> = {
   'team.decisions': 'Decisions',
   'team.decisionsGuide': 'What your teams need you to decide, each with a recommendation',
   'team.noDecisions': 'Nothing is waiting for your decision.',
+  'team.decisionsDenied': 'This page cannot read the decisions (this DSH has a control key). They are still waiting: open the Team page of the A2A workbench.',
+  'team.decisionsUnreadable': 'The decisions cannot be read right now. That does not mean none is waiting; this tries again shortly.',
+  'team.decisionsStale': 'Below is what was read last; it may be out of date.',
   'team.recommended': 'Recommended',
   'team.approve': 'Approve recommendation',
   'team.confirmChoice': 'Confirm choice',
