@@ -166,7 +166,7 @@ export class SuperagentHost {
       declares: (ref, capability) => d.memberDeclares?.(ref, capability) === true,
       send: async (ref, text, taskId) => { if (d.rosterSend === undefined) throw new Error('no roster send on this host'); await d.rosterSend(ref, text, taskId) },
       handleOf: id => d.handleOf?.(id) ?? id, nameOf: id => plainName(d.sessionName?.(id)), online: id => d.sessionLoaded?.(id) ?? false, seatIdOf: id => this.named.seatIdOf(id),
-      loadOf: id => this.executor.loadOf(id), hostFingerprint: () => d.hostFingerprint?.(), nowMs: () => Date.parse(this.now()), logger: d.logger,
+      loadOf: id => this.executor.loadOf(id), hostFingerprint: () => d.hostFingerprint?.(), warm: () => d.warmPeerCards?.(), nowMs: () => Date.parse(this.now()), logger: d.logger,
     })
     const progressPath = join(dir, 'progress.json')
     this.progress = new ProgressReceipts({
