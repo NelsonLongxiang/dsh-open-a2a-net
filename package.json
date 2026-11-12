@@ -26,6 +26,10 @@
       "types": "./lib/types/receipt.d.ts",
       "default": "./lib/receipt.js"
     },
+    "./sdk/wire": {
+      "types": "./lib/types/sdk/wire.d.ts",
+      "default": "./lib/sdk/wire.js"
+    },
     "./transport-caps": {
       "types": "./lib/types/transport-caps.d.ts",
       "default": "./lib/transport-caps.js"
