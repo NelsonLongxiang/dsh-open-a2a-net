@@ -68,6 +68,21 @@ It depends on where work enters.
 - **Same-instance children.** A child team on the same instance admits the root identity as the owner would: it goes on the child's bot list, with a `root-dispatch` rule.
 - **Later.** Sending from the host face with a pinned, capable card, so progress, `for` and `rework` work too. It comes with the cross-host child registration.
 
+**S5 (2026-11-12, at the owner's request: capable sending and cross-host registration).** S2's sender stays: the root team's A2A identity, a CLI identity whose receipts reach the team's mailbox on any host. What changes:
+- **The identity declares capabilities.** A root team's identity publishes its card with `progressReceipts`, `directedSeats` and `reworkReturns` declared (`a2a-net publish --declare …`, or `A2A_DECLARE`, which the team's A2A Source sets while the team is a root). Only these known names can be declared.
+- **The child believes a CLI caller's declarations.** It reads them from the identity's verified card: on the same host from the deposit, from another host from the card verified when the request arrived. A dispatch line is believed under any trusted proof (`origin-claim`, `cli-identity`, `in-process`). The caller must still be on the child team's bot list, and must declare the capability.
+- **What the root gains.** It gets the child's progress steps, and passes them to its own requester as the root ticket's progress. It may also name a seat (`for`) and return a rework (`rework`) to a child.
+- **Cross-host sends.** The team identity's forward scope allows sending to the root's registered children, as it allows an approved outbound card's address. Registration is the standing permission (R2).
+- **Cross-host registration is the child owner's act.** `POST /__dsh_a2a/superagent { action: 'admit-root', handle, home? }` on the child's host makes two links, wire first:
+  - **The wire's link.** The root identity becomes a *requester* of the child team's canvas, pinned to its home host. `home` must be a linked host that lists the identity; without it, the only linked host that lists it. A requester is not a member (the team canvas takes no CLI handle as a member): it takes no work and no roster shows it. The wire's admission counts it as an operator-established link for a remote CLI, with the same pinned-home, bound-signer and online checks. An identity deposited on the child's host needs no link.
+  - **The team's link.** The identity goes on the child team's bot list with the `root-dispatch` rule, as same-instance admission does.
+  - A linked peer cannot list itself on someone's bot list or canvas.
+- **The child's answers need the root host's link too.** The child answers (acknowledgement, questions, results) from its own team identity, a CLI identity deposited on the child's host. The child host's card names it (`identity` in the superagent team's `canvasOrg` entry). When the root owner adds that child (`add-team`), the root's canvas links the identity as a requester pinned to the child's host, and `remove-team` drops it. A child host too old to name its identity is still added; its answers are refused until it does. Each side's sender scope includes the other: a root's children, and a child's admitted roots.
+- **Order matters once.** Register both sides (the child's `admit-root`, then the root's `add-team`) before the root sends. An answer the wire refused for a missing link keeps its task id, and the same answer is never sent again under it.
+- **A root's restart does not resend.** A child keeps working on its own host while the root host restarts. The root keeps the child's assignment running (no recovery restart, unlike a member session), so the child is not sent the ticket a second time. *Found live:* each restart of the root host sent the child the same ticket again.
+  - *Found live (3084 → 3086, 2026-11-12):* the first S5 build made only the team's link, and the child's host refused every forwarded send (`remote CLI … has no operator-established canvas link`).
+- **The root can see it.** The child host's card lists the root identities it admits (`admits` in its `canvasOrg` entry). The root shows 「待子团队登记」 until its identity is there.
+
 ### R3. What comes back maps onto the root ticket
 
 The child's receipts arrive at the root host on the task it sent, and the root ticket follows them:

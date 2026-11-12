@@ -30,6 +30,8 @@ export interface RootDispatchDeps {
   readonly ask: (ticketId: string, child: string, question: string, options: readonly string[], recommended: string | undefined) => void
   /** The answer to a child's question was passed on to the child: the root ticket's question is settled. */
   readonly forwarded?: (ticketId: string) => void
+  /** S5: a child's progress step, as the root ticket's progress (its requester sees it through the root's own steps). */
+  readonly progress?: (ticketId: string, summary: string) => void
   readonly now: () => string
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
 }
@@ -102,6 +104,7 @@ export class RootDispatch {
     const who = childLabel(row.child)
     if (envelope?.disposition === 'acknowledged' || envelope?.disposition === 'progress') {
       if (row.state === 'sent') { row.state = 'acknowledged'; this.save() }
+      if (envelope.disposition === 'progress' && row.state !== 'question') this.d.progress?.(row.ticketId, `${who}：${summary}`)
       return
     }
     if (envelope?.disposition === 'attention') {

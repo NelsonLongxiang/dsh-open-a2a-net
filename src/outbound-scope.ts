@@ -11,6 +11,14 @@ export interface OutboundScopeRecords {
   peerOrgs(): Iterable<readonly { team?: unknown; members?: unknown; superagentTeam?: unknown }[]>
   warmPeers(): Promise<unknown>
 }
+/**
+ * Owner ruling 2026-11-12 (superagent outbound O4): the sender scope of a forwarded send. A superagent team's own A2A
+ * identity sits in no canvas team, so it declares no scope of its own; an approved outbound card being sent to `team`
+ * is its scope for that send. Every other sender, and that identity at any other time, goes through {@link outboundScope}.
+ */
+export async function forwardScope(cardAuthorized: (handle: string, team: string) => boolean, scope: () => Promise<{ ok: true } | { ok: false; error: string }>, handle: string, team: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  return cardAuthorized(handle, team) ? { ok: true } : await scope()
+}
 export async function outboundScope(r: OutboundScopeRecords, id: string, handle: string, team: string): Promise<{ ok: true } | { ok: false; error: string }> {
   const teams = r.teamsOf(id)
   const sharedRoster = teams.some(roster => r.membersOf(roster).some(member => r.zone + '/' + r.id8(member) === team))

@@ -144,7 +144,14 @@ A root team's workers are other teams (docs/design/superagent-root-team.md).
   - Its result becomes the root ticket's `ready` or `failed` report.
   - A refusal or no outcome hands the ticket back to the root router as blocked, to name another child with `superagent_assign`.
 - **Same-instance children.** A child team on the same instance admits the root identity automatically (its bot list and a `root-dispatch` rule).
-- **Not yet.** Progress steps from children, and children on other hosts registering the root.
+- **Declarations.** A root's identity declares `progressReceipts`, `directedSeats` and `reworkReturns` on its card.
+  - A child believes those from a CLI identity on its bot list.
+  - The child's progress steps become the root ticket's progress.
+- **Children on other hosts.**
+  - **Registering the root.** The child's owner runs `POST /__dsh_a2a/superagent { action: 'admit-root', handle: '<root team identity>', home?: '<root host origin>' }` on the child's host. This links the identity to the team's canvas as a requester pinned to its home host (the wire admits it from there), and puts it on the bot list. `home` is needed only when no single linked host lists the identity.
+  - **What the card shows.** The child's card then lists the root under `admits`, and names the child team's own identity (`identity`).
+  - **The root's side.** `add-team` on the root host links that `identity` to the root's canvas as a requester pinned to the child's host, so the child's acknowledgement, questions and results are admitted there. `remove-team` drops the link.
+  - **Sending.** The root identity may forward to its registered children.
 
 
 - **Marking a root.** `POST /__dsh_a2a/canvas { action: 'set-root', name, root: true|false }`. A root with child teams stays a root until they are removed.

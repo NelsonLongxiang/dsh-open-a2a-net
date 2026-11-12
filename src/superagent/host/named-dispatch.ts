@@ -10,6 +10,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import type { Engine, Ticket, Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
 import { key } from '../source-types.ts'
+import { TRUSTED_PROOFS } from '../a2a-watch.ts'
 
 import { DISPATCH_PREFIX, ID_MAX, DIRECT_HEADER, parseDispatch, type DispatchLine } from '../../dispatch.ts'
 export { DISPATCH_PREFIX, ID_MAX, DIRECT_HEADER, parseDispatch }
@@ -145,7 +146,9 @@ export class NamedDispatch {
   /** The trigger's dispatch line, when its caller is believed for `capability`. */
   believed(trigger: Trigger | undefined, capability: string): DispatchLine | undefined {
     if (trigger === undefined || trigger.source !== 'a2a' || trigger.human) return undefined
-    if ((trigger.meta as { proof?: unknown } | undefined)?.proof !== 'origin-claim') return undefined
+    // Any trusted proof: a peer's signed host face (origin-claim), a root team's CLI identity (cli-identity), this host (in-process).
+    const proof = (trigger.meta as { proof?: unknown } | undefined)?.proof
+    if (typeof proof !== 'string' || !TRUSTED_PROOFS.has(proof)) return undefined
     const parsed = parseDispatch(trigger.text)
     if (parsed === undefined || !this.d.declares(trigger.actor.id, capability)) return undefined
     return parsed.line
