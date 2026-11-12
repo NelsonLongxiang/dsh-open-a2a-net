@@ -1816,6 +1816,9 @@ export function apply(ctx: Context, config: Config): void {
         ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
+        canvasRoot: { store: canvasStore, zone: config.team, ownKey: encodePublicKey(createPublicKey(nodePrivateKey)),
+          localSuperagentCanvas: (name: string) => superagentTeams?.all().some(team => team.a2aAddress !== undefined && team.settings.canvas === name) === true,
+          peerCards: async () => (await freshCliHomeCards()).flatMap(row => row.card !== undefined ? [{ url: row.url, card: row.card, linked: peerAdmissionLinkState(row.url).link === 'linked' }] : []) },
         admissionRecheck: (caller: string, handle: string, local: boolean) => recheckCallerAdmission(linkRecheckRecords, caller, handle, local),
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
@@ -1979,7 +1982,7 @@ export function apply(ctx: Context, config: Config): void {
             // gh#152: members are read through the local tiers' lens — one of
             // this host's own handles resolves to the session it names, and
             // the two stored shapes of one session publish as ONE handle.
-            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...(superagentTeams?.all().some(team => team.a2aAddress !== undefined && team.settings.canvas === name) === true ? { superagentTeam: true as const } : {}) })) } : {}),
+            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...(superagentTeams?.all().some(team => team.a2aAddress !== undefined && team.settings.canvas === name) === true ? { superagentTeam: true as const } : {}), ...(canvasStore.isRoot(name) ? { root: true as const } : {}) })) } : {}),
             ...(named && lanIp !== '' ? { lanIp } : {}),
             ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
             description: `A2A node exposing team ${config.team}${named ? '' : ' (minimal card — OriginClaim envelope required for the full card: X-A2A-Caller/-Url/-Ts/-Sig signed with your card key)'}`,

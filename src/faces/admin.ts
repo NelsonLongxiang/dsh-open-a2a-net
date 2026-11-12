@@ -15,6 +15,7 @@
  *   entry module, not this file (tsc mirrors src/ under lib/).
  * @module src/faces/admin
  */
+import { isRootAction, rootAction, type CanvasRootDeps } from '../canvas-root.ts'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
@@ -78,6 +79,8 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly canvasMemberForWrite: (ref: string, peer?: unknown) => Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }>
   /** Design v5 R3/R4: why the superagent team refuses this member on this canvas, if it does (absent: no team). */
   readonly teamCanvasRefusal?: (canvas: string, member: string) => string | undefined
+  /** docs/design/superagent-root-team.md R7: the root operations on the canvas route. */
+  readonly canvasRoot?: CanvasRootDeps
   readonly cliHomeForAdd: (handle: string, requested?: unknown) => Promise<CliHomeDecision>
   readonly cliHomeOptions: (handle: string) => Promise<{ homes: string[]; unreadable: number; held?: true }>
   readonly layoutStore: LayoutStore
@@ -917,6 +920,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               try { payload = JSON.stringify({ ok: true, ...await d.cliHomeOptions(id) }) }
               catch { payload = JSON.stringify({ ok: false, error: 'fresh home card lookup failed' }) }
             }
+          } else if (isRootAction(action) && d.canvasRoot !== undefined) {
+            payload = JSON.stringify({ ...await rootAction(action, body as Record<string, unknown>, d.canvasRoot), ...canvasStore.state() })
           } else if (action === 'create') {
             const name = typeof body.name === 'string' ? body.name : ''
             const stored = canvasNameReserved(name) ? undefined : canvasStore.create(name)
