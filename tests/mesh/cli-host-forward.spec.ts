@@ -142,12 +142,12 @@ describe('#230 home host forwards a deposited CLI one hop with scope on', () => 
     try {
       const body = { team: 'beta/01234567', message: 'not a local CLI proof', caller_session: handle, task_id: 'direct-forward-unsigned', wait: false }
       const unsigned = await post(a, '/a2a/direct', body)
-      expect(unsigned.error).toContain('proven online local CLI')
+      expect(unsigned.error).toContain('no bound CLI signature')
       const url = a.baseUrl + '/a2a/direct'
       const privateKey = createPrivateKey(readFileSync(join(b.home, 'a2a', 'node-key.pem'), 'utf8'))
       const headers = signOriginClaim({ url, method: 'POST' }, { caller: b.team, callerUrl: b.baseUrl, privateKey, unbound: false, now: Date.now() })
       const foreign = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ ...body, task_id: 'direct-forward-foreign-signer' }) }).then(async r => await r.json() as any)
-      expect(foreign.error).toContain('proven online local CLI')
+      expect(foreign.error).toContain('no bound CLI signature')
       expect(b.steered).toHaveLength(0)
     } finally { await a.dispose(); await b.dispose() }
   }, 30000)

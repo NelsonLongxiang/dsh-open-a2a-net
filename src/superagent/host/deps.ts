@@ -70,6 +70,8 @@ export interface SuperagentHostDeps {
   readonly homeUrl?: () => string | undefined
   /** This host's API key (the CLI's control credential). */
   readonly apiKey?: () => string | undefined
+  /** The origin this host publishes as its own (its card URL's): what the team identity's claims are bound to. */
+  readonly claimAudience?: () => string | undefined
   /**
    * PR-C2: a signed request to another a2a host (OriginClaim, body-bound, on this host's card key). Absent: no remote
    * members can be reached and no team can be served.

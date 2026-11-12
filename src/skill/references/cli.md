@@ -122,7 +122,11 @@ Files do not go through session messages: use the file channel below, never JPFI
   more than ±5 min (fix its NTP); the caller fields are the sender's own claim. Once the window is closed the route is refused as
   `wrong-audience`: stderr names the dialled origin and the fix — the host
   operator adds it to `originClaimAudiences`, or `--home` / `$A2A_HOME`
-  points at an address the host lists. A proxy that rewrites the path
+  points at an address the host lists. `$A2A_CLAIM_AUDIENCE` (an origin)
+  makes the bound form name that origin instead of the one dialled: a host
+  that runs the CLI against itself on loopback (the superagent team
+  identity) sets it to its own card URL's origin, which it always lists.
+  `a2a-net status` then prints `signed for <origin>`. A proxy that rewrites the path
   (`<home>` with a path prefix) fails the same way as `bad-sig`. These
   refusals are never resent unsigned. A redirect from the home is never
   followed either, on any command (the API key, pocket cookie and claim

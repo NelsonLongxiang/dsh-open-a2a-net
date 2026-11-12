@@ -54,7 +54,9 @@ export function createDirectForward(d: DirectForwardDeps) {
     if (!d.enabled()) return refuse('forwardDirect is off', 'ask this host\'s operator to set forwardDirect: true (the default since 0.6.38)')
     if (d.isolated()) return refuse('host is isolated', 'this host forwards nothing while isolated; deposit the CLI on another home host')
     if (request.guarded) return refuse('an inbound X-A2A-Guard is present; already forwarded')
-    if (!request.localCliProof || !d.deposited(request.caller)) return refuse('caller is not a proven online local CLI deposit', publish)
+    // Two different causes, two different repairs: a renewal cannot bind a signature, and a binding cannot renew a deposit.
+    if (!request.localCliProof) return refuse('caller has no bound CLI signature on this host (unsigned, signed by another identity, or an OriginClaim bound to an origin this host does not list); renewing the deposit does not change this', 'dial an address this host lists as its own (its card URL), or ask its operator to add the dialled origin to originClaimAudiences; `a2a-net status` names the miss')
+    if (!d.deposited(request.caller)) return refuse('caller is not an online local CLI deposit', publish)
     // #282 S2: candidates honour an owner-qualified id; scope, the peer, the receivers and the ledger see the plain team.
     const qualifiedMember = splitQualifiedMember(request.team)
     const plainTeam = qualifiedMember?.handle ?? splitCanvasOwner(request.team).team

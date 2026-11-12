@@ -145,4 +145,32 @@ describe('CLI bound OriginClaim (real host, §2.1)', () => {
       proxyC.server.close()
     }
   }, 60_000)
+
+  it('a host whose originClaimUrl declares a proxy: a loopback dial is a bound miss; signed for the published origin (A2A_CLAIM_AUDIENCE) it binds', async () => {
+    // The superagent team identity's shape: its CLI dials the host on loopback, while the host publishes another origin.
+    const port = await reservePort()
+    const proxy = await proxyTo(port)
+    const d = await bootNode({ name: 'D', session: 'mesh-cli-bound-d', team: 'dsh', sessionNodes: true, teamScopeRouting: true, port, home: tmpHome(), originClaimUnboundWindow: true, originClaimUrl: proxy.url } as Parameters<typeof bootNode>[0])
+    try {
+      const cli = await cliOn(d, 'd1b2c3d4e5f60718')
+      const before = await gauges(d)
+      const loop = await runCli(['route', TARGET, 'loopback, dialled audience', '--task', 'direct-bound000005'], cli.env(d.baseUrl))
+      expect(loop.code, loop.stderr).toBe(0)
+      let after = await gauges(d)
+      expect(after.boundMissInbound - before.boundMissInbound).toBe(1)
+      expect(after.unboundInbound - before.unboundInbound).toBe(1)
+
+      const signed = await runCli(['route', TARGET, 'loopback, published audience', '--task', 'direct-bound000006'], { ...cli.env(d.baseUrl), A2A_CLAIM_AUDIENCE: `${proxy.url}/ignored/path` })
+      expect(signed.code, signed.stderr).toBe(0)
+      const now = await gauges(d)
+      expect([now.boundMissInbound, now.unboundInbound]).toEqual([after.boundMissInbound, after.unboundInbound])
+      expect(now.rows.find(t => t.taskId === 'direct-bound000006')?.auth).toMatchObject({ proof: 'cli-identity', via: 'cli-deposit' })
+      after = now
+      const status = await runCli(['status'], { ...cli.env(d.baseUrl), A2A_CLAIM_AUDIENCE: proxy.url })
+      expect(status.stdout).toContain(`signed for ${new URL(proxy.url).origin}`)
+    } finally {
+      await d.dispose()
+      proxy.server.close()
+    }
+  }, 60_000)
 })
