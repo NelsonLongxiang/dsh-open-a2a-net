@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "188dfbf0118ce3dff3f89d64885b2ac40bd6cbd0dcd0420bce74287e2f5b51dd",
+    "src/index.ts": "ad2a84552aabba1f7019c7beb92dedcff1866f887a961ccace23a8edc724b7cd",
     "src/faces/admin.ts": "af1a2ce28a7d2135bdc6eb44a302c70f1d47b3c21c6374e0bb28eb74f0a7134f",
     "src/canvas-store.ts": "1f5b5006956d0a0b9d42b51ea8fbb88f993adbc7a41e947be35b6532daf863b1",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
@@ -27,7 +27,7 @@
     "src/tools/act.ts": "983f78c58b8c886b39b5af3f2cf474a1a47e4d03b91fedf5ed581aba3225bed2",
     "src/peer-directory.ts": "1f5eb4c1b19edcb834c168f8e9c36928128085cb92aa75b52e0f040ab2c5f009",
     "src/card.ts": "933f38ddb0233f2214259a1361616728cb0fdd335fa820d2ded777af60a2b0d5",
-    "src/outbound-scope.ts": "f8206432e964209c949d3e2ad3c34865025dbc5d6e9008b23cbab2f92bd4559f"
+    "src/outbound-scope.ts": "ee6c5764bcc16fdddf6690c01b4d2b4f5d3797e703673aa36889aa8da5c5847c"
   },
   "anchors": [
     {
@@ -93,13 +93,13 @@
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/outbound-scope.ts:17",
+      "ref": "src/outbound-scope.ts:25",
       "expect": "const sharedCanvas = r.canvasNames().some(name => {"
     },
     {
       "page": "p1-arch",
       "cell": "b6",
-      "ref": "src/outbound-scope.ts:24",
+      "ref": "src/outbound-scope.ts:32",
       "expect": "let orgShared = false"
     },
     {
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4180",
+      "ref": "src/index.ts:4188",
       "expect": "const callerNodeId = originAgentId"
     },
     {

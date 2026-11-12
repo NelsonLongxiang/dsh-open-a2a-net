@@ -1173,6 +1173,8 @@ export class SuperagentHost {
 
   /** The team's A2A address: requests to it are Triggers, so they take no target queue slot. */
   get a2aAddress(): string | undefined { return this.settingsValue.sources.a2a ? this.a2a.address : undefined }
+  /** Whether an approved outbound card is being sent to `target` right now (its decision is the sender scope then). */
+  outboundAuthorizes(target: string): boolean { return this.outbound.authorizes(target) }
 
   /** Send pending a2a Channel messages; a thrown send stays pending for the next pass (a2a-watch gives up after 24h). */
   private flushOutbox(): void {
