@@ -48,6 +48,12 @@ export interface SuperagentFaceDeps {
   readonly ownCanvasFingerprint: string
   readonly peerAdmissionLinkState: (peerUrl: string) => { link: 'linked' | 'stranger'; verified: boolean }
   readonly blobStore: BlobStore
+  /**
+   * superagent-root-team S5: link a root team's identity to the team's canvas as a requester pinned to its home host, so
+   * the wire admits its deliveries from that host. A requested home must be a linked host listing the identity; without
+   * one, the only linked host that lists it. A locally deposited identity needs no link.
+   */
+  readonly linkRequester?: (canvas: string, handle: string, home: unknown) => Promise<{ ok: true; home?: string } | { ok: false; error: string }>
 }
 
 /**
@@ -145,8 +151,17 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
             } else if (fields.action === 'admit-root') {
               // superagent-root-team S5: the owner lets a root team on another host send this team requests.
               const handle = typeof fields.handle === 'string' ? fields.handle.trim() : ''
+              // Two links, both the owner's: the wire's (a requester link on the team's canvas, pinned to the root's home host)
+              // and the team's (bot list and root rule). The first comes first: a bot entry the wire refuses would admit nothing.
+              const canvas = sa.settings.canvas
               if (!CLI_HANDLE_RE.test(handle)) send(200, { ok: false, error: 'handle (the root team identity, <name>/<16 hex>) is required' })
-              else { sa.admitRequester(handle); send(200, { ok: sa.admittedRoots().includes(handle), admits: sa.admittedRoots() }) }
+              else if (canvas === undefined) send(200, { ok: false, error: 'the team is bound to no canvas: bind it before admitting a root' })
+              else void (async () => {
+                const link = d.linkRequester === undefined ? { ok: true as const } : await d.linkRequester(canvas, handle, fields.home)
+                if (!link.ok) { send(200, { ok: false, error: link.error }); return }
+                sa.admitRequester(handle)
+                send(200, { ok: sa.admittedRoots().includes(handle), admits: sa.admittedRoots(), ...(link.home !== undefined ? { home: link.home } : {}) })
+              })().catch(error => send(200, { ok: false, error: String(error) }))
             } else if (fields.action === 'move-seat') {
               // Named dispatch N2: the owner moves a seat (its stable id) to the session that replaced its member.
               const moved = sa.named.moveSeat(typeof fields.from === 'string' ? fields.from : '', typeof fields.to === 'string' ? fields.to : '')

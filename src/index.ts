@@ -37,6 +37,7 @@ export function resolveCallerLabel(input: {
 import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef, legacyBareMember } from './canvas-store.ts'
+import { linkRootRequester } from './canvas-root.ts'
 import { splitQualifiedMember, memberProvenance, qualifiedSessionMember, pinnedCallerDeclares } from './canvas-member.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
 import { LayoutStore } from './layout-store.ts'
@@ -1984,7 +1985,7 @@ export function apply(ctx: Context, config: Config): void {
             // gh#152: members are read through the local tiers' lens — one of
             // this host's own handles resolves to the session it names, and
             // the two stored shapes of one session publish as ONE handle.
-            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...(superagentTeams?.all().some(team => team.a2aAddress !== undefined && team.settings.canvas === name) === true ? { superagentTeam: true as const } : {}), ...(canvasStore.isRoot(name) ? { root: true as const } : {}), ...((admits => admits.length > 0 ? { admits } : {})(superagentTeams?.all().find(team => team.a2aAddress !== undefined && team.settings.canvas === name)?.admittedRoots() ?? [])) })) } : {}),
+            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...((team => team?.a2aAddress !== undefined ? { superagentTeam: true as const, identity: team.a2aAddress } : {})(superagentTeams?.all().find(team => team.a2aAddress !== undefined && team.settings.canvas === name))), ...(canvasStore.isRoot(name) ? { root: true as const } : {}), ...((admits => admits.length > 0 ? { admits } : {})(superagentTeams?.all().find(team => team.a2aAddress !== undefined && team.settings.canvas === name)?.admittedRoots() ?? [])) })) } : {}),
             ...(named && lanIp !== '' ? { lanIp } : {}),
             ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
             description: `A2A node exposing team ${config.team}${named ? '' : ' (minimal card — OriginClaim envelope required for the full card: X-A2A-Caller/-Url/-Ts/-Sig signed with your card key)'}`,
@@ -2922,6 +2923,7 @@ export function apply(ctx: Context, config: Config): void {
     canvasTeamsOf: sessionId => canvasTeamsOfSession(sessionId),
     canvasMembersOf: name => canvasLocalMembersOf(name),
     canvasRemoteMembersOf: name => canvasStore.remoteMembersOf(name),
+    canvasRequestersOf: name => canvasStore.requestersOf(name),
     peerOrgs: function * () {
       for (const cached of cardCache.values()) {
         const org = (cached.card as { canvasOrg?: PeerOrgEntry[] } | undefined)?.canvasOrg
@@ -3401,6 +3403,7 @@ export function apply(ctx: Context, config: Config): void {
       ctx, config, superagentHost, superagentTeams, homeUrl: () => superagentHomeUrl, controlRoute, readJsonBody, recordActivity, routeTrunk,
       sessionNodes, sessionPresetOf, sessionTeamOf, joinedSessions, archivedSessionFilter, verifyOriginClaim, fetchPeerCard, peerStore, cardCache,
       ownCanvasFingerprint, peerAdmissionLinkState, blobStore,
+      linkRequester: (canvas: string, handle: string, home: unknown) => linkRootRequester({ store: canvasStore, deposited: h => cliDeposits.directoryRows().some(row => row.team === h), pinHome: cliHomeForAdd }, canvas, handle, home),
     })
   })
   const cardCacheInFlight = new Map<string, Promise<A2aPeerCard | undefined>>()
@@ -3946,8 +3949,9 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
    * sends it. Signature, deposit and the receiving host's admission still apply.
    */
   function cardAuthorizedSend(handle: string, team: string): boolean {
-    // superagent-root-team S5: a root's registered child teams are its standing sender scope (R2), like an approved card's address.
-    return superagentTeams?.all().some(host => host.a2aAddress === handle && (host.outboundAuthorizes(team) || host.childAuthorizes(team))) === true
+    // superagent-root-team S5: a root's registered child teams are its standing sender scope (R2), like an approved card's
+    // address; a child's admitted roots are its own, for the receipts and questions that answer them.
+    return superagentTeams?.all().some(host => host.a2aAddress === handle && (host.outboundAuthorizes(team) || host.childAuthorizes(team) || host.admittedRoots().includes(team))) === true
   }
   const senderScopeRecords: OutboundScopeRecords = {
     zone: config.team, id8, teamsOf: id => teamMemberships.teamsOf(id), membersOf: team => teamMemberships.membersOf(team),

@@ -46,13 +46,18 @@ export interface CanvasSnapshot {
   /** docs/design/superagent-root-team.md R7: the teams marked as roots, and each root's child teams. */
   readonly roots?: readonly string[]
   readonly children?: Readonly<Record<string, readonly CanvasChild[]>>
+  /** superagent-root-team S5: CLI identities on other hosts that send a team requests (not members), each pinned to its home in cliHome. */
+  readonly requesters?: Readonly<Record<string, readonly string[]>>
 }
 
 /** A root team's child: another team (`<zone>/canvas/<name>@<fp8>`), the key of its owning host, and how many root tickets it takes at once. */
-export interface CanvasChild { readonly ref: string; readonly key: string; readonly slots: number }
+export interface CanvasChild { readonly ref: string; readonly key: string; readonly slots: number; /** S5: a child on another host: its team identity, a requester of the root's canvas. */ readonly identity?: string }
 /** A child's slots: 1 to 16, 3 unless the owner sets it. */
 export const CHILD_SLOTS_DEFAULT = 3
 export const CHILD_SLOTS_MAX = 16
+/** Whether a stored snapshot holds the handle as some team's member or requester. */
+const linkedIn = (snapshot: Partial<CanvasSnapshot>, handle: string): boolean =>
+  (snapshot.teams ?? []).some(t => t.members.includes(handle)) || Object.values(snapshot.requesters ?? {}).some(list => Array.isArray(list) && list.includes(handle))
 const validSlots = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 1 && (n as number) <= CHILD_SLOTS_MAX
 
 /** Upper bounds: a canvas taxonomy, not a database. */
@@ -117,6 +122,7 @@ export class CanvasStore {
   private memberOwners: Record<string, string> = {}
   private roots = new Set<string>()
   private children: Record<string, CanvasChild[]> = {}
+  private requesters: Record<string, string[]> = {}
   private disk: string | undefined
   private readOnlyReason = ''
   private lastWriteError = ''
@@ -171,8 +177,8 @@ export class CanvasStore {
           if (fpKeys.has(fp) && fpKeys.get(fp) !== key) throw Error('conflicting canvas member fingerprints')
           fpKeys.set(fp,key)
         }
-        if (snapshot.cliHome !== undefined && (snapshot.cliHome === null || typeof snapshot.cliHome !== 'object' || Array.isArray(snapshot.cliHome) || Object.entries(snapshot.cliHome).some(([handle, home]) => !CLI_HANDLE_RE.test(handle) || typeof home !== 'string' || !validHomeOrigin(home) || !snapshot.teams!.some(t => t.members.includes(handle))))) throw Error('invalid canvas v2 CLI homes')
-        if (snapshot.cliHomeCleared !== undefined && (!Array.isArray(snapshot.cliHomeCleared) || new Set(snapshot.cliHomeCleared).size !== snapshot.cliHomeCleared.length || snapshot.cliHomeCleared.some(handle => typeof handle !== 'string' || !CLI_HANDLE_RE.test(handle) || !snapshot.teams!.some(t => t.members.includes(handle))))) throw Error('invalid canvas v2 cleared homes')
+        if (snapshot.cliHome !== undefined && (snapshot.cliHome === null || typeof snapshot.cliHome !== 'object' || Array.isArray(snapshot.cliHome) || Object.entries(snapshot.cliHome).some(([handle, home]) => !CLI_HANDLE_RE.test(handle) || typeof home !== 'string' || !validHomeOrigin(home) || !linkedIn(snapshot, handle)))) throw Error('invalid canvas v2 CLI homes')
+        if (snapshot.cliHomeCleared !== undefined && (!Array.isArray(snapshot.cliHomeCleared) || new Set(snapshot.cliHomeCleared).size !== snapshot.cliHomeCleared.length || snapshot.cliHomeCleared.some(handle => typeof handle !== 'string' || !CLI_HANDLE_RE.test(handle) || !linkedIn(snapshot, handle)))) throw Error('invalid canvas v2 cleared homes')
       }
       this.revision = Number.isSafeInteger(snapshot?.revision) && snapshot!.revision! >= 0 ? snapshot!.revision! : 0
       if (snapshot?.suspendedMembers !== undefined) {
@@ -198,17 +204,18 @@ export class CanvasStore {
         kept.push({ name: String(entry.name), members })
       }
       this.teams = kept.slice(0, CANVAS_TEAM_CAP)
+      this.restoreRequesters(snapshot)
       if (snapshot.cliHome !== null && typeof snapshot.cliHome === 'object' && !Array.isArray(snapshot.cliHome)) {
         for (const [handle, home] of Object.entries(snapshot.cliHome)) {
-          if (CLI_HANDLE_RE.test(handle) && typeof home === 'string' && validHomeOrigin(home) && this.teams.some(t => t.members.includes(handle))) this.cliHome[handle] = home
+          if (CLI_HANDLE_RE.test(handle) && typeof home === 'string' && validHomeOrigin(home) && this.linked(handle)) this.cliHome[handle] = home
         }
       }
       this.restoreRoots(snapshot)
       if (Array.isArray(snapshot.cliHomeCleared)) for (const handle of snapshot.cliHomeCleared) {
-        if (typeof handle === 'string' && CLI_HANDLE_RE.test(handle) && this.cliHome[handle] === undefined && this.teams.some(t => t.members.includes(handle))) this.cliHomeCleared.add(handle)
+        if (typeof handle === 'string' && CLI_HANDLE_RE.test(handle) && this.cliHome[handle] === undefined && this.linked(handle)) this.cliHomeCleared.add(handle)
       }
     } catch {
-      this.teams = []; this.suspended = []
+      this.teams = []; this.suspended = []; this.requesters = {}
       // A malformed v2 suspension must never silently reactivate members.
       if (this.disk?.includes('suspendedMembers') || this.disk?.includes('formatVersion')) this.readOnlyReason = 'invalid canvas v2 snapshot'
     }
@@ -226,10 +233,28 @@ export class CanvasStore {
       for (const row of list as unknown[]) {
         const child = row as Partial<CanvasChild> | null
         if (typeof child?.ref !== 'string' || typeof child.key !== 'string' || !validTeamOwner(child.ref, child.key) || !validSlots(child.slots) || kept.some(k => k.ref === child.ref)) continue
-        kept.push({ ref: child.ref, key: child.key, slots: child.slots })
+        kept.push({ ref: child.ref, key: child.key, slots: child.slots, ...(typeof child.identity === 'string' && CLI_HANDLE_RE.test(child.identity) ? { identity: child.identity } : {}) })
       }
       if (kept.length > 0) this.children[name] = kept.slice(0, CANVAS_MEMBER_CAP)
     }
+  }
+
+  /** S5: requesters of existing teams, CLI handles only, each once and never also a member of that team. */
+  private restoreRequesters(snapshot: Partial<CanvasSnapshot>): void {
+    this.requesters = {}
+    const raw = snapshot.requesters
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return
+    for (const [name, list] of Object.entries(raw)) {
+      const team = this.teams.find(t => t.name === name)
+      if (team === undefined || !Array.isArray(list)) continue
+      const kept = [...new Set((list as unknown[]).filter((h): h is string => typeof h === 'string' && CLI_HANDLE_RE.test(h) && !team.members.includes(h)))].slice(0, CANVAS_MEMBER_CAP)
+      if (kept.length > 0) this.requesters[name] = kept
+    }
+  }
+
+  /** Whether some team holds the handle as a member or a requester (a pinned home lives only that long). */
+  private linked(handle: string): boolean {
+    return this.teams.some(t => t.members.includes(handle)) || Object.values(this.requesters).some(list => list.includes(handle))
   }
 
   /** Persist the current snapshot (no-op without a path), then tell the listeners. */
@@ -243,6 +268,7 @@ export class CanvasStore {
       this.cliHome = { ...previous.cliHome }; this.cliHomeCleared = new Set(previous.cliHomeCleared)
       this.roots = new Set(previous.roots ?? [])
       this.children = Object.fromEntries(Object.entries(previous.children ?? {}).map(([name, list]) => [name, list.map(c => ({ ...c }))]))
+      this.requesters = Object.fromEntries(Object.entries(previous.requesters ?? {}).map(([name, list]) => [name, [...list]]))
       this.revision = previous.revision ?? 0
       throw error
     }
@@ -252,7 +278,7 @@ export class CanvasStore {
   }
 
   private serialize(): string {
-    return JSON.stringify({ teams: this.teams, memberOwners: this.memberOwners, suspendedMembers: this.suspended, cliHome: this.cliHome, cliHomeCleared: [...this.cliHomeCleared], roots: [...this.roots], children: this.children, revision: this.revision })
+    return JSON.stringify({ teams: this.teams, memberOwners: this.memberOwners, suspendedMembers: this.suspended, cliHome: this.cliHome, cliHomeCleared: [...this.cliHomeCleared], roots: [...this.roots], children: this.children, requesters: this.requesters, revision: this.revision })
   }
   private write(): void {
     if (this.readOnlyReason) throw Error(this.readOnlyReason)
@@ -264,7 +290,8 @@ export class CanvasStore {
       ...(Object.keys(this.cliHome).length ? { cliHome: { ...this.cliHome } } : {}),
       ...(this.cliHomeCleared.size ? { cliHomeCleared: [...this.cliHomeCleared] } : {}),
       ...(this.roots.size ? { roots: [...this.roots] } : {}),
-      ...(Object.keys(this.children).length ? { children: Object.fromEntries(Object.entries(this.children).map(([name, list]) => [name, list.map(c => ({ ...c }))])) } : {}) }
+      ...(Object.keys(this.children).length ? { children: Object.fromEntries(Object.entries(this.children).map(([name, list]) => [name, list.map(c => ({ ...c }))])) } : {}),
+      ...(Object.keys(this.requesters).length ? { requesters: Object.fromEntries(Object.entries(this.requesters).map(([name, list]) => [name, [...list]])) } : {}) }
     const bytes = JSON.stringify(snapshot)
     if (this.path !== '') {
       mkdirSync(dirname(this.path), { recursive: true })
@@ -425,6 +452,39 @@ export class CanvasStore {
     return this.membersOf(name).filter(isRemoteMemberRef)
   }
 
+  /** S5: the CLI identities on other hosts that send the named team requests (each pinned to its home). */
+  requestersOf(name: string): readonly string[] { return this.requesters[name] ?? [] }
+
+  /**
+   * S5: the owner lets a CLI identity on another host send the named team requests: a requester link pinned to its home
+   * host, which the wire admission counts as an operator-established link. Not a member: it takes no work. False when the
+   * team is missing, the handle or home is malformed, the handle is a member of the team, or it is pinned to another home.
+   */
+  addRequester(name: string, handle: string, home: string): boolean {
+    const team = this.teams.find(t => t.name === name)
+    if (team === undefined || !CLI_HANDLE_RE.test(handle) || !validHomeOrigin(home) || team.members.includes(handle)) return false
+    if (this.cliHome[handle] !== undefined && this.cliHome[handle] !== home) return false
+    const list = this.requesters[name] ?? []
+    if (list.includes(handle) && this.cliHome[handle] === home) return true
+    if (!list.includes(handle) && list.length >= CANVAS_MEMBER_CAP) return false
+    this.requesters[name] = list.includes(handle) ? list : [...list, handle]
+    this.cliHome[handle] = home; this.cliHomeCleared.delete(handle)
+    this.persist()
+    return true
+  }
+
+  /** S5: drop a requester link (a no-op when absent); its pinned home goes with the last link. */
+  removeRequester(name: string, handle: string): boolean {
+    const list = this.requesters[name]
+    if (list === undefined || !list.includes(handle)) return false
+    const rest = list.filter(h => h !== handle)
+    if (rest.length > 0) this.requesters[name] = rest
+    else delete this.requesters[name]
+    this.forgetUnusedHome(handle)
+    this.persist()
+    return true
+  }
+
   /** Every team name the id is a member of, in team creation order. */
   teamsOf(id: string): readonly string[] {
     return this.teams.filter(t => this.membersOf(t.name).includes(id)).map(t => t.name)
@@ -455,7 +515,9 @@ export class CanvasStore {
     if (index < 0) return false
     if (this.suspended.some(r => r.team === name)) return false
     const [removed] = this.teams.splice(index, 1)
-    for (const id of removed!.members) this.forgetUnusedHome(id)
+    const requesters = this.requesters[name] ?? []
+    delete this.requesters[name]
+    for (const id of [...removed!.members, ...requesters]) this.forgetUnusedHome(id)
     this.roots.delete(name)
     Reflect.deleteProperty(this.children, name)
     this.persist()
@@ -482,19 +544,23 @@ export class CanvasStore {
   }
 
   /** Add a child team to a root, under the key of the host that owns it (proved by the caller). Idempotent for the same ref and key. */
-  addChild(name: string, ref: string, key: string, slots: number = CHILD_SLOTS_DEFAULT): { ok: true } | { ok: false; error: string } {
+  addChild(name: string, ref: string, key: string, slots: number = CHILD_SLOTS_DEFAULT, identity?: string): { ok: true } | { ok: false; error: string } {
     if (!this.roots.has(name)) return { ok: false, error: `${name} is not a root team` }
     if (!validTeamOwner(ref, key)) return { ok: false, error: `${ref} is not a team address under that key` }
     if (!validSlots(slots)) return { ok: false, error: `slots must be 1 to ${String(CHILD_SLOTS_MAX)}` }
     const list = this.children[name] ?? []
     const existing = list.find(c => c.ref === ref)
-    if (existing !== undefined) return existing.key === key ? { ok: true } : { ok: false, error: `${ref} is already a child under another key` }
+    if (existing !== undefined) {
+      if (existing.key !== key) return { ok: false, error: `${ref} is already a child under another key` }
+      if (identity !== undefined && existing.identity !== identity) { this.children[name] = list.map(c => c === existing ? { ...c, identity } : c); this.persist() }
+      return { ok: true }
+    }
     if (list.length >= CANVAS_MEMBER_CAP) return { ok: false, error: `a root holds at most ${String(CANVAS_MEMBER_CAP)} child teams` }
     const fingerprint = splitTeamRef(ref)!.fingerprint
     const clash = Object.entries(this.memberOwners).some(([member, owner]) => splitQualifiedMember(member)?.fingerprint === fingerprint && owner !== key)
       || Object.values(this.children).some(rows => rows.some(c => splitTeamRef(c.ref)?.fingerprint === fingerprint && c.key !== key))
     if (clash) return { ok: false, error: `another key is already pinned for fingerprint ${fingerprint}` }
-    this.children[name] = [...list, { ref, key, slots }]
+    this.children[name] = [...list, { ref, key, slots, ...(identity !== undefined ? { identity } : {}) }]
     this.persist()
     return { ok: true }
   }
@@ -562,7 +628,7 @@ export class CanvasStore {
   }
 
   private forgetUnusedHome(id: string): void {
-    if (!this.teams.some(team => team.members.includes(id))) { delete this.cliHome[id]; this.cliHomeCleared.delete(id) }
+    if (!this.linked(id)) { delete this.cliHome[id]; this.cliHomeCleared.delete(id) }
   }
 
   /**

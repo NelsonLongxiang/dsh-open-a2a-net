@@ -100,6 +100,16 @@ export interface AdmissionRecords {
   cliDeposited(handle: string): boolean
   /** An operator-pinned CLI home, absent for ambiguous/unlinked CLI refs. */
   cliHomeOf?(handle: string): string | undefined
+  /**
+   * superagent-root-team S5: the CLI identities on other hosts the operator linked to a canvas as requesters (a root
+   * team's identity a child team admitted). A remote CLI's operator link, like a remote member; never a member.
+   */
+  canvasRequestersOf?(name: string): readonly string[]
+}
+
+/** The canvas teams whose operator linked this remote CLI handle: as a remote member or as a requester (S5). */
+function remoteCliBasis(r: AdmissionRecords, caller: string): string[] {
+  return r.canvasNames().filter(name => r.canvasRemoteMembersOf(name).includes(caller) || (r.canvasRequestersOf?.(name) ?? []).includes(caller)).map(name => r.canvasTeamOf(name))
 }
 
 /** Bound signer evidence and a fresh full-card online check, never caller self-description. */
@@ -278,7 +288,7 @@ export function callerAdmission(r: AdmissionRecords, caller: string, targetTeam?
   // A foreign CLI handle is never a free-form node fact: its operator link,
   // pinned home, bound signer, and fresh online row must ALL hold.
   if (CLI_HANDLE_RE.test(caller) && !r.cliDeposited(caller)) {
-    const basis = r.canvasNames().filter(name => r.canvasRemoteMembersOf(name).includes(caller)).map(name => r.canvasTeamOf(name))
+    const basis = remoteCliBasis(r, caller)
     if (basis.length === 0) return refused(`remote CLI ${caller} has no operator-established canvas link`, linkNext(caller, targetTeam))
     const home = r.cliHomeOf?.(caller)
     if (home === undefined) return refused(`remote CLI ${caller} home is not pinned`, `ask this host's operator to pin ${caller}'s home host when adding it to the canvas team (workbench member dialog)`)
@@ -306,7 +316,7 @@ export function callerAdmission(r: AdmissionRecords, caller: string, targetTeam?
 export function recheckCallerAdmission(r: AdmissionRecords, caller: string, targetTeam: string, local: boolean): Admission {
   if (local) return localCandidateAdmission(r, caller, targetTeam)
   if (r.teamScopeRouting && CLI_HANDLE_RE.test(caller) && !r.cliDeposited(caller)) {
-    const basis = r.canvasNames().filter(name => r.canvasRemoteMembersOf(name).includes(caller)).map(name => r.canvasTeamOf(name))
+    const basis = remoteCliBasis(r, caller)
     if (basis.length === 0) return refused(`remote CLI ${caller} has no operator-established canvas link`)
     if (r.cliHomeOf?.(caller) === undefined) return refused(`remote CLI ${caller} home is not pinned`)
     return admitted('remote-ref-cli', basis)
@@ -317,7 +327,7 @@ export function recheckCallerAdmission(r: AdmissionRecords, caller: string, targ
 /** Revalidate only mutable operator authority, not already-verified birth-time identity or liveness. */
 export function recheckRemoteCliAuthorization(r: AdmissionRecords, auth: TaskAuthorization): Admission {
   if (!r.teamScopeRouting) return admitted('scope-off')
-  const basis = r.canvasNames().filter(name => r.canvasRemoteMembersOf(name).includes(auth.caller)).map(name => r.canvasTeamOf(name))
+  const basis = remoteCliBasis(r, auth.caller)
   if (basis.length === 0) return refused(`remote CLI ${auth.caller} has no operator-established canvas link`)
   const home = r.cliHomeOf?.(auth.caller)
   if (home === undefined || home !== cliHomeOrigin(auth.carrier_url)) return refused(`remote CLI ${auth.caller} pinned home changed`)
