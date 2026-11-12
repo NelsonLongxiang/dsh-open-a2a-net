@@ -58,6 +58,8 @@ export interface MemberExecutorDeps {
   readonly runPrepare?: PrepareRunner
   /** How many tickets may run at once; 0 is no cap (design reliability R5). */
   readonly maxConcurrent?: () => number
+  /** superagent-root-team S2: how many tickets a member holds at once (a child team: its slots); 1 when unset. */
+  readonly capacity?: (member: string) => number
 }
 
 /** Runs a prepare command: whether it exited 0, and the end of what it printed. */
@@ -185,7 +187,8 @@ export class MemberExecutor implements Executor {
   private available(member: string): boolean {
     const stopping = this.stopping.get(member)
     if (stopping !== undefined && Date.now() - stopping >= STOPPING_MS) this.stopping.delete(member)
-    return !this.bindings.some(b => b.member === member) && !this.stopping.has(member) && !this.background.has(member)
+    const held = this.bindings.filter(b => b.member === member).length
+    return held < (this.d.capacity?.(member) ?? 1) && !this.stopping.has(member) && !this.background.has(member)
   }
 
   /** The repository a ticket was accepted for. */

@@ -2077,8 +2077,11 @@ export function apply(ctx: Context, config: Config): void {
         const url = [...cardCache.entries()].find(([, entry]) => entry.card?.publicKey === key)?.[0]
         return [{ ref, key, url: url !== undefined ? new URL(url).origin : '' }]
       })
-      return { local, remote }
+      // superagent-root-team: a root's child teams are its workers too (kept apart from the canvas members).
+      const children = canvasStore.isRoot(name) ? canvasStore.childrenOf(name).map(child => ({ ref: child.ref, slots: child.slots })) : []
+      return { local, remote, children }
     },
+    admitAtChild: (childCanvas, rootHandle) => { superagentTeams?.all().find(team => team.settings.canvas === childCanvas)?.admitRequester(rootHandle) },
     canvasesOf: id => canvasTeamsOfSession(id),
     canvasNames: () => canvasStore.list(),
     presetOf: id => sessionPresetOf(id),
