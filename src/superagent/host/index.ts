@@ -158,7 +158,7 @@ export class SuperagentHost {
       },
     }
     this.a2a = new A2aSource({
-      dir, homeUrl: () => d.homeUrl?.(), apiKey: () => d.apiKey?.(), claimAudience: () => d.claimAudience?.(), enabled: () => this.settingsValue.sources.a2a,
+      dir, homeUrl: () => d.homeUrl?.(), apiKey: () => d.apiKey?.(), claimAudience: () => d.claimAudience?.(), declares: () => { try { return this.childTeams().length > 0 ? ['progressReceipts', 'directedSeats', 'reworkReturns'] : [] } catch { return [] } }, enabled: () => this.settingsValue.sources.a2a,
       receive: trigger => { this.reviews.received(trigger as unknown as Trigger); this.outbound.received(trigger as unknown as Trigger); this.root.received(trigger as unknown as Trigger); const result = this.engine.receive(trigger as unknown as Trigger); queueMicrotask(() => this.pass()); return result },
       ticket: id => this.store.tickets.get(id) as never,
       resultPending: (ticketId, task) => this.resultPending(ticketId, task),
@@ -223,6 +223,7 @@ export class SuperagentHost {
     this.root = new RootDispatch({
       path: join(dir, 'root.json'), now: () => this.now(), logger: d.logger,
       route: (address, text, context) => this.a2a.routeAs(address, text, context),
+      progress: (ticketId, summary) => { try { this.engine.report(ticketId, { state: 'progress', summary: clip(summary, 2_000) }); this.pass() } catch (error) { this.d.logger.warn('superagent: child progress on %s not recorded: %s', ticketId, String(error)) } },
       forwarded: ticketId => { try { this.engine.report(ticketId, { state: 'progress', summary: '答复已转给子团队', question: null }) } catch (error) { this.d.logger.warn('superagent: question on %s not cleared: %s', ticketId, String(error)) } },
       report: (ticketId, child, state, summary) => { this.engine.report(ticketId, { state, summary: clip(summary, 2_000) }); this.relayReport(ticketId, state, summary); this.pass(); void child },
       ask: (ticketId, child, question, options, recommended) => {
@@ -1175,6 +1176,15 @@ export class SuperagentHost {
   get a2aAddress(): string | undefined { return this.settingsValue.sources.a2a ? this.a2a.address : undefined }
   /** Whether an approved outbound card is being sent to `target` right now (its decision is the sender scope then). */
   outboundAuthorizes(target: string): boolean { return this.outbound.authorizes(target) }
+  /** superagent-root-team S5: whether `target` is one of this root's child teams (its address, with or without `@<fp8>`). */
+  childAuthorizes(target: string): boolean {
+    try { return this.childTeams().some(child => target === child.ref || target === child.ref.replace(/@[0-9a-f]{8}$/, '')) } catch { return false }
+  }
+  /** S5: the root team identities this team takes requests from (on its bot list, with the root rule). */
+  admittedRoots(): string[] {
+    const now = this.settingsValue
+    return now.rules.some(rule => rule.name === ROOT_RULE && rule.enabled) ? now.bots.a2a.filter(handle => handle.startsWith('superagent-team/')) : []
+  }
 
   /** Send pending a2a Channel messages; a thrown send stays pending for the next pass (a2a-watch gives up after 24h). */
   private flushOutbox(): void {

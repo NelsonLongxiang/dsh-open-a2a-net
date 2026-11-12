@@ -46,6 +46,8 @@ export interface A2aSourceDeps {
    * the claim to this very host either way.
    */
   readonly claimAudience?: () => string | undefined
+  /** superagent-root-team S5: the capabilities this team's identity declares on its card (a root: progress, seats, rework). */
+  readonly declares?: () => readonly string[]
   readonly enabled: () => boolean
   readonly receive: (trigger: Trigger) => ReceiveResult
   readonly ticket: (id: string) => TicketView | undefined
@@ -161,8 +163,8 @@ export class A2aSource {
   private env(): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {}
     for (const [name, value] of Object.entries(process.env)) if (!name.startsWith('A2A_')) env[name] = value
-    const home = this.d.homeUrl(), key = this.d.apiKey(), audience = this.d.claimAudience?.()
-    return { ...env, A2A_CLI_HOME: this.identityDir, ...(home !== undefined ? { A2A_HOME: home } : {}), ...(key !== undefined && key !== '' ? { A2A_KEY: key } : {}), ...(audience !== undefined && audience !== '' ? { A2A_CLAIM_AUDIENCE: audience } : {}) }
+    const home = this.d.homeUrl(), key = this.d.apiKey(), audience = this.d.claimAudience?.(), declared = this.d.declares?.() ?? []
+    return { ...env, A2A_CLI_HOME: this.identityDir, ...(home !== undefined ? { A2A_HOME: home } : {}), ...(key !== undefined && key !== '' ? { A2A_KEY: key } : {}), ...(audience !== undefined && audience !== '' ? { A2A_CLAIM_AUDIENCE: audience } : {}), ...(declared.length > 0 ? { A2A_DECLARE: declared.join(',') } : {}) }
   }
 
   private commands(signal?: AbortSignal): Commands {

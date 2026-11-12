@@ -4,6 +4,7 @@
  * unchanged; what the faces need from the host's closure comes in as {@link SuperagentFaceDeps}.
  * @module @nelsonlongxiang/dsh-open-a2a-net/faces/superagent
  */
+import { CLI_HANDLE_RE } from '../cli-deposit.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type WebServer from '@deepseek-ai/dsh-host-webserver'
@@ -141,6 +142,11 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
             } else if (fields.action === 'reevaluate') {
               // Design superagent-reevaluate-note D1: the owner asks for a fresh judgement of a stored message.
               send(200, sa.reevaluate(typeof fields.trigger_id === 'string' ? fields.trigger_id : ''))
+            } else if (fields.action === 'admit-root') {
+              // superagent-root-team S5: the owner lets a root team on another host send this team requests.
+              const handle = typeof fields.handle === 'string' ? fields.handle.trim() : ''
+              if (!CLI_HANDLE_RE.test(handle)) send(200, { ok: false, error: 'handle (the root team identity, <name>/<16 hex>) is required' })
+              else { sa.admitRequester(handle); send(200, { ok: sa.admittedRoots().includes(handle), admits: sa.admittedRoots() }) }
             } else if (fields.action === 'move-seat') {
               // Named dispatch N2: the owner moves a seat (its stable id) to the session that replaced its member.
               const moved = sa.named.moveSeat(typeof fields.from === 'string' ? fields.from : '', typeof fields.to === 'string' ? fields.to : '')
@@ -153,7 +159,7 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
                 : sa.engine.retryTicket(ticketId)
               sa.pass()
               send(200, { ok: true, ticket })
-            } else send(200, { ok: false, error: 'action must be settings, request, answer, serve, move-seat, stop, retry or reevaluate' })
+            } else send(200, { ok: false, error: 'action must be settings, request, answer, serve, move-seat, admit-root, stop, retry or reevaluate' })
           } catch (error) { send(200, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
         }, 64_000)
       }),

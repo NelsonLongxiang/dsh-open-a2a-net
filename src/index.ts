@@ -1982,7 +1982,7 @@ export function apply(ctx: Context, config: Config): void {
             // gh#152: members are read through the local tiers' lens — one of
             // this host's own handles resolves to the session it names, and
             // the two stored shapes of one session publish as ONE handle.
-            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...(superagentTeams?.all().some(team => team.a2aAddress !== undefined && team.settings.canvas === name) === true ? { superagentTeam: true as const } : {}), ...(canvasStore.isRoot(name) ? { root: true as const } : {}) })) } : {}),
+            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...(superagentTeams?.all().some(team => team.a2aAddress !== undefined && team.settings.canvas === name) === true ? { superagentTeam: true as const } : {}), ...(canvasStore.isRoot(name) ? { root: true as const } : {}), ...((admits => admits.length > 0 ? { admits } : {})(superagentTeams?.all().find(team => team.a2aAddress !== undefined && team.settings.canvas === name)?.admittedRoots() ?? [])) })) } : {}),
             ...(named && lanIp !== '' ? { lanIp } : {}),
             ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
             description: `A2A node exposing team ${config.team}${named ? '' : ' (minimal card — OriginClaim envelope required for the full card: X-A2A-Caller/-Url/-Ts/-Sig signed with your card key)'}`,
@@ -2196,8 +2196,17 @@ export function apply(ctx: Context, config: Config): void {
    * and whose card (fetched and verified, in the card cache) carries `capabilities[name] === true`. Anything else — a
    * CLI identity, an unpinned or unknown caller, a card not fetched yet — declares nothing.
    */
+  /** superagent-root-team S5: the capabilities verified remote CLI identities declared, by handle. */
+  const cliCapabilities = new Map<string, { capabilities: Record<string, unknown>; expiresAt: number }>()
   function callerCapability(caller: string, name: string): boolean {
-    return pinnedCallerDeclares(caller, name, canvasStore.list().flatMap(canvas => canvasStore.membersOf(canvas)), ref => canvasStore.ownerKeyOf(ref), [...cardCache.values()].map(entry => entry.card))
+    if (pinnedCallerDeclares(caller, name, canvasStore.list().flatMap(canvas => canvasStore.membersOf(canvas)), ref => canvasStore.ownerKeyOf(ref), [...cardCache.values()].map(entry => entry.card))) return true
+    // superagent-root-team S5: a CLI identity (a root team's) declares on its own signed card — read from the deposit on
+    // this host, or from the card verified when its request arrived from another host. The team's bot list still gates it.
+    if (!CLI_HANDLE_RE.test(caller)) return false
+    const local = cliDeposits.get(caller)
+    if (local !== undefined) { try { return (JSON.parse(local.cardJson) as { capabilities?: Record<string, unknown> } | null)?.capabilities?.[name] === true } catch { return false } }
+    const seen = cliCapabilities.get(caller)
+    return seen !== undefined && seen.expiresAt > Date.now() && seen.capabilities[name] === true
   }
 
   async function teamCanvasSend(args: readonly string[]): Promise<string | undefined> {
@@ -2742,6 +2751,14 @@ export function apply(ctx: Context, config: Config): void {
       ...(options?.rawBody !== undefined ? { rawBody: options.rawBody } : {}),
     })
     if (!claim.ok && claim.reason !== 'absent') noteClaimReject(req, claim.reason)
+    // superagent-root-team S5: what a verified remote CLI identity declares, for callerCapability (bounded, newest kept).
+    if (claim.ok && claim.cli === true && claim.bound && typeof claim.caller === 'string') {
+      const card = claim.card as { capabilities?: unknown; expiresAt?: unknown }
+      const capabilities = typeof card.capabilities === 'object' && card.capabilities !== null ? card.capabilities as Record<string, unknown> : {}
+      cliCapabilities.delete(claim.caller)
+      cliCapabilities.set(claim.caller, { capabilities, expiresAt: typeof card.expiresAt === 'number' ? card.expiresAt : Date.now() + 3_600_000 })
+      if (cliCapabilities.size > 256) cliCapabilities.delete(cliCapabilities.keys().next().value!)
+    }
     // #312: recover bilateral seed evidence from a signed, reduction-only card,
     // never from a caller-selected unseeded URL and never recursively.
     const discovery = new URL(req.url ?? '/', 'http://x').searchParams.get('discovery') === '1'
@@ -3927,7 +3944,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
    * sends it. Signature, deposit and the receiving host's admission still apply.
    */
   function cardAuthorizedSend(handle: string, team: string): boolean {
-    return superagentTeams?.all().some(host => host.a2aAddress === handle && host.outboundAuthorizes(team)) === true
+    // superagent-root-team S5: a root's registered child teams are its standing sender scope (R2), like an approved card's address.
+    return superagentTeams?.all().some(host => host.a2aAddress === handle && (host.outboundAuthorizes(team) || host.childAuthorizes(team))) === true
   }
   const senderScopeRecords: OutboundScopeRecords = {
     zone: config.team, id8, teamsOf: id => teamMemberships.teamsOf(id), membersOf: team => teamMemberships.membersOf(team),

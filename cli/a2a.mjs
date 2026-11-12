@@ -48,7 +48,7 @@ const USAGE = `a2a-net CLI — aligned with the plugin's model tools ('a2a tools
 
 usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 
-户口制:   init <name> [--uuid 16hex] [--force] · publish [--owes] · inbox [--new|--wait|--hook] · thread <context_id> · receipt <task_id> <result…> · admission <caller> [--local] · revoke
+户口制:   init <name> [--uuid 16hex] [--force] · publish [--owes] [--declare progressReceipts,directedSeats,reworkReturns,teamRoster] · inbox [--new|--wait|--hook] · thread <context_id> · receipt <task_id> <result…> · admission <caller> [--local] · revoke
 对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…> [--task ID]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
@@ -109,7 +109,9 @@ admission: admission <caller> [--local] [--json]   how <caller> would be admitte
           host refuses or does not know the query`
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
-const VALUE_FLAGS = new Set(['--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets'])
+/** The capabilities a CLI identity may declare on its card (superagent-root-team S5). */
+const DECLARABLE = ['progressReceipts', 'teamRoster', 'directedSeats', 'reworkReturns']
+const VALUE_FLAGS = new Set(['--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets'])
 const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
@@ -862,7 +864,9 @@ async function publishDeposit() {
   const privateKey = createPrivateKey(id.privateKeyPem)
   // superagent p1-mailbox-owes (S33): --owes declares, in the signed card, that this identity owes a receipt for what
   // its mailbox takes; every publish (and --renew) states it afresh, so a publish without it withdraws the declaration.
-  const capabilities = { route: true, async: true, ...(has('--owes') ? { owes: true } : {}) }
+  // superagent-root-team S5: --declare (or A2A_DECLARE) adds the capabilities a requester takes — only these names.
+  const declared = (flag('--declare') ?? process.env.A2A_DECLARE ?? '').split(',').map(name => name.trim()).filter(name => DECLARABLE.includes(name))
+  const capabilities = { route: true, async: true, ...(has('--owes') ? { owes: true } : {}), ...Object.fromEntries(declared.map(name => [name, true])) }
   const card = signCard({ name: id.name, session: `cli-${id.name}`, team: id.handle, capabilities, expiresAt: Date.now() + 2 * 24 * 60 * 60 * 1000 }, privateKey)
   return await control({ action: 'publish', card: JSON.stringify(card) })
 }
