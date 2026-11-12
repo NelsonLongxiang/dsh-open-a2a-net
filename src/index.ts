@@ -47,7 +47,7 @@ import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
 import { applyOwnerSettings, loadSeatNames, type OwnerSettings } from './owner-settings.ts'
-import { CLI_HANDLE_RE, CliDepositStore } from './cli-deposit.ts'
+import { CLI_HANDLE_RE, CliDepositStore, remoteCliTarget } from './cli-deposit.ts'
 import { cliHomeChoices, decideCliHome } from './cli-home.ts'
 import { forwardScope, outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
 import { createDirectForward, ForwardBirths } from './direct-forward.ts'
@@ -2222,7 +2222,7 @@ export function apply(ctx: Context, config: Config): void {
     if (verb === 'receipt') {
       const task = args[1] ?? '', to = flagOf('--to') ?? ''
       const row = taskLedger.find(task)
-      if (row === undefined || teamMailboxOf(row.team) === undefined || to === '') return undefined
+      if (row === undefined || teamMailboxOf(row.team) === undefined || to === '' || remoteCliTarget(to, handle => cliDeposits.get(handle) !== undefined)) return undefined
       // Review of #442: switches are read before `--` only — the text after it may be anything.
       const switches = dash >= 0 ? args.slice(0, dash) : args
       const acknowledged = switches.includes('--acknowledged'), attention = switches.includes('--attention')
@@ -2256,7 +2256,7 @@ export function apply(ctx: Context, config: Config): void {
     }
     const to = args[1] ?? '', context = flagOf('--context') ?? '', followTask = flagOf('--task')
     const origin = taskLedger.list().find(r => r.contextId === context && teamMailboxOf(r.team) !== undefined)
-    if (origin === undefined || to === '') return undefined
+    if (origin === undefined || to === '' || remoteCliTarget(to, handle => cliDeposits.get(handle) !== undefined)) return undefined
     try {
       await dispatchAnywhere(to, text, session, context, new AbortController().signal, true, followTask)
       return JSON.stringify({ delivered: true, class: 'sent', ...(followTask !== undefined ? { task_id: followTask } : {}), team: to, context_id: context })
