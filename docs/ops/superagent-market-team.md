@@ -37,7 +37,7 @@ superagent 只接收运维已经建了链的调用方。宿主给来信判出的
    { "name": "market-rework", "text": "市场打回的事项（正文以「[打回重做]」开头）：接成新工单重做，范围以打回理由为准；不要挂回已结束的原工单。", "enabled": true }
    ```
 
-   这仍是总工按规则做的判断，不是宿主的硬保证；由宿主直接把打回接成新工单（市场名片声明 `reworkReturns`）要属主另行决定。
+   这条规则是给没有声明 `reworkReturns` 的调用方用的：总工按规则判断。市场名片声明 `capabilities.reworkReturns: true` 并在打回时带上派工行（见第 6 节「指名与打回」），宿主会直接把打回接成新工单，不经总工判断。
 
    这条规则放宽的是：总工可以不经人确认，就接下列在 bot 名单上的调用方（这里是市场）发来的、它判断属于这条规则的请求。谁能给这个团队派工、能派什么，由市场自己的权限判定把关；团队的工具边界、提问和审批照旧。只想接市场的部分工作时，把规则文字写窄（例如只写某个仓库或某类事项）。
 6. **核对准入**：在团队宿主上，用团队的 CLI 身份执行：
@@ -91,6 +91,11 @@ superagent 只接收运维已经建了链的调用方。宿主给来信判出的
 已实现（[superagent-market-progress-roster](../design/superagent-market-progress-roster.md) P3）：团队宿主每 5 分钟、以及席位变化 30 秒后，给画布上名片声明 `capabilities.teamRoster: true` 的远端成员发一份名册（`[A2A roster]`，任务号 `roster-<宿主指纹前 8 位>-<毫秒>`，不欠回执、不占槽）。
 
 已实现（[superagent-market-progress-roster](../design/superagent-market-progress-roster.md) P1/P2）：名片声明 `capabilities.progressReceipts: true` 的市场会收到进展消息 `progress-<task>-<n>`（带 `progress` 与子任务 `tickets`，不结清原派工，团队设置 `progressOff` 可关）；市场在自己那张工单的对话里接着发的话直接交给成员，不再经总工判定。
+
+已实现（[superagent-named-dispatch](../design/superagent-named-dispatch.md)，指名与打回）：请求正文第一行写派工行 `[A2A dispatch] {json}`，只对签名来信、且市场名片声明了对应能力时生效：
+  - `{"for":"<席位 id | 句柄 | 成员名>"}`（名片声明 `capabilities.directedSeats: true`）：总工只判接不接；接下后宿主交给指名的席位，席位忙就排队等。席位不在团队、不在线或句柄失效时，宿主在 `attention-<task>-<id>` 上提问，选项固定为「等」「换人」：答「换人」就去掉指名重新派，答「等」就一直等到这个席位能接。
+  - `{"rework":{"of":"<被打回的原任务号>"}}`（名片声明 `capabilities.reworkReturns: true`）：宿主直接接成新工单，标题「打回重做：<原工单标题>」，范围是正文，交给上次做这张单的成员，或者交给 `for` 指名的席位。
+  - 名册每个席位带稳定的 `seatId`，会话被替换后不变；属主用 `POST /__dsh_a2a/superagent {action:'move-seat', from, to}` 把席位移到新会话上。
 
 已实现（[receipt-envelope-fields](../design/receipt-envelope-fields.md)）：提问走自己的任务号 `attention-<task>-<提问 id>`，不欠回执，也不结清原派工；回执带接手人 `by`；`artifacts` 和结构化 `question` 的字段已可用。
 - 节点名册：任务号 `roster-<指纹>-<at>`，同样经 `/a2a/direct` 发送。

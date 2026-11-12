@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { TaskLedger } from '../../src/task-ledger.ts'
-import { formatReceipt, holdsRow, parseReceipt, receiptExtras, receiptTaskId } from '../../src/receipt.ts'
+import { formatReceipt, holdsRow, parseBy, parseReceipt, receiptExtras, receiptTaskId } from '../../src/receipt.ts'
 
 const flags = (values: Record<string, string>) => (name: string) => values[name]
 const ledger = () => { let t = 1_000_000; return new TaskLedger(join(mkdtempSync(join(tmpdir(), 'dsh-a2a-fields-')), 'a2a', 'tasks.json'), { now: () => t++ }) }
@@ -37,6 +37,13 @@ describe('the added envelope fields', () => {
     expect(receiptExtras(flags({ '--by': 'dsh/aaaa1111', '--by-role': 'member' }), false, 'x')).toEqual({ fields: { by: { seat: 'dsh/aaaa1111', role: 'member' } } })
     expect(receiptExtras(flags({ '--by': 'dsh/aaaa1111', '--by-role': 'boss' }), false, 'x')).toHaveProperty('error')
     expect(receiptExtras(flags({ '--by-role': 'member' }), false, 'x')).toHaveProperty('error')
+  })
+
+  it('by carries the seat\'s stable seatId; a bad one is refused, and it goes with --by', () => {
+    expect(receiptExtras(flags({ '--by': 'dsh/aaaa1111', '--by-seat-id': 'seat-1a2b3c4d', '--by-role': 'member' }), false, 'x')).toEqual({ fields: { by: { seat: 'dsh/aaaa1111', seatId: 'seat-1a2b3c4d', role: 'member' } } })
+    expect(receiptExtras(flags({ '--by': 'dsh/aaaa1111', '--by-seat-id': 'seat/中文' }), false, 'x')).toHaveProperty('error')
+    expect(receiptExtras(flags({ '--by-seat-id': 'seat-1a2b3c4d' }), false, 'x')).toHaveProperty('error')
+    expect(parseBy({ seat: 'dsh/aaaa1111', seatId: 'has space' })).toEqual({ seat: 'dsh/aaaa1111' })
   })
 
   it('an artifact may carry a title for people; an over-long or non-text one is dropped, the item kept', () => {

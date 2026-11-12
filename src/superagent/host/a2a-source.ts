@@ -78,9 +78,31 @@ export function runCli(args: string[], env: NodeJS.ProcessEnv, signal?: AbortSig
     child.on('close', code => {
       clearTimeout(timer)
       if (code === 0) resolve(stdout)
-      else reject(Object.assign(new Error(`a2a-net ${args[0] ?? ''} exited ${String(code)}: ${stderr.trim().slice(0, 400)}`), { exitCode: code ?? undefined, stdout }))
+      else reject(Object.assign(new Error(`a2a-net ${args[0] ?? ''} exited ${String(code)}: ${(stderr.trim() || cliRefusal(stdout).summary).slice(0, 400)}`), { exitCode: code ?? undefined, stdout }))
     })
   })
+}
+
+/**
+ * The refusal a `--json` run printed on stdout before exiting non-zero (its `error`, `next` and `task_id`): with `--json`
+ * the CLI writes nothing to stderr, so this is the only reason there is.
+ */
+export function cliRefusal(stdout: unknown): { summary: string; error?: string; task?: string } {
+  let out: Record<string, unknown> = {}
+  try { const parsed = JSON.parse(typeof stdout === 'string' ? stdout : '') as unknown; if (typeof parsed === 'object' && parsed !== null) out = parsed as Record<string, unknown> } catch { /* not JSON */ }
+  const error = typeof out.error === 'string' && out.error !== '' ? out.error : undefined
+  const next = typeof out.next === 'string' && out.next !== '' ? out.next : undefined
+  const task = typeof out.task_id === 'string' && out.task_id !== '' ? out.task_id : undefined
+  const summary = [error ?? (typeof stdout === 'string' && stdout.trim() !== '' ? stdout.trim() : 'no reason given'), ...(next !== undefined ? [`next: ${next}`] : []), ...(task !== undefined ? [`task ${task}`] : [])].join(' · ')
+  return { summary, ...(error !== undefined ? { error } : {}), ...(task !== undefined ? { task } : {}) }
+}
+
+/** The home host refused to forward because the team identity's CLI deposit is not online there (direct-forward.ts). */
+const DEPOSIT_REFUSAL = /not a proven online local CLI deposit|local CLI deposit expired/
+
+/** A route that did not go out: the reason the CLI gave and the task id it used, when it printed one. */
+export class RouteRefused extends Error {
+  constructor(message: string, readonly task?: string) { super(message) }
 }
 
 export class A2aSource {
@@ -263,8 +285,27 @@ export class A2aSource {
   async askReview(address: string, text: string): Promise<string | undefined> {
     const check = JSON.parse(await this.context.commands.run('a2a-net', ['admission', address, '--json'])) as { admitted?: unknown; rule?: unknown }
     if (check.admitted !== true || typeof check.rule !== 'string' || !LINK_RULES.has(check.rule)) return undefined
-    const sent = JSON.parse(await this.context.commands.run('a2a-net', ['route', address, '--json', '--', text])) as { task_id?: unknown }
-    return typeof sent.task_id === 'string' ? sent.task_id : undefined
+    const route = async (): Promise<string | undefined> => {
+      const sent = JSON.parse(await this.context.commands.run('a2a-net', ['route', address, '--json', '--', text])) as { task_id?: unknown }
+      return typeof sent.task_id === 'string' ? sent.task_id : undefined
+    }
+    try { return await route() } catch (error) {
+      const refusal = cliRefusal((error as { stdout?: unknown }).stdout)
+      if (refusal.error === undefined || !DEPOSIT_REFUSAL.test(refusal.error)) throw this.refused(error, refusal)
+      // The home host refused before any dispatch: nothing reached the address. Renew the team identity's deposit there
+      // (as the watch loop does, which does not run while the Source is off or setup is pending) and send once more.
+      try {
+        const config = this.context.config<A2aConfig>(KIND)
+        await this.context.commands.run('a2a-net', config?.mode === 'reply' ? ['publish', '--owes'] : ['publish'])
+        this.context.state.set(KV.renewedAt, Date.now())
+      } catch (publishError) { throw this.refused(error, refusal, `deposit renewal failed: ${String(publishError).slice(0, 200)}`) }
+      try { return await route() } catch (again) { throw this.refused(again, cliRefusal((again as { stdout?: unknown }).stdout), 'after renewing the deposit') }
+    }
+  }
+
+  private refused(error: unknown, refusal: ReturnType<typeof cliRefusal>, note?: string): Error {
+    const base = refusal.error !== undefined ? `a2a-net route refused: ${refusal.summary}` : String(error instanceof Error ? error.message : error)
+    return new RouteRefused(note !== undefined ? `${base} (${note})` : base, refusal.task)
   }
 
   /** Whether the A2A request `task` has had its one formal receipt (a2a-watch records it once it went out). */

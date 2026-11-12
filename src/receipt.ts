@@ -122,7 +122,9 @@ export const SEAT_ROLES = ['router', 'member', 'observer'] as const
  * Who took the work up: a seat id (a session id or a qualified member ref), its display name, the team it serves, and its
  * role — `router` until a member holds the work (an acknowledgement, a queued step), then the member.
  */
-export interface ReceiptBy { seat: string; name?: string; team?: string; role?: (typeof SEAT_ROLES)[number] }
+export interface ReceiptBy { seat: string; seatId?: string; name?: string; team?: string; role?: (typeof SEAT_ROLES)[number] }
+/** A seat's stable id (superagent's `seat-<8 hex>`, the roster's `seatId`): it outlives the session behind the seat. */
+export const SEAT_ID_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/
 /** One product of the work, named by the system that keeps it (`kind` such as table, file, sop-run), with a title for people (display only). */
 export interface ReceiptArtifact { kind: string; id: string; title?: string }
 /** A question for the caller: its id, its text, the answers offered and the one taken when nobody answers. */
@@ -146,8 +148,9 @@ export function parseBy(value: unknown): ReceiptBy | undefined {
   const seat = shortText(r['seat'])
   if (seat === undefined) return undefined
   const name = shortText(r['name']), team = shortText(r['team'])
+  const seatId = typeof r['seatId'] === 'string' && SEAT_ID_PATTERN.test(r['seatId']) ? r['seatId'] : undefined
   const role = typeof r['role'] === 'string' && (SEAT_ROLES as readonly string[]).includes(r['role']) ? r['role'] as ReceiptBy['role'] : undefined
-  return { seat, ...(name !== undefined ? { name } : {}), ...(team !== undefined ? { team } : {}), ...(role !== undefined ? { role } : {}) }
+  return { seat, ...(seatId !== undefined ? { seatId } : {}), ...(name !== undefined ? { name } : {}), ...(team !== undefined ? { team } : {}), ...(role !== undefined ? { role } : {}) }
 }
 
 /** The `artifacts` field, or undefined when it holds no well-formed item; malformed items are dropped. */
@@ -335,10 +338,12 @@ export function receiptExtras(flag: (name: string) => string | undefined, attent
   if (seat !== undefined) {
     const role = flag('--by-role')
     if (role !== undefined && !(SEAT_ROLES as readonly string[]).includes(role)) return { error: `--by-role takes ${SEAT_ROLES.join(', ')}` }
-    const by = parseBy({ seat, name: flag('--by-name'), team: flag('--by-team'), role })
+    const seatId = flag('--by-seat-id')
+    if (seatId !== undefined && !SEAT_ID_PATTERN.test(seatId)) return { error: '--by-seat-id takes 1 to 64 of A-Z a-z 0-9 . _ : -' }
+    const by = parseBy({ seat, seatId, name: flag('--by-name'), team: flag('--by-team'), role })
     if (by === undefined) return { error: `--by takes a seat id of at most ${String(RECEIPT_FIELD_LIMITS.short)} characters` }
     fields.by = by
-  } else if (flag('--by-name') !== undefined || flag('--by-team') !== undefined || flag('--by-role') !== undefined) return { error: '--by-name, --by-team and --by-role go with --by' }
+  } else if (flag('--by-name') !== undefined || flag('--by-team') !== undefined || flag('--by-role') !== undefined || flag('--by-seat-id') !== undefined) return { error: '--by-name, --by-team, --by-role and --by-seat-id go with --by' }
   const artifacts = flag('--artifacts')
   if (artifacts !== undefined) {
     // KIND:ID[,KIND:ID…], or a JSON array [{kind, id, title?}] when titles are wanted (a title may hold commas and colons).

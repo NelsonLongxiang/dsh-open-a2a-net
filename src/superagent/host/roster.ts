@@ -15,6 +15,8 @@ const ROSTER_SEATS_CAP = 64
 
 export interface RosterSeat {
   seat: string
+  /** Named dispatch N2: the seat's stable id, kept when its session is replaced (the market keys assignments on it). */
+  seatId?: string
   name?: string
   team: string
   role: 'router' | 'member' | 'observer'
@@ -34,6 +36,7 @@ export interface RosterDeps {
   readonly handleOf: (sessionId: string) => string
   readonly nameOf: (sessionId: string) => string | undefined
   readonly online: (sessionId: string) => boolean
+  readonly seatIdOf?: (sessionId: string) => string | undefined
   readonly loadOf: (sessionId: string) => { active: number; queued: number; since?: string }
   readonly hostFingerprint: () => string | undefined
   readonly nowMs: () => number
@@ -41,7 +44,7 @@ export interface RosterDeps {
 }
 
 /** The team's seats as the report lists them. */
-export function rosterSeats(d: Pick<RosterDeps, 'team' | 'handleOf' | 'nameOf' | 'online' | 'loadOf'>): RosterSeat[] {
+export function rosterSeats(d: Pick<RosterDeps, 'team' | 'handleOf' | 'nameOf' | 'online' | 'loadOf' | 'seatIdOf'>): RosterSeat[] {
   const team = d.team()
   if (team === undefined) return []
   const seats: RosterSeat[] = []
@@ -53,7 +56,8 @@ export function rosterSeats(d: Pick<RosterDeps, 'team' | 'handleOf' | 'nameOf' |
     const canvasAddress = `${seat.split('/')[0] ?? ''}/canvas/${team.canvas}`
     const name = d.nameOf(id)
     const load = role === 'member' ? d.loadOf(id) : { active: 0, queued: 0 }
-    seats.push({ seat, ...(name !== undefined && name !== '' ? { name: name.slice(0, 200) } : {}), team: canvasAddress, role, online: d.online(id), active: load.active, queued: load.queued, ...(load.since !== undefined ? { lastActiveAt: load.since } : {}) })
+    const seatId = d.seatIdOf?.(id)
+    seats.push({ seat, ...(seatId !== undefined ? { seatId } : {}), ...(name !== undefined && name !== '' ? { name: name.slice(0, 200) } : {}), team: canvasAddress, role, online: d.online(id), active: load.active, queued: load.queued, ...(load.since !== undefined ? { lastActiveAt: load.since } : {}) })
   }
   add(team.router, 'router')
   for (const id of team.members) add(id, 'member')

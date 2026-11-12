@@ -2099,6 +2099,7 @@ export function apply(ctx: Context, config: Config): void {
     memberTurn: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : memberTurnFrom(id, sessionEventsOf(agent), ctx.get('jobs' as never)) },
     teamSend: args => teamCanvasSend(args),
     memberDeclares: (ref, capability) => { const member = splitQualifiedMember(ref); return member !== undefined && callerCapability(member.handle, capability) },
+    callerDeclares: (caller, capability) => callerCapability(caller, capability),
     rosterSend: async (ref, text, taskId) => { await dispatchAnywhere(ref, text, session, undefined, AbortSignal.timeout(15_000), true, taskId) },
     hostFingerprint: () => canvasOwnerFingerprint(encodePublicKey(createPublicKey(nodePrivateKey))),
   }) : undefined

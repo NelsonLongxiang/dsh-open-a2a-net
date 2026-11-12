@@ -98,6 +98,8 @@ export interface SuperagentHostDeps {
    * debt booked, no queue slot), on its own task id. The host's card key fingerprint names the host in the report.
    */
   readonly memberDeclares?: (ref: string, capability: string) => boolean
+  /** Named dispatch N1: whether an A2A caller (its handle) is a pinned canvas remote member whose verified card declares a capability. */
+  readonly callerDeclares?: (caller: string, capability: string) => boolean
   readonly rosterSend?: (ref: string, text: string, taskId: string) => Promise<void>
   readonly hostFingerprint?: () => string | undefined
   /** The canvas teams this host owns, by name (the owner binds one of them). */

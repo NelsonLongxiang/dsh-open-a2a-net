@@ -128,12 +128,17 @@ export class OutboundRequests {
     const header = `[来自 superagent 团队 ${team} 的请求 · 工单「${clip(titleOf(record.ticketId) ?? '', 80)}」]`
     if (!approved) { record.state = 'declined'; this.save(); this.d.note(record.ticketId, `对外请求（发往 ${record.address}）未获批准，没有发出。`); return undefined }
     let task: string | undefined
-    try { task = await this.d.ask(record.address, `${header}\n${record.text}`) } catch (error) { record.error = clip(String(error), 300) }
+    try { task = await this.d.ask(record.address, `${header}\n${record.text}`) } catch (error) {
+      record.error = clip(error instanceof Error ? error.message : String(error), 600)
+      // The task id the refused attempt used, for reconciliation with the host's ledger; never matched as an answer (O5 reads sent only).
+      const used = (error as { task?: unknown }).task
+      if (typeof used === 'string' && used !== '') record.task = used
+    }
     if (task === undefined) {
       record.state = 'failed'
       record.error ??= 'the address is not reachable from this host, or this host is not admitted there'
       this.save()
-      this.d.note(record.ticketId, `对外请求（发往 ${record.address}）已获批准，但没能发出：${record.error}`)
+      this.d.note(record.ticketId, `对外请求（发往 ${record.address}${record.task !== undefined ? `，task ${record.task}` : ''}）已获批准，但没能发出：${record.error}`)
       return undefined
     }
     record.state = 'sent'
