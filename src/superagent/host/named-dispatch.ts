@@ -18,6 +18,7 @@ export const NAMED_CAPABILITY = 'directedSeats'
 export const REWORK_CAPABILITY = 'reworkReturns'
 export const WAIT = '等'
 export const SWAP = '换人'
+/** How long a seat that left keeps its id (a dispatch naming it then gets the question, not an unknown name). */
 export const SEAT_LEFT_KEEP_MS = 30 * 86_400_000
 
 /**

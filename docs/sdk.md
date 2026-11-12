@@ -33,15 +33,15 @@ const rework = formatDispatch({ rework: { of: 'wbe-1.d26.q7.a1' } }, '第三列�
 `parseReceipt` / `formatReceipt` 与信封类型（`by`（含 `seatId`）、`artifacts`、`question`、progress、tickets）——同 src/receipt.ts。请求方按任务号分类收到的回执：
 
 ```js
-taskKind('ack-T1')            // { kind: 'ack', task: 'T1' }            —— 已收
-taskKind('progress-T1-3')     // { kind: 'progress', task: 'T1', n: 3 }  —— 第 3 步进展
-taskKind('attention-T1-q7')   // { kind: 'attention', task: 'T1', questionId: 'q7' } —— 提问
-taskKind('receipt-T1')        // { kind: 'receipt', task: 'T1' }         —— 正式结局
+taskKind('ack-direct-000000000001')   // { kind: 'ack', task: 'direct-000000000001' } —— 已收（任务号里的 '-' 不碍事：按前缀和最后一段读）
+taskKind('progress-direct-000000000001-3') // { kind: 'progress', task: 'direct-000000000001', n: 3 }
+taskKind('attention-direct-000000000001-q1a2b3') // { kind: 'attention', task: 'direct-000000000001', questionId: 'q1a2b3' }
+taskKind('receipt-wbe-304f27617fe74277.d26.a1') // { kind: 'receipt', task: 'wbe-304f27617fe74277.d26.a1' }
 taskKind('roster-ab12cd34-1770000000000') // { kind: 'roster', host: 'ab12cd34' } —— 名册，不是回执
 ```
 
-- `holdsRow(id)`：这个任务号上的回执**持行不结清**吗（ack / attention / progress 持行；`receipt-<task>` 结清；名册不算）。
-- `receiptTaskId(task)`：`'receipt-' + task`——正式结局骑的任务号。
+- `taskHoldsRow(id)`：这个任务号上的回执**持行不结清**吗（ack / attention / progress 持行；`receipt-<task>` 结清；名册不算）。手里已有信封时用回执模块自己的 `holdsRow(envelope)`（同一问题、按信封判）。
+- `receiptTaskId(task, disposition, …)`：回执模块自己的构造器——`'result'` 得 `receipt-<task>`、`'acknowledged'` 得 `ack-<task>`、progress/attention 带各自末段。
 
 ## 名册
 
