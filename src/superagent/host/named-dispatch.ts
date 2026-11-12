@@ -46,6 +46,24 @@ export function parseDispatch(delivered: string): { line: DispatchLine; body: st
   return { line: { ...(named !== undefined ? { for: named } : {}), ...(rework !== undefined ? { rework } : {}) }, body: newline === -1 ? '' : text.slice(newline + 1).trim() }
 }
 
+/**
+ * The option a requester's answer picks, read from the answer itself: under the network's header, a JSON envelope's
+ * `answer.text` (the market's workbench event) or `text`, else the message's first line. 「换人」 is checked first; a
+ * name or another field that merely contains 「等」 elsewhere in the envelope is not read.
+ */
+export function answerChoice(delivered: string): typeof WAIT | typeof SWAP | undefined {
+  const body = delivered.replace(DIRECT_HEADER, '').trim()
+  let said: string | undefined
+  try {
+    const value = JSON.parse(body) as { answer?: { text?: unknown }; text?: unknown }
+    said = typeof value?.answer?.text === 'string' ? value.answer.text : typeof value?.text === 'string' ? value.text : undefined
+  } catch { said = body.split('\n').find(line => line.trim() !== '') }
+  const option = (said ?? '').trim().replace(/^[「『"'“]+/, '')
+  if (option.startsWith(SWAP)) return SWAP
+  if (option.startsWith(WAIT)) return WAIT
+  return undefined
+}
+
 interface SeatRow { member: string; left?: string }
 interface Hold { wanted: string; why: string; asked?: string; answered?: 'wait'; choosing?: true }
 /** `reworks`: a rework ticket's original title (the first request's), so a return of a return is titled after that one. */
@@ -224,8 +242,9 @@ export class NamedDispatch {
   answered(ticketId: string, text: string): void {
     const hold = this.data.holds[ticketId]
     if (hold === undefined || hold.asked === undefined || hold.choosing) return
-    const swap = text.includes(SWAP), wait = !swap && text.includes(WAIT)
-    if (!swap && !wait) return
+    const choice = answerChoice(text)
+    if (choice === undefined) return
+    const swap = choice === SWAP, wait = choice === WAIT
     this.clearQuestion(ticketId, swap ? '请求方选择换人' : '请求方选择等指名的成员')
     if (wait) { this.data.holds[ticketId] = { ...hold, answered: 'wait' }; this.save(); return }
     Reflect.deleteProperty(this.data.named, ticketId)
