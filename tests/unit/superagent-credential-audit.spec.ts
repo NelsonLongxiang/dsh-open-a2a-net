@@ -31,6 +31,18 @@ describe('what a call touches', () => {
     expect(credentialAccess({ command: 'ls ~/Library/Application\\ Support/Claude/side-session-notes' })).toEqual(['other-session'])
   })
 
+  it('another team\'s identity key, the host\'s state and profiles, the node key and the ygl database (2026-11-12)', () => {
+    for (const command of [
+      'cat ~/.dsh/state/superagent-a2a/a2a/superagent/teams/ac2f382e/team-cli/cli.json',
+      'cat ~/.a2a-review-private/p4/cli-bot/cli.json',
+      'ls ~/.dsh/state/superagent-a2a/a2a/',
+      'cat ~/.dsh/state/superagent-a2a/a2a/node-key.pem',
+      'grep apiKey ~/.dsh/profiles/superagent/cordis.patch.yml',
+      'sqlite3 ~/.ygl-trees/ygl-trees.db .tables',
+      'cp ~/work/team-home/ygl-home/ygl-trees.db /tmp/x.db',
+    ]) expect(credentialAccess({ command }), command).toContain('credential-file')
+  })
+
   it('ordinary work touches nothing', () => {
     for (const command of ['npm test', 'git status --short', 'cat src/index.ts', 'node -e "console.log(obj.key)"', 'grep -rn token src/receipt.ts', 'ls docs/design', 'curl -sS http://127.0.0.1:9890/api/health']) {
       expect(credentialAccess({ command }), command).toEqual([])
