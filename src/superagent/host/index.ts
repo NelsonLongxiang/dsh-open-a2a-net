@@ -151,7 +151,7 @@ export class SuperagentHost {
       },
     }
     this.a2a = new A2aSource({
-      dir, homeUrl: () => d.homeUrl?.(), apiKey: () => d.apiKey?.(), enabled: () => this.settingsValue.sources.a2a,
+      dir, homeUrl: () => d.homeUrl?.(), apiKey: () => d.apiKey?.(), claimAudience: () => d.claimAudience?.(), enabled: () => this.settingsValue.sources.a2a,
       receive: trigger => { this.reviews.received(trigger as unknown as Trigger); this.outbound.received(trigger as unknown as Trigger); const result = this.engine.receive(trigger as unknown as Trigger); queueMicrotask(() => this.pass()); return result },
       ticket: id => this.store.tickets.get(id) as never,
       resultPending: (ticketId, task) => this.resultPending(ticketId, task),
