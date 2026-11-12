@@ -1,6 +1,6 @@
 /**
  * The workbench's left rail as tabs (2026-10-23 rewrite): one tab per pane
- * — 目录 · 主机 · 台账 · 活动 · 规划 — each panel full-height with its own
+ * — 目录 · 主机 · 台账 · 活动 · 待办 — each panel full-height with its own
  * scroll, replacing the single accordion scroll where the host rail sat
  * last and the ledger pushed everything below the fold.
  *
