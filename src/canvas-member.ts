@@ -10,6 +10,27 @@ export function splitQualifiedMember(ref: string): QualifiedMember | undefined {
   const match = /^([^/\s@]+\/[0-9a-f]{8})@([0-9a-f]{8})$/.exec(ref)
   return match ? { handle: match[1]!, fingerprint: match[2]! } : undefined
 }
+/**
+ * docs/design/superagent-root-team.md R7: a root team's child is another team, named by its canvas address and the
+ * fingerprint of the key of the host that owns it: `<zone>/canvas/<name>@<fp8>`.
+ */
+export interface TeamRef { zone: string; name: string; team: string; fingerprint: string }
+export function splitTeamRef(ref: string): TeamRef | undefined {
+  const match = /^([^/\s@]+)\/canvas\/([^/\s@]{1,40})@([0-9a-f]{8})$/.exec(ref)
+  return match ? { zone: match[1]!, name: match[2]!, team: `${match[1]!}/canvas/${match[2]!}`, fingerprint: match[3]! } : undefined
+}
+/** Whether `key` is a well-formed ed25519 key whose fingerprint the ref names. */
+export function validKeyFor(fingerprint: string, key: string): boolean {
+  if (!key || canvasOwnerFingerprint(key) !== fingerprint) return false
+  try {
+    const bytes = Buffer.from(key, 'base64'), publicKey = createPublicKey({ key: bytes, format: 'der', type: 'spki' })
+    return publicKey.asymmetricKeyType === 'ed25519' && publicKey.export({ format: 'der', type: 'spki' }).equals(bytes) && bytes.toString('base64') === key
+  } catch { return false }
+}
+export function validTeamOwner(ref: string, key: string): boolean {
+  const team = splitTeamRef(ref)
+  return team !== undefined && validKeyFor(team.fingerprint, key)
+}
 export function validMemberOwner(ref: string, key: string): boolean {
   const member = splitQualifiedMember(ref)
   if (!member || !key || canvasOwnerFingerprint(key) !== member.fingerprint) return false

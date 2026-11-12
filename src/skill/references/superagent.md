@@ -133,6 +133,18 @@ A member can sit on another host: another physical node, or another DSH instance
 - **On the member host:** `POST { action: 'serve', team: '<zone>/canvas/<name>@<fp8>', members: [<local session ids>] }` — the team's canvas id, whose fingerprint names its owner. The host finds the linked peer whose signed card has that key and advertises that canvas, and pins the key. Only that key may assign work to those sessions (`/a2a/superagent-member`). Those sessions report with `a2a_ticket_report` as usual, and the host forwards the report, signed. `team: null` leaves the team. This is the member host owner's consent: a team host cannot take another host's sessions on its own. A served session on another preset than `superagent-member` (a serve stored before presets) takes no new work — a stop still reaches it — and the state reports it as `servesProblem` until it is served from a member-preset session.
 - Serving sessions are isolated from A2A like any member.
 
+## Root teams (in progress)
+
+A root team's workers are other teams (docs/design/superagent-root-team.md). So far the canvas holds them; dispatch to child teams comes next.
+
+- **Marking a root.** `POST /__dsh_a2a/canvas { action: 'set-root', name, root: true|false }`. A root with child teams stays a root until they are removed.
+- **Adding a child.** `{ action: 'add-team', name, team: '<zone>/canvas/<name>@<fp8>', slots? }`. The child must be one of two things, and must not be a root or the root itself:
+  - a superagent team on this host taking requests;
+  - a superagent team on a linked peer's signed card under that key.
+- **Removing and sizing a child.** `{ action: 'remove-team', name, team }` and `{ action: 'set-team-slots', name, team, slots }`. `slots` is 1 to 16, default 3: how many root tickets that child takes at once.
+- **Where they are kept.** Children are kept apart from the canvas's members and never route as members.
+- **On the card.** The host's card lists a root with `root: true` in `canvasOrg`, so no other host takes it as a child.
+
 ## Named dispatch and rework returns
 
 A request whose first line is `[A2A dispatch] {json}` is read by the host, not only by the router, when it comes signed from a pinned canvas remote member whose card declares the capability (docs/design/superagent-named-dispatch.md).
