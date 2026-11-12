@@ -38,7 +38,7 @@ import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef, legacyBareMember } from './canvas-store.ts'
 import { linkRootRequester } from './canvas-root.ts'
-import { contextLive } from './context-live.ts'
+import { inactiveContextError } from './context-live.ts'
 import { splitQualifiedMember, memberProvenance, qualifiedSessionMember, pinnedCallerDeclares } from './canvas-member.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
 import { LayoutStore } from './layout-store.ts'
@@ -521,8 +521,13 @@ export function apply(ctx: Context, config: Config): void {
     const settled = ctx.get('loader')?.await()
     if (settled === undefined) read()
     else void settled.then(() => {
-      if (contextLive(ctx)) read()
-      else logger.warn('a2a: the plugin context stopped before the web server settled; that work is skipped (the next activation redoes it)')
+      if (ctx.fiber.uid === null) return
+      try { read() } catch (error) {
+        // The plugin's fiber went inactive while this waited (a reload swapped a service it injects): a late read must not
+        // take the host down. The fiber's next activation runs the plugin again and redoes this work.
+        if (!inactiveContextError(error)) throw error
+        logger.warn('a2a: the plugin context went inactive before the web server settled; skipped (the next activation redoes it)')
+      }
     }, () => {
       // A failed boot never mounts the web server row; the absent path stays
       // silent so a dying tree logs its own failure once.
@@ -1567,7 +1572,7 @@ export function apply(ctx: Context, config: Config): void {
     })
     let reconcilePostponed = 0
     const reconcileTick = (): void => {
-      if (reconcileCancelled || !contextLive(ctx)) return
+      if (reconcileCancelled || ctx.fiber.uid === null) return
       const interval = Math.max(50, config.wakeReconcileIntervalMs)
       if (!config.wakeReconcile || wakeFace() === undefined) {
         // Late-mounting wake face: keep the cadence so a session controller
@@ -1629,7 +1634,7 @@ export function apply(ctx: Context, config: Config): void {
           // A quick re-check after each attempt keeps a multi-id drain
           // moving at the yield cadence; the interval cadence resumes as
           // soon as a pass finds nothing due.
-          if (!reconcileCancelled && contextLive(ctx)) schedule(reconcileTick, Math.min(RECONCILE_YIELD_MS, interval))
+          if (!reconcileCancelled && ctx.fiber.uid !== null) schedule(reconcileTick, Math.min(RECONCILE_YIELD_MS, interval))
         })
     }
 
@@ -1683,7 +1688,7 @@ export function apply(ctx: Context, config: Config): void {
         prewarmStatus.state = 'draining'
         let index = 0
         const step = (): void => {
-          if (prewarmCancelled || !contextLive(ctx)) {
+          if (prewarmCancelled || ctx.fiber.uid === null) {
             prewarmStatus.state = 'cancelled'
             return
           }
@@ -1723,7 +1728,7 @@ export function apply(ctx: Context, config: Config): void {
             .then(() => {
               prewarmStatus.woken += 1
               logger.info(`a2a: boot prewarm ${id8(id)} settled in ${String(Date.now() - startedAt)}ms (${String(ids.length - index)} left)`)
-              if (!prewarmCancelled && contextLive(ctx)) schedule(step, config.wakeBootStaggerMs)
+              if (!prewarmCancelled && ctx.fiber.uid !== null) schedule(step, config.wakeBootStaggerMs)
             })
         }
         schedule(step, config.wakePrewarmDelayMs)
@@ -1734,7 +1739,7 @@ export function apply(ctx: Context, config: Config): void {
       const settled = ctx.get('loader')?.await()
       if (settled === undefined) pruneThenWake()
       else void settled.then(() => {
-        if (contextLive(ctx)) pruneThenWake()
+        if (ctx.fiber.uid !== null) pruneThenWake()
       }, () => {
         // A failed boot never wakes anything; the dying tree logs its own
         // failure once.

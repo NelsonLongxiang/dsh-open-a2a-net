@@ -1,11 +1,9 @@
 /**
- * Whether the plugin's context can still use its services. A fiber whose injected service went away is inactive: its
- * store is gone while its uid stays, so `uid !== null` alone lets a late callback reach for `ctx.timer` and throw
- * "cannot get required service … in inactive context" — which, in a loader callback, takes the whole host down
- * (3084, 2026-11-12, after a team settings write). A late callback checks this and gives up; the fiber's next activation
- * runs the plugin again and redoes the work.
+ * Test host, 2026-11-12: a team settings write made the host reload while the plugin's loader callback was pending. The
+ * plugin fiber went inactive (a service it injects was swapped) but kept its uid, so the callback's `uid !== null` check
+ * passed; it reached for `ctx.timer` and threw "cannot get required service "timer" in inactive context" — inside a
+ * loader callback, a fatal load failure for the whole host. Whether a fiber is active is not readable from outside the
+ * host's cordis, so the late callback catches this one error and gives up; the fiber's next activation redoes the work.
  * @module @nelsonlongxiang/dsh-open-a2a-net/context-live
  */
-export interface FiberLike { readonly fiber: { readonly uid: number | null; readonly store?: object } }
-
-export const contextLive = (ctx: FiberLike): boolean => ctx.fiber.uid !== null && ctx.fiber.store !== undefined
+export const inactiveContextError = (error: unknown): boolean => error instanceof Error && /\bin inactive context\b/.test(error.message)
