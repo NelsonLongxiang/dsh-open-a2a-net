@@ -896,6 +896,62 @@ describe('ops team ledger: every A2A message to the team address gets a formal o
   })
 })
 
+describe('a message the team could not judge still gets its outcome', () => {
+  it('after the router times out for good, the sender is told (failed) once the grace has passed, and not before', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { UNAVAILABLE_RECEIPT_GRACE_MS } = await import('../../src/superagent/host/receipts.ts')
+    const calls: string[][] = []
+    let clock = Date.parse('2026-11-07T00:00:30.000Z')
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r']), home: mkdtempSync(join(tmpdir(), 'sa-unavailable-')), logger: { info: () => {}, warn: () => {} },
+      deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1', now: () => new Date(clock).toISOString(),
+      runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' } })
+    const bot = 'reporter/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const task = 'direct-000000000001'
+    h.engine.receive({ ...wb('1', 'ctx-1'), at: new Date(clock).toISOString(), source: 'a2a', threads: [{ source: 'a2a', id: 'ctx-1' }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: 'a2a:ctx-1', address: { caller: bot, task, context: 'ctx-1' } }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } })
+    const receiptFor = () => calls.find(a => a[0] === 'receipt' && a[1] === task && !a.includes('--acknowledged'))
+    const outcome = (args: string[] | undefined) => args?.[args.indexOf('--outcome') + 1]
+    // The router never answers: each Eval expires; the third expiry records the message unavailable.
+    for (let i = 0; i < 4; i++) { await settle(); clock += 11 * 60_000 }
+    await settle()
+    const decided = h.store.decisions.byThread('a2a:ctx-1').map(d => d.kind)
+    expect(decided.at(-1)).toBe('unavailable')
+    // Within the grace the owner may still ask for a fresh judgement: nothing is sent yet.
+    expect(receiptFor()).toBeUndefined()
+    clock += UNAVAILABLE_RECEIPT_GRACE_MS
+    await settle()
+    expect(outcome(receiptFor())).toBe('failed')
+    expect(receiptFor()!.at(-1)).toContain('没能判断')
+    // Once.
+    await settle()
+    expect(calls.filter(a => a[0] === 'receipt' && a[1] === task && !a.includes('--acknowledged'))).toHaveLength(1)
+  })
+
+  it('an Eval ended unavailable only to be judged again (a policy change) sends nothing', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { UNAVAILABLE_RECEIPT_GRACE_MS } = await import('../../src/superagent/host/receipts.ts')
+    const calls: string[][] = []
+    let clock = Date.parse('2026-11-07T00:00:30.000Z')
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r']), home: mkdtempSync(join(tmpdir(), 'sa-unavailable2-')), logger: { info: () => {}, warn: () => {} },
+      deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1', now: () => new Date(clock).toISOString(),
+      runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' } })
+    const bot = 'reporter/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const task = 'direct-000000000002'
+    h.engine.receive({ ...wb('2', 'ctx-2'), at: new Date(clock).toISOString(), source: 'a2a', threads: [{ source: 'a2a', id: 'ctx-2' }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: 'a2a:ctx-2', address: { caller: bot, task, context: 'ctx-2' } }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } })
+    await settle()
+    // A rules change re-assesses the Eval in progress: an `unavailable` decision whose message is queued again.
+    expect(h.saveSettings({ rules: [{ name: 'deps', text: 'Upgrade a pinned dependency, any.' }] }, () => true)).toMatchObject({ ok: true })
+    await settle()
+    expect(h.store.decisions.byThread('a2a:ctx-2').some(d => d.kind === 'unavailable')).toBe(true)
+    clock += UNAVAILABLE_RECEIPT_GRACE_MS + 60_000
+    await settle()
+    expect(calls.find(a => a[0] === 'receipt' && a[1] === task && !a.includes('--acknowledged'))).toBeUndefined()
+  })
+})
+
 describe('design M12: a request from an unlisted sender waits on the owner', () => {
   it('holds it on a sender card, tells the sender, and acts on the owner\'s choice', async () => {
     const { SuperagentHost, SENDER_TAKE_LIST, SENDER_DECLINE } = await import('../../src/superagent/host/index.ts')

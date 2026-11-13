@@ -31,6 +31,11 @@ import type { SuperagentHostDeps, PersonMessage, WorkbenchVia } from './deps.ts'
 export const END_RECEIPT_GRACE_MS = 5 * 60_000
 /** Tickets that ended longer ago than this get no ending receipt (the requester's acknowledged row is gone by then). */
 export const END_RECEIPT_HORIZON_MS = 8 * 86_400_000
+/**
+ * A message the team could not judge (its Eval ended `unavailable` and nothing queued it again) waits this long before
+ * its sender is told, so the owner can still ask for a fresh judgement first (once told, the sender has the outcome).
+ */
+export const UNAVAILABLE_RECEIPT_GRACE_MS = 30 * 60_000
 
 export interface A2aReceiptsDeps {
   readonly store: JsonRepositories
@@ -190,8 +195,8 @@ export class A2aReceipts {
       if ((disposition?.fanout ?? []).some(ticketId => !handedBack(ticketId))) return true
       return this.d.store.tickets.list().some(ticket => !handedBack(ticket.id) && ticket.inputs.some(input => input.kind === 'trigger' && input.triggerId === triggerId && input.deliveredTo !== undefined))
     }
-    const due = new Map<string, { channel: NonNullable<Trigger['channel']>; text: string; outcome: 'completed' | 'rejected'; ticketId?: string }>()
-    const consider = (triggerId: string, make: () => { text: string; outcome: 'completed' | 'rejected'; ticketId?: string }): void => {
+    const due = new Map<string, { channel: NonNullable<Trigger['channel']>; text: string; outcome: 'completed' | 'rejected' | 'failed'; ticketId?: string }>()
+    const consider = (triggerId: string, make: () => { text: string; outcome: 'completed' | 'rejected' | 'failed'; ticketId?: string }): void => {
       if (origins.has(triggerId) || due.has(triggerId) || this.outcomeReceipted.has(triggerId)) return
       const trigger = this.d.store.triggers.get(triggerId)
       const channel = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel : undefined
@@ -201,7 +206,22 @@ export class A2aReceipts {
     }
     const holding: string[] = []
     for (const thread of this.d.store.threads.list()) {
-      for (const decision of this.d.store.decisions.byThread(thread.key)) {
+      const decisions = this.d.store.decisions.byThread(thread.key)
+      // A message the team could not judge: the engine ends an Eval `unavailable` when the router never answered in time (or
+      // the policy changed beneath it). When it queued the message again, a later Eval answers it; when it did not, the
+      // message just stops, and without this its sender's row stays owed for days. Only the message's latest decision counts,
+      // and only once nothing holds it; after {@link UNAVAILABLE_RECEIPT_GRACE_MS} the sender is told to send it again.
+      const held = new Set([...thread.pending, ...(thread.evaluating?.triggerIds ?? [])])
+      for (const decision of decisions) {
+        if (decision.kind !== 'unavailable' || now - Date.parse(decision.at) < UNAVAILABLE_RECEIPT_GRACE_MS) continue
+        for (const triggerId of decision.triggerIds) {
+          if (held.has(triggerId) || decisions.some(other => other !== decision && other.triggerIds.includes(triggerId) && other.at >= decision.at)) continue
+          const why = decision.reason.find(r => r.triggerId === triggerId) ?? decision.reason[0]
+          const cause = why?.code === 'timeout' ? '总工没有在时限内作出判断' : why === undefined ? '没有记录原因' : reasonText(why)
+          consider(triggerId, () => ({ outcome: 'failed', text: clip(`团队这次没能判断这条消息（${cause}），没有接下；需要的话请重新发送。The team could not judge this message (${why?.code ?? 'no reason recorded'}) and did not take it; send it again if it is still needed.`, 1_000) }))
+        }
+      }
+      for (const decision of decisions) {
         if (decision.kind !== 'ignore') continue
         decision.triggerIds.forEach((triggerId, i) => {
           const reason = decision.reason.find(r => r.triggerId === triggerId) ?? decision.reason[decision.reason.length === decision.triggerIds.length ? i : 0]

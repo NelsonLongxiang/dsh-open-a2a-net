@@ -20,6 +20,11 @@ person's replay") and `Engine.note(ticketId, text)` ("a fact the main Session gi
   An A2A message whose sender already has its formal outcome (#431's `rejected` or `completed` receipt, or the ticket's
   result) is refused (`answered`): its task is settled, and a later decision could not be its outcome. The sender sends it
   again. In practice that is every A2A message the router ignored, since the rejected receipt goes out within a pass.
+  An A2A message the team could not judge (its Eval ended `unavailable`, for instance the router timed out three times, and
+  nothing queued it again) keeps 30 minutes (`UNAVAILABLE_RECEIPT_GRACE_MS`) in which the owner may re-evaluate it. After
+  that its sender gets a `failed` receipt saying the team could not judge it and to send it again (2026-11-13: before this,
+  such a message had no outcome at all and its sender's row stayed owed for days). An `unavailable` decision whose message
+  the engine queued again (a policy change, a requeue) is not an outcome and sends nothing.
 - **D2 The router is told it is a second look.** A candidate whose trigger a person requeued says so on its card ("a person
   asked for a fresh judgement of this message"), so the router does not treat it as new traffic.
 - **D3 Where the owner does it.** The 团队 page offers 「重新判断」 on a thread's `ignore` and `unavailable` decisions (the
