@@ -373,6 +373,12 @@ export class SuperagentHost {
   private async deliverToMember(member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string): Promise<boolean> {
     if (isChildTeam(member)) return await this.root.send(member, text, kind, ticketId)
     const remote = this.settings.remoteMembers.find(r => r.ref === member)
+    // A CLI handle is never a session (#685 review F2): a Pi seat removed while its ticket runs still gets the stop in its
+    // mailbox while its deposit is a Pi seat here (R6 takes effect at its next poll); anything else for it goes nowhere.
+    if (remote === undefined && CLI_HANDLE_RE.test(member)) {
+      const seat = kind === 'stop' ? this.d.piSeat?.(member) : undefined
+      return seat?.ok === true ? this.d.piDeliver?.(member, seat.key, piCardText(text, kind, ticketId), ticketId) ?? false : false
+    }
     if (remote === undefined) return this.d.deliverToSession(member, text)
     // Pi platform P3: a Pi seat's work goes to its CLI mailbox on this host, as the Pi variant of the card.
     if (remote.platform === PI_PLATFORM) return this.d.piDeliver?.(remote.ref, remote.key, piCardText(text, kind, ticketId), ticketId) ?? false
@@ -390,9 +396,13 @@ export class SuperagentHost {
     // claim shape stands for the other kind of member.
     const entry = this.settings.remoteMembers.find(r => r.ref.replace(/@[0-9a-f]{8}$/, '') === memberHandle && r.key === signerKey && (r.platform === PI_PLATFORM) === cliSigned)
     if (entry === undefined) return { ok: false, code: 'not-member', error: 'no remote member of this team is that session under that key' }
+    // #685 review F1: a member host vouches for what a person typed in its session; a Pi seat signs for itself, so nothing it
+    // says can stand for the owner. It has the P4 vocabulary only: no rule changes, and no person flag on a turn end.
+    const pi = entry.platform === PI_PLATFORM
+    if (pi && !['report', 'ack', 'handback', 'idle', 'read', 'error'].includes(String(op))) return { ok: false, code: 'op', error: 'a Pi seat may send report, ack, handback, idle, read or error: rule changes need the owner, whom a seat cannot speak for' }
     if (op === 'idle') {
       const turn = (report ?? {}) as Record<string, unknown>
-      this.executor.memberIdle(entry.ref, { quiet: turn.quiet !== false, text: typeof turn.text === 'string' ? clip(turn.text, 2_000) : '', ...(turn.person === true ? { person: true } : {}) })
+      this.executor.memberIdle(entry.ref, { quiet: turn.quiet !== false, text: typeof turn.text === 'string' ? clip(turn.text, 2_000) : '', ...(turn.person === true && !pi ? { person: true } : {}) })
       return { ok: true }
     }
     if (op === 'error') {

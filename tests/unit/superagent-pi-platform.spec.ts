@@ -111,6 +111,47 @@ describe('the team host and its Pi seat', () => {
     void h.stop()
   })
 
+  it('#685 F1: a seat cannot stand for the owner — no rule changes, and its turn end never counts as a person\'s', async () => {
+    const h = await make(() => true)
+    for (const op of ['rules-propose', 'rules-apply']) {
+      expect(h.remoteEvent(op, SEAT, KEY_P, { value: { rules: [] }, reason: 'x', person: { text: 'agreed', atMs: Date.now() + 60_000 } }, true)).toMatchObject({ ok: false, code: 'op' })
+    }
+    expect(h.remoteEvent('idle', SEAT, KEY_P, { quiet: true, text: '', person: true }, true)).toEqual({ ok: true })
+    // A remote member session keeps both (its host vouches for its session).
+    expect(h.remoteEvent('rules-propose', 'dsh/bbbbbbbb', KEY_B, { value: {}, reason: 'x' }, false)).not.toMatchObject({ code: 'op' })
+  })
+
+  it('#685 F2: a seat removed while its ticket runs gets the stop in its mailbox, never through a session', async () => {
+    const mailed: string[] = [], sent: string[] = []
+    let remotes: RemoteMember[] = [seat]
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const h = new SuperagentHost({
+      canvasTeam: name => name === 'team' ? { local: ['session-r'], remote: remotes } : undefined,
+      home: mkdtempSync(join(tmpdir(), 'sa-pi-stop-')), logger: { info: () => {}, warn: () => {} }, interval: () => () => {},
+      deliverToSession: (id, text) => { sent.push(`${id}:${text}`); return true },
+      piSeat: handle => handle === SEAT ? { ok: true, key: KEY_P } : { ok: false, error: 'no' },
+      piDeliver: (_h, _k, text) => { mailed.push(text); return true },
+    })
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const asked = h.request('do it') as { triggerId: string }
+    routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'T', scope: 's', reason: 'r' })
+    await new Promise(r => setTimeout(r, 30))
+    expect(mailed).toHaveLength(1)
+    // The owner takes the seat off the canvas: the pool changes and the running ticket is stopped on the seat.
+    remotes = []
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    await new Promise(r => setTimeout(r, 50))
+    expect(sent.filter(line => line.startsWith(`${SEAT}:`))).toEqual([])
+    const deliverToMember = (h as unknown as { deliverToMember(m: string, t: string, k: string, id: string): Promise<boolean> }).deliverToMember.bind(h)
+    expect(await deliverToMember(SEAT, 'stop it', 'stop', 't-1')).toBe(true)
+    expect(mailed.at(-1)).toBe('stop it')
+    expect(await deliverToMember(SEAT, 'more', 'input', 't-1')).toBe(false)
+    expect(sent.filter(line => line.startsWith(`${SEAT}:`))).toEqual([])
+    void h.stop()
+  })
+
   it('a seat is heard only through a CLI claim under its pinned key; a node claim never speaks for it, nor a CLI claim for a session', async () => {
     const h = await make(() => true)
     expect(h.remoteEvent('idle', SEAT, KEY_P, undefined, true)).toEqual({ ok: true })
