@@ -63,6 +63,9 @@ A blueprint is a #626 staffing change with a source of `owner-local`. It is one 
 ### TB4. The owner agrees in the builder's conversation; the host carries it out
 
 - **The gate is D10's.** The owner's own typed message in the builder session agrees to the blueprint. The host marks that message, and no shell can produce it. The message must be newer than the proposal and the same proposal must still be pending, as for `superagent_rules_apply`.
+- **Only the owner's own typing (owner ruling, 2026-11-13, "Only my own typing").** No other session, seat or agent ever types an agreement into a builder or router session for the owner, nor decides a card for them. That holds even when the owner asks for it (「你帮我直接发」).
+  - The BS2 acceptance run on the test host was the one exception, and it must not repeat.
+  - The builder refuses a message that says it was typed on the owner's behalf. A session that sets up a trial stops there and asks the owner to type or click.
 - **The builder never holds the owner's proof.** It has no GUI login and no control key. After the owner agrees, the **host's staffing executor** (#626 S1a) carries out each operation with the host's own authority. It calls the same internal checks the canvas and team routes run: the preset check, one role per session, the canvas member checks and quotas. Nothing is skipped because the source is local.
 - **New teams and existing teams:**
   - A blueprint that **only builds new teams** is agreed in the conversation. There is no team yet to hang a card on.
@@ -91,6 +94,12 @@ A blueprint is a #626 staffing change with a source of `owner-local`. It is one 
    - The inventory copies named fields only, so no W3 field can reach it.
    - The templates come from the ops and market-trial teams on the test host and from a root team's children. The ops members' own intake texts were not kept, so the member templates come from the repository split and the member card's line.
 3. **BS2, blueprints** (high tier, after S1a): `superagent_blueprint_propose`, `_apply` and `_withdraw`, the D10 gate, per-team cards for existing teams, rollback, and the history line.
+   - *Built 2026-11-13.* `propose` records an `owner-local` change drafted by the builder session and returns the diff (now vs new for each rule set).
+   - `apply` needs the owner's own typed message in that session, newer than the blueprint. It is the same reading as `superagent_rules_apply`, and a relayed or agent message never counts.
+   - `withdraw` takes back only the session's own pending blueprint.
+   - Each rule set a blueprint writes gets a history line 「由组队顾问蓝图 <id> 起草，主人确认于 <time>」, and an undo gets one too.
+   - A blueprint also records the revisions of the existing rule sets it changes; if one moved before it runs, nothing runs.
+   - The persona asks for the team's goal and repositories first (BS1's live trial found the inventory shows structure, not intent).
 4. **S1b, the market's entry** (#626 S1's second half): `staffing.sources`, Sig3, `staffingChanges`, receipts and `rosterSeq`. The market loses nothing by waiting: until then, teams are built on the node and the market claims them (#626 §8.5).
 5. **Later:** `member.add` from job templates (#626 S2), child teams across hosts in a blueprint, and retiring through the builder.
 

@@ -1436,7 +1436,9 @@ export class SuperagentHost {
     const previous = this.settings
     const routerChanged = parsed.settings.router !== this.settingsValue.router
     this.writeSettings(parsed.settings)
-    this.recordOwnerEdits(previous, parsed.settings)
+    // #671: the staffing executor writes its own history line for each rule set it changes, so a write it makes is not also
+    // recorded as the owner's edit (that moved the revision twice and left a line for an edit nobody made).
+    if (by !== 'staffing') this.recordOwnerEdits(previous, parsed.settings)
     this.settingsHistory.record(this.now(), by, previous as unknown as Record<string, unknown>, this.settings as unknown as Record<string, unknown>)
     this.poolChanged()
     const after = policyVersion(parsed.settings)

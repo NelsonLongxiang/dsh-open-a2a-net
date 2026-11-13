@@ -56,7 +56,7 @@ export interface StaffingChange {
 }
 
 export type StepState = 'pending' | 'done' | 'failed' | 'undone' | 'undo-failed' | 'skipped'
-export type ChangeState = 'awaiting' | 'running' | 'done' | 'refused' | 'failed' | 'partial'
+export type ChangeState = 'awaiting' | 'running' | 'done' | 'refused' | 'failed' | 'partial' | 'withdrawn'
 export interface StaffingEntry {
   readonly id: string
   readonly source: StaffingSource
@@ -71,6 +71,8 @@ export interface StaffingEntry {
   /** One confirmation card per existing team the change touches: its card id and state. */
   cards: Record<string, { card?: string; state: 'open' | 'confirmed' | 'refused' }>
   steps: Array<{ op: StaffingOp; state: StepState; error?: string; result?: Record<string, string> }>
+  /** BS2: each existing team's rule set this change touches, at its revision when it was recorded (`<team>|<scope>`). */
+  bases?: Record<string, number>
   reason?: string
   finished?: string
 }
@@ -83,6 +85,9 @@ export interface StaffingTeam {
   memberOfSeat(seatId: string): string | undefined
   /** A confirmation card on this team for one change; its id. */
   proposeStaffingCard(changeId: string, question: string, reason: string, level: 'P0' | 'P1'): string | undefined
+  /** BS2: a rule set's revision (`team`, `dispatch`, `member:<session>`), and one line in its history. */
+  ruleRevision?(scope: string): number
+  recordRuleChange?(scope: string, change: { by: string; reason: string }): void
 }
 
 export interface StaffingDeps {
@@ -228,6 +233,15 @@ export class StaffingExecutor {
     if (!checked.ok) return checked
     const allAuto = change.ops.every(input => this.mode(change.source, input.op) === 'auto')
     const entry: StaffingEntry = { id: change.id, source: change.source, by: change.by, ...(change.summary !== undefined ? { summary: change.summary.slice(0, 500) } : {}), ops: change.ops, hash, at: this.d.now(), state: 'awaiting', cards: {}, steps: change.ops.map(input => ({ op: input.op, state: 'pending' as const })) }
+    // BS2: the revisions the change was drafted against; it is refused at run time if one moved (read again, propose afresh).
+    const bases: Record<string, number> = {}
+    for (const input of change.ops) {
+      if (input.op !== 'team.rules.set' || !checked.existing.includes(input.params.team as string)) continue
+      const team = this.d.team(input.params.team as string)
+      const scope = this.scopeKey(team, input.params.scope as string)
+      if (team?.ruleRevision !== undefined && scope !== undefined) bases[`${input.params.team as string}|${scope}`] = team.ruleRevision(scope)
+    }
+    if (Object.keys(bases).length > 0) entry.bases = bases
     this.entries.push(entry)
     if (!allAuto) {
       for (const teamId of checked.existing) {
@@ -274,8 +288,40 @@ export class StaffingExecutor {
     return entry.ops.every(input => this.mode(entry.source, input.op) === 'auto') || Object.keys(entry.cards).length > 0
   }
 
+  /** The rule-changes scope a staffing scope stands for on a team (`member:<seatId>` → `member:<session>`). */
+  private scopeKey(team: StaffingTeam | undefined, scope: string): string | undefined {
+    if (scope === 'team' || scope === 'dispatch') return scope
+    const member = team?.memberOfSeat(scope.slice('member:'.length))
+    return member === undefined ? undefined : `member:${member}`
+  }
+
+  /** Withdraw a change still awaiting, by whoever recorded it (`by.session`). */
+  withdraw(id: string, session: string): { ok: true } | { ok: false; code: string; error: string } {
+    const entry = this.get(id)
+    if (entry === undefined) return { ok: false, code: 'unknown', error: `no staffing change ${id}` }
+    if (entry.by.session !== session) return { ok: false, code: 'not-yours', error: `change ${id} was not drafted in this session` }
+    if (entry.state !== 'awaiting') return { ok: false, code: 'not-awaiting', error: `change ${id} is ${entry.state}` }
+    entry.state = 'withdrawn'
+    entry.finished = this.d.now()
+    this.save()
+    return { ok: true }
+  }
+
   /** Carry the change out in order; on a failure, undo the completed steps in reverse. */
   private async run(entry: StaffingEntry): Promise<void> {
+    // A rule set that moved since the change was drafted: nothing runs (BS2, as superagent_rules_apply's stale check).
+    for (const [key, base] of Object.entries(entry.bases ?? {})) {
+      const [teamId, scope] = key.split('|') as [string, string]
+      const now = this.d.team(teamId)?.ruleRevision?.(scope)
+      if (now !== undefined && now !== base) {
+        entry.state = 'failed'
+        entry.reason = `team ${teamId}'s ${scope} rules changed after the change was drafted (revision ${String(base)} → ${String(now)}): read again and propose afresh`
+        entry.finished = this.d.now()
+        for (const step of entry.steps) step.state = 'skipped'
+        this.save()
+        return
+      }
+    }
     entry.state = 'running'
     this.save()
     const created = new Map<string, string>()
@@ -284,7 +330,7 @@ export class StaffingExecutor {
     for (const [index, input] of entry.ops.entries()) {
       const step = entry.steps[index]!
       try {
-        const out = await this.step(input, resolve, created, fn => undo.push({ index, fn }))
+        const out = await this.step(input, resolve, created, fn => undo.push({ index, fn }), entry)
         if (!out.ok) throw new Error(out.error)
         step.state = 'done'
         if (out.result !== undefined) step.result = out.result
@@ -314,9 +360,13 @@ export class StaffingExecutor {
     this.d.logger.info('superagent: staffing change %s done', entry.id)
   }
 
-  private async step(input: StaffingOpInput, resolve: (team: unknown) => string | undefined, created: Map<string, string>, onUndo: (fn: () => boolean | Promise<boolean>) => void): Promise<{ ok: true; result?: Record<string, string> } | { ok: false; error: string }> {
+  private async step(input: StaffingOpInput, resolve: (team: unknown) => string | undefined, created: Map<string, string>, onUndo: (fn: () => boolean | Promise<boolean>) => void, entry: StaffingEntry): Promise<{ ok: true; result?: Record<string, string> } | { ok: false; error: string }> {
     const p = input.params
     const by = 'staffing'
+    // TB4: each rule set the change writes gets one line in its history; an undo gets one too.
+    const drafted = entry.by.session !== undefined ? `由组队顾问蓝图 ${entry.id} 起草` : `编制变更 ${entry.id}（${entry.source}）`
+    const note = `${drafted}，主人确认于 ${entry.agreed?.at ?? this.d.now()}`
+    const history = (team: StaffingTeam, scope: string, reason: string): void => { try { team.recordRuleChange?.(scope, { by: entry.by.session !== undefined ? 'builder' : 'staffing', reason }) } catch { /* the history is a record, not the change */ } }
     if (input.op === 'team.create') {
       const canvas = p.canvas as string, router = p.router as string
       const made = this.d.canvasCreate(canvas)
@@ -347,7 +397,8 @@ export class StaffingExecutor {
         if (typeof profile === 'string') return { ok: false, error: profile }
         const saved = team.saveSettings({ profiles: { ...before, [session]: profile } }, by)
         if (!saved.ok) return saved
-        onUndo(() => team.saveSettings({ profiles: before }, by).ok)
+        history(team, `member:${session}`, note)
+        onUndo(() => { const ok = team.saveSettings({ profiles: before }, by).ok; if (ok) history(team, `member:${session}`, `${drafted}失败，已撤回`); return ok })
       }
       return { ok: true, result: { teamId, session } }
     }
@@ -357,12 +408,14 @@ export class StaffingExecutor {
       const before = team.settings.rules
       const saved = team.saveSettings({ rules: parseRuleList(p.value) }, by)
       if (!saved.ok) return saved
-      onUndo(() => team.saveSettings({ rules: before }, by).ok)
+      history(team, 'team', note)
+      onUndo(() => { const ok = team.saveSettings({ rules: before }, by).ok; if (ok) history(team, 'team', `${drafted}失败，已恢复到之前的内容`); return ok })
     } else if (scope === 'dispatch') {
       const before = team.settings.dispatch
       const saved = team.saveSettings({ dispatch: p.value as string }, by)
       if (!saved.ok) return saved
-      onUndo(() => team.saveSettings({ dispatch: before }, by).ok)
+      history(team, 'dispatch', note)
+      onUndo(() => { const ok = team.saveSettings({ dispatch: before }, by).ok; if (ok) history(team, 'dispatch', `${drafted}失败，已恢复到之前的内容`); return ok })
     } else {
       const seatId = scope.slice('member:'.length)
       const member = team.memberOfSeat(seatId)
@@ -371,7 +424,8 @@ export class StaffingExecutor {
       const current = (before[member] ?? {}) as Record<string, unknown>
       const saved = team.saveSettings({ profiles: { ...before, [member]: { ...current, rules: parseRuleList(p.value) } } }, by)
       if (!saved.ok) return saved
-      onUndo(() => team.saveSettings({ profiles: before }, by).ok)
+      history(team, `member:${member}`, note)
+      onUndo(() => { const ok = team.saveSettings({ profiles: before }, by).ok; if (ok) history(team, `member:${member}`, `${drafted}失败，已恢复到之前的内容`); return ok })
     }
     return { ok: true, result: { teamId, scope } }
   }

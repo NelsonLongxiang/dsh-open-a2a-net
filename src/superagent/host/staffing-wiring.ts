@@ -32,6 +32,8 @@ export function createStaffing(w: StaffingWiring): StaffingExecutor {
     saveSettings: (raw, by) => team.saveSettings(raw, w.sessionValid, w.presetOf, by),
     memberOfSeat: seatId => team.named.memberOfSeat(seatId),
     proposeStaffingCard: (changeId, question, reason, level) => team.proposeStaffingCard(changeId, question, reason, level),
+    ruleRevision: scope => team.ruleChanges.revision(scope as never),
+    recordRuleChange: (scope, change) => { team.ruleChanges.applied(scope as never, { at: new Date().toISOString(), by: change.by, reason: change.reason }) },
   })
   return new StaffingExecutor({
     path: w.path,
