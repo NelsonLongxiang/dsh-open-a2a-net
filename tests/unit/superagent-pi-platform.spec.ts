@@ -116,7 +116,7 @@ describe('the team host and its Pi seat', () => {
     for (const op of ['rules-propose', 'rules-apply']) {
       expect(h.remoteEvent(op, SEAT, KEY_P, { value: { rules: [] }, reason: 'x', person: { text: 'agreed', atMs: Date.now() + 60_000 } }, true)).toMatchObject({ ok: false, code: 'op' })
     }
-    expect(h.remoteEvent('idle', SEAT, KEY_P, { quiet: true, text: '', person: true }, true)).toEqual({ ok: true })
+    expect(h.remoteEvent('idle', SEAT, KEY_P, { quiet: true, text: '', person: true, ticket_id: 't-none', event_id: 'e-p1' }, true)).toMatchObject({ ok: true })
     // A remote member session keeps both (its host vouches for its session).
     expect(h.remoteEvent('rules-propose', 'dsh/bbbbbbbb', KEY_B, { value: {}, reason: 'x' }, false)).not.toMatchObject({ code: 'op' })
   })
@@ -173,11 +173,40 @@ describe('the team host and its Pi seat', () => {
     expect(h.remoteEvent('report', SEAT, KEY_P, { state: 'waiting', summary: 's', question: 'which?', options: ['a', 'b'], recommended: 'a' }, true)).not.toMatchObject({ code: 'decision' })
   })
 
+  it('#688 R2: an idle the host took whose answer was lost, replayed after the next ticket was given, leaves that ticket alone', async () => {
+    const mailed: Array<[string, string]> = []
+    const h = await make((_h, _k, text, ticket) => { mailed.push([ticket, text]); return true }, [], [seat])
+    h.start()
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    for (const text of ['first', 'second']) {
+      const asked = h.request(text) as { triggerId: string }
+      routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: text, scope: 's', reason: 'r' })
+    }
+    await new Promise(r => setTimeout(r, 30))
+    const ticketA = h.executor.bindingOf(SEAT)!.ticketId
+    // The seat ends its turn on A: the host takes it (the answer is lost on the way back) and gives the seat B.
+    expect(h.remoteEvent('idle', SEAT, KEY_P, { quiet: true, text: '', ticket_id: ticketA, event_id: 'ev-a-1' }, true)).toEqual({ ok: true })
+    await new Promise(r => setTimeout(r, 30))
+    const ticketB = h.executor.bindingOf(SEAT)?.ticketId
+    expect(ticketB).toBeDefined()
+    expect(ticketB).not.toBe(ticketA)
+    const before = JSON.stringify(h.ticket(ticketB!))
+    // The replay of A's idle, and any later fact for A, do nothing to B.
+    expect(h.remoteEvent('idle', SEAT, KEY_P, { quiet: true, text: '', ticket_id: ticketA, event_id: 'ev-a-1' }, true)).toEqual({ ok: true, duplicate: true })
+    expect(h.remoteEvent('error', SEAT, KEY_P, { error: 'late', transient: true, ticket_id: ticketA, event_id: 'ev-a-2' }, true)).toEqual({ ok: true, stale: true })
+    expect(JSON.stringify(h.ticket(ticketB!))).toBe(before)
+    expect(h.executor.bindingOf(SEAT)?.ticketId).toBe(ticketB)
+    void h.stop()
+  })
+
   it('a seat is heard only through a CLI claim under its pinned key; a node claim never speaks for it, nor a CLI claim for a session', async () => {
     const h = await make(() => true)
-    expect(h.remoteEvent('idle', SEAT, KEY_P, undefined, true)).toEqual({ ok: true })
-    expect(h.remoteEvent('idle', SEAT, KEY_P, undefined, false)).toMatchObject({ ok: false, code: 'not-member' })
-    expect(h.remoteEvent('idle', SEAT, KEY_Q, undefined, true)).toMatchObject({ ok: false, code: 'not-member' })
+    const fact = (event: string) => ({ ticket_id: 't-none', event_id: event })
+    expect(h.remoteEvent('idle', SEAT, KEY_P, fact('e-1'), true)).toMatchObject({ ok: true })
+    expect(h.remoteEvent('idle', SEAT, KEY_P, fact('e-2'), false)).toMatchObject({ ok: false, code: 'not-member' })
+    expect(h.remoteEvent('idle', SEAT, KEY_Q, fact('e-3'), true)).toMatchObject({ ok: false, code: 'not-member' })
+    // A Pi seat's turn fact names its ticket and event.
+    expect(h.remoteEvent('idle', SEAT, KEY_P, undefined, true)).toMatchObject({ ok: false, code: 'report' })
     expect(h.remoteEvent('idle', 'dsh/bbbbbbbb', KEY_B, undefined, true)).toMatchObject({ ok: false, code: 'not-member' })
     expect(h.remoteEvent('idle', 'dsh/bbbbbbbb', KEY_B, undefined, false)).toEqual({ ok: true })
   })

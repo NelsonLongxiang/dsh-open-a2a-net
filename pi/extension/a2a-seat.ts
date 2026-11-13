@@ -6,44 +6,48 @@
  * `a2a-net inbox --after <cursor>`, hands each piece of work to the Pi session, tells the host it was read, and tells it
  * when the run settles. The model answers with the `a2a-net ticket …` commands the work card names.
  *
- * Lifecycle rules (#688 review):
- * - F1: the cursor belongs to one seat — its handle and home host — and is kept in that seat's own state file. A read
- *   that names another handle, a cursor the host never issued, and lost mail are reported, never silently accepted.
- *   One Pi session at a time consumes a seat (a lock file names the consuming process).
- * - F2: a turn end (idle, or an error when the run was aborted) and a read acknowledgement are owed facts: they are kept,
- *   in the state file too, until the CLI succeeds, and retried on later polls. Owed facts are settled before any new work
- *   is handed over, so an old turn end can never settle newer work.
- * - F3: every session start opens a generation with its own AbortController; shutdown aborts it, and nothing from an old
- *   generation hands work over, moves the cursor or acknowledges anything.
- * - F4: the extension re-publishes the deposit every hour with `a2a-net publish --renew`, which signs the declarations
- *   of the last explicit publish (piSeat stays declared).
+ * Lifecycle rules (#688 reviews):
+ * - One seat, one consumer: the cursor and state belong to the seat (handle + home host), and the seat's lock file is
+ *   created exclusively and names its consumer with a token; only the token's holder reads the mailbox, and only it
+ *   releases the lock. A lock of a dead process is reclaimed by an atomic rename, never by overwriting; an unreadable
+ *   lock is left alone and reported.
+ * - Facts are scoped and replay-safe: every turn fact (read, idle, error) names its ticket and carries an event id made
+ *   once and persisted, so the host acknowledges a replay without acting on it and ignores a fact for a ticket that is no
+ *   longer the seat's current one. Owed facts are sent one at a time, oldest first, before any new work is fetched.
+ * - In-flight work survives the consumer: the tickets handed over are recorded before the cursor moves; a consumer that
+ *   finds tickets still in flight (its predecessor stopped without the run settling) owes an error for each of them.
+ * - Shutdown fences: each session start opens a generation with its own AbortController; nothing from a closed
+ *   generation hands work over, moves the cursor or sends a fact.
+ * - The deposit is renewed every hour with `a2a-net publish --renew`, which keeps the piSeat declaration.
  *
  * Installed by `a2a-net pi install` into ~/.pi/agent/extensions/. It joins no team: the team's owner adds the handle to
  * the team canvas. Environment: A2A_NET (the CLI command, default `a2a-net`), A2A_SEAT_POLL_MS (default 15000).
  */
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
-import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash, randomBytes } from 'node:crypto'
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 /** One mailbox row as `a2a-net inbox --after` prints it. */
 interface MailRow { readonly from?: string; readonly text?: string; readonly seq?: number; readonly task_id?: string }
 interface AfterRead { readonly handle?: string; readonly next?: string; readonly mail?: readonly MailRow[]; readonly lost?: number | null; readonly epochChanged?: boolean; readonly cursorAhead?: boolean }
-/** A turn end the host has not acknowledged yet. */
-type OwedEnd = { readonly op: 'idle' } | { readonly op: 'error'; readonly text: string }
+/** A turn fact the host has not acknowledged yet, scoped to its ticket, with an id made once. */
+export interface OwedFact { readonly op: 'read' | 'idle' | 'error'; readonly ticket: string; readonly event: string; readonly text?: string }
 /** One seat's persisted consumer state. */
-interface SeatState { readonly handle: string; readonly home: string; cursor: string; owedEnd?: OwedEnd; owedRead?: boolean }
+export interface SeatState { readonly handle: string; readonly home: string; cursor: string; inflight: string[]; owed: OwedFact[] }
 
 /** The sender name the team host writes a seat's work under (src/index.ts piDeliver). */
 export const TEAM_SENDER = 'superagent'
 const CLI = process.env.A2A_NET ?? 'a2a-net'
 const POLL_MS = Math.max(5_000, Number(process.env.A2A_SEAT_POLL_MS ?? 15_000) || 15_000)
 const RENEW_MS = 60 * 60_000
-const STATE_DIR = join(homedir(), '.pi', 'agent', 'a2a-seat')
+
+const stateDir = (): string => join(homedir(), '.pi', 'agent', 'a2a-seat')
+const newId = (): string => randomBytes(12).toString('base64url')
 
 /** The state file of one seat: its handle and home host, never only this OS user. */
-export function seatStatePath(handle: string, home: string, dir: string = STATE_DIR): string {
+export function seatStatePath(handle: string, home: string, dir: string = stateDir()): string {
   const slug = handle.replace(/[^a-z0-9-]/gi, '_')
   return join(dir, `${slug}-${createHash('sha256').update(home).digest('hex').slice(0, 8)}.json`)
 }
@@ -51,14 +55,18 @@ export function seatStatePath(handle: string, home: string, dir: string = STATE_
 function loadState(path: string, handle: string, home: string): SeatState {
   try {
     const stored = JSON.parse(readFileSync(path, 'utf8')) as Partial<SeatState>
-    if (stored.handle === handle && stored.home === home && typeof stored.cursor === 'string') return { handle, home, cursor: stored.cursor, ...(stored.owedEnd !== undefined ? { owedEnd: stored.owedEnd } : {}), ...(stored.owedRead === true ? { owedRead: true } : {}) }
+    if (stored.handle === handle && stored.home === home && typeof stored.cursor === 'string') {
+      const inflight = Array.isArray(stored.inflight) ? stored.inflight.filter((t): t is string => typeof t === 'string') : []
+      const owed = Array.isArray(stored.owed) ? stored.owed.filter((f): f is OwedFact => f !== null && typeof f === 'object' && ['read', 'idle', 'error'].includes(String(f.op)) && typeof f.ticket === 'string' && typeof f.event === 'string') : []
+      return { handle, home, cursor: stored.cursor, inflight, owed }
+    }
   } catch { /* no state yet */ }
-  return { handle, home, cursor: 'start' }
+  return { handle, home, cursor: 'start', inflight: [], owed: [] }
 }
 
 function saveState(path: string, state: SeatState): void {
   mkdirSync(join(path, '..'), { recursive: true })
-  const tmp = `${path}.tmp`
+  const tmp = `${path}.${process.pid}.${newId()}.tmp`
   writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 })
   renameSync(tmp, path)
 }
@@ -67,21 +75,51 @@ function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch (error) { return (error as { code?: string }).code === 'EPERM' }
 }
 
-/** One consumer per seat: take the lock unless another live process holds it. */
-function takeLock(path: string): boolean {
-  const lock = `${path}.lock`
+/** The lock's holder as written, or undefined when the file is missing; 'unreadable' when it is not a lock this code wrote. */
+function readLock(lock: string): { pid: number; token: string } | 'unreadable' | undefined {
+  let text: string
+  try { text = readFileSync(lock, 'utf8') } catch (error) { return (error as { code?: string }).code === 'ENOENT' ? undefined : 'unreadable' }
   try {
-    const holder = Number(JSON.parse(readFileSync(lock, 'utf8')).pid)
-    if (Number.isInteger(holder) && holder !== process.pid && alive(holder)) return false
-  } catch { /* free, or unreadable: take it */ }
-  mkdirSync(join(path, '..'), { recursive: true })
-  writeFileSync(lock, JSON.stringify({ pid: process.pid }), { mode: 0o600 })
-  return true
+    const holder = JSON.parse(text) as { pid?: unknown; token?: unknown }
+    return Number.isInteger(holder.pid) && typeof holder.token === 'string' ? { pid: holder.pid as number, token: holder.token } : 'unreadable'
+  } catch { return 'unreadable' }
 }
 
-function dropLock(path: string): void {
+/**
+ * Take the seat's lock for `token`: exclusive create; a dead holder's lock is moved aside by one atomic rename (only one
+ * contender wins it) and the create tried again. Never overwrites a lock, never takes an unreadable one.
+ * @returns 'taken', 'held' (a live consumer has it), or 'unreadable'.
+ */
+export function takeSeatLock(path: string, token: string): 'taken' | 'held' | 'unreadable' {
   const lock = `${path}.lock`
-  try { if (Number(JSON.parse(readFileSync(lock, 'utf8')).pid) === process.pid) rmSync(lock) } catch { /* not ours */ }
+  mkdirSync(join(path, '..'), { recursive: true })
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(lock, JSON.stringify({ pid: process.pid, token }), { mode: 0o600, flag: 'wx' })
+      return 'taken'
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'EEXIST') throw error
+    }
+    const holder = readLock(lock)
+    if (holder === 'unreadable') return 'unreadable'
+    if (holder === undefined) continue
+    if (holder.token === token) return 'taken'
+    if (alive(holder.pid)) return 'held'
+    // A dead holder: move its lock aside atomically; a contender that lost the rename finds the lock gone or new.
+    try { renameSync(lock, `${lock}.stale-${newId()}`) } catch { /* another contender moved it first */ }
+  }
+  return 'held'
+}
+
+/** Whether `token` still holds the seat's lock. */
+export function holdsSeatLock(path: string, token: string): boolean {
+  const holder = readLock(`${path}.lock`)
+  return holder !== undefined && holder !== 'unreadable' && holder.token === token
+}
+
+/** Release the seat's lock only if `token` holds it. */
+export function dropSeatLock(path: string, token: string): void {
+  if (holdsSeatLock(path, token)) { try { rmSync(`${path}.lock`) } catch { /* already gone */ } }
 }
 
 export default function a2aSeat(pi: ExtensionAPI): void {
@@ -90,10 +128,10 @@ export default function a2aSeat(pi: ExtensionAPI): void {
   let abort: AbortController | undefined
   let poller: ReturnType<typeof setInterval> | undefined
   let renewer: ReturnType<typeof setInterval> | undefined
-  let seat: { path: string; state: SeatState } | undefined
+  let seat: { path: string; state: SeatState; token: string } | undefined
   let polling = false
-  /** Team work reached this session since the last turn end was recorded as owed. */
-  let working = false
+  /** Owed facts go out one at a time (poll and settle share this chain). */
+  let flushing: Promise<boolean> = Promise.resolve(true)
   const warned = new Set<string>()
 
   const warn = (ctx: ExtensionContext, key: string, message: string): void => {
@@ -102,6 +140,8 @@ export default function a2aSeat(pi: ExtensionAPI): void {
     if (ctx.hasUI) ctx.ui.notify(`a2a-seat: ${message}`, 'warning')
   }
   const current = (gen: number): boolean => gen === generation && abort !== undefined && !abort.signal.aborted
+  /** This generation still consumes the seat: not shut down, and the lock is still its own. */
+  const owns = (gen: number): boolean => current(gen) && seat !== undefined && holdsSeatLock(seat.path, seat.token)
 
   const cli = async (gen: number, args: string[]): Promise<{ code: number; stdout: string } | undefined> => {
     if (!current(gen)) return undefined
@@ -111,32 +151,41 @@ export default function a2aSeat(pi: ExtensionAPI): void {
     } catch { return current(gen) ? { code: 1, stdout: '' } : undefined }
   }
 
-  /** F2: settle what the host is owed, oldest first; false while something is still owed (no new work then). */
-  const flushOwed = async (gen: number, ctx: ExtensionContext): Promise<boolean> => {
-    if (seat === undefined) return false
-    const { state, path } = seat
-    if (state.owedEnd !== undefined) {
-      const end = state.owedEnd
-      const out = await cli(gen, end.op === 'idle' ? ['ticket', 'idle'] : ['ticket', 'error', '--transient', '--', end.text])
-      if (out === undefined) return false
-      if (out.code !== 0) { warn(ctx, 'owed-end', `telling the team host the turn ended failed; retrying on the next poll`); return false }
-      state.owedEnd = undefined
-      warned.delete('owed-end')
-      saveState(path, state)
-    }
-    if (state.owedRead === true) {
-      const out = await cli(gen, ['ticket', 'read'])
-      if (out === undefined) return false
-      if (out.code !== 0) { warn(ctx, 'owed-read', 'telling the team host the work was read failed; retrying on the next poll'); return false }
-      state.owedRead = undefined
-      warned.delete('owed-read')
-      saveState(path, state)
-    }
-    return true
+  const factArgs = (fact: OwedFact): string[] => {
+    const scope = ['--ticket', fact.ticket, '--event', fact.event]
+    if (fact.op === 'error') return ['ticket', 'error', '--transient', ...scope, '--', fact.text ?? 'the Pi run did not settle']
+    return ['ticket', fact.op, ...scope]
+  }
+
+  /** Send the owed facts, oldest first, one at a time; true when none is left owed. */
+  const flushOwed = (gen: number, ctx: ExtensionContext): Promise<boolean> => {
+    flushing = flushing.then(async () => {
+      while (seat !== undefined && seat.state.owed.length > 0) {
+        if (!owns(gen)) return false
+        const fact = seat.state.owed[0]!
+        const out = await cli(gen, factArgs(fact))
+        if (out === undefined || seat === undefined) return false
+        if (out.code !== 0) { warn(ctx, 'owed', `telling the team host about ticket ${fact.ticket} (${fact.op}) failed; retrying on the next poll`); return false }
+        warned.delete('owed')
+        seat.state.owed = seat.state.owed.filter(f => f.event !== fact.event)
+        saveState(seat.path, seat.state)
+      }
+      return true
+    }, () => false)
+    return flushing
+  }
+
+  /** Every ticket still in flight now owes a fact (the run settled, was aborted, or its consumer is gone). */
+  const settleInflight = (op: 'idle' | 'error', text?: string): void => {
+    if (seat === undefined || seat.state.inflight.length === 0) return
+    for (const ticket of seat.state.inflight) seat.state.owed.push({ op, ticket, event: newId(), ...(text !== undefined ? { text } : {}) })
+    seat.state.inflight = []
+    saveState(seat.path, seat.state)
   }
 
   const poll = async (gen: number, ctx: ExtensionContext): Promise<void> => {
-    if (polling || seat === undefined || !current(gen)) return
+    if (polling || seat === undefined) return
+    if (!owns(gen)) { warn(ctx, 'lost-lock', 'this session no longer holds the seat lock and stops consuming'); return }
     polling = true
     try {
       if (!(await flushOwed(gen, ctx))) return
@@ -146,21 +195,23 @@ export default function a2aSeat(pi: ExtensionAPI): void {
       if (out.code !== 0) { warn(ctx, 'inbox', 'reading the mailbox failed; retrying on the next poll'); return }
       warned.delete('inbox')
       const read = JSON.parse(out.stdout) as AfterRead
-      // F1: the read must be this seat's mailbox, at a cursor its host issued.
       if (read.handle !== state.handle) { warn(ctx, 'handle', `the CLI read the mailbox of ${String(read.handle)}, not ${state.handle}; this seat stops consuming`); return }
       if (read.cursorAhead === true) { warn(ctx, 'ahead', `the stored cursor ${state.cursor} was not issued by ${state.home}; nothing is read until it is reset (delete ${path})`); return }
       if (read.lost === null || (typeof read.lost === 'number' && read.lost > 0) || read.epochChanged === true) warn(ctx, `lost-${String(read.next)}`, read.epochChanged === true ? 'the team host restarted its mailbox store: mail from before may be gone' : `${String(read.lost)} message(s) were pushed out of the mailbox before they were read`)
-      const work = (read.mail ?? []).filter(row => row.from === TEAM_SENDER && typeof row.text === 'string' && row.text !== '')
-      if (!current(gen)) return
+      const work = (read.mail ?? []).filter(row => row.from === TEAM_SENDER && typeof row.text === 'string' && row.text !== '' && typeof row.task_id === 'string' && row.task_id !== '')
+      if (!owns(gen)) return
+      // In flight first (durable), then the handover, then the cursor and the read facts: a consumer that dies in between
+      // leaves its successor the tickets to account for, never a silent gap.
+      if (work.length > 0) {
+        state.inflight = [...new Set([...state.inflight, ...work.map(row => row.task_id as string)])]
+        saveState(path, state)
+      }
       for (const row of work) {
         if (ctx.isIdle()) pi.sendUserMessage(row.text as string)
         else pi.sendUserMessage(row.text as string, { deliverAs: 'followUp' })
-        working = true
       }
-      // The cursor moves only after the work is handed over (a crash in between delivers it again, never loses it), and the
-      // read acknowledgement it owes is recorded with it.
       if (typeof read.next === 'string') state.cursor = read.next
-      if (work.length > 0) state.owedRead = true
+      for (const row of work) state.owed.push({ op: 'read', ticket: row.task_id as string, event: newId() })
       saveState(path, state)
       await flushOwed(gen, ctx)
     } catch (error) {
@@ -181,25 +232,28 @@ export default function a2aSeat(pi: ExtensionAPI): void {
     try { ({ handle, host: home } = JSON.parse(who.stdout) as { handle?: unknown; host?: unknown }) } catch { /* below */ }
     if (who.code !== 0 || typeof handle !== 'string' || typeof home !== 'string') { warn(ctx, 'whoami', 'no a2a-net identity: run a2a-net init and a2a-net publish --pi-seat'); return }
     const path = seatStatePath(handle, home)
-    if (!takeLock(path)) { warn(ctx, 'lock', `another Pi process is consuming seat ${handle}; this session does not`); return }
-    if (!current(gen)) { dropLock(path); return }
-    seat = { path, state: loadState(path, handle, home) }
+    const token = newId()
+    const lock = takeSeatLock(path, token)
+    if (lock === 'unreadable') { warn(ctx, 'lock', `the seat lock ${path}.lock is not one this extension wrote; remove it if no Pi consumes ${handle}`); return }
+    if (lock !== 'taken') { warn(ctx, 'lock', `another Pi consumer holds seat ${handle}; this session does not consume it`); return }
+    if (!current(gen)) { dropSeatLock(path, token); return }
+    seat = { path, state: loadState(path, handle, home), token }
+    // A predecessor that stopped without its run settling left tickets in flight: each owes an error, scoped to its ticket.
+    settleInflight('error', 'the Pi consumer stopped before the run settled')
     void poll(gen, ctx)
     poller = setInterval(() => { void poll(gen, ctx) }, POLL_MS)
     renewer = setInterval(() => { void cli(gen, ['publish', '--renew']).then(out => { if (out !== undefined && out.code !== 0) warn(ctx, 'renew', 're-publishing the seat deposit failed') }) }, RENEW_MS)
   })
 
   pi.on('agent_settled', async (event, ctx) => {
-    if (!working || seat === undefined) return
-    working = false
-    // F2: owed until the host takes it (kept across a restart in the state file).
-    seat.state.owedEnd = event.aborted ? { op: 'error', text: 'the Pi run was aborted' } : { op: 'idle' }
-    saveState(seat.path, seat.state)
+    if (seat === undefined || !owns(generation)) return
+    settleInflight(event.aborted ? 'error' : 'idle', event.aborted ? 'the Pi run was aborted' : undefined)
     await flushOwed(generation, ctx)
   })
 
   pi.on('session_shutdown', async () => {
-    // F3: close the generation — an in-flight poll from it can no longer hand work over, move the cursor or acknowledge.
+    const closing = seat
+    // Close the generation first: an in-flight poll from it can no longer hand work over, move the cursor or send a fact.
     generation += 1
     abort?.abort()
     abort = undefined
@@ -207,20 +261,12 @@ export default function a2aSeat(pi: ExtensionAPI): void {
     if (renewer !== undefined) clearInterval(renewer)
     poller = undefined
     renewer = undefined
-    if (seat !== undefined) {
-      // Work handed over and never settled: the turn end is owed (sent by the next session that consumes this seat).
-      if (working && seat.state.owedEnd === undefined) { seat.state.owedEnd = { op: 'error', text: 'the Pi session closed before the run settled' }; saveState(seat.path, seat.state) }
-      dropLock(seat.path)
+    if (closing !== undefined && holdsSeatLock(closing.path, closing.token)) {
+      seat = closing
+      settleInflight('error', 'the Pi session closed before the run settled')
+      dropSeatLock(closing.path, closing.token)
     }
     seat = undefined
     polling = false
-    working = false
   })
-}
-
-/** Exported for tests: whether a lock file is held by another live process. */
-export function seatLockedByOther(path: string): boolean {
-  const lock = `${path}.lock`
-  if (!existsSync(lock)) return false
-  try { const pid = Number(JSON.parse(readFileSync(lock, 'utf8')).pid); return Number.isInteger(pid) && pid !== process.pid && alive(pid) } catch { return false }
 }

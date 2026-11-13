@@ -369,6 +369,8 @@ export class SuperagentHost {
     }
   }
 
+  /** #688 R2: the turn-fact event ids each Pi seat sent, newest last (a replayed fact is acknowledged and ignored). */
+  private readonly piEvents = new Map<string, string[]>()
   /** Pi platform: the key each Pi seat's work was last delivered under (in memory: a seat's work does not outlive a restart). */
   private readonly piPins = new Map<string, string>()
 
@@ -409,6 +411,17 @@ export class SuperagentHost {
     // says can stand for the owner. It has the P4 vocabulary only: no rule changes, and no person flag on a turn end.
     const pi = entry.platform === PI_PLATFORM
     if (pi && !['report', 'ack', 'handback', 'idle', 'read', 'error'].includes(String(op))) return { ok: false, code: 'op', error: 'a Pi seat may send report, ack, handback, idle, read or error: rule changes need the owner, whom a seat cannot speak for' }
+    // #688 R2: a Pi seat's turn facts name their ticket and carry an event id. An event seen before is acknowledged again and does
+    // nothing (its first answer may have been lost); a fact for a ticket that is no longer the seat's current one does nothing
+    // either — it never touches newer work.
+    if (pi && (op === 'idle' || op === 'read' || op === 'error')) {
+      const fact = (report ?? {}) as Record<string, unknown>
+      if (typeof fact.ticket_id !== 'string' || typeof fact.event_id !== 'string' || !/^[A-Za-z0-9._:-]{1,80}$/.test(fact.event_id)) return { ok: false, code: 'report', error: 'a Pi seat names the ticket (ticket_id) and the event (event_id) of a turn fact' }
+      const seen = this.piEvents.get(entry.ref) ?? []
+      if (seen.includes(fact.event_id)) return { ok: true, duplicate: true }
+      this.piEvents.set(entry.ref, [...seen, fact.event_id].slice(-512))
+      if (this.executor.bindingOf(entry.ref)?.ticketId !== fact.ticket_id) return { ok: true, stale: true }
+    }
     if (op === 'idle') {
       const turn = (report ?? {}) as Record<string, unknown>
       this.executor.memberIdle(entry.ref, { quiet: turn.quiet !== false, text: typeof turn.text === 'string' ? clip(turn.text, 2_000) : '', ...(turn.person === true && !pi ? { person: true } : {}) })

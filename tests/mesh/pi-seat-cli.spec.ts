@@ -64,7 +64,7 @@ describe('a Pi seat through the CLI', () => {
 
       // Its signed, body-bound ops reach the team. A question is a decision card: a bare one never leaves the CLI, and one
       // with options and a recommendation reaches the owner as a card.
-      expect(JSON.parse((await cli(seat, ['ticket', 'read', '--json'])).stdout)).toEqual({ ok: true })
+      expect(JSON.parse((await cli(seat, ['ticket', 'read', '--ticket', ticketId, '--event', 'ev-read-1', '--json'])).stdout)).toEqual({ ok: true })
       expect((await cli(seat, ['ticket', 'report', '--ticket', ticketId, '--state', 'waiting', '--question', '用哪种?', '--', '要你定'])).code).toBe(2)
       expect((await cli(seat, ['ticket', 'report', '--ticket', ticketId, '--state', 'waiting', '--question', '用哪种?', '--options', '甲|乙', '--recommended', '丙', '--', '要你定'])).code).toBe(2)
       const asks = await cli(seat, ['ticket', 'report', '--ticket', ticketId, '--state', 'waiting', '--question', '用哪种?', '--options', '甲|乙', '--recommended', '乙', '--level', 'P1', '--json', '--', '要你定'])
@@ -73,7 +73,10 @@ describe('a Pi seat through the CLI', () => {
       expect(cards.find(c => c.ticketId === ticketId)).toMatchObject({ options: ['甲', '乙'], recommended: '乙', level: 'P1' })
       const reported = await cli(seat, ['ticket', 'report', '--ticket', ticketId, '--state', 'ready', '--json', '--', '做完了'])
       expect(JSON.parse(reported.stdout), reported.stdout + reported.stderr).toMatchObject({ ok: true })
-      expect((await cli(seat, ['ticket', 'idle'])).code).toBe(0)
+      expect((await cli(seat, ['ticket', 'idle', '--ticket', ticketId, '--event', 'ev-idle-1'])).code).toBe(0)
+      // A turn fact with no ticket and event is a usage error for one half, and refused by the host without both.
+      expect((await cli(seat, ['ticket', 'idle', '--ticket', ticketId])).code).toBe(2)
+      expect(JSON.parse((await cli(seat, ['ticket', 'idle', '--json'])).stdout)).toMatchObject({ ok: false, code: 'report' })
       // A CLI identity that is not the seat is refused, with the code; rule changes are not a seat's op at all.
       const refused = await cli(other, ['ticket', 'idle', '--json'])
       expect(refused.code).toBe(1)

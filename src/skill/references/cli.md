@@ -423,7 +423,7 @@ A Pi seat is a CLI identity that declares `piSeat` on its own signed card (`a2a-
 the superagent team's host. Once the team's owner adds it to the team canvas (its key is pinned there), its work arrives
 in its mailbox with the ticket id as `task_id`, and it answers on the team host with signed, body-bound ops:
 
-- `a2a-net ticket read` · `ticket idle [--text T]` · `ticket error [--transient] -- <what failed>`
+- `a2a-net ticket read` · `ticket idle [--text T]` · `ticket error [--transient] -- <what failed>` — each with `--ticket <id> --event <id>`: a Pi seat's turn facts name their ticket and carry an event id made once; the host acknowledges a replayed event without acting on it, and ignores a fact for a ticket that is no longer the seat's current one
 - `a2a-net ticket ack|handback --trigger <trigger id> -- <text>`
 - `a2a-net ticket report --ticket <id> --state progress|waiting|ready|blocked|failed|dropped [--question Q --options A|B|… --recommended A [--level P0..P3]] [--answers <trigger id>] [--pull-request <url>] -- <summary>` — a question is a decision card for the owner: 2–6 options and the one the seat recommends, checked before it is sent
 

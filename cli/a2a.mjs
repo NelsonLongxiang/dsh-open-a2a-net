@@ -54,7 +54,7 @@ CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) 
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
 文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR]   (#91: bytes never ride a message)
 superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
-pi 席位:  publish --pi-seat · publish --renew (keeps the last publish's declarations) · ticket read|idle [--text T] · ticket ack|handback --trigger ID -- <text> · ticket report --ticket ID --state S [--question Q --options A|B --recommended A [--level P1]] -- <summary>
+pi 席位:  publish --pi-seat · publish --renew (keeps the last publish's declarations) · ticket read|idle [--text T] [--ticket ID --event ID] · ticket ack|handback --trigger ID -- <text> · ticket report --ticket ID --state S [--question Q --options A|B --recommended A [--level P1]] -- <summary>
           · ticket error [--transient] -- <what failed> · pi install [--dir DIR] [--force]   (docs/design/superagent-pi-platform.md)
 
 host:     --home > $A2A_HOME > the home saved by 'a2a init --home URL' > ${DEFAULT_HOME}
@@ -114,7 +114,7 @@ admission: admission <caller> [--local] [--json]   how <caller> would be admitte
 /** The capabilities a CLI identity may declare on its card (superagent-root-team S5). */
 // piSeat: docs/design/superagent-pi-platform.md P1 — this identity is a Pi seat (it may join a superagent team as a member).
 const DECLARABLE = ['progressReceipts', 'teamRoster', 'directedSeats', 'reworkReturns', 'piSeat']
-const VALUE_FLAGS = new Set(['--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir', '--recommended', '--level'])
+const VALUE_FLAGS = new Set(['--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir', '--recommended', '--level', '--event'])
 const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class', '--pi-seat', '--transient'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
@@ -724,6 +724,12 @@ async function cmdTicket() {
   if (!TICKET_OPS.includes(op ?? '')) usage(`usage: a2a ticket ${TICKET_OPS.join('|')} …  (a Pi seat's op on its team host)`)
   const dash = process.argv.indexOf('--')
   const text = dash >= 0 ? process.argv.slice(dash + 1).join(' ') : (flag('--text') ?? '')
+  // #688 R2: a turn fact (idle, read, error) names its ticket and a stable event id, so the host can tell a replay and a stale fact.
+  const scoped = () => {
+    const ticket = flag('--ticket'), event = flag('--event')
+    if ((ticket === undefined) !== (event === undefined)) usage(`ticket ${op}: --ticket and --event go together`)
+    return ticket !== undefined ? { ticket_id: ticket, event_id: event } : {}
+  }
   let report
   if (op === 'report') {
     const state = flag('--state')
@@ -747,10 +753,12 @@ async function cmdTicket() {
     if (trigger === undefined || (op === 'handback' && text.trim() === '')) usage(`usage: a2a ticket ${op} --trigger ID -- <text>`)
     report = { trigger_id: trigger, text }
   } else if (op === 'idle') {
-    report = { quiet: text === '', text }
+    report = { quiet: text === '', text, ...scoped() }
   } else if (op === 'error') {
-    if (text.trim() === '') usage('usage: a2a ticket error [--transient] -- <what failed>')
-    report = { error: text, transient: has('--transient') }
+    if (text.trim() === '') usage('usage: a2a ticket error [--transient] [--ticket ID --event ID] -- <what failed>')
+    report = { error: text, transient: has('--transient'), ...scoped() }
+  } else if (op === 'read') {
+    report = scoped()
   }
   const member = identity().handle
   const url = `${home()}/a2a/superagent-team`
