@@ -205,3 +205,66 @@ describe('planning-overlap', () => {
     })
   })
 })
+
+describe('card vs card (owner 2026-11-13: 节点卡片不得互相覆盖)', () => {
+  const cardsClear = (m: WorldModel): boolean => {
+    const n = m.allNodes()
+    for (let i = 0; i < n.length; i++) for (let j = i + 1; j < n.length; j++) if (hit(nodeRect(n[i]!), nodeRect(n[j]!))) return false
+    return true
+  }
+  it('the card just put down stays; the one under it yields to the nearest free spot', async () => {
+    const { separateCards } = await import('../src/planning-overlap.ts')
+    const m = new WorldModel()
+    m.upsertNode(node('a', 0, 0))
+    m.upsertNode(node('b', 30, 10))
+    expect(separateCards(m, new Set(['b']))).toBe(true)
+    expect(m.getNode('b')).toMatchObject({ x: 30, y: 10 })
+    expect(cardsClear(m)).toBe(true)
+    // Nearest: one half-pitch step is not enough for a 30 px overlap, so it lands within one card's width.
+    expect(Math.hypot(m.getNode('a')!.x, m.getNode('a')!.y)).toBeLessThanOrEqual(NODE_W + 16)
+  })
+
+  it('a stack of cards spreads out with nothing overlapping, deterministically', async () => {
+    const { separateCards } = await import('../src/planning-overlap.ts')
+    const make = () => { const m = new WorldModel(); for (let i = 0; i < 8; i++) m.upsertNode(node(`c${i}`, 100 + i * 3, 100 + i * 2)); return m }
+    const m1 = make(), m2 = make()
+    separateCards(m1); separateCards(m2)
+    expect(cardsClear(m1)).toBe(true)
+    expect(m1.allNodes().map(n => [n.x, n.y])).toEqual(m2.allNodes().map(n => [n.x, n.y]))
+    expect(m1.getNode('c0')).toMatchObject({ x: 100, y: 100 }) // the first card in board order never moves
+  })
+
+  it('a yielding member stays inside its own frame and never lands on a foreign one', async () => {
+    const { separateCards } = await import('../src/planning-overlap.ts')
+    const m = new WorldModel()
+    m.setFrame('A', { x: 0, y: 0, w: 600, h: 300 })
+    m.setFrame('B', { x: 640, y: 0, w: 400, h: 300 })
+    m.upsertNode(node('a1', 520, 150))
+    m.upsertNode(node('a2', 530, 150))
+    m.setTeamMembers('A', ['a1', 'a2'])
+    separateCards(m, new Set(['a1']))
+    const r = nodeRect(m.getNode('a2')!), A = m.getFrame('A')!, B = m.getFrame('B')!
+    expect(r.x >= A.x && r.y >= A.y && r.x + r.w <= A.x + A.w && r.y + r.h <= A.y + A.h).toBe(true)
+    expect(hit(r, B)).toBe(false)
+    expect(cardsClear(m)).toBe(true)
+  })
+
+  it('a dragged group keeps its shape: two pinned cards are left alone', async () => {
+    const { separateCards } = await import('../src/planning-overlap.ts')
+    const m = new WorldModel()
+    m.upsertNode(node('p', 0, 0)); m.upsertNode(node('q', 20, 0))
+    expect(separateCards(m, new Set(['p', 'q']))).toBe(false)
+  })
+
+  it('settleBoard (整理成员 / 一键重排 / load) also clears card overlaps, e.g. frameless and multi-team cards', () => {
+    const m = new WorldModel()
+    m.setFrame('A', { x: 0, y: 0, w: 400, h: 200 })
+    m.upsertNode(node('free1', 600, 100))
+    m.upsertNode(node('free2', 610, 105))
+    m.upsertNode(node('a1', 100, 100))
+    m.setTeamMembers('A', ['a1'])
+    expect(settleBoard(m, new Set())).toBe(true)
+    expect(cardsClear(m)).toBe(true)
+    expect(m.getNode('a1')).toMatchObject({ x: 100, y: 100 })
+  })
+})
