@@ -155,6 +155,7 @@ import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerFileFaces } from './faces/files.ts'
 import { registerSuperagentFaces } from './faces/superagent.ts'
 import { SidebarSends } from './sidebar-sends.ts'
+import { PI_PLATFORM, piDeliverable, piSeatAdmission } from './superagent/platforms/pi.ts'
 import { cancelAgentTurn, memberTurnFrom, personMessageFrom, selectSessionModel, stageCardFiles } from './superagent/session-reads.ts'
 import { createFileTools } from './tools/files.ts'
 import { BLOB_FILE_MAX, BlobStore, formatFileRef } from './blob-store.ts'
@@ -2086,12 +2087,21 @@ export function apply(ctx: Context, config: Config): void {
     ensureYglProject: name => { void ensureTeamYglProject(name, { logger }) },
     // Design v5: the team is a canvas team this host owns. Its local sessions in canvas order, and its remote session slots
     // with the key the canvas pinned and the base URL of the linked peer whose signed card carries that key.
+    // Pi platform P1/P2/P3: whether a CLI handle is a Pi seat deposited here, and the mailbox delivery to one.
+    piSeat: handle => piSeatAdmission(handle, cliDeposits.get(handle)),
+    piDeliver: (handle, pinnedKey, text, ticketId) => {
+      if (!piDeliverable(cliDeposits.get(handle), pinnedKey)) return false
+      cliDeposits.mail(handle, 'superagent', text, undefined, { taskId: ticketId })
+      return true
+    },
     canvasTeam: name => {
       if (!canvasStore.hasTeam(name)) return undefined
       const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))
       const local = canvasLocalMembersOf(name, true).filter(id => !id.includes('/'))
       const remote = canvasStore.membersOf(name).flatMap(ref => {
-        if (CLI_HANDLE_RE.test(ref) || splitQualifiedMember(ref) === undefined) return []
+        // Pi platform P2/P3: a CLI handle with a pinned key is a Pi seat (only a seat's row is pinned); its home is this host.
+        if (CLI_HANDLE_RE.test(ref)) { const key = canvasStore.seatKeyOf(ref); return key === undefined ? [] : [{ ref, key, url: '', platform: PI_PLATFORM }] }
+        if (splitQualifiedMember(ref) === undefined) return []
         const key = canvasStore.ownerKeyOf(ref)
         if (key === undefined || key === ownKey || memberProvenance(ref, key, ownKey) !== 'confirmed-remote') return []
         const url = [...cardCache.entries()].find(([, entry]) => entry.card?.publicKey === key)?.[0]
@@ -3549,7 +3559,11 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   async function canvasMemberForWrite(ref: string, requestedPeer?: unknown, editorCard?: A2aPeerCard): Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }> {
-    if (CLI_HANDLE_RE.test(ref)) return { ok: true, member: ref }
+    if (CLI_HANDLE_RE.test(ref)) {
+      // Pi platform P2: a Pi seat deposited here joins with its deposit's key pinned on the row (its later ops must sign with it).
+      const seat = piSeatAdmission(ref, cliDeposits.get(ref))
+      return seat.ok ? { ok: true, member: ref, ownerKey: seat.key } : { ok: true, member: ref }
+    }
     const selected = splitQualifiedMember(ref), handle = selected?.handle ?? ref
     if (!ref.includes('/')) {
       if (editorCard) return { ok: false, error: 'peer writes must use owner-qualified session members; upgrade the editor' }

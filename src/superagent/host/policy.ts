@@ -29,7 +29,8 @@ export type AcceptMode = 'off' | 'observe' | 'auto'
 export interface GithubIntake { readonly repos: readonly string[]; readonly intake: 'mention' | 'all' }
 export const GITHUB_REPOS_MAX = 10
 /** A remote member: `ref` is `<zone>/<id8>@<fp8>`, `key` the member host's full public key, `url` its base URL. */
-export interface RemoteMember { readonly ref: string; readonly key: string; readonly url: string }
+/** A member that is not a local session: a session on a served member host, or (pi platform) a Pi seat's CLI handle. */
+export interface RemoteMember { readonly ref: string; readonly key: string; readonly url: string; /** docs/design/superagent-pi-platform.md: a Pi seat, reached through its CLI mailbox here. */ readonly platform?: 'pi' }
 /** A kind of proactive work the team may take on without being asked (upstream: Policy rules). */
 export interface ProactiveRule { readonly name: string; readonly text: string; readonly enabled: boolean }
 
