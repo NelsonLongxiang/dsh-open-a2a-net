@@ -9,11 +9,13 @@
  * Lifecycle rules (#688 reviews):
  * - One seat, one consumer: the cursor and state belong to the seat (handle + home host), and the seat's lock file is
  *   created exclusively and names its consumer with a token; only the token's holder reads the mailbox, and only it
- *   releases the lock. A lock of a dead process is reclaimed by an atomic rename, never by overwriting; an unreadable
- *   lock is left alone and reported.
- * - Facts are scoped and replay-safe: every turn fact (read, idle, error) names its ticket and carries an event id made
- *   once and persisted, so the host acknowledges a replay without acting on it and ignores a fact for a ticket that is no
- *   longer the seat's current one. Owed facts are sent one at a time, oldest first, before any new work is fetched.
+ *   releases the lock. A lock of a dead process is reclaimed only under the seat's reclaim mutex, after reading again that
+ *   the lock is still that dead holder's, and the lock moved aside is checked to be it (a live lock moved by mistake is
+ *   put back without overwriting anything); never by overwriting, and an unreadable lock is left alone and reported.
+ * - Facts are scoped and replay-safe: every turn fact (read, idle, error) names its ticket, the run of it (the work row's
+ *   context id: each binding of a ticket has its own) and an event id made once and persisted, so the host acknowledges a
+ *   replay without acting on it and ignores a fact that is not for the seat's current run. Owed facts are sent one at a
+ *   time, oldest first, before any new work is fetched.
  * - In-flight work survives the consumer: the tickets handed over are recorded before the cursor moves; a consumer that
  *   finds tickets still in flight (its predecessor stopped without the run settling) owes an error for each of them.
  * - Shutdown fences: each session start opens a generation with its own AbortController; nothing from a closed
@@ -25,17 +27,19 @@
  */
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { linkSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 /** One mailbox row as `a2a-net inbox --after` prints it. */
-interface MailRow { readonly from?: string; readonly text?: string; readonly seq?: number; readonly task_id?: string }
+interface MailRow { readonly from?: string; readonly text?: string; readonly seq?: number; readonly task_id?: string; readonly context_id?: string }
 interface AfterRead { readonly handle?: string; readonly next?: string; readonly mail?: readonly MailRow[]; readonly lost?: number | null; readonly epochChanged?: boolean; readonly cursorAhead?: boolean }
-/** A turn fact the host has not acknowledged yet, scoped to its ticket, with an id made once. */
-export interface OwedFact { readonly op: 'read' | 'idle' | 'error'; readonly ticket: string; readonly event: string; readonly text?: string }
+/** A turn fact the host has not acknowledged yet, scoped to its ticket and run, with an id made once. */
+export interface OwedFact { readonly op: 'read' | 'idle' | 'error'; readonly ticket: string; readonly run: string; readonly event: string; readonly text?: string }
+/** A ticket handed to the Pi session, in the run its work came in. */
+export interface InflightWork { readonly ticket: string; readonly run: string }
 /** One seat's persisted consumer state. */
-export interface SeatState { readonly handle: string; readonly home: string; cursor: string; inflight: string[]; owed: OwedFact[] }
+export interface SeatState { readonly handle: string; readonly home: string; cursor: string; inflight: InflightWork[]; owed: OwedFact[] }
 
 /** The sender name the team host writes a seat's work under (src/index.ts piDeliver). */
 export const TEAM_SENDER = 'superagent'
@@ -56,8 +60,9 @@ function loadState(path: string, handle: string, home: string): SeatState {
   try {
     const stored = JSON.parse(readFileSync(path, 'utf8')) as Partial<SeatState>
     if (stored.handle === handle && stored.home === home && typeof stored.cursor === 'string') {
-      const inflight = Array.isArray(stored.inflight) ? stored.inflight.filter((t): t is string => typeof t === 'string') : []
-      const owed = Array.isArray(stored.owed) ? stored.owed.filter((f): f is OwedFact => f !== null && typeof f === 'object' && ['read', 'idle', 'error'].includes(String(f.op)) && typeof f.ticket === 'string' && typeof f.event === 'string') : []
+      // Entries without a run (written before runs) cannot be scoped: the host would refuse them, so they are not kept.
+      const inflight = Array.isArray(stored.inflight) ? stored.inflight.filter((w): w is InflightWork => w !== null && typeof w === 'object' && typeof w.ticket === 'string' && typeof w.run === 'string') : []
+      const owed = Array.isArray(stored.owed) ? stored.owed.filter((f): f is OwedFact => f !== null && typeof f === 'object' && ['read', 'idle', 'error'].includes(String(f.op)) && typeof f.ticket === 'string' && typeof f.run === 'string' && typeof f.event === 'string') : []
       return { handle, home, cursor: stored.cursor, inflight, owed }
     }
   } catch { /* no state yet */ }
@@ -85,28 +90,79 @@ function readLock(lock: string): { pid: number; token: string } | 'unreadable' |
   } catch { return 'unreadable' }
 }
 
+const create = (file: string, token: string): boolean => {
+  try { writeFileSync(file, JSON.stringify({ pid: process.pid, token }), { mode: 0o600, flag: 'wx' }); return true } catch (error) {
+    if ((error as { code?: string }).code !== 'EEXIST') throw error
+    return false
+  }
+}
+
 /**
- * Take the seat's lock for `token`: exclusive create; a dead holder's lock is moved aside by one atomic rename (only one
- * contender wins it) and the create tried again. Never overwrites a lock, never takes an unreadable one.
- * @returns 'taken', 'held' (a live consumer has it), or 'unreadable'.
+ * Move `file` aside only if it still is the lock of `expected` (a dead holder's token). The move is checked afterwards: if
+ * what was moved is not `expected`'s (another contender put a live lock there in between), it is put back with a hard link,
+ * which never overwrites, and the move counts for nothing. #688 review R1: an atomic rename does not compare ownership.
+ */
+export function moveAsideIf(file: string, expected: string): boolean {
+  const before = readLock(file)
+  if (before === undefined || before === 'unreadable' || before.token !== expected) return false
+  const aside = `${file}.stale-${newId()}`
+  try { renameSync(file, aside) } catch { return false }
+  const moved = readLock(aside)
+  if (moved !== undefined && moved !== 'unreadable' && moved.token === expected) { rmSync(aside, { force: true }); return true }
+  try { linkSync(aside, file) } catch { /* a new lock is already there: the moved one's owner finds it is not its own and stops */ }
+  rmSync(aside, { force: true })
+  return false
+}
+
+/**
+ * The seat's reclaim mutex: only its holder may move a dead consumer's lock aside. Taken by exclusive create; a mutex left
+ * by a dead reclaimer is moved aside the same checked way. Released only by its holder.
+ */
+function takeReclaim(mutex: string, token: string): boolean {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (create(mutex, token)) return true
+    const holder = readLock(mutex)
+    if (holder === 'unreadable') return false
+    if (holder === undefined) continue
+    if (alive(holder.pid)) return false
+    moveAsideIf(mutex, holder.token)
+  }
+  return false
+}
+
+/**
+ * Reclaim the seat's lock from a dead holder seen as `dead`: under the reclaim mutex, read the lock again and move it aside
+ * only if it still is that dead holder's. A contender that saw the same dead lock but comes second finds a live lock (or
+ * none) and leaves it alone.
+ */
+export function reclaimSeatLock(path: string, dead: string, token: string): void {
+  const lock = `${path}.lock`, mutex = `${lock}.reclaim`
+  if (!takeReclaim(mutex, token)) return
+  try {
+    const again = readLock(lock)
+    if (again !== undefined && again !== 'unreadable' && again.token === dead && !alive(again.pid)) moveAsideIf(lock, dead)
+  } finally {
+    const held = readLock(mutex)
+    if (held !== undefined && held !== 'unreadable' && held.token === token) rmSync(mutex, { force: true })
+  }
+}
+
+/**
+ * Take the seat's lock for `token`: exclusive create; a dead holder's lock is reclaimed under the reclaim mutex
+ * ({@link reclaimSeatLock}) and the create tried again. Never overwrites a lock, never takes an unreadable one.
+ * @returns 'taken', 'held' (a live consumer has it, or another contender is reclaiming it), or 'unreadable'.
  */
 export function takeSeatLock(path: string, token: string): 'taken' | 'held' | 'unreadable' {
   const lock = `${path}.lock`
   mkdirSync(join(path, '..'), { recursive: true })
   for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      writeFileSync(lock, JSON.stringify({ pid: process.pid, token }), { mode: 0o600, flag: 'wx' })
-      return 'taken'
-    } catch (error) {
-      if ((error as { code?: string }).code !== 'EEXIST') throw error
-    }
+    if (create(lock, token)) return 'taken'
     const holder = readLock(lock)
     if (holder === 'unreadable') return 'unreadable'
     if (holder === undefined) continue
     if (holder.token === token) return 'taken'
     if (alive(holder.pid)) return 'held'
-    // A dead holder: move its lock aside atomically; a contender that lost the rename finds the lock gone or new.
-    try { renameSync(lock, `${lock}.stale-${newId()}`) } catch { /* another contender moved it first */ }
+    reclaimSeatLock(path, holder.token, token)
   }
   return 'held'
 }
@@ -152,7 +208,7 @@ export default function a2aSeat(pi: ExtensionAPI): void {
   }
 
   const factArgs = (fact: OwedFact): string[] => {
-    const scope = ['--ticket', fact.ticket, '--event', fact.event]
+    const scope = ['--ticket', fact.ticket, '--run', fact.run, '--event', fact.event]
     if (fact.op === 'error') return ['ticket', 'error', '--transient', ...scope, '--', fact.text ?? 'the Pi run did not settle']
     return ['ticket', fact.op, ...scope]
   }
@@ -178,7 +234,7 @@ export default function a2aSeat(pi: ExtensionAPI): void {
   /** Every ticket still in flight now owes a fact (the run settled, was aborted, or its consumer is gone). */
   const settleInflight = (op: 'idle' | 'error', text?: string): void => {
     if (seat === undefined || seat.state.inflight.length === 0) return
-    for (const ticket of seat.state.inflight) seat.state.owed.push({ op, ticket, event: newId(), ...(text !== undefined ? { text } : {}) })
+    for (const { ticket, run } of seat.state.inflight) seat.state.owed.push({ op, ticket, run, event: newId(), ...(text !== undefined ? { text } : {}) })
     seat.state.inflight = []
     saveState(seat.path, seat.state)
   }
@@ -198,12 +254,17 @@ export default function a2aSeat(pi: ExtensionAPI): void {
       if (read.handle !== state.handle) { warn(ctx, 'handle', `the CLI read the mailbox of ${String(read.handle)}, not ${state.handle}; this seat stops consuming`); return }
       if (read.cursorAhead === true) { warn(ctx, 'ahead', `the stored cursor ${state.cursor} was not issued by ${state.home}; nothing is read until it is reset (delete ${path})`); return }
       if (read.lost === null || (typeof read.lost === 'number' && read.lost > 0) || read.epochChanged === true) warn(ctx, `lost-${String(read.next)}`, read.epochChanged === true ? 'the team host restarted its mailbox store: mail from before may be gone' : `${String(read.lost)} message(s) were pushed out of the mailbox before they were read`)
-      const work = (read.mail ?? []).filter(row => row.from === TEAM_SENDER && typeof row.text === 'string' && row.text !== '' && typeof row.task_id === 'string' && row.task_id !== '')
+      // Work names its ticket (task id) and its run (context id); a row without both is not work this seat can account for.
+      const work = (read.mail ?? []).filter(row => row.from === TEAM_SENDER && typeof row.text === 'string' && row.text !== '' && typeof row.task_id === 'string' && row.task_id !== '' && typeof row.context_id === 'string' && row.context_id !== '')
       if (!owns(gen)) return
       // In flight first (durable), then the handover, then the cursor and the read facts: a consumer that dies in between
       // leaves its successor the tickets to account for, never a silent gap.
       if (work.length > 0) {
-        state.inflight = [...new Set([...state.inflight, ...work.map(row => row.task_id as string)])]
+        const known = new Set(state.inflight.map(w => `${w.ticket}\u0000${w.run}`))
+        for (const row of work) {
+          const key = `${row.task_id as string}\u0000${row.context_id as string}`
+          if (!known.has(key)) { known.add(key); state.inflight.push({ ticket: row.task_id as string, run: row.context_id as string }) }
+        }
         saveState(path, state)
       }
       for (const row of work) {
@@ -211,7 +272,7 @@ export default function a2aSeat(pi: ExtensionAPI): void {
         else pi.sendUserMessage(row.text as string, { deliverAs: 'followUp' })
       }
       if (typeof read.next === 'string') state.cursor = read.next
-      for (const row of work) state.owed.push({ op: 'read', ticket: row.task_id as string, event: newId() })
+      for (const row of work) state.owed.push({ op: 'read', ticket: row.task_id as string, run: row.context_id as string, event: newId() })
       saveState(path, state)
       await flushOwed(gen, ctx)
     } catch (error) {

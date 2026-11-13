@@ -114,7 +114,7 @@ admission: admission <caller> [--local] [--json]   how <caller> would be admitte
 /** The capabilities a CLI identity may declare on its card (superagent-root-team S5). */
 // piSeat: docs/design/superagent-pi-platform.md P1 — this identity is a Pi seat (it may join a superagent team as a member).
 const DECLARABLE = ['progressReceipts', 'teamRoster', 'directedSeats', 'reworkReturns', 'piSeat']
-const VALUE_FLAGS = new Set(['--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir', '--recommended', '--level', '--event'])
+const VALUE_FLAGS = new Set(['--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir', '--recommended', '--level', '--event', '--run'])
 const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class', '--pi-seat', '--transient'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
@@ -724,11 +724,13 @@ async function cmdTicket() {
   if (!TICKET_OPS.includes(op ?? '')) usage(`usage: a2a ticket ${TICKET_OPS.join('|')} …  (a Pi seat's op on its team host)`)
   const dash = process.argv.indexOf('--')
   const text = dash >= 0 ? process.argv.slice(dash + 1).join(' ') : (flag('--text') ?? '')
-  // #688 R2: a turn fact (idle, read, error) names its ticket and a stable event id, so the host can tell a replay and a stale fact.
+  // #688 R2: a turn fact (idle, read, error) names its ticket, the run of it the work came in (the mailbox row's context id),
+  // and a stable event id, so the host can tell a replay, and a fact from an earlier run of the same ticket.
   const scoped = () => {
-    const ticket = flag('--ticket'), event = flag('--event')
-    if ((ticket === undefined) !== (event === undefined)) usage(`ticket ${op}: --ticket and --event go together`)
-    return ticket !== undefined ? { ticket_id: ticket, event_id: event } : {}
+    const ticket = flag('--ticket'), run = flag('--run'), event = flag('--event')
+    const given = [ticket, run, event].filter(v => v !== undefined).length
+    if (given !== 0 && given !== 3) usage(`ticket ${op}: --ticket, --run and --event go together`)
+    return ticket !== undefined ? { ticket_id: ticket, run_id: run, event_id: event } : {}
   }
   let report
   if (op === 'report') {
@@ -755,7 +757,7 @@ async function cmdTicket() {
   } else if (op === 'idle') {
     report = { quiet: text === '', text, ...scoped() }
   } else if (op === 'error') {
-    if (text.trim() === '') usage('usage: a2a ticket error [--transient] [--ticket ID --event ID] -- <what failed>')
+    if (text.trim() === '') usage('usage: a2a ticket error [--transient] [--ticket ID --run ID --event ID] -- <what failed>')
     report = { error: text, transient: has('--transient'), ...scoped() }
   } else if (op === 'read') {
     report = scoped()

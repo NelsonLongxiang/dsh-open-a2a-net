@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import { CanvasStore } from '../../src/canvas-store.ts'
 import { PI_PLATFORM, piCardText, piDeliverable, piSeatAdmission } from '../../src/superagent/platforms/pi.ts'
 import type { RemoteMember } from '../../src/superagent/host/policy.ts'
+import { runOf } from '../../src/superagent/host/executor.ts'
 
 const KEY_P = 'MCowBQYDK2VwAyEA' + 'P'.repeat(44), KEY_Q = 'MCowBQYDK2VwAyEA' + 'Q'.repeat(44), KEY_B = 'MCowBQYDK2VwAyEA' + 'B'.repeat(44)
 const SEAT = 'fleet-pi/0123456789abcdef'
@@ -60,11 +61,11 @@ describe('the canvas pins a Pi seat\'s key', () => {
 describe('the team host and its Pi seat', () => {
   const seat: RemoteMember = { ref: SEAT, key: KEY_P, url: '', platform: PI_PLATFORM }
   const remote: RemoteMember = { ref: 'dsh/bbbbbbbb@12345678', key: KEY_B, url: 'http://127.0.0.1:9' }
-  const make = async (piDeliver: (handle: string, key: string, text: string, ticket: string) => boolean, sent: string[] = [], remotes: RemoteMember[] = [seat, remote]) => {
+  const make = async (piDeliver: (handle: string, key: string, text: string, ticket: string, run?: string) => boolean, sent: string[] = [], remotes: RemoteMember[] = [seat, remote], home = mkdtempSync(join(tmpdir(), 'sa-pi-'))) => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const h = new SuperagentHost({
       canvasTeam: name => name === 'team' ? { local: ['session-r'], remote: remotes } : undefined,
-      home: mkdtempSync(join(tmpdir(), 'sa-pi-')), logger: { info: () => {}, warn: () => {} }, interval: () => () => {},
+      home, logger: { info: () => {}, warn: () => {} }, interval: () => () => {},
       deliverToSession: (id, text) => { sent.push(`${id}:${text}`); return true },
       piSeat: handle => handle === SEAT ? { ok: true, key: KEY_P } : { ok: false, error: `[pi-seat] ${handle} is a CLI handle that is not a Pi seat` },
       piDeliver,
@@ -116,7 +117,7 @@ describe('the team host and its Pi seat', () => {
     for (const op of ['rules-propose', 'rules-apply']) {
       expect(h.remoteEvent(op, SEAT, KEY_P, { value: { rules: [] }, reason: 'x', person: { text: 'agreed', atMs: Date.now() + 60_000 } }, true)).toMatchObject({ ok: false, code: 'op' })
     }
-    expect(h.remoteEvent('idle', SEAT, KEY_P, { quiet: true, text: '', person: true, ticket_id: 't-none', event_id: 'e-p1' }, true)).toMatchObject({ ok: true })
+    expect(h.remoteEvent('idle', SEAT, KEY_P, { quiet: true, text: '', person: true, ticket_id: 't-none', run_id: 'r-none', event_id: 'e-p1' }, true)).toMatchObject({ ok: true })
     // A remote member session keeps both (its host vouches for its session).
     expect(h.remoteEvent('rules-propose', 'dsh/bbbbbbbb', KEY_B, { value: {}, reason: 'x' }, false)).not.toMatchObject({ code: 'op' })
   })
@@ -174,8 +175,8 @@ describe('the team host and its Pi seat', () => {
   })
 
   it('#688 R2: an idle the host took whose answer was lost, replayed after the next ticket was given, leaves that ticket alone', async () => {
-    const mailed: Array<[string, string]> = []
-    const h = await make((_h, _k, text, ticket) => { mailed.push([ticket, text]); return true }, [], [seat])
+    const mailed: Array<[string, string, string | undefined]> = []
+    const h = await make((_h, _k, text, ticket, run) => { mailed.push([ticket, text, run]); return true }, [], [seat])
     h.start()
     const { routeItem } = await import('../../src/superagent/host/tools.ts')
     for (const text of ['first', 'second']) {
@@ -183,25 +184,57 @@ describe('the team host and its Pi seat', () => {
       routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: text, scope: 's', reason: 'r' })
     }
     await new Promise(r => setTimeout(r, 30))
-    const ticketA = h.executor.bindingOf(SEAT)!.ticketId
+    const bindingA = h.executor.bindingOf(SEAT)!
+    const ticketA = bindingA.ticketId, runA = runOf(bindingA)
+    // The work went out with its run as the mailbox row's context id.
+    expect(mailed[0]?.[2]).toBe(runA)
     // The seat ends its turn on A: the host takes it (the answer is lost on the way back) and gives the seat B.
-    expect(h.remoteEvent('idle', SEAT, KEY_P, { quiet: true, text: '', ticket_id: ticketA, event_id: 'ev-a-1' }, true)).toEqual({ ok: true })
+    expect(h.remoteEvent('idle', SEAT, KEY_P, { quiet: true, text: '', ticket_id: ticketA, run_id: runA, event_id: 'ev-a-1' }, true)).toEqual({ ok: true })
     await new Promise(r => setTimeout(r, 30))
     const ticketB = h.executor.bindingOf(SEAT)?.ticketId
     expect(ticketB).toBeDefined()
     expect(ticketB).not.toBe(ticketA)
     const before = JSON.stringify(h.ticket(ticketB!))
     // The replay of A's idle, and any later fact for A, do nothing to B.
-    expect(h.remoteEvent('idle', SEAT, KEY_P, { quiet: true, text: '', ticket_id: ticketA, event_id: 'ev-a-1' }, true)).toEqual({ ok: true, duplicate: true })
-    expect(h.remoteEvent('error', SEAT, KEY_P, { error: 'late', transient: true, ticket_id: ticketA, event_id: 'ev-a-2' }, true)).toEqual({ ok: true, stale: true })
+    expect(h.remoteEvent('idle', SEAT, KEY_P, { quiet: true, text: '', ticket_id: ticketA, run_id: runA, event_id: 'ev-a-1' }, true)).toEqual({ ok: true, duplicate: true })
+    expect(h.remoteEvent('error', SEAT, KEY_P, { error: 'late', transient: true, ticket_id: ticketA, run_id: runA, event_id: 'ev-a-2' }, true)).toEqual({ ok: true, stale: true })
     expect(JSON.stringify(h.ticket(ticketB!))).toBe(before)
     expect(h.executor.bindingOf(SEAT)?.ticketId).toBe(ticketB)
     void h.stop()
   })
 
+  it('#688 R2 (re-review): a fact from another run of the same ticket does nothing; an accepted fact replayed after a restart is a duplicate', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-pi-restart-'))
+    const h = await make(() => true, [], [seat], home)
+    h.start()
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const asked = h.request('only') as { triggerId: string }
+    routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'only', scope: 's', reason: 'r' })
+    await new Promise(r => setTimeout(r, 30))
+    const binding = h.executor.bindingOf(SEAT)!
+    const run = runOf(binding)
+    const before = JSON.stringify(h.ticket(binding.ticketId))
+    // Same ticket, an earlier run (as a restart that re-ran the ticket leaves behind): stale, and the current run untouched.
+    expect(h.remoteEvent('error', SEAT, KEY_P, { error: 'old run', ticket_id: binding.ticketId, run_id: 'an-earlier-run', event_id: 'ev-old' }, true)).toEqual({ ok: true, stale: true })
+    expect(h.remoteEvent('idle', SEAT, KEY_P, { quiet: true, text: '', ticket_id: binding.ticketId, run_id: 'an-earlier-run', event_id: 'ev-old-2' }, true)).toEqual({ ok: true, stale: true })
+    expect(JSON.stringify(h.ticket(binding.ticketId))).toBe(before)
+    expect(h.executor.bindingOf(SEAT)).toEqual(binding)
+    // A read on the current run is taken once; the host restarts; its replay is a duplicate, not a new fact.
+    expect(h.remoteEvent('read', SEAT, KEY_P, { ticket_id: binding.ticketId, run_id: run, event_id: 'ev-read' }, true)).toEqual({ ok: true })
+    await h.stop()
+    const again = await make(() => true, [], [seat], home)
+    again.start()
+    try {
+      expect(again.remoteEvent('read', SEAT, KEY_P, { ticket_id: binding.ticketId, run_id: run, event_id: 'ev-read' }, true)).toEqual({ ok: true, duplicate: true })
+      expect(again.remoteEvent('error', SEAT, KEY_P, { error: 'old run', ticket_id: binding.ticketId, run_id: 'an-earlier-run', event_id: 'ev-old' }, true)).toEqual({ ok: true, duplicate: true })
+      // A fact without its run is refused.
+      expect(again.remoteEvent('idle', SEAT, KEY_P, { quiet: true, text: '', ticket_id: binding.ticketId, event_id: 'ev-x' }, true)).toMatchObject({ ok: false, code: 'report' })
+    } finally { void again.stop() }
+  })
+
   it('a seat is heard only through a CLI claim under its pinned key; a node claim never speaks for it, nor a CLI claim for a session', async () => {
     const h = await make(() => true)
-    const fact = (event: string) => ({ ticket_id: 't-none', event_id: event })
+    const fact = (event: string) => ({ ticket_id: 't-none', run_id: 'r-none', event_id: event })
     expect(h.remoteEvent('idle', SEAT, KEY_P, fact('e-1'), true)).toMatchObject({ ok: true })
     expect(h.remoteEvent('idle', SEAT, KEY_P, fact('e-2'), false)).toMatchObject({ ok: false, code: 'not-member' })
     expect(h.remoteEvent('idle', SEAT, KEY_Q, fact('e-3'), true)).toMatchObject({ ok: false, code: 'not-member' })

@@ -24,7 +24,8 @@ import { SplitBook } from './split.ts'
 import { progressState } from './progress.ts'
 import { credentialAccess, redactedPreview, type CredentialKind } from './credential-audit.ts'
 import { RosterReports } from './roster.ts'
-import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
+import { MemberExecutor, runOf, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
+import { PiEvents } from './pi-events.ts'
 import { ReviewRequests } from './review-requests.ts'
 import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, type OutboundAsk } from './outbound.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
@@ -132,7 +133,7 @@ export class SuperagentHost {
   private readonly credentialCardAt = new Map<string, number>()
 
   constructor(private readonly d: SuperagentHostDeps) {
-    const dir = d.stateDir ?? join(d.home, 'superagent')
+    const dir = this.stateDir = d.stateDir ?? join(d.home, 'superagent')
     this.settingsPath = join(dir, 'settings.json')
     this.settingsValue = this.loadSettings()
     this.store = new JsonRepositories(join(dir, 'state.json'))
@@ -146,7 +147,7 @@ export class SuperagentHost {
       held: ticketId => this.splitHeld(ticketId) || this.named.held(ticketId),
       repoOf: member => this.settingsValue.repos[member],
       memberNotes: (member, ticket) => this.memberNotes(member, ticket),
-      deliver: (member, text, kind, ticketId) => this.deliverToMember(member, text, kind, ticketId), engine: () => this.engine,
+      deliver: (member, text, kind, ticketId, run) => this.deliverToMember(member, text, kind, ticketId, run), engine: () => this.engine,
       paused: () => this.settingsValue.paused,
       cancelTurn: member => this.d.cancelTurn?.(member) === true,
       reportFor: (ticketId, member, state, summary) => { this.engine.report(ticketId, { state, summary: clip(summary, 2_000) }); this.relayReport(ticketId, state, summary); this.pass(); void member },
@@ -369,13 +370,16 @@ export class SuperagentHost {
     }
   }
 
-  /** #688 R2: the turn-fact event ids each Pi seat sent, newest last (a replayed fact is acknowledged and ignored). */
-  private readonly piEvents = new Map<string, string[]>()
+  /** #688 R2: the turn facts each Pi seat sent that were accepted, on disk (a replay, even after a restart, does nothing). */
+  private piEventLog: PiEvents | undefined
+  /** The team's state directory (executor.json, pi-events.json, …). */
+  private readonly stateDir: string
+  private piEvents(): PiEvents { return this.piEventLog ??= new PiEvents(join(this.stateDir, 'pi-events.json')) }
   /** Pi platform: the key each Pi seat's work was last delivered under (in memory: a seat's work does not outlive a restart). */
   private readonly piPins = new Map<string, string>()
 
   /** PR-C2: put a card into a member's session — local by host relay, remote by a signed request to its host. */
-  private async deliverToMember(member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string): Promise<boolean> {
+  private async deliverToMember(member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string, run?: string): Promise<boolean> {
     if (isChildTeam(member)) return await this.root.send(member, text, kind, ticketId)
     const remote = this.settings.remoteMembers.find(r => r.ref === member)
     // A CLI handle is never a session (#685 review F2): a Pi seat removed while its ticket runs still gets the stop in its
@@ -383,12 +387,12 @@ export class SuperagentHost {
     if (remote === undefined && CLI_HANDLE_RE.test(member)) {
       // Only under the key pinned when its work was given: never a key the deposit holds now (a re-keyed seat gets nothing).
       const pinned = kind === 'stop' ? this.piPins.get(member) : undefined
-      return pinned !== undefined ? this.d.piDeliver?.(member, pinned, piCardText(text, kind, ticketId), ticketId) ?? false : false
+      return pinned !== undefined ? this.d.piDeliver?.(member, pinned, piCardText(text, kind, ticketId), ticketId, run) ?? false : false
     }
     if (remote === undefined) return this.d.deliverToSession(member, text)
     // Pi platform P3: a Pi seat's work goes to its CLI mailbox on this host, as the Pi variant of the card.
     if (remote.platform === PI_PLATFORM) {
-      const delivered = this.d.piDeliver?.(remote.ref, remote.key, piCardText(text, kind, ticketId), ticketId) ?? false
+      const delivered = this.d.piDeliver?.(remote.ref, remote.key, piCardText(text, kind, ticketId), ticketId, run) ?? false
       // #685 review F2: the key its work went out under, so a stop after the seat leaves the canvas still finds it (and only it).
       if (delivered) this.piPins.set(remote.ref, remote.key)
       return delivered
@@ -411,16 +415,19 @@ export class SuperagentHost {
     // says can stand for the owner. It has the P4 vocabulary only: no rule changes, and no person flag on a turn end.
     const pi = entry.platform === PI_PLATFORM
     if (pi && !['report', 'ack', 'handback', 'idle', 'read', 'error'].includes(String(op))) return { ok: false, code: 'op', error: 'a Pi seat may send report, ack, handback, idle, read or error: rule changes need the owner, whom a seat cannot speak for' }
-    // #688 R2: a Pi seat's turn facts name their ticket and carry an event id. An event seen before is acknowledged again and does
-    // nothing (its first answer may have been lost); a fact for a ticket that is no longer the seat's current one does nothing
-    // either — it never touches newer work.
+    // #688 R2: a Pi seat's turn facts name their ticket, the run of it the work came in (each binding has its own), and an
+    // event id. An event accepted before — even before a restart — is acknowledged again and does nothing (its first answer
+    // may have been lost). A fact whose ticket and run are not the seat's current binding does nothing either: it never
+    // touches newer work, not even a later run of the same ticket.
     if (pi && (op === 'idle' || op === 'read' || op === 'error')) {
       const fact = (report ?? {}) as Record<string, unknown>
-      if (typeof fact.ticket_id !== 'string' || typeof fact.event_id !== 'string' || !/^[A-Za-z0-9._:-]{1,80}$/.test(fact.event_id)) return { ok: false, code: 'report', error: 'a Pi seat names the ticket (ticket_id) and the event (event_id) of a turn fact' }
-      const seen = this.piEvents.get(entry.ref) ?? []
-      if (seen.includes(fact.event_id)) return { ok: true, duplicate: true }
-      this.piEvents.set(entry.ref, [...seen, fact.event_id].slice(-512))
-      if (this.executor.bindingOf(entry.ref)?.ticketId !== fact.ticket_id) return { ok: true, stale: true }
+      const id = /^[A-Za-z0-9._:-]{1,80}$/
+      if (typeof fact.ticket_id !== 'string' || typeof fact.run_id !== 'string' || !id.test(fact.run_id) || typeof fact.event_id !== 'string' || !id.test(fact.event_id)) return { ok: false, code: 'report', error: 'a Pi seat names the ticket (ticket_id), the run (run_id) and the event (event_id) of a turn fact' }
+      if (this.piEvents().has(entry.ref, fact.run_id, fact.event_id)) return { ok: true, duplicate: true }
+      const binding = this.executor.bindingOf(entry.ref)
+      const current = binding !== undefined && binding.ticketId === fact.ticket_id && runOf(binding) === fact.run_id
+      this.piEvents().add(entry.ref, fact.run_id, fact.event_id)
+      if (!current) return { ok: true, stale: true }
     }
     if (op === 'idle') {
       const turn = (report ?? {}) as Record<string, unknown>

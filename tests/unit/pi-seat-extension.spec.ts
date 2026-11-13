@@ -41,8 +41,8 @@ function pi(handle: string, reply: (args: string[]) => Promise<Exec> | Exec) {
   return { api, sent, calls, notes, fire, facts }
 }
 const inbox = (handle: string, next: string, mail: Array<Record<string, unknown>> = [], extra: Record<string, unknown> = {}) => ok(JSON.stringify({ handle, next, mail, lost: 0, epochChanged: false, ...extra }))
-const work = (ticket: string, seq: number) => ({ from: 'superagent', text: `work ${ticket}`, seq, task_id: ticket })
-const state = (ext: { seatStatePath(h: string, home: string): string }, handle = A) => JSON.parse(readFileSync(ext.seatStatePath(handle, HOST), 'utf8')) as { cursor: string; inflight: string[]; owed: Array<{ op: string; ticket: string; event: string }> }
+const work = (ticket: string, seq: number, run = `run-${ticket}`) => ({ from: 'superagent', text: `work ${ticket}`, seq, task_id: ticket, context_id: run })
+const state = (ext: { seatStatePath(h: string, home: string): string }, handle = A) => JSON.parse(readFileSync(ext.seatStatePath(handle, HOST), 'utf8')) as { cursor: string; inflight: Array<{ ticket: string; run: string }>; owed: Array<{ op: string; ticket: string; run: string; event: string }> }
 
 afterEach(() => { vi.unstubAllEnvs() })
 
@@ -106,6 +106,53 @@ describe('one seat, one consumer (R1, F1)', () => {
   })
 })
 
+describe('stale lock reclaim compares ownership (#688 re-review R1)', () => {
+  it('a contender that saw the dead lock but comes second leaves the live lock alone', async () => {
+    const ext = await load(mkdtempSync(join(tmpdir(), 'pi-seat-')))
+    const path = ext.seatStatePath(A, HOST)
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(`${path}.lock`, JSON.stringify({ pid: deadPid(), token: 'dead' }))
+    // A reclaims and takes the seat; B had read the same dead lock before and now goes on with its reclaim.
+    expect(ext.takeSeatLock(path, 'token-a')).toBe('taken')
+    ext.reclaimSeatLock(path, 'dead', 'token-b')
+    expect(ext.holdsSeatLock(path, 'token-a')).toBe(true)
+    expect(ext.takeSeatLock(path, 'token-b')).toBe('held')
+    expect(existsSync(`${path}.lock.reclaim`)).toBe(false)
+  })
+
+  it('a lock moved aside that turns out not to be the dead one is put back, never lost', async () => {
+    const ext = await load(mkdtempSync(join(tmpdir(), 'pi-seat-')))
+    const path = ext.seatStatePath(A, HOST)
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(`${path}.lock`, JSON.stringify({ pid: process.pid, token: 'live' }))
+    expect(ext.moveAsideIf(`${path}.lock`, 'dead')).toBe(false)
+    expect(ext.holdsSeatLock(path, 'live')).toBe(true)
+  })
+
+  it('real processes racing for one dead lock: exactly one takes it, and it still holds it after the others are done', async () => {
+    const { spawn } = await import('node:child_process')
+    const { fileURLToPath } = await import('node:url')
+    const dir = mkdtempSync(join(tmpdir(), 'pi-seat-race-'))
+    const path = join(dir, 'seat.json')
+    const module = fileURLToPath(new URL('../../pi/extension/a2a-seat.ts', import.meta.url))
+    for (let round = 0; round < 5; round++) {
+      writeFileSync(`${path}.lock`, JSON.stringify({ pid: deadPid(), token: 'dead' }))
+      const start = Date.now() + 400
+      const child = `const m = await import(${JSON.stringify(module)}); while (Date.now() < ${String(start)}); const token = 't' + process.pid; const got = m.takeSeatLock(${JSON.stringify(path)}, token); await new Promise(r => setTimeout(r, 300)); console.log(JSON.stringify({ got, holds: m.holdsSeatLock(${JSON.stringify(path)}, token) })); if (got === 'taken') m.dropSeatLock(${JSON.stringify(path)}, token)`
+      const results = await Promise.all(Array.from({ length: 6 }, () => new Promise<{ got: string; holds: boolean }>((resolve, reject) => {
+        const p = spawn(process.execPath, ['--input-type=module', '-e', child], { stdio: ['ignore', 'pipe', 'pipe'] })
+        let out = '', err = ''
+        p.stdout.on('data', d => { out += String(d) })
+        p.stderr.on('data', d => { err += String(d) })
+        p.on('close', code => { code === 0 ? resolve(JSON.parse(out.trim()) as { got: string; holds: boolean }) : reject(new Error(err)) })
+      })))
+      const taken = results.filter(r => r.got === 'taken')
+      expect(taken, JSON.stringify(results)).toHaveLength(1)
+      expect(taken[0]!.holds).toBe(true)
+    }
+  }, 30_000)
+})
+
 describe('facts are scoped to their ticket and replay-safe (R2)', () => {
   it('a read and an idle name the delivered ticket and keep one event id across retries until acknowledged', async () => {
     const ext = await load(mkdtempSync(join(tmpdir(), 'pi-seat-')))
@@ -156,7 +203,7 @@ describe('in-flight work survives its consumer (R3)', () => {
     ext.default(first.api as never)
     await first.fire('session_start')
     expect(first.sent).toEqual(['work t-1'])
-    expect(state(ext)).toMatchObject({ cursor: 'ep:1', inflight: ['t-1'] })
+    expect(state(ext)).toMatchObject({ cursor: 'ep:1', inflight: [{ ticket: 't-1', run: 'run-t-1' }] })
     // Abrupt exit: no settle, no shutdown. Its lock now names a dead process.
     writeFileSync(`${ext.seatStatePath(A, HOST)}.lock`, JSON.stringify({ pid: deadPid(), token: 'dead' }))
     const next = pi(A, args => args[0] === 'inbox' ? inbox(A, 'ep:1') : ok())

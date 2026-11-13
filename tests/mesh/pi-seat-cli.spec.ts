@@ -59,12 +59,15 @@ describe('a Pi seat through the CLI', () => {
         expect(read.mail.some((m: any) => m.from === 'superagent' && m.task_id === ticketId)).toBe(true)
       }, { timeout: 10_000 })
       const card = read.mail.find((m: any) => m.task_id === ticketId)
+      // #688 R2: the run of the ticket the work came in rides as the row's context id.
+      const run = card.context_id as string
+      expect(run).toMatch(/^[A-Za-z0-9_-]{8,}$/)
       expect(card.text).toContain('[superagent assignment]')
       expect(card.text).toContain(`a2a-net ticket report --ticket ${ticketId}`)
 
       // Its signed, body-bound ops reach the team. A question is a decision card: a bare one never leaves the CLI, and one
       // with options and a recommendation reaches the owner as a card.
-      expect(JSON.parse((await cli(seat, ['ticket', 'read', '--ticket', ticketId, '--event', 'ev-read-1', '--json'])).stdout)).toEqual({ ok: true })
+      expect(JSON.parse((await cli(seat, ['ticket', 'read', '--ticket', ticketId, '--run', run, '--event', 'ev-read-1', '--json'])).stdout)).toEqual({ ok: true })
       expect((await cli(seat, ['ticket', 'report', '--ticket', ticketId, '--state', 'waiting', '--question', '用哪种?', '--', '要你定'])).code).toBe(2)
       expect((await cli(seat, ['ticket', 'report', '--ticket', ticketId, '--state', 'waiting', '--question', '用哪种?', '--options', '甲|乙', '--recommended', '丙', '--', '要你定'])).code).toBe(2)
       const asks = await cli(seat, ['ticket', 'report', '--ticket', ticketId, '--state', 'waiting', '--question', '用哪种?', '--options', '甲|乙', '--recommended', '乙', '--level', 'P1', '--json', '--', '要你定'])
@@ -73,8 +76,8 @@ describe('a Pi seat through the CLI', () => {
       expect(cards.find(c => c.ticketId === ticketId)).toMatchObject({ options: ['甲', '乙'], recommended: '乙', level: 'P1' })
       const reported = await cli(seat, ['ticket', 'report', '--ticket', ticketId, '--state', 'ready', '--json', '--', '做完了'])
       expect(JSON.parse(reported.stdout), reported.stdout + reported.stderr).toMatchObject({ ok: true })
-      expect((await cli(seat, ['ticket', 'idle', '--ticket', ticketId, '--event', 'ev-idle-1'])).code).toBe(0)
-      // A turn fact with no ticket and event is a usage error for one half, and refused by the host without both.
+      expect((await cli(seat, ['ticket', 'idle', '--ticket', ticketId, '--run', run, '--event', 'ev-idle-1'])).code).toBe(0)
+      // A turn fact with only some of ticket, run and event is a usage error, and refused by the host without them.
       expect((await cli(seat, ['ticket', 'idle', '--ticket', ticketId])).code).toBe(2)
       expect(JSON.parse((await cli(seat, ['ticket', 'idle', '--json'])).stdout)).toMatchObject({ ok: false, code: 'report' })
       // A CLI identity that is not the seat is refused, with the code; rule changes are not a seat's op at all.
