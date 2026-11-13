@@ -1,5 +1,7 @@
 # #356 sourced agent.followup 实施交付（高档，待精确头复核）
 
+> 补记（2026-11-13）：已于 2026-11-06 经 PR#363（`d3ac79c`）合入 master（代码在 `src/followup-delivery.ts`）。标题里的「待复核 / 未合并」是写这份记录时的状态，正文保持原样。
+
 Refs #356；派单direct-795e9280a9d0、补充direct-8604a94f8790/direct-702292f00d4c。基线master104196987acace8f3cd28637c4c9dba79f3f2387（已合351/354/359/361），独立feat/356-sourced-followup-delivery；与351实施分支没有并行写同文件。本PR高档，非作者PASS后先冻结、监督报全局获回复后才match-head合并。**不部署、不补积压、不发生产回执，不关358②③，不碰343或deepseek-harness源码。**
 
 ## 版本矩阵与能力边界

@@ -330,16 +330,18 @@ its origin). A verified but unlinked caller still gets the minimal card. See
 the envelope details.
 
 **Which artifact to build against.** npm direct install already includes the
-four subpaths: releases from 0.6.25 (badge `latest`) carry them, so
+four subpaths: every npm release from 0.6.24 on carries them (there is no
+release between 0.5.15 and 0.6.24; `latest` is currently 0.7.0), so
 `npm install @nelsonlongxiang/dsh-open-a2a-net` works out of the box —
 see `examples/external-node/` for a runnable external-node example that
 exercises all four subpaths against an embedded mock peer. The subpath
-exports landed in commit `9cb3852`; versions before that (public 0.5.15
-included) predate the admission rules and the OriginClaim envelope above,
+exports landed in commit `9cb3852` (0.6.24 has them; the full-card link
+gate is from 0.6.25); versions before that (public 0.5.15 included) predate
+the admission rules and the OriginClaim envelope above,
 and importing the subpaths from them fails with
 `ERR_PACKAGE_PATH_NOT_EXPORTED` — the historical recipe (pin a commit,
 `pnpm build`, `npm pack`, depend on the tarball) survives below for
-pre-0.6.25 deployments only:
+pre-0.6.24 deployments only:
 
 ```bash
 # HISTORICAL (0.5.15 and earlier): build the package from a pinned commit

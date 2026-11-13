@@ -16,6 +16,8 @@
 >
 > **参照**：deepseek-ai/dsh-superagent-prototype（per-ticket worker、Mandate）、ai-native-expert-agents 的四层提示词和 `update_self`。
 
+> 补记（2026-11-13）：实现切片已陆续合入 master，到 N4 为止（PR#200，`e1ec454`，2026-11-03；`node_update_self` 见 `src/node-self.ts`）。
+
 ## 0. 一句话
 
 今天，**节点就是会话**：会话没了，身份、职责和积累的经验也跟着消失。本设计把身份、任务状态和分层的系统提示词挂到一个由人起名、长期存在的**节点**上，会话退化为节点的执行载体。

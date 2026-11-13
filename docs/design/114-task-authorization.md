@@ -10,6 +10,8 @@
 > 参照：deepseek-ai/dsh-superagent-prototype `docs/002-authorization.md`（Mandate /
 > Policy version / observe）。
 
+> 补记（2026-11-13，对照 master）：判定已落在 `src/task-auth.ts`（`d570208`，2026-10-31 起），配置键 `settlementAuth`（`off` / `observe` / `enforce`，缺省 `observe`）已在 `src/config.ts`。下文是方案稿原文。
+
 ## 0. 一句话
 
 今天，**谁发来一句 `[A2A receipt] task <id> …`，谁就能结算 `<id>`**。台账不记"凭什么接下这条任务"，

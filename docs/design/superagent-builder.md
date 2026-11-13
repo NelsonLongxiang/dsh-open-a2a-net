@@ -2,6 +2,8 @@
 
 Status: **proposed, 2026-11-12.** Not implemented. The owner asked for it on 2026-11-12, and the direction was agreed in the review seat's session the same day (「写设计稿」). The four points that change a boundary are listed at the end; they need the owner's ruling before BS2.
 
+> Update (2026-11-13): BS1 (the preset and read-only inventory, PR #667) and BS2 (blueprints, PR #670) are built and merged; the four boundary points were ruled by the owner on 2026-11-13 (see below). The "proposed / not implemented" line above is the state when this design was written.
+
 - **Asked for by** the owner (2026-11-12): a new preset whose job is to create teams and organize their members. It gives the owner convenient tools, including the initial router intake and dispatch rules and each member's intake rules. It takes no tickets and dispatches nothing. It only aligns with the owner on what they need, and gives them decisions and advice on how to build the team, so that a team, and then an organization, can be put together quickly.
 - **Discussed with** the review seat's main session (2026-11-12). Its conclusion, kept here: the builder is the **local, owner-facing entry into the staffing changes** of [superagent-staffing-changes](superagent-staffing-changes.md) (#626), not a second way to build a team. A team the builder drafts and a team the market asks for are the same thing (#626 W5).
 - **Why host behavior, not persona text:** the same lesson as #558 and #620. What the builder may do is fixed by the role-tools guard and checked by the staffing executor. The persona only describes the job.
