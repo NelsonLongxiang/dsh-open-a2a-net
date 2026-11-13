@@ -188,6 +188,23 @@ describe('a team on another instance', () => {
     expect(posts(f)).toEqual([{ action: 'send', address: remote.address, session: 'session-aaaaaaaa', text: '远端的活' }])
     expect(f.mock.calls.find(([, init]) => init?.method === 'POST')![0]).toBe('/__dsh_a2a/superagent/teams')
   })
+  it('shows what came back for its own sends, in the tab: waiting, the result, an unverified receipt, a question', async () => {
+    const sent = [
+      { taskId: 't-1', address: 'z/canvas/far@abcd1234', brief: '第一件', at: '2026-11-13T00:00:00Z', returns: [] },
+      { taskId: 't-2', address: 'z/canvas/far@abcd1234', brief: '第二件', at: '2026-11-13T00:00:00Z', ended: true, returns: [{ at: '', disposition: 'result', summary: '做完了', settled: true }] },
+      { taskId: 't-3', address: 'z/canvas/far@abcd1234', brief: '第三件', at: '2026-11-13T00:00:00Z', returns: [{ at: '', disposition: 'result', summary: '冒充的', settled: false }] },
+      { taskId: 't-4', address: 'z/canvas/far@abcd1234', brief: '第四件', at: '2026-11-13T00:00:00Z', returns: [{ at: '', disposition: 'attention', summary: '要你选', question: 'A 还是 B', settled: true }] },
+    ]
+    const f = serve({ teams: [remote], sent })
+    render(<TeamRequestTab t={t} sessionId="session-aaaaaaaa" />)
+    await waitFor(() => { expect(screen.getByText(en['team.sentList'], { selector: 'span' })).toBeTruthy() })
+    expect(screen.getByText('far · 第一件')).toBeTruthy()
+    expect(screen.getByText(en['team.sentWaiting'])).toBeTruthy()
+    expect(screen.getByText('做完了')).toBeTruthy()
+    expect(screen.getByText(/冒充的/).textContent).toContain(en['team.sentUnverified'])
+    expect(screen.getByText(/要你选/).textContent).toContain('A 还是 B')
+    expect(f.mock.calls.some(([url]) => url === '/__dsh_a2a/superagent/teams?session=session-aaaaaaaa')).toBe(true)
+  })
   it('keeps the text and shows why when the route is refused', async () => {
     serve({ teams: [remote] }, 200, () => ({ status: 200, body: { ok: false, error: 'join this session first' } }))
     render(<TeamRequestTab t={t} sessionId="session-aaaaaaaa" />)

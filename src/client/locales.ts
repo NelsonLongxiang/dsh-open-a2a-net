@@ -23,6 +23,10 @@ export type A2aNetKey =
   | 'team.noFileTarget'
   | 'team.noFolders'
   | 'team.sentRemote'
+  | 'team.sentList'
+  | 'team.sentWaiting'
+  | 'team.sentUnverified'
+  | 'team.sentQuestion'
   | 'team.remoteHint'
   | 'team.decisions'
   | 'team.decisionsGuide'
@@ -72,7 +76,11 @@ export const zh: Record<A2aNetKey, string> = {
   'team.cardFiles': '卡上的文件',
   'team.noFileTarget': '这张卡的团队没有画布地址，不能附文件',
   'team.noFolders': '不能拖入文件夹，请选择里面的文件',
-  'team.sentRemote': '已发给 {team}，由对方团队按自己的规则决定。发送者是 {sender}，回执会回到这个会话',
+  'team.sentRemote': '已发给 {team}，由对方团队按自己的规则决定。发送者是 {sender}；回执显示在下面，不进入会话',
+  'team.sentList': '发往其他实例的需求',
+  'team.sentWaiting': '等待对方回执',
+  'team.sentUnverified': '未核实：发回这条的不是这项任务的对方',
+  'team.sentQuestion': '对方提问：{question}',
   'team.remoteHint': '这支团队在其他实例上：这条消息算当前会话发的，不算你本人。对方要把这个会话列入名单，并开 auto 和对应规则，才会开单。',
   'team.decisions': '待决策',
   'team.decisionsGuide': '各团队等你拍板的事，附推荐选项',
@@ -135,7 +143,11 @@ export const en: Record<A2aNetKey, string> = {
   'team.cardFiles': 'Files on this card',
   'team.noFileTarget': 'this card\'s team has no canvas address to send files to',
   'team.noFolders': 'Folders cannot be added. Choose the files inside',
-  'team.sentRemote': 'Sent to {team}, whose own rules decide. The sender is {sender}; the receipt comes back to this session',
+  'team.sentRemote': 'Sent to {team}, whose own rules decide. The sender is {sender}; receipts show below, not in the conversation',
+  'team.sentList': 'Requests to other instances',
+  'team.sentWaiting': 'Waiting for the team\'s receipt',
+  'team.sentUnverified': 'Unverified: this came from someone other than the task\'s team',
+  'team.sentQuestion': 'The team asks: {question}',
   'team.remoteHint': 'This team is on another instance. The message counts as this session\'s, not yours. That team opens a ticket only if it lists this session and runs auto with a matching rule.',
   'team.decisions': 'Decisions',
   'team.decisionsGuide': 'What your teams need you to decide, each with a recommendation',

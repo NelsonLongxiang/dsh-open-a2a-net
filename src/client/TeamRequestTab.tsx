@@ -49,6 +49,58 @@ async function sendRequest(team: string, text: string): Promise<string | undefin
 
 type Note = { readonly tone: 'ok' | 'error'; readonly text: string }
 
+/** One request this session's tab sent to another instance, and what came back (the server's sidebar-sends rows). */
+export interface SentRequest {
+  readonly taskId: string
+  readonly address: string
+  readonly brief: string
+  readonly at: string
+  readonly ended?: boolean
+  readonly returns: ReadonlyArray<{ readonly at: string; readonly disposition: string; readonly outcome?: string; readonly summary: string; readonly question?: string; readonly settled: boolean }>
+}
+
+/** The requests this session's tab sent to other instances; empty when there is no session or they cannot be read. */
+export async function loadSent(sessionId: string | undefined): Promise<readonly SentRequest[]> {
+  if (sessionId === undefined || sessionId === '') return []
+  try {
+    const response = await fetch(`${TEAM_ROUTE}/teams?session=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
+    if (!response.ok) return []
+    const { sent } = await response.json() as { sent?: SentRequest[] }
+    return Array.isArray(sent) ? sent : []
+  } catch { return [] }
+}
+
+/** The team part of an address: `zone/canvas/<name>@fp8` reads as `<name>`. */
+const teamName = (address: string): string => address.replace(/@[0-9a-f]+$/i, '').split('/').pop() ?? address
+
+/**
+ * The tab's own sends to other instances: each request and the last thing that came back for it. A receipt for one of
+ * these lands here and not in the conversation (owner ruling 2026-11-13). Records are data: text nodes only.
+ */
+export function SentList({ t, sent }: PropsLocale<'a2aNet'> & { readonly sent: readonly SentRequest[] }) {
+  if (sent.length === 0) return null
+  return (
+    <section className={styles.sent} aria-label={t('team.sentList')}>
+      <span className={styles.label}>{t('team.sentList')}</span>
+      <ul className={styles.sentRows}>
+        {sent.map((row) => {
+          const last = row.returns[row.returns.length - 1]
+          return (
+            <li key={row.taskId} className={styles.sentRow}>
+              <span className={styles.sentHead}>{teamName(row.address)} · {row.brief}</span>
+              {last === undefined
+                ? <span className={styles.hint}>{t('team.sentWaiting')}</span>
+                : <span className={last.settled ? (row.ended === true ? styles.ok : styles.hint) : styles.error}>
+                    {last.summary}{last.question !== undefined ? ` ${t('team.sentQuestion', { question: last.question })}` : ''}{last.settled ? '' : ` (${t('team.sentUnverified')})`}
+                  </span>}
+            </li>
+          )
+        })}
+      </ul>
+    </section>
+  )
+}
+
 /** One request to a team on another instance, as this session; the sender's handle, or why not. */
 async function sendRemote(address: string, session: string | undefined, text: string): Promise<{ sender: string } | { refused: string }> {
   try {
@@ -76,6 +128,14 @@ export function TeamRequestTab({ t, sessionId }: TeamRequestTabProps) {
     void loadTeams().then((result) => { if (live) setLoaded(result) })
     return () => { live = false }
   }, [])
+  // The tab's own sends to other instances and their receipts, read again every 15s while the tab is open.
+  const [sent, setSent] = useState<readonly SentRequest[]>([])
+  const refreshSent = useCallback(() => { void loadSent(sessionId).then(setSent) }, [sessionId])
+  useEffect(() => {
+    refreshSent()
+    const timer = setInterval(refreshSent, 15_000)
+    return () => { clearInterval(timer) }
+  }, [refreshSent])
 
   const teams = loaded?.state === 'ready' ? loaded.teams : []
   const chosen = teams.find(row => row.id === team) ?? teams[0]
@@ -95,6 +155,7 @@ export function TeamRequestTab({ t, sessionId }: TeamRequestTabProps) {
       setText('')
       setFiles([])
       setNote({ tone: 'ok', text: t('team.sentRemote', { team: chosen.name, sender: out.sender }) })
+      refreshSent()
       return
     }
     const refused = await sendRequest(chosen.id, message)
@@ -103,7 +164,7 @@ export function TeamRequestTab({ t, sessionId }: TeamRequestTabProps) {
     setText('')
     setFiles([])
     setNote({ tone: 'ok', text: t('team.sent', { team: chosen.name }) })
-  }, [canSend, chosen, files, sessionId, t, text])
+  }, [canSend, chosen, files, refreshSent, sessionId, t, text])
 
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -137,6 +198,7 @@ export function TeamRequestTab({ t, sessionId }: TeamRequestTabProps) {
         <a className={styles.link} href="/__dsh_a2a_nexus/" target="_blank" rel="noreferrer">{t('team.open')}</a>
       </div>
       {note !== undefined && <p role="status" className={note.tone === 'ok' ? styles.ok : styles.error}>{note.text}</p>}
+      <SentList t={t} sent={sent} />
     </div>
   )
 }
