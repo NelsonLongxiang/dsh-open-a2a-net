@@ -58,6 +58,32 @@ export async function childProof(root: string, ref: string, d: CanvasRootDeps): 
   return { ok: true, key: host.card.publicKey!, ...(entry.identity !== undefined && home !== undefined ? { identity: entry.identity, home } : {}) }
 }
 
+/** The facts a child's registration check reads (S3 review F4): the child's pinned key, this host's key, the verified peer cards. */
+export interface ChildRegistrationDeps {
+  /** The key pinned for a child ref, or undefined when the store has none. */
+  readonly keyOf: (childRef: string) => string | undefined
+  /** This host's own public key: a child pinned to it lives here (#654's admit-root already registered the root). */
+  readonly ownKey: string
+  /** The verified peer cards (url → card), for a remote child's host card. */
+  readonly cards: ReadonlyArray<{ readonly card: { readonly publicKey?: string; readonly canvasOrg?: ReadonlyArray<{ readonly name: string; readonly team: string; readonly superagentTeam?: true; readonly root?: true; readonly admits?: readonly string[] }> } }>
+}
+
+/**
+ * superagent-root-team R8/S5 (S3 review F4): a child team's registration as the board reads it — `ready`,
+ * `pending-registration` (its host's card does not list the root identity in `admits` yet), or `unreachable` (no key
+ * pinned, or no verified card for its key). Same-host children are ready: admitting the root there is #654's act.
+ */
+export function childRegistration(d: ChildRegistrationDeps, childRef: string, rootHandle: string | undefined): 'ready' | 'pending-registration' | 'unreachable' {
+  const childKey = d.keyOf(childRef)
+  if (childKey === undefined) return 'unreachable'
+  if (childKey === d.ownKey) return 'ready'
+  const host = d.cards.find(row => row.card.publicKey === childKey)?.card
+  if (host === undefined) return 'unreachable'
+  const childCanvas = childRef.split('/canvas/')[1]?.split('@')[0] ?? ''
+  const org = host.canvasOrg?.find(row => row.name === childCanvas)
+  return rootHandle !== undefined && (org?.admits?.includes(rootHandle) ?? false) ? 'ready' : 'pending-registration'
+}
+
 const str = (value: unknown): string => typeof value === 'string' ? value.trim() : ''
 
 /** One root operation from the canvas route's body; the result is the route's JSON payload. */

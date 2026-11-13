@@ -42,6 +42,18 @@ describe('the health check', () => {
     expect(m.h.health().map(p => p.code)).toEqual(['router-not-loaded', 'member-not-loaded'])
     await m.h.stop()
   })
+  it('names a router whose turn failed (a used-up model quota), with why, until the router decides again', async () => {
+    const m = await team(new Set(['session-r', 'session-a']))
+    const quota = Object.assign(new Error('GoUsageLimitError: usage limit reached for this period'), { status: 429 })
+    m.h.memberFailed('session-r', quota)
+    m.clock.ms += 12 * 60_000
+    expect(m.h.health(m.clock.ms)).toEqual([{ code: 'router-turn-failed', session: 'session-r', minutes: 12, detail: expect.stringContaining('usage limit') }])
+    const { problemText } = await import('../../src/superagent/host/health-reminders.ts')
+    expect(problemText(m.h.health(m.clock.ms)[0]!)).toContain('模型额度')
+    m.open()
+    expect(m.h.health(m.clock.ms)).toEqual([])
+    await m.h.stop()
+  })
   it('names a working ticket with no change for an hour, and the state carries it', async () => {
     const m = await team(new Set(['session-r', 'session-a']))
     const ticket = m.open()

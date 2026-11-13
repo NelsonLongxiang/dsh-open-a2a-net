@@ -43,6 +43,8 @@ export interface SuperagentHostDeps {
    */
   /** Whether a local session can call a tool (its preset mounts it): the ygl-trees steps go only to a member that has them. */
   readonly hasTool?: (sessionId: string, name: string) => boolean
+  /** Staffing changes (S1a): a team's confirmation card for a change was decided. */
+  readonly staffingDecided?: (changeId: string, team: import('./index.ts').SuperagentHost, confirmed: boolean) => void
   /** Make the team's ygl-trees project in the team workspace (design Y1c); idempotent. */
   readonly ensureYglProject?: (name: string) => void
   readonly stageFiles?: (sessionId: string, paths: readonly string[], canvas: string) => { ok: true; files: DecisionFile[] } | { ok: false; code: string; error: string }

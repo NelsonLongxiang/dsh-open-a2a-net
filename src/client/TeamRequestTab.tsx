@@ -110,14 +110,16 @@ export function TeamRequestTab({ t, sessionId }: TeamRequestTabProps) {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void send() }
   }
 
-  if (loaded === undefined) return <div className={styles.view}><p className={styles.hint}>{t('team.loading')}</p></div>
-  if (loaded.state !== 'ready') return <div className={styles.view}><p className={styles.hint}>{t(loaded.state === 'denied' ? 'team.denied' : 'team.unreadable')}</p></div>
-  if (chosen === undefined) return <div className={styles.view}><p className={styles.hint}>{t('team.none')}</p><a className={styles.link} href="/__dsh_a2a_nexus/" target="_blank" rel="noreferrer">{t('team.open')}</a></div>
+  // The decisions are not gated on the request box (feedback 2026-11-12): a team list that cannot be read, or has no team to
+  // send to, says so where the box would be, and the cards waiting for the owner still show above it.
+  const head = <><TeamHealthBanner t={t} /><DecisionList t={t} /></>
+  if (loaded === undefined) return <div className={styles.view}>{head}<p className={styles.hint}>{t('team.loading')}</p></div>
+  if (loaded.state !== 'ready') return <div className={styles.view}>{head}<p className={styles.hint}>{t(loaded.state === 'denied' ? 'team.denied' : 'team.unreadable')}</p></div>
+  if (chosen === undefined) return <div className={styles.view}>{head}<p className={styles.hint}>{t('team.none')}</p><a className={styles.link} href="/__dsh_a2a_nexus/" target="_blank" rel="noreferrer">{t('team.open')}</a></div>
 
   return (
     <div className={`${styles.view} ${dragging ? styles.dragging : ''}`} {...dropProps}>
-      <TeamHealthBanner t={t} />
-      <DecisionList t={t} />
+      {head}
       <label className={styles.field}>
         <span className={styles.label}>{t('team.pick')}</span>
         <select className={styles.input} value={chosen.id} onChange={(event) => { setTeam(event.target.value) }}>

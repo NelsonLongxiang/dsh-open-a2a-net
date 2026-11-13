@@ -134,6 +134,7 @@ describe('pruning', () => {
     expect(b.get(done.id)).toBeUndefined()
     expect(b.get(waiting.id)).toBeDefined()
   })
+  // 503 propose+decide pairs, each persisting the whole book: about 1-2 s alone, past the 5 s default under a full parallel run.
   it('keeps at most the newest decided cards', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sa-prune-max-'))
     const clock = { ms: Date.parse('2026-11-10T00:00:00Z') }
@@ -149,7 +150,7 @@ describe('pruning', () => {
     expect(stored).toHaveLength(DECIDED_KEEP_MAX)
     expect(ids.slice(0, 3).some(id => b.get(id) !== undefined)).toBe(false)
     expect(b.get(ids.at(-1)!)).toBeDefined()
-  })
+  }, 30_000)
   it('drops a member\'s card once its ticket has ended', () => {
     const open = new Set(['t1', 't2'])
     const { b, iso } = book(id => open.has(id))

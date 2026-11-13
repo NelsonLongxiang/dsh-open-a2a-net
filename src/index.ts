@@ -37,7 +37,8 @@ export function resolveCallerLabel(input: {
 import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
 import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef, legacyBareMember } from './canvas-store.ts'
-import { linkRootRequester } from './canvas-root.ts'
+import { childRegistration, linkRootRequester } from './canvas-root.ts'
+import { inactiveContextError } from './context-live.ts'
 import { splitQualifiedMember, memberProvenance, qualifiedSessionMember, pinnedCallerDeclares } from './canvas-member.ts'
 import { decodeSessionLog, extractTranscript, TRANSCRIPT_MAX_FILE_BYTES } from './session-transcript.ts'
 import { LayoutStore } from './layout-store.ts'
@@ -47,7 +48,7 @@ import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
 import { applyOwnerSettings, loadSeatNames, type OwnerSettings } from './owner-settings.ts'
-import { CLI_HANDLE_RE, CliDepositStore } from './cli-deposit.ts'
+import { CLI_HANDLE_RE, CliDepositStore, remoteCliTarget } from './cli-deposit.ts'
 import { cliHomeChoices, decideCliHome } from './cli-home.ts'
 import { forwardScope, outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
 import { createDirectForward, ForwardBirths } from './direct-forward.ts'
@@ -59,7 +60,7 @@ import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedB
 import { formatReceipt, holdsRow, parseReceipt, receiptExtras, receiptTaskId, taskIdRefusal } from './receipt.ts'
 import { SuperagentHost } from './superagent/host/index.ts'
 import { registerSuperagentTools } from './superagent/host/tools.ts'
-import { RoleTools, scopeKeyOf, type RoleAgent } from './superagent/host/role-tools.ts'
+import { BUILDER_PRESET, RoleTools, scopeKeyOf, type RoleAgent } from './superagent/host/role-tools.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
@@ -143,6 +144,9 @@ import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
 import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
+import { registerBuilderTools } from './superagent/host/builder-tools.ts'
+import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
+import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { guiOwnerProven, ownerOrNoLogin, touchesRules } from './superagent/host/owner-proof.ts'
 import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
@@ -520,7 +524,13 @@ export function apply(ctx: Context, config: Config): void {
     const settled = ctx.get('loader')?.await()
     if (settled === undefined) read()
     else void settled.then(() => {
-      if (ctx.fiber.uid !== null) read()
+      if (ctx.fiber.uid === null) return
+      try { read() } catch (error) {
+        // The plugin's fiber went inactive while this waited (a reload swapped a service it injects): a late read must not
+        // take the host down. The fiber's next activation runs the plugin again and redoes this work.
+        if (!inactiveContextError(error)) throw error
+        logger.warn('a2a: the plugin context went inactive before the web server settled; skipped (the next activation redoes it)')
+      }
     }, () => {
       // A failed boot never mounts the web server row; the absent path stays
       // silent so a dying tree logs its own failure once.
@@ -1817,6 +1827,9 @@ export function apply(ctx: Context, config: Config): void {
         ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
+        rootChildrenOpen: canvas => { const open = new Map<string, number>(); for (const row of superagentTeams?.all().find(team => team.settings.canvas === canvas)?.root.open() ?? []) open.set(row.child, (open.get(row.child) ?? 0) + 1); return open },
+        rootIdentityOf: canvas => superagentTeams?.all().find(team => team.settings.canvas === canvas)?.a2a.address,
+        rootChildRegistration: (canvas, childRef, rootHandle) => childRegistration({ keyOf: ref => canvasStore.ownerKeyOf(ref), ownKey: encodePublicKey(createPublicKey(nodePrivateKey)), cards: [...cardCache.values()].map(entry => ({ card: entry.card ?? {} })) }, childRef, rootHandle),
         canvasRoot: { store: canvasStore, zone: config.team, ownKey: encodePublicKey(createPublicKey(nodePrivateKey)),
           localSuperagentCanvas: (name: string) => superagentTeams?.all().some(team => team.a2aAddress !== undefined && team.settings.canvas === name) === true,
           peerCards: async () => (await freshCliHomeCards()).flatMap(row => row.card !== undefined ? [{ url: row.url, card: row.card, linked: peerAdmissionLinkState(row.url).link === 'linked' }] : []) },
@@ -2047,6 +2060,7 @@ export function apply(ctx: Context, config: Config): void {
   const followupRelay = (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected=true): 'inserted'|void => followupDelivery.deliver(agent,text,sender,localFrom,taskId,callerKey,taskExpected)
   // superagent design v4, PR-B: superagent's domain engine in this host (on by default, idle until a team is bound). The router gets
   // candidate cards in its own session (host relay, not A2A) and decides only through the superagent_* tools.
+  let staffing: StaffingExecutor | undefined
   const superagentTeams: SuperagentTeams | undefined = config.superagent === true ? new SuperagentTeams({
     home: join(home, 'a2a'), logger,
     deliverToSession: (id, text) => { const agent = sessionNodes.get(id); if (agent === undefined) return false; followupRelay(agent, text, config.team); return true },
@@ -2098,6 +2112,7 @@ export function apply(ctx: Context, config: Config): void {
     // /api/session/* answers 401 without a browser cookie, so the loopback call could never work (review of #566).
     // A session not loaded yet is skipped; the next start or pool change applies it.
     selectModel: (sessionId, pick) => selectSessionModel(sessionNodes.has(sessionId), ctx.get('sessionController' as never), sessionId, pick),
+    staffingDecided: (changeId, team, confirmed) => { const ref = staffingTeamRef(superagentTeams!, team); if (ref !== undefined) void staffing?.cardDecided(changeId, ref, confirmed) },
     bootSettled: () => bootPrewarm.settled(),
     workspaceOf: id => { const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd; return typeof cwd === 'string' ? cwd : undefined },
     hasTool: (id, name) => {
@@ -2115,10 +2130,15 @@ export function apply(ctx: Context, config: Config): void {
     warmPeerCards: () => { for (const url of peerStore.list()) void cachedCardFetch(url).catch(() => undefined) },
   }) : undefined
   teamsHandle = superagentTeams
+  // Staffing changes (S1a): the host's executor, through the canvas and team routes' own checks.
+  if (superagentTeams !== undefined) staffing = createStaffing({ path: join(home, 'a2a', 'superagent', 'staffing.json'), teams: superagentTeams, canvasStore, canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
+    sessionValid: id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, presetOf: sessionPresetOf, memberForWrite: id => canvasMemberForWrite(id),
+    teamCanvasRefusal: (canvas, member) => superagentTeams.canvasMemberRefusal(canvas, member, sessionPresetOf), revokeCanvasMember: (id, reason, name) => revokeCanvasMember(id, reason, name), logger })
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
   const superagentRoleTools = new RoleTools({
-    roleOf: id => superagentTeams?.ofSession(id)?.toolRoleOf(id), grantedOf: id => superagentTeams?.ofSession(id)?.grantedTools(id) ?? [], blockedOf: id => superagentTeams?.ofSession(id)?.settings.blockedTools ?? [], onRefused: (id, role, name) => superagentTeams?.ofSession(id)?.requestTool(id, role, name),
+    // superagent-builder TB1: a session under the builder preset that holds no team role is the team builder.
+    roleOf: id => superagentTeams?.ofSession(id)?.toolRoleOf(id) ?? (superagentTeams !== undefined && sessionPresetOf(id) === BUILDER_PRESET ? 'builder' : undefined), grantedOf: id => superagentTeams?.ofSession(id)?.grantedTools(id) ?? [], blockedOf: id => superagentTeams?.ofSession(id)?.settings.blockedTools ?? [], onRefused: (id, role, name) => superagentTeams?.ofSession(id)?.requestTool(id, role, name),
     agentOf: id => ctx.get('agents')?.get(SessionId(id)) as RoleAgent | undefined,
     logger,
   })
@@ -2128,6 +2148,11 @@ export function apply(ctx: Context, config: Config): void {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
     ctx.effect(() => { superagentTeams!.start(); void ensureTeamYglHome({ logger }); return () => { void superagentTeams!.stop() } }, 'a2a: superagent engine passes')
     registerSuperagentTools(ctx, id => superagentTeams!.ofSession(id))
+    // superagent-builder BS1: the team builder's inventory and rule templates (read-only).
+    registerBuilderTools(ctx, id => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET, () => ({
+      teams: superagentTeams!.all().map(team => ({ ref: (id => id === '' ? 'primary' : id ?? '?')(superagentTeams!.idOf(team)), settings: team.settings, revisions: team.ruleChanges.view().revisions, seatOf: (session: string) => team.named.seatIdOf(session), children: team.settings.canvas !== undefined ? canvasStore.childrenOf(team.settings.canvas) : [] })),
+      sessions: joinedSessions.list().filter(id => sessionNodes.has(id)), nameOf: id => { const agent = sessionNodes.get(id); return agent === undefined ? id : nodeMetadataOf(agent).name }, presetOf: sessionPresetOf, staffing: staffing?.list() ?? [],
+    }))
     // A member's turn ending is the executor's turn-end fact (PR-C1).
     ctx.on('agent/status', payload => { superagentRoleTools.sync(payload.agent as unknown as RoleAgent); if (payload.status === 'idle') superagentTeams!.ofSession(String(payload.agent.id))?.memberIdle(String(payload.agent.id)) })
     // A failed turn is retried or fails the ticket for a person (upstream); without this it read as still working.
@@ -2222,7 +2247,7 @@ export function apply(ctx: Context, config: Config): void {
     if (verb === 'receipt') {
       const task = args[1] ?? '', to = flagOf('--to') ?? ''
       const row = taskLedger.find(task)
-      if (row === undefined || teamMailboxOf(row.team) === undefined || to === '') return undefined
+      if (row === undefined || teamMailboxOf(row.team) === undefined || to === '' || remoteCliTarget(to, handle => cliDeposits.get(handle) !== undefined)) return undefined
       // Review of #442: switches are read before `--` only — the text after it may be anything.
       const switches = dash >= 0 ? args.slice(0, dash) : args
       const acknowledged = switches.includes('--acknowledged'), attention = switches.includes('--attention')
@@ -2256,7 +2281,7 @@ export function apply(ctx: Context, config: Config): void {
     }
     const to = args[1] ?? '', context = flagOf('--context') ?? '', followTask = flagOf('--task')
     const origin = taskLedger.list().find(r => r.contextId === context && teamMailboxOf(r.team) !== undefined)
-    if (origin === undefined || to === '') return undefined
+    if (origin === undefined || to === '' || remoteCliTarget(to, handle => cliDeposits.get(handle) !== undefined)) return undefined
     try {
       await dispatchAnywhere(to, text, session, context, new AbortController().signal, true, followTask)
       return JSON.stringify({ delivered: true, class: 'sent', ...(followTask !== undefined ? { task_id: followTask } : {}), team: to, context_id: context })
@@ -3402,7 +3427,7 @@ export function apply(ctx: Context, config: Config): void {
     registerSuperagentFaces(webServer, {
       ctx, config, superagentHost, superagentTeams, homeUrl: () => superagentHomeUrl, controlRoute, readJsonBody, recordActivity, routeTrunk,
       sessionNodes, sessionPresetOf, sessionTeamOf, joinedSessions, archivedSessionFilter, verifyOriginClaim, fetchPeerCard, peerStore, cardCache,
-      ownCanvasFingerprint, peerAdmissionLinkState, blobStore,
+      ownCanvasFingerprint, peerAdmissionLinkState, blobStore, ...(staffing !== undefined ? { staffing } : {}),
       linkRequester: (canvas: string, handle: string, home: unknown) => linkRootRequester({ store: canvasStore, deposited: h => cliDeposits.directoryRows().some(row => row.team === h), pinHome: cliHomeForAdd }, canvas, handle, home),
     })
   })
