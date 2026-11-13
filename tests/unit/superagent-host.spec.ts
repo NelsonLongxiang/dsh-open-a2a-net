@@ -224,6 +224,12 @@ describe('PR-B2a: bots, accept modes and rules (upstream docs/002)', () => {
     expect(with_({ acceptMode: 'auto' }).gate(unaddressed, thread(), [])).toEqual({ admissible: false, reason: 'notAddressed' })
     // A bot listed under a2a is no workbench person, and an A2A handle is never human (a2a-watch D7).
     expect(with_({ acceptMode: 'auto' }).gate(bot({ source: 'workbench' }), thread(), [])).toEqual({ admissible: false, reason: 'botNotListed' })
+    // Design M12: one message the owner took from an unlisted sender passes as an explicit request, and stays valid.
+    const granted = teamPolicy(settings({ acceptMode: 'off' }), { taken: id => id === 'taken-1' })
+    const out = granted.gate(bot({ id: 'taken-1', actor: { source: 'a2a', id: 'other/0123456789abcdef' } }), thread(), [])
+    expect(out).toMatchObject({ admissible: true, strength: 'explicit', basis: { via: 'listed', authority: 'owner-once', sender: 'other/0123456789abcdef' } })
+    expect(granted.gate(bot({ id: 'other-2', actor: { source: 'a2a', id: 'other/0123456789abcdef' } }), thread(), [])).toEqual({ admissible: false, reason: 'botNotListed' })
+    if (out.admissible) expect(granted.revalidate({ strength: 'explicit', basis: out.basis, actor: { source: 'a2a', id: 'other/0123456789abcdef' } } as never)).toBe(true)
   })
   it('an unlisted person\'s follow-up is inferred outside off', () => {
     const p = teamPolicy(settings({ acceptMode: 'observe' }))
@@ -887,6 +893,74 @@ describe('ops team ledger: every A2A message to the team address gets a formal o
     // Each message is answered once.
     await settle()
     expect(calls.filter(a => a[0] === 'receipt' && [observed, refused, stop].includes(a[1]!)).length).toBe(3)
+  })
+})
+
+describe('design M12: a request from an unlisted sender waits on the owner', () => {
+  it('holds it on a sender card, tells the sender, and acts on the owner\'s choice', async () => {
+    const { SuperagentHost, SENDER_TAKE_LIST, SENDER_DECLINE } = await import('../../src/superagent/host/index.ts')
+    const calls: string[][] = []
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']),
+      home: mkdtempSync(join(tmpdir(), 'sa-sender-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1', now: () => '2026-11-07T00:05:00.000Z',
+      runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' },
+    })
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'observe' }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const receive = (n: string, from: string, ctx = `ctx-${n}`) => {
+      const task = `direct-${n.padStart(12, '0')}`
+      h.engine.receive({ ...wb(n, ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: from }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: from, task, context: ctx } }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } })
+      h.pass()
+      return task
+    }
+    const receiptFor = (task: string) => calls.find(a => a[0] === 'receipt' && a[1] === task && !a.includes('--acknowledged'))
+    const ackFor = (task: string) => calls.find(a => a[0] === 'receipt' && a[1] === task && a.includes('--acknowledged'))
+    const cardOf = (trigger: string) => h.decisionCards().find(c => c.source === 'sender' && c.by === trigger)
+    const a = 'dsh/aaaaaaaa', b = 'dsh/bbbbbbbb'
+
+    // Held: a card for the owner, an acknowledgement for the sender, no refusal.
+    const first = receive('1', a)
+    await settle()
+    expect(cardOf('1')).toMatchObject({ level: 'P1', options: ['接这一单', SENDER_TAKE_LIST, SENDER_DECLINE] })
+    expect(cardOf('1')!.reason).toContain('request 1')
+    expect(ackFor(first)!.at(-1)).toContain('团队主人决定')
+    expect(receiptFor(first)).toBeUndefined()
+    // One waiting card per sender: the same sender's next message is refused as before.
+    const second = receive('2', a)
+    await settle()
+    expect(cardOf('2')).toBeUndefined()
+    expect(receiptFor(second)!.at(-1)).toContain('名单')
+    // The owner must choose; declining tells the sender so.
+    expect(h.decide(cardOf('1')!.id, 'choose', undefined, '再说吧')).toMatchObject({ ok: false, code: 'choice' })
+    expect(h.decide(cardOf('1')!.id, 'choose', SENDER_DECLINE)).toMatchObject({ ok: true, taken: false })
+    await settle()
+    expect(receiptFor(first)!.at(-1)).toContain('主人没有接')
+    expect(h.senderChoice('1')).toBe('declined')
+
+    // Taken, and the sender listed: the gate now admits that message as the owner's explicit request, judged again.
+    const third = receive('3', b)
+    await settle()
+    expect(h.decide(cardOf('3')!.id, 'choose', SENDER_TAKE_LIST)).toMatchObject({ ok: true, taken: true })
+    expect(h.settings.bots.a2a).toContain(b)
+    expect(h.senderChoice('3')).toBe('taken')
+    await settle()
+    expect(receiptFor(third)).toBeUndefined()
+    expect(h.engine.candidate('3')).toMatchObject({ strength: 'explicit' })
+  })
+
+  it('does not hold an old message, and at most ten wait at a time', async () => {
+    const { SuperagentHost, SENDER_CARDS_MAX } = await import('../../src/superagent/host/index.ts')
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r']), home: mkdtempSync(join(tmpdir(), 'sa-sender-cap-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1', now: () => '2026-11-08T12:00:00.000Z',
+      runCli: async args => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' })
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true } }, () => true)).toMatchObject({ ok: true })
+    const put = (n: string, from: string, at: string) => {
+      h.engine.receive({ ...wb(n, `c${n}`), at, source: 'a2a', threads: [{ source: 'a2a', id: `c${n}` }], actor: { source: 'a2a', id: from }, human: false, channel: { source: 'a2a', thread: `a2a:c${n}`, address: { caller: from, task: `direct-${n.padStart(12, '0')}`, context: `c${n}` } }, meta: {} })
+      return h.senderHold(n)
+    }
+    expect(put('1', 'dsh/00000001', '2026-11-07T00:00:00.000Z')).toBeUndefined()
+    for (let i = 0; i < SENDER_CARDS_MAX; i++) expect(put(String(10 + i), `dsh/1000000${String(i)}`, '2026-11-08T11:00:00.000Z')).toBe('hold')
+    expect(put('99', 'dsh/99999999', '2026-11-08T11:00:00.000Z')).toBeUndefined()
   })
 })
 

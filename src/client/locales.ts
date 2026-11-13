@@ -45,6 +45,8 @@ export type A2aNetKey =
   | 'team.fromHealth'
   | 'team.fromTool'
   | 'team.fromOutbound'
+  | 'team.fromSender'
+  | 'team.fromStaffing'
   | 'team.healthTitle'
   | 'team.healthRouter'
   | 'team.healthRouterFailed'
@@ -99,6 +101,8 @@ export const zh: Record<A2aNetKey, string> = {
   'team.fromHealth': '健康自检',
   'team.fromTool': '工具申请',
   'team.fromOutbound': '对外请求',
+  'team.fromSender': '名单外的需求',
+  'team.fromStaffing': '编制变更',
   'team.healthTitle': '团队有 {count} 个问题',
   'team.healthRouter': '总工会话 {session} 没有加载，需求送不到它，打开这个会话即可',
   'team.healthRouterFailed': '总工会话 {session} 上一回合失败（{detail}），需求在等它判断；常见原因是模型额度用完或服务中断',
@@ -166,6 +170,8 @@ export const en: Record<A2aNetKey, string> = {
   'team.fromHealth': 'Health check',
   'team.fromTool': 'Tool request',
   'team.fromOutbound': 'Outbound request',
+  'team.fromSender': 'Request from an unlisted sender',
+  'team.fromStaffing': 'Staffing change',
   'team.healthTitle': 'The team has {count} problem(s)',
   'team.healthRouter': 'Router session {session} is not loaded, so requests cannot reach it. Open that session',
   'team.healthRouterFailed': 'Router session {session}\'s last turn failed ({detail}); requests wait for its judgement. A used-up model quota or an outage is the usual cause',

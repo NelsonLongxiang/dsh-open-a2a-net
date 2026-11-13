@@ -467,7 +467,13 @@ export function policyEffects(before: TeamSettings, after: TeamSettings, open: r
 const admits = (settings: TeamSettings, rules: readonly string[]): boolean => settings.acceptMode === 'auto' && rules.length > 0
   && rules.every(name => settings.rules.some(rule => rule.name === name && rule.enabled))
 
-export function teamPolicy(settings: TeamSettings): Policy {
+/**
+ * Design M12: what the team's owner granted one message from a sender the bot list does not hold — its trigger was taken
+ * from a `sender` decision card. Granted triggers pass the gate as explicit requests (authority `owner-once`).
+ */
+export interface SenderGrants { taken(triggerId: string): boolean }
+
+export function teamPolicy(settings: TeamSettings, grants?: SenderGrants): Policy {
   return {
     version: policyVersion(settings),
     paused: settings.paused,
@@ -478,6 +484,8 @@ export function teamPolicy(settings: TeamSettings): Policy {
         // An observer files a request of its own (design D15): the owner created it for this, so no accept mode or rule holds it back.
         if (observerOn(settings, trigger.source, trigger.actor.id)) return { admissible: true, strength: 'explicit', basis: { via: 'listed', addressed: 'direct', sender: trigger.actor.id, authority: 'observer' } }
         // A bot on the Source's list that addresses the agent may make an inferred candidate; nothing else of a bot.
+        // Design M12: the owner took this one message from an unlisted sender on its card: an explicit request, once.
+        if (grants?.taken(trigger.id) === true) return { admissible: true, strength: 'explicit', basis: { via: 'listed', addressed: 'direct', sender: trigger.actor.id, authority: 'owner-once' } }
         if (!botOn(settings, trigger.source, trigger.actor.id)) return { admissible: false, reason: 'botNotListed' }
         if (trigger.addressed === undefined) return { admissible: false, reason: 'notAddressed' }
         if (mode === 'off') return { admissible: false, reason: 'acceptOff' }
@@ -496,6 +504,8 @@ export function teamPolicy(settings: TeamSettings): Policy {
     revalidate(mandate: Mandate): boolean {
       const basis = mandate.basis
       // Upstream docs/002 "Revalidation before resume".
+      // The owner's own decision on that one message (M12): nothing the settings change takes it back.
+      if (basis.via === 'listed' && basis.authority === 'owner-once') return true
       if (basis.via === 'listed' && basis.authority === 'observer') return basis.sender !== undefined && observerOn(settings, mandate.actor.source, basis.sender)
       if (basis.via === 'bot') return basis.sender !== undefined && botOn(settings, mandate.actor.source, basis.sender) && admits(settings, basis.rules ?? [])
       if (mandate.strength === 'inferred') return admits(settings, basis.rules ?? [])

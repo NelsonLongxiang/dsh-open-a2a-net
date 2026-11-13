@@ -44,6 +44,12 @@ export interface A2aReceiptsDeps {
   readonly parentOf?: (ticketId: string) => string | undefined
   /** superagent-split S4: a split parent's parts and its outcome, for its ending receipt. */
   readonly splitView?: (ticketId: string) => { tickets: readonly unknown[]; outcome?: 'completed' | 'failed' } | undefined
+  /**
+   * Design M12: a message refused only because its sender is not on the bot list may wait on the owner's `sender` card.
+   * `hold` while it waits (the sender is told so once), `taken` once the owner took it (the engine judges it again),
+   * `declined` when the owner said no, undefined when it is not held (it is refused as before).
+   */
+  readonly senderHold?: (triggerId: string) => 'hold' | 'taken' | 'declined' | undefined
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
 }
 
@@ -193,6 +199,7 @@ export class A2aReceipts {
       if (channel === undefined || task === undefined || this.d.a2a.answered(task) || now - Date.parse(trigger!.at) > END_RECEIPT_HORIZON_MS) { this.outcomeReceipted.add(triggerId); return }
       due.set(triggerId, { channel, ...make() })
     }
+    const holding: string[] = []
     for (const thread of this.d.store.threads.list()) {
       for (const decision of this.d.store.decisions.byThread(thread.key)) {
         if (decision.kind !== 'ignore') continue
@@ -201,10 +208,17 @@ export class A2aReceipts {
           // A message routed into a ticket is answered when its member has it (above); so is one fanned out into one and only
           // set aside by the router.
           if (reason?.code === 'routed' || (reason?.code === 'said' && intoTicket(triggerId))) return
+          if (reason?.code === 'botNotListed' && this.d.senderHold !== undefined) {
+            const held = this.d.senderHold(triggerId)
+            if (held === 'hold') { holding.push(triggerId); return }
+            if (held === 'taken') return
+            if (held === 'declined') { consider(triggerId, () => ({ outcome: 'rejected', text: '团队主人没有接这一单。The team\'s owner declined this request.' })); return }
+          }
           consider(triggerId, () => ({ outcome: 'rejected', text: clip(`团队未接这条消息：${notTakenText(reason)}。The team did not take this message: ${reason === undefined ? 'no reason recorded' : reasonText(reason)}.`, 1_000) }))
         })
       }
     }
+    this.acknowledgeHolds(holding)
     if (due.size === 0) return
     this.outcomeReceipting = true
     void (async () => {
@@ -216,5 +230,30 @@ export class A2aReceipts {
         } catch (error) { this.d.logger.warn('superagent: outcome receipt for %s failed (retried later): %s', triggerId, String(error)) }
       }
     })().finally(() => { this.outcomeReceipting = false })
+  }
+
+  private holdAcking = false
+  /**
+   * Design M12: a message waiting on the owner's `sender` card tells its sender so, once, with an `acknowledged` receipt:
+   * its row stays owed (the outcome follows the decision) but leaves the queue count. A failure is tried again later.
+   */
+  private acknowledgeHolds(triggerIds: readonly string[]): void {
+    if (this.holdAcking) return
+    const due = triggerIds.flatMap((triggerId) => {
+      const trigger = this.d.store.triggers.get(triggerId)
+      const address = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel?.address : undefined
+      return address?.task !== undefined && !this.ackSettled.has(address.task) ? [{ task: address.task, address }] : []
+    })
+    if (due.length === 0) return
+    this.holdAcking = true
+    void (async () => {
+      for (const item of due) {
+        try {
+          const result = await this.d.a2a.acknowledge(item.address, '发送方不在团队名单上，这一单在等团队主人决定接不接。The sender is not on the team\'s list; the team\'s owner decides whether to take this request.')
+          this.ackSettled.add(item.task)
+          if (result === 'sent') this.d.logger.info('superagent: A2A task %s waits on the owner (sender card)', item.task)
+        } catch (error) { this.d.logger.warn('superagent: telling A2A task %s it waits failed (retried later): %s', item.task, String(error)) }
+      }
+    })().finally(() => { this.holdAcking = false })
   }
 }
