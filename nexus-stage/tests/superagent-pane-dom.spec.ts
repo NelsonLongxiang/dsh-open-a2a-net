@@ -517,3 +517,60 @@ describe('ops loop: the team view shows each member\'s repository', () => {
     expect(text(pane.root)).not.toContain('仓库')
   })
 })
+
+describe('team tab across reloads and teams (nexus sidebar report 2026-11-13)', () => {
+  function memoryStorage(): Storage {
+    const m = new Map<string, string>()
+    return {
+      get length() { return m.size }, clear: () => { m.clear() }, getItem: (k) => m.get(k) ?? null,
+      key: (i) => [...m.keys()][i] ?? null, removeItem: (k) => { m.delete(k) }, setItem: (k, v) => { m.set(k, String(v)) },
+    }
+  }
+  const withStorage = (): void => {
+    Object.defineProperty(window, 'localStorage', { value: memoryStorage(), configurable: true })
+    onTestFinished(() => { Object.defineProperty(window, 'localStorage', { value: undefined, configurable: true }) })
+  }
+
+  it('the rail badge counts every team\'s waiting tickets, not only the shown team\'s', () => {
+    const { pane } = mount()
+    const teams = [{ id: '', canvas: 'ops' }, { id: 'aaaa1111', canvas: 'market', waiting: 1 }, { id: 'bbbb2222', canvas: 'p7', waiting: 2 }]
+    expect(pane.update(state({ teams, selectedTeam: '' }), sessions, NOW)).toEqual({ badge: '5', tone: 'warn' })
+    expect(pane.update(state({ teams: [{ id: '', canvas: 'ops' }], selectedTeam: '' }), sessions, NOW)).toEqual({ badge: '2', tone: 'warn' })
+  })
+
+  it('an unsent answer or request survives a reload, per team, and is gone once sent', async () => {
+    withStorage()
+    const teams = [{ id: '', canvas: 'ops' }, { id: 'aaaa1111', canvas: 'market' }]
+    const first = mount()
+    first.pane.update(state({ teams, selectedTeam: '' }), sessions, NOW)
+    const box = first.pane.root.querySelector<HTMLElement>('[data-ticket="t-ask"]')!.querySelector('textarea')!
+    box.value = '拼音先不做'
+    box.dispatchEvent(new Event('input'))
+    first.pane.select('request')
+    const request = first.pane.root.querySelector<HTMLTextAreaElement>('textarea[aria-label="需求内容"]')!
+    request.value = '加一个导出按钮'
+    request.dispatchEvent(new Event('input'))
+
+    const second = mount() // a reload
+    second.pane.update(state({ teams, selectedTeam: '' }), sessions, NOW)
+    expect(second.pane.root.querySelector<HTMLTextAreaElement>('textarea[aria-label="需求内容"]')!.value).toBe('加一个导出按钮')
+    second.pane.select('person')
+    const again = second.pane.root.querySelector<HTMLElement>('[data-ticket="t-ask"]')!.querySelector('textarea')!
+    expect(again.value).toBe('拼音先不做')
+    button(second.pane.root.querySelector('[data-ticket="t-ask"]')!, '回答').click()
+    await flush()
+    expect(second.act).toHaveBeenCalledWith({ action: 'request', text: '拼音先不做', thread: 'th-ask' })
+
+    const other = mount() // another team shows none of this team's drafts
+    other.pane.update(state({ teams, selectedTeam: 'aaaa1111' }), sessions, NOW)
+    other.pane.select('request')
+    expect(other.pane.root.querySelector<HTMLTextAreaElement>('textarea[aria-label="需求内容"]')!.value).toBe('')
+
+    const third = mount() // after the send, the answer draft is gone; the request draft stays
+    third.pane.update(state({ teams, selectedTeam: '' }), sessions, NOW)
+    third.pane.select('person')
+    expect(third.pane.root.querySelector<HTMLElement>('[data-ticket="t-ask"]')!.querySelector('textarea')!.value).toBe('')
+    third.pane.select('request')
+    expect(third.pane.root.querySelector<HTMLTextAreaElement>('textarea[aria-label="需求内容"]')!.value).toBe('加一个导出按钮')
+  })
+})

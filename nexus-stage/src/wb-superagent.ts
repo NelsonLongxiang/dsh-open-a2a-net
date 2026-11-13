@@ -163,6 +163,31 @@ export function problemsOf(state: SaState, now: number): SaProblem[] {
   return out
 }
 
+const DRAFTS_KEY = 'dsh-a2a.superagent.drafts'
+/** How many unsent drafts are kept; the oldest go first. */
+const DRAFTS_MAX = 40
+
+function readDrafts(): Record<string, string> {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(DRAFTS_KEY) ?? '{}')
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.fromEntries(Object.entries(parsed).filter((e): e is [string, string] => typeof e[1] === 'string')) : {}
+  } catch { return {} }
+}
+
+function storeDraft(key: string, text: string): void {
+  try {
+    const all = readDrafts()
+    delete all[key]
+    if (text.trim() !== '') all[key] = text.slice(0, 8000)
+    const keys = Object.keys(all)
+    for (const old of keys.slice(0, Math.max(0, keys.length - DRAFTS_MAX))) delete all[old]
+    window.localStorage.setItem(DRAFTS_KEY, JSON.stringify(all))
+  } catch { /* per-viewer convenience only */ }
+}
+
+function keepDraft(box: HTMLTextAreaElement): void { if (box.dataset.draft !== undefined) storeDraft(box.dataset.draft, box.value) }
+function clearDraft(box: HTMLTextAreaElement): void { box.value = ''; keepDraft(box) }
+
 /** Open tickets waiting on a person, oldest change first. */
 export function personTickets(state: SaState): SaTicket[] {
   return state.tickets.filter(t => t.ended === undefined && t.stage?.stage === 'person').sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
@@ -363,12 +388,23 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   requestBox.setAttribute('aria-label', '需求内容')
   const requestSend = el('button', 'wb-btn wb-btn-primary', '提交需求')
   requestSend.type = 'button'
-  requestSend.addEventListener('click', () => { void send({ action: 'request', text: requestBox.value }, () => { requestBox.value = '' }, '需求已提交，等总工决定') })
-  /** Follow-up / answer drafts by thread id. */
+  requestSend.addEventListener('click', () => { void send({ action: 'request', text: requestBox.value }, () => { clearDraft(requestBox) }, '需求已提交，等总工决定') })
+  requestBox.addEventListener('input', () => { keepDraft(requestBox) })
+  /** Follow-up / answer drafts by team and thread; their text also outlives a reload (per-viewer, in localStorage). */
   const drafts = new Map<string, HTMLTextAreaElement>()
+  const draftKey = (thread: string): string => `${last?.selectedTeam ?? ''}|${thread}`
   const draftFor = (thread: string, placeholder: string): HTMLTextAreaElement => {
-    let box = drafts.get(thread)
-    if (box === undefined) { box = el('textarea', 'wb-sa-input'); box.rows = 2; drafts.set(thread, box) }
+    const key = draftKey(thread)
+    let box = drafts.get(key)
+    if (box === undefined) {
+      box = el('textarea', 'wb-sa-input')
+      box.rows = 2
+      box.dataset.draft = key
+      box.value = readDrafts()[key] ?? ''
+      const b = box
+      box.addEventListener('input', () => { keepDraft(b) })
+      drafts.set(key, box)
+    }
     box.placeholder = placeholder
     return box
   }
@@ -422,7 +458,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
           const box = draftFor(thread, '回答这个问题（会作为这条需求的后续消息送给成员）')
           const answer = el('button', 'wb-btn wb-btn-primary', '回答')
           answer.type = 'button'
-          answer.addEventListener('click', () => { void send({ action: 'request', text: box.value, thread }, () => { box.value = '' }, '回答已送出') })
+          answer.addEventListener('click', () => { void send({ action: 'request', text: box.value, thread }, () => { clearDraft(box) }, '回答已送出') })
           card.appendChild(box)
           actions.appendChild(answer)
         } else {
@@ -430,7 +466,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
           const box = draftFor(`ticket:${ticket.id}`, '回答这个问题（请求方是 agent，由你来答，答复会送给成员）')
           const answer = el('button', 'wb-btn wb-btn-primary', '回答')
           answer.type = 'button'
-          answer.addEventListener('click', () => { void send({ action: 'answer', ticket_id: ticket.id, text: box.value }, () => { box.value = '' }, '回答已送出') })
+          answer.addEventListener('click', () => { void send({ action: 'answer', ticket_id: ticket.id, text: box.value }, () => { clearDraft(box) }, '回答已送出') })
           card.appendChild(box)
           actions.appendChild(answer)
         }
@@ -471,6 +507,8 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   }
 
   function renderRequest(state: SaState): void {
+    const key = draftKey('request')
+    if (requestBox.dataset.draft !== key) { requestBox.dataset.draft = key; requestBox.value = readDrafts()[key] ?? '' }
     const form = el('div', 'wb-sa-form')
     form.append(requestBox, requestSend)
     if (!state.settings.sources.workbench) form.appendChild(el('div', 'wb-sa-hint', '工作台 Source 已关闭：需求不会被受理（到「设置」里打开）'))
@@ -506,7 +544,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       const box = draftFor(thread.ref.id, '在这条需求下追加（补充、回答、或要求停止）')
       const more = el('button', 'wb-btn', '追加')
       more.type = 'button'
-      more.addEventListener('click', () => { void send({ action: 'request', text: box.value, thread: thread.ref.id }, () => { box.value = '' }, '已追加') })
+      more.addEventListener('click', () => { void send({ action: 'request', text: box.value, thread: thread.ref.id }, () => { clearDraft(box) }, '已追加') })
       const actions = el('div', 'wb-sa-actions')
       actions.appendChild(more)
       card.append(box, actions)
@@ -809,7 +847,9 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const changed = viewKey() !== builtFrom || at - builtAt >= 60_000
     if (changed && !busy) render()
     if (state === null) return { badge: '' }
-    const waiting = personTickets(state).length
+    // The rail badge counts every team's waiting tickets: the picker names the other teams' counts, and a badge that
+    // showed only this team's would hide them (an owner on one team never learned another needed them).
+    const waiting = personTickets(state).length + (state.teams ?? []).reduce((n, team) => n + (team.id !== state.selectedTeam ? team.waiting ?? 0 : 0), 0)
     const problems = problemsOf(state, at)
     if (problems.some(p => p.tone === 'danger')) return { badge: String(waiting + problems.length), tone: 'danger' }
     return waiting + problems.length > 0 ? { badge: String(waiting + problems.length), tone: 'warn' } : { badge: '' }
