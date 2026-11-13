@@ -165,6 +165,14 @@ describe('the team host and its Pi seat', () => {
     void h.stop()
   })
 
+  it('#688 G1: a seat\'s question is a decision card on the host too, whatever sent it', async () => {
+    const h = await make(() => true)
+    expect(h.remoteEvent('report', SEAT, KEY_P, { state: 'waiting', summary: 's', question: 'which?' }, true)).toMatchObject({ ok: false, code: 'decision' })
+    expect(h.remoteEvent('report', SEAT, KEY_P, { state: 'waiting', summary: 's', question: 'which?', options: ['a', 'b'], recommended: 'c' }, true)).toMatchObject({ ok: false, code: 'decision' })
+    // With options and a recommendation the report goes on to the executor (no assignment here, so it is not-assigned).
+    expect(h.remoteEvent('report', SEAT, KEY_P, { state: 'waiting', summary: 's', question: 'which?', options: ['a', 'b'], recommended: 'a' }, true)).not.toMatchObject({ code: 'decision' })
+  })
+
   it('a seat is heard only through a CLI claim under its pinned key; a node claim never speaks for it, nor a CLI claim for a session', async () => {
     const h = await make(() => true)
     expect(h.remoteEvent('idle', SEAT, KEY_P, undefined, true)).toEqual({ ok: true })

@@ -54,7 +54,7 @@ CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) 
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
 文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR]   (#91: bytes never ride a message)
 superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
-pi 席位:  publish --pi-seat · ticket read|idle [--text T] · ticket ack|handback --trigger ID -- <text> · ticket report --ticket ID --state S [--question Q] -- <summary>
+pi 席位:  publish --pi-seat · ticket read|idle [--text T] · ticket ack|handback --trigger ID -- <text> · ticket report --ticket ID --state S [--question Q --options A|B --recommended A [--level P1]] -- <summary>
           · ticket error [--transient] -- <what failed> · pi install [--dir DIR] [--force]   (docs/design/superagent-pi-platform.md)
 
 host:     --home > $A2A_HOME > the home saved by 'a2a init --home URL' > ${DEFAULT_HOME}
@@ -114,7 +114,7 @@ admission: admission <caller> [--local] [--json]   how <caller> would be admitte
 /** The capabilities a CLI identity may declare on its card (superagent-root-team S5). */
 // piSeat: docs/design/superagent-pi-platform.md P1 — this identity is a Pi seat (it may join a superagent team as a member).
 const DECLARABLE = ['progressReceipts', 'teamRoster', 'directedSeats', 'reworkReturns', 'piSeat']
-const VALUE_FLAGS = new Set(['--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir'])
+const VALUE_FLAGS = new Set(['--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir', '--recommended', '--level'])
 const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class', '--pi-seat', '--transient'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
@@ -727,9 +727,21 @@ async function cmdTicket() {
   let report
   if (op === 'report') {
     const state = flag('--state')
-    if (!REPORT_STATES.includes(state ?? '') || text.trim() === '') usage(`usage: a2a ticket report --ticket ID --state ${REPORT_STATES.join('|')} [--question Q] [--answers TRIGGER] [--pull-request URL] -- <summary>`)
+    if (!REPORT_STATES.includes(state ?? '') || text.trim() === '') usage(`usage: a2a ticket report --ticket ID --state ${REPORT_STATES.join('|')} [--question Q --options A|B|… --recommended A [--level P0..P3]] [--answers TRIGGER] [--pull-request URL] -- <summary>`)
     const ticket = flag('--ticket'), question = flag('--question'), answers = flag('--answers'), pr = flag('--pull-request')
-    report = { state, summary: text, ...(ticket !== undefined ? { ticket_id: ticket } : {}), ...(question !== undefined ? { question } : {}), ...(answers !== undefined ? { answers } : {}), ...(pr !== undefined ? { pull_request: pr } : {}) }
+    // A question reaches the owner as a decision card (C1/C2, as a2a_ticket_report requires): what to decide between, and
+    // what the seat would do. Checked here by the same rules, so a bare question never leaves.
+    let decision = {}
+    if (question !== undefined) {
+      const options = (flag('--options') ?? '').split('|').map(o => o.trim()).filter(o => o !== '')
+      const recommended = flag('--recommended')?.trim(), level = flag('--level')
+      if (options.length < 2 || options.length > 6 || options.some(o => o.length > 300) || new Set(options).size !== options.length) usage('ticket report: --question needs --options A|B|… (2 to 6 different options, each at most 300 characters)')
+      if (recommended === undefined || !options.includes(recommended)) usage('ticket report: --question needs --recommended, one of the --options copied exactly')
+      if (level !== undefined && !['P0', 'P1', 'P2', 'P3'].includes(level)) usage('ticket report: --level is P0, P1, P2 or P3')
+      if (question.length > 2000) usage('ticket report: a question is at most 2000 characters')
+      decision = { options, recommended, ...(level !== undefined ? { level } : {}) }
+    } else if (flag('--options') !== undefined || flag('--recommended') !== undefined || flag('--level') !== undefined) usage('ticket report: --options, --recommended and --level go with --question')
+    report = { state, summary: text, ...(ticket !== undefined ? { ticket_id: ticket } : {}), ...(question !== undefined ? { question, ...decision } : {}), ...(answers !== undefined ? { answers } : {}), ...(pr !== undefined ? { pull_request: pr } : {}) }
   } else if (op === 'ack' || op === 'handback') {
     const trigger = flag('--trigger')
     if (trigger === undefined || (op === 'handback' && text.trim() === '')) usage(`usage: a2a ticket ${op} --trigger ID -- <text>`)

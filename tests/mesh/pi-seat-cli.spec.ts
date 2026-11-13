@@ -62,8 +62,15 @@ describe('a Pi seat through the CLI', () => {
       expect(card.text).toContain('[superagent assignment]')
       expect(card.text).toContain(`a2a-net ticket report --ticket ${ticketId}`)
 
-      // Its signed, body-bound ops reach the team; the report ends the ticket.
+      // Its signed, body-bound ops reach the team. A question is a decision card: a bare one never leaves the CLI, and one
+      // with options and a recommendation reaches the owner as a card.
       expect(JSON.parse((await cli(seat, ['ticket', 'read', '--json'])).stdout)).toEqual({ ok: true })
+      expect((await cli(seat, ['ticket', 'report', '--ticket', ticketId, '--state', 'waiting', '--question', '用哪种?', '--', '要你定'])).code).toBe(2)
+      expect((await cli(seat, ['ticket', 'report', '--ticket', ticketId, '--state', 'waiting', '--question', '用哪种?', '--options', '甲|乙', '--recommended', '丙', '--', '要你定'])).code).toBe(2)
+      const asks = await cli(seat, ['ticket', 'report', '--ticket', ticketId, '--state', 'waiting', '--question', '用哪种?', '--options', '甲|乙', '--recommended', '乙', '--level', 'P1', '--json', '--', '要你定'])
+      expect(JSON.parse(asks.stdout), asks.stdout + asks.stderr).toMatchObject({ ok: true })
+      const cards = (await json(await globalThis.fetch(`${A.baseUrl}/__dsh_a2a/superagent/decisions`))).decisions as Array<Record<string, any>>
+      expect(cards.find(c => c.ticketId === ticketId)).toMatchObject({ options: ['甲', '乙'], recommended: '乙', level: 'P1' })
       const reported = await cli(seat, ['ticket', 'report', '--ticket', ticketId, '--state', 'ready', '--json', '--', '做完了'])
       expect(JSON.parse(reported.stdout), reported.stdout + reported.stderr).toMatchObject({ ok: true })
       expect((await cli(seat, ['ticket', 'idle'])).code).toBe(0)

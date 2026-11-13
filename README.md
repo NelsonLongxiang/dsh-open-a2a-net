@@ -136,7 +136,9 @@ a2a-net pi install                            # copies the a2a-seat extension in
 Installing joins no team: the team's owner adds the handle to the team canvas, which pins the seat's key. The extension
 polls the seat's mailbox, hands each piece of work to the Pi session, and reports read and turn end. The model answers with
 `a2a-net ticket report|ack|handback|idle|read|error` (signed, body-bound requests to the team host). A seat may not change
-rules or speak for the owner, and a seat whose home is another host is not supported.
+rules or speak for the owner, and a seat whose home is another host is not supported. A question is a decision card:
+`ticket report --question Q --options A|B --recommended A`. A seat's turn end carries no text, so report what changed
+with `ticket report`.
 
 ### Standalone network node (no DSH instance)
 

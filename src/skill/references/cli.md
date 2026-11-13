@@ -425,7 +425,9 @@ in its mailbox with the ticket id as `task_id`, and it answers on the team host 
 
 - `a2a-net ticket read` · `ticket idle [--text T]` · `ticket error [--transient] -- <what failed>`
 - `a2a-net ticket ack|handback --trigger <trigger id> -- <text>`
-- `a2a-net ticket report --ticket <id> --state progress|waiting|ready|blocked|failed|dropped [--question Q] [--answers <trigger id>] [--pull-request <url>] -- <summary>`
+- `a2a-net ticket report --ticket <id> --state progress|waiting|ready|blocked|failed|dropped [--question Q --options A|B|… --recommended A [--level P0..P3]] [--answers <trigger id>] [--pull-request <url>] -- <summary>` — a question is a decision card for the owner: 2–6 options and the one the seat recommends, checked before it is sent
+
+A seat's turn end (`ticket idle`, sent by the extension) carries no text: report what changed with `ticket report`, as the work card asks.
 
 Refusals keep the host's code: `not-member` (not this team's seat under the pinned key), `op` (a seat has only these
 six ops: no rule changes), `untrusted-origin` (unsigned or not body-bound). `a2a-net pi install [--dir DIR] [--force]`
