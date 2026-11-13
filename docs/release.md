@@ -5,6 +5,28 @@
 
 > 2026-11-10（#569）：预览版从 npm 回读、核对通过后，立即单独提交一次「记录已发布」：把该版本一节的标题改成「已发布到 npm 的 preview 标签」，并写上状态行（标签指向的提交、npm 发布时间、shasum、integrity、回读结果）。不要等到下一版发版时才顺手改。
 
+## 0.8.1-preview.20（预览版候选，待评审，未发布）
+
+- 基线：next/0.8 合入 master 后的合并提交（候选提交在发版 PR 里写明）。相对已发布的 0.8.1-preview.19 有下列改动。
+- 升级、回退照 [0.8.1 升级检查](ops/0.8.1-upgrade-check.md)。升级后只需重启，不用改配置。
+
+### 新功能
+
+- **组队顾问蓝图（BS2，#670）**：组队顾问用 `superagent_blueprint_propose` 起草蓝图，即一批编制变更，并给出差异（每个规则集"现在 / 改为"）。
+  - 主人在顾问会话里本人打字同意之后，`superagent_blueprint_apply` 才让宿主执行，而且这条消息要晚于蓝图。转达的、定时的、代输入的消息一律不算（#673）。
+  - 改已有团队仍要等该团队的确认卡。
+  - `superagent_blueprint_withdraw` 撤回尚未执行的蓝图。
+  - 蓝图写入或撤销的每个规则集，历史里各留一行；起草后规则若被改过，整份蓝图拒绝执行；失败时倒序撤销。
+  - 顾问先问清建队目标和仓库，再起草。
+
+### 修复
+
+- 编制变更写规则时，修订号只前进一次（#671，#672）。
+
+### 本版已披露限制
+
+- 0.8.1-preview.19 一节列出的限制仍然适用，但"组队顾问只能盘点和给建议"一条已由本版解决。
+
 ## 0.8.1-preview.19（预览版，已发布到 npm 的 preview 标签）
 
 - 状态（2026-11-13）：标签 `v0.8.1-preview.19` 指向 679de3a（发版 PR #668）。2026-11-13T02:32:14Z 发布到 npmjs，dist-tag 为 `preview`，`latest` 仍是 0.7.0。shasum `73990d6338a0dc3ad4a53b77a77be2c93a4cf8b6`，integrity `sha512-NXLYtkyJn+TnuEGEvoWDg+pUOYZ6EA2ZTzzAzhqNNHdnJHsMZCAhA5lDMe/C2WJ17OgGO1ZB0FtdbDhDaDBgbw==`。从 npmjs 回读的包与审计过的包逐字节相同。GitHub Release 为 prerelease。未发布到 Gitea。
