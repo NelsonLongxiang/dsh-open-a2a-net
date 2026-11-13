@@ -63,6 +63,9 @@ A blueprint is a #626 staffing change with a source of `owner-local`. It is one 
 ### TB4. The owner agrees in the builder's conversation; the host carries it out
 
 - **The gate is D10's.** The owner's own typed message in the builder session agrees to the blueprint. The host marks that message, and no shell can produce it. The message must be newer than the proposal and the same proposal must still be pending, as for `superagent_rules_apply`.
+- **Only the owner's own typing (owner ruling, 2026-11-13, "Only my own typing").** No other session, seat or agent ever types an agreement into a builder or router session for the owner, nor decides a card for them. That holds even when the owner asks for it (「你帮我直接发」).
+  - The BS2 acceptance run on the test host was the one exception, and it must not repeat.
+  - The builder refuses a message that says it was typed on the owner's behalf. A session that sets up a trial stops there and asks the owner to type or click.
 - **The builder never holds the owner's proof.** It has no GUI login and no control key. After the owner agrees, the **host's staffing executor** (#626 S1a) carries out each operation with the host's own authority. It calls the same internal checks the canvas and team routes run: the preset check, one role per session, the canvas member checks and quotas. Nothing is skipped because the source is local.
 - **New teams and existing teams:**
   - A blueprint that **only builds new teams** is agreed in the conversation. There is no team yet to hang a card on.
