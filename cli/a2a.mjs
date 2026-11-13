@@ -54,7 +54,7 @@ CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) 
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
 文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR]   (#91: bytes never ride a message)
 superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
-pi 席位:  publish --pi-seat · ticket read|idle [--text T] · ticket ack|handback --trigger ID -- <text> · ticket report --ticket ID --state S [--question Q --options A|B --recommended A [--level P1]] -- <summary>
+pi 席位:  publish --pi-seat · publish --renew (keeps the last publish's declarations) · ticket read|idle [--text T] · ticket ack|handback --trigger ID -- <text> · ticket report --ticket ID --state S [--question Q --options A|B --recommended A [--level P1]] -- <summary>
           · ticket error [--transient] -- <what failed> · pi install [--dir DIR] [--force]   (docs/design/superagent-pi-platform.md)
 
 host:     --home > $A2A_HOME > the home saved by 'a2a init --home URL' > ${DEFAULT_HOME}
@@ -937,20 +937,29 @@ async function renewIfExpiring(handle) {
   if (!Array.isArray(list.deposits)) return
   const mine = list.deposits.find(d => d.handle === handle)
   if (mine !== undefined && mine.expiresAt - Date.now() > 10 * 60_000) return
-  const out = await publishDeposit()
+  const out = await publishDeposit({ renew: true })
   if (out.ok === true) console.error(`[inbox] deposit renewed — ${hoursLeft(out.expiresAt)}h left`)
   else console.error(`[inbox] deposit renewal refused: ${String(out.error)}`)
 }
 
-async function publishDeposit() {
+async function publishDeposit({ renew = false } = {}) {
   const signCard = await loadSignCard()
   const id = identity()
   const privateKey = createPrivateKey(id.privateKeyPem)
   // superagent p1-mailbox-owes (S33): --owes declares, in the signed card, that this identity owes a receipt for what
-  // its mailbox takes; every publish (and --renew) states it afresh, so a publish without it withdraws the declaration.
+  // its mailbox takes; every explicit publish states it afresh, so a publish without it withdraws the declaration.
   // superagent-root-team S5: --declare (or A2A_DECLARE) adds the capabilities a requester takes — only these names.
-  const declared = [...(flag('--declare') ?? process.env.A2A_DECLARE ?? '').split(','), ...(has('--pi-seat') ? ['piSeat'] : [])].map(name => name.trim()).filter(name => DECLARABLE.includes(name))
-  const capabilities = { route: true, async: true, ...(has('--owes') ? { owes: true } : {}), ...Object.fromEntries(declared.map(name => [name, true])) }
+  // #688 review F4: what an explicit publish declared is kept in the identity file, and a renewal (inbox --wait --renew)
+  // signs the same declarations: a renewal never withdraws piSeat (or owes) — only an explicit publish without it does.
+  const kept = renew && id.published !== null && typeof id.published === 'object' ? id.published : undefined
+  const declared = kept !== undefined && Array.isArray(kept.declare)
+    ? kept.declare.filter(name => DECLARABLE.includes(name))
+    : [...(flag('--declare') ?? process.env.A2A_DECLARE ?? '').split(','), ...(has('--pi-seat') ? ['piSeat'] : [])].map(name => name.trim()).filter(name => DECLARABLE.includes(name))
+  const owes = kept !== undefined ? kept.owes === true : has('--owes')
+  if (!renew) {
+    try { writeFileSync(IDENTITY, JSON.stringify({ ...id, published: { declare: [...new Set(declared)], owes } }, null, 2), { mode: 0o600 }) } catch { /* the card still goes out; a later renewal then falls back to its own flags */ }
+  }
+  const capabilities = { route: true, async: true, ...(owes ? { owes: true } : {}), ...Object.fromEntries(declared.map(name => [name, true])) }
   const card = signCard({ name: id.name, session: `cli-${id.name}`, team: id.handle, capabilities, expiresAt: Date.now() + 2 * 24 * 60 * 60 * 1000 }, privateKey)
   return await control({ action: 'publish', card: JSON.stringify(card) })
 }
@@ -1435,7 +1444,8 @@ async function main() {
     return
   }
   if (cmd === 'publish') {
-    const out = await publishDeposit()
+    // --renew: sign what the last explicit publish declared (the Pi seat extension renews this way; #688 F4).
+    const out = await publishDeposit({ renew: has('--renew') })
     if (out.ok !== true) die(`[publish] refused: ${String(out.error)}`)
     console.log(`[publish] ${String(out.handle)} online — ${hoursLeft(out.expiresAt)}h left (auto-deregister then; re-publish returns)`)
     console.log(`[publish] card url: ${cardDocUrl(String(out.cardUrl))}`)

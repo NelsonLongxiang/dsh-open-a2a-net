@@ -129,12 +129,14 @@ whose own signed card declares `piSeat` ([docs/design/superagent-pi-platform.md]
 
 ```sh
 a2a-net init fleet-pi --home <team host URL>   # the seat's identity, home = the team host
-a2a-net publish --pi-seat                     # deposit with capabilities.piSeat (re-publish within 4h, or inbox --wait --renew)
+a2a-net publish --pi-seat                     # deposit with capabilities.piSeat; renewals keep it (publish --renew)
 a2a-net pi install                            # copies the a2a-seat extension into ~/.pi/agent/extensions/ (--dir, --force)
 ```
 
-Installing joins no team: the team's owner adds the handle to the team canvas, which pins the seat's key. The extension
-polls the seat's mailbox, hands each piece of work to the Pi session, and reports read and turn end. The model answers with
+Installing joins no team: the team's owner adds the handle to the team canvas, which pins the seat's key. A renewal
+(`publish --renew`, `inbox --wait --renew`) signs what the last explicit publish declared, so `piSeat` stays; an explicit
+`publish` without `--pi-seat` withdraws it. The extension renews the deposit every hour, keeps its cursor per seat (one
+Pi process consumes a seat at a time), keeps a turn end owed until the host takes it, and polls the seat's mailbox, hands each piece of work to the Pi session, and reports read and turn end. The model answers with
 `a2a-net ticket report|ack|handback|idle|read|error` (signed, body-bound requests to the team host). A seat may not change
 rules or speak for the owner, and a seat whose home is another host is not supported. A question is a decision card:
 `ticket report --question Q --options A|B --recommended A`. A seat's turn end carries no text, so report what changed

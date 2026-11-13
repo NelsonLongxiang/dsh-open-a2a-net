@@ -71,11 +71,11 @@ Pi coding agent 可以作为 superagent 团队的成员干活。席位就是一�
 
 ```sh
 a2a-net init fleet-pi --home <团队宿主地址>   # 席位身份，home 必须是团队宿主
-a2a-net publish --pi-seat                     # 带 capabilities.piSeat 寄存（4 小时内重发，或 inbox --wait --renew）
+a2a-net publish --pi-seat                     # 带 capabilities.piSeat 寄存；续期会保留它（publish --renew）
 a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.pi/agent/extensions/（--dir、--force）
 ```
 
-安装不等于入队：要由团队主人在团队画布上把这个 handle 加进来，加入时固定席位的密钥。扩展会轮询席位邮箱，把派来的活交给 Pi 会话，
+安装不等于入队：要由团队主人在团队画布上把这个 handle 加进来，加入时固定席位的密钥。续期（`publish --renew`、`inbox --wait --renew`）沿用上次显式 publish 的声明，`piSeat` 不会丢；不带 `--pi-seat` 的显式 `publish` 才会撤销它。扩展每小时续期一次，游标按席位分开保存（同一席位同时只由一个 Pi 进程消费），"本轮结束"在宿主收下之前会一直保留重发。扩展会轮询席位邮箱，把派来的活交给 Pi 会话，
 并回报"已读"和"本轮结束"；模型用 `a2a-net ticket report|ack|handback|idle|read|error` 回报（对团队宿主的签名且绑定内容的请求）。
 席位不能改团队规则、不能代主人说话；home 在其他主机上的席位本版不支持。提问就是一张决策卡：
 `ticket report --question Q --options A|B --recommended A`。席位的"本轮结束"不带文字，有变化要用 `ticket report` 主动回报。
