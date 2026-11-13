@@ -173,6 +173,13 @@ A request whose first line is `[A2A dispatch] {json}` is read by the host, not o
 - **`rework`** (capability `reworkReturns`, `{"of": "<returned task id>"}`) is accepted by the host at once as a new ticket, 「打回重做：<title>」. It goes on the member that last worked the returned ticket, or the `for` seat.
 - **Seats.** Each member slot has a stable `seatId`, carried in the roster. `POST /__dsh_a2a/superagent { action: 'move-seat', from, to }` moves it to the session that replaced a member.
 
+## The team builder (组队顾问, BS1)
+
+- **What it is.** A session the owner creates under the `superagent-builder` preset. It holds no team role.
+- **What it can do.** It reads the organisation with `superagent_org_read` and drafts rules from `superagent_rule_templates`. It may read files (`read` / `glob` / `grep`). Nothing else is allowed: no shell, no writes, no other session, no A2A.
+- **What it does with that.** It advises the owner in its own session. Blueprints, carried out through the staffing changes below, come with BS2.
+- **What the inventory leaves out.** Never credentials, MCP servers, tool grants or blocks, bots, allow-lists, GitHub settings or file paths.
+
 ## Staffing changes (S1a)
 
 - **What it is.** The host's executor of staffing changes ([superagent-staffing-changes](../../../docs/design/superagent-staffing-changes.md), [superagent-builder](../../../docs/design/superagent-builder.md) TB3/TB4). A change is one ledger entry with ordered operations:

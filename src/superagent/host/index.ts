@@ -315,7 +315,7 @@ export class SuperagentHost {
   isObserver(sessionId: string): boolean { return this.settings.observers.includes(sessionId) }
 
   /** A session's tool list: its role, an observer being a member with one tool more. */
-  toolRoleOf(sessionId: string): Role | undefined {
+  toolRoleOf(sessionId: string): Exclude<Role, 'builder'> | undefined {
     const role = this.roleOf(sessionId)
     return role === 'member' && this.isObserver(sessionId) ? 'observer' : role
   }
