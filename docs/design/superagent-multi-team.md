@@ -26,7 +26,7 @@ Today one DSH instance runs one team. `SuperagentHost` holds one settings file, 
 
 ### Sending to another instance
 
-- **M9 No new trust.** A request to another instance goes over A2A to that team's canvas address, sent as the session the tab is open in. The receiving team treats it as it treats any A2A message: an agent's, admitted only if the sender is on its bot list, and opened as a ticket only under `auto` with a matching rule. The view says so, and names the sender to add. The receipt comes back to that session.
+- **M9 No new trust.** A request to another instance goes over A2A to that team's canvas address, sent as the session the tab is open in. The receiving team treats it as it treats any A2A message: an agent's, admitted only if the sender is on its bot list, and opened as a ticket only under `auto` with a matching rule. The view says so, and names the sender to add. The receipt comes back to the tab, not into the session (owner ruling 2026-11-13: it had landed as a new message that woke the session's model). It settles the ledger like any receipt, then the host keeps it for the tab (`src/sidebar-sends.ts`, `GET …/superagent/teams?session=<id>` → `sent`), and the tab lists each request with what came back. A receipt this host's settlement judge refused is still kept, marked unverified. Anything else the team sends that session still reaches it.
 - **M10 A team's own sessions cannot send.** A router or member has no A2A route today, and the view does not give it one.
 
 ## Not doing
