@@ -76,6 +76,21 @@ describe('rail tabs (wb-rail)', () => {
     expect(document.activeElement).toBe(t.root.querySelector('.wb-tab[data-sec="a"]'))
   })
 
+  it('a tab hidden at startup takes back the stored selection when it shows, unless the viewer chose another meanwhile', () => {
+    window.localStorage.setItem('dsh-a2a.rail.tab', 'c')
+    const t = createRailTabs(defs)
+    t.setHidden('c', true) // 团队 is hidden until the superagent state arrives
+    expect(t.selected()).toBe('a')
+    t.setHidden('c', false)
+    expect(t.selected()).toBe('c')
+    expect(t.panel('c').hidden).toBe(false)
+    t.setHidden('c', true)
+    t.select('b') // the viewer moved on while it was hidden
+    t.setHidden('c', false)
+    expect(t.selected()).toBe('b')
+    expect(window.localStorage.getItem('dsh-a2a.rail.tab')).toBe('b')
+  })
+
   it('badges count, and take a tone only when something needs a hand', () => {
     const t = createRailTabs(defs)
     t.setBadge('a', '3', 'danger')
