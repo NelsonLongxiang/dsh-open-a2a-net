@@ -16,7 +16,7 @@
     "nexus-stage/src/planning-fit.ts": "cbda0255062632bd412deb2131c7a01e1e16ab9c72d2a70a32c362e108f8c07a",
     "src/task-ledger.ts": "032e7b40db048956d28fc7e047fa212366720bfdad70f7c48b5cdf785ba4f767",
     "nexus-stage/src/world.ts": "8191581b4551b3b5ea3658a4a640fcb68cea0311d500743884de666441501cd0",
-    "nexus-stage/src/planning-overlap.ts": "3341e41c386e2c9d6c94aaf8ea9d80087aa68f1150149031c95465f97bdeaeaf",
+    "nexus-stage/src/planning-overlap.ts": "f4e7ecf5af229f6107191f35be2b5a10ebab921b175ba0950f577458dacc5019",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "b4f92c9ce3237019ab3c7ab71f0624c3306e8c316cb15d119d4e7c57f65e604f",
     "src/faces/wire.ts": "348bf98df51ca16cf36d6a29e063211735b801e28bfceb63659e2fbb80a21fb5",
@@ -321,7 +321,7 @@
     {
       "page": "p1-arch",
       "cell": "e7",
-      "ref": "nexus-stage/src/planning-overlap.ts:97",
+      "ref": "nexus-stage/src/planning-overlap.ts:98",
       "expect": "export function evictStrangers(model: WorldModel): boolean {"
     },
     {
