@@ -91,6 +91,12 @@ A blueprint is a #626 staffing change with a source of `owner-local`. It is one 
    - The inventory copies named fields only, so no W3 field can reach it.
    - The templates come from the ops and market-trial teams on the test host and from a root team's children. The ops members' own intake texts were not kept, so the member templates come from the repository split and the member card's line.
 3. **BS2, blueprints** (high tier, after S1a): `superagent_blueprint_propose`, `_apply` and `_withdraw`, the D10 gate, per-team cards for existing teams, rollback, and the history line.
+   - *Built 2026-11-13.* `propose` records an `owner-local` change drafted by the builder session and returns the diff (now vs new for each rule set).
+   - `apply` needs the owner's own typed message in that session, newer than the blueprint. It is the same reading as `superagent_rules_apply`, and a relayed or agent message never counts.
+   - `withdraw` takes back only the session's own pending blueprint.
+   - Each rule set a blueprint writes gets a history line 「由组队顾问蓝图 <id> 起草，主人确认于 <time>」, and an undo gets one too.
+   - A blueprint also records the revisions of the existing rule sets it changes; if one moved before it runs, nothing runs.
+   - The persona asks for the team's goal and repositories first (BS1's live trial found the inventory shows structure, not intent).
 4. **S1b, the market's entry** (#626 S1's second half): `staffing.sources`, Sig3, `staffingChanges`, receipts and `rosterSeq`. The market loses nothing by waiting: until then, teams are built on the node and the market claims them (#626 §8.5).
 5. **Later:** `member.add` from job templates (#626 S2), child teams across hosts in a blueprint, and retiring through the builder.
 

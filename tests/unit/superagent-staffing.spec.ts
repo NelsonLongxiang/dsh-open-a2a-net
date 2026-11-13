@@ -12,6 +12,7 @@ import { StaffingExecutor, type StaffingChange, type StaffingDeps, type Staffing
 const R = 'session-11111111-aaaa', M = 'session-22222222-bbbb', M2 = 'session-33333333-cccc'
 
 function world(options: { failAdd?: string; failUndo?: boolean } = {}) {
+  // eslint-disable-next-line prefer-const
   const calls: string[] = []
   const canvases = new Map<string, string[]>()
   const teams = new Map<string, { canvas?: string; router?: string; rules: Array<{ name: string; text: string; enabled: boolean }>; dispatch: string; profiles: Record<string, unknown>; seats: Record<string, string>; cards: Array<{ change: string; question: string; level: string }> }>()
@@ -28,7 +29,7 @@ function world(options: { failAdd?: string; failUndo?: boolean } = {}) {
       proposeStaffingCard: (change, question, _reason, level) => { t.cards.push({ change, question, level }); return `card-${String(t.cards.length)}` },
     }
   }
-  const deps: StaffingDeps = {
+  let deps: StaffingDeps = {
     path: join(mkdtempSync(join(tmpdir(), 'staffing-')), 'staffing.json'),
     now: () => new Date().toISOString(),
     logger: { info: () => {}, warn: () => {} },
@@ -42,7 +43,8 @@ function world(options: { failAdd?: string; failUndo?: boolean } = {}) {
     teamAdd: (canvas, router) => { const id = `t-${String(++next)}`; calls.push(`team+:${canvas}`); teams.set(id, { canvas, router, rules: [], dispatch: '', profiles: {}, seats: {}, cards: [] }); return { ok: true, id } },
     teamUnbind: id => { calls.push(`team-:${id}`); const t = teams.get(id); if (t !== undefined) { delete t.canvas; delete t.router } return true },
   }
-  return { deps, calls, teams, canvases, x: new StaffingExecutor(deps) }
+  const out = { get deps() { return deps }, set deps(next: StaffingDeps) { deps = next }, calls, teams, canvases, x: new StaffingExecutor(deps) }
+  return out
 }
 
 const blueprint = (id = 'bp-1'): StaffingChange => ({
@@ -165,5 +167,79 @@ describe('the team\'s confirmation card', () => {
     expect(h.decide(card, 'choose', STAFFING_CONFIRM)).toMatchObject({ ok: true, confirmed: true })
     expect(decided).toEqual([['bp-9', true]])
     await h.stop()
+  })
+})
+
+describe('BS2: what a blueprint adds to a staffing change', () => {
+  const withHistory = (w: ReturnType<typeof world>) => {
+    const lines: Array<[string, string, string]> = []
+    const revisions: Record<string, number> = {}
+    const team = w.deps.team
+    w.deps = { ...w.deps, team: id => { const t = team(id); return t === undefined ? undefined : { ...t, get settings() { return t.settings }, ruleRevision: scope => revisions[`${id}|${scope}`] ?? 0, recordRuleChange: (scope, change) => { revisions[`${id}|${scope}`] = (revisions[`${id}|${scope}`] ?? 0) + 1; lines.push([id, scope, change.reason]) } } } }
+    return { x: new StaffingExecutor(w.deps), lines, revisions }
+  }
+
+  it('each rule set written gets a history line naming the blueprint; an undo gets one too', async () => {
+    const w = world({ failAdd: M2 })
+    const h = withHistory(w)
+    await h.x.submit({ id: 'bp-h', source: 'owner-local', by: { session: 'session-builder-0000' }, ops: [
+      { op: 'team.rules.set', params: { team: 't-old', scope: 'dispatch', value: 'new' } },
+      { op: 'member.add', params: { team: 't-old', session: M2 } },
+    ] })
+    await h.x.agree('bp-h', 'test')
+    await h.x.cardDecided('bp-h', 't-old', true)
+    expect(h.x.get('bp-h')!.state).toBe('failed')
+    expect(h.lines.map(l => l[2])).toEqual([expect.stringMatching(/^由组队顾问蓝图 bp-h 起草，主人确认于 /), '由组队顾问蓝图 bp-h 起草失败，已恢复到之前的内容'])
+    expect(w.teams.get('t-old')!.dispatch).toBe('before')
+  })
+
+  it('a rule set that moved after the draft refuses the whole blueprint, nothing runs', async () => {
+    const w = world()
+    const h = withHistory(w)
+    await h.x.submit({ id: 'bp-s', source: 'owner-local', by: { session: 'session-builder-0000' }, ops: [{ op: 'team.rules.set', params: { team: 't-old', scope: 'dispatch', value: 'new' } }] })
+    h.revisions['t-old|dispatch'] = 5
+    await h.x.agree('bp-s', 'test')
+    await h.x.cardDecided('bp-s', 't-old', true)
+    expect(h.x.get('bp-s')).toMatchObject({ state: 'failed', reason: expect.stringContaining('changed after the change was drafted') })
+    expect(w.teams.get('t-old')!.dispatch).toBe('before')
+  })
+
+  it('only the session that drafted a pending blueprint withdraws it', async () => {
+    const w = world()
+    await w.x.submit({ ...blueprint('bp-w'), by: { session: 'session-builder-0000' } })
+    expect(w.x.withdraw('bp-w', 'session-other-0000')).toMatchObject({ ok: false, code: 'not-yours' })
+    expect(w.x.withdraw('bp-w', 'session-builder-0000')).toEqual({ ok: true })
+    expect(await w.x.agree('bp-w', 'test')).toMatchObject({ ok: false, code: 'not-awaiting' })
+  })
+})
+
+describe('BS2: the blueprint tools and the D10 gate', () => {
+  async function tools(person: { id: string; atMs: number; text: string } | undefined) {
+    const { registerBuilderTools } = await import('../../src/superagent/host/builder-tools.ts')
+    const w = world()
+    const registered = new Map<string, { execute: (args: unknown, exec: unknown) => Promise<Record<string, unknown>> }>()
+    const ctx = { tools: { register: (def: { name: string; execute: never }) => { registered.set(def.name, def as never); return () => {} } } }
+    const B = 'session-builder-0000'
+    registerBuilderTools(ctx as never, id => id === B, () => ({ teams: [], sessions: [], nameOf: id => id, presetOf: () => undefined, staffing: [] }),
+      { staffing: () => w.x, personMessage: () => person, teamRules: () => undefined })
+    const call = (name: string, args: unknown, as = B) => registered.get(name)!.execute(args, { agent: { id: as } })
+    return { w, call }
+  }
+
+  it('propose records a pending blueprint and returns the diff; apply waits for the owner\'s own later message', async () => {
+    const t = await tools(undefined)
+    const proposed = await t.call('superagent_blueprint_propose', { summary: '建 docs 团队', ops: blueprint().ops })
+    expect(proposed).toMatchObject({ ok: true, state: 'awaiting', diff: expect.stringContaining('新建团队，画布 docs') })
+    expect(await t.call('superagent_blueprint_apply', { id: proposed.id })).toMatchObject({ ok: false, code: 'not-the-owner' })
+    expect(await t.call('superagent_blueprint_apply', { id: proposed.id }, 'session-other-0000')).toMatchObject({ ok: false, code: 'not-builder' })
+  })
+
+  it('an owner message older than the blueprint does not agree; a newer one runs it', async () => {
+    const old = await tools({ id: 'm-1', atMs: Date.now() - 60_000, text: '好' })
+    const p1 = await old.call('superagent_blueprint_propose', { summary: 's', ops: blueprint().ops })
+    expect(await old.call('superagent_blueprint_apply', { id: p1.id })).toMatchObject({ ok: false, code: 'not-yet' })
+    const fresh = await tools({ id: 'm-2', atMs: Date.now() + 60_000, text: '可以，照这个建' })
+    const p2 = await fresh.call('superagent_blueprint_propose', { summary: 's', ops: blueprint().ops })
+    expect(await fresh.call('superagent_blueprint_apply', { id: p2.id })).toMatchObject({ ok: true, state: 'done' })
   })
 })
