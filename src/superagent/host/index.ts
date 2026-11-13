@@ -22,6 +22,7 @@ import { A2aSource } from './a2a-source.ts'
 import { ProgressReceipts } from './progress.ts'
 import { SplitBook } from './split.ts'
 import { progressState } from './progress.ts'
+import { TeamMcp } from './team-mcp.ts'
 import { credentialAccess, redactedPreview, type CredentialKind } from './credential-audit.ts'
 import { RosterReports } from './roster.ts'
 import { MemberExecutor, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
@@ -130,6 +131,8 @@ export class SuperagentHost {
   /** The credential-access audit's recent hits (kinds and a redacted preview, never what was read) and when each session last raised a card. */
   private readonly credentialHits: Array<{ at: string; session: string; role: string; tool: string; kinds: readonly CredentialKind[]; preview: string; card?: string }> = []
   private readonly credentialCardAt = new Map<string, number>()
+  /** docs/design/superagent-team-mcp.md M1–M3: the team's MCP servers, their tokens in this process's memory only. */
+  readonly mcp: TeamMcp
 
   constructor(private readonly d: SuperagentHostDeps) {
     const dir = d.stateDir ?? join(d.home, 'superagent')
@@ -244,6 +247,12 @@ export class SuperagentHost {
         this.pass()
       },
     })
+    // The market's MCP, called for members with one-hour seat tokens exchanged under the node key (owner 2026-11-13). The tool
+    // list is read as one of the team's member seats.
+    this.mcp = new TeamMcp({ servers: () => this.settingsValue.mcp ?? [], now: () => this.now(), toolsChanged: () => this.d.mcpToolsChanged?.(),
+      catalogSeat: () => this.settings.members.map(id => this.named.seatIdOf(id)).find((seat): seat is string => seat !== undefined),
+      ...(d.seatSigner !== undefined ? { signer: d.seatSigner } : {}), ...(d.seatTokenFetch !== undefined ? { tokenFetch: d.seatTokenFetch } : {}),
+      ...(d.mcpTransport !== undefined ? { transport: d.mcpTransport } : {}) })
     this.named = new NamedDispatch({
       path: join(dir, 'seats.json'), engine: this.engine, ticket: id => this.store.tickets.get(id), tickets: () => this.store.tickets.list(),
       trigger: id => this.store.triggers.get(id), pool: () => this.pool(), router: () => this.settingsValue.router,
@@ -751,6 +760,9 @@ export class SuperagentHost {
       const rule = this.settingsValue.rules.find(r => r.name === name)
       if (rule !== undefined) lines.push(`accepted on team rule ${rule.name}: ${clip(rule.text, 600)}`)
     }
+    // superagent-team-mcp M2: the team's MCP servers go through the host; a member never looks for a token (the 2026-11-11 trial).
+    const servers = this.settingsValue.mcp ?? []
+    if (servers.length > 0) lines.push(`This team's MCP servers: ${servers.map(s => s.name).join(', ')}. Their tools are your tools named team__<server>__<tool>; call them for this ticket and the host calls the server with the token it holds. Never look for or use a token file yourself.`)
     lines.push(...this.promptCardLines('communication'))
     lines.push(...this.promptCardLines('delivery'))
     return lines
@@ -1326,8 +1338,24 @@ export class SuperagentHost {
   routerDecided(): void { this.routerFailure = undefined }
 
   /** One pass: expire or start due Evals, then deliver what waits for the router. */
+  /** When the team's MCP tool lists were last read (0: read on the next pass). */
+  private mcpReadAt = 0
+  private mcpReading = false
+  /** Read the MCP servers' tool lists: on the first pass, after a settings save, and every 5 minutes while one is not ready. */
+  private readMcpTools(): void {
+    const servers = this.settingsValue.mcp ?? []
+    if (servers.length === 0 || this.mcpReading) return
+    const now = Date.parse(this.now())
+    const notReady = this.mcp.status().some(s => s.state !== 'ready')
+    if (this.mcpReadAt !== 0 && (!notReady || now - this.mcpReadAt < 5 * 60_000)) return
+    this.mcpReadAt = now
+    this.mcpReading = true
+    void this.mcp.refreshAll().catch(error => { this.d.logger.warn('superagent: team MCP tool lists not read: %s', String(error)) }).finally(() => { this.mcpReading = false })
+  }
+
   pass(): void {
     if (this.store.loadError !== undefined) return
+    try { this.readMcpTools() } catch (error) { this.d.logger.warn('superagent: team MCP check failed: %s', String(error)) }
     try { this.engine.evaluateDue() } catch (error) { this.d.logger.warn('superagent: evaluation pass failed: %s', String(error)) }
     this.flushCandidates()
     this.flushOutbox()
@@ -1526,6 +1554,9 @@ export class SuperagentHost {
     this.d.logger.info('superagent: team settings saved (policy %s)', after)
     this.applyModels()
     this.syncA2a()
+    // superagent-team-mcp: the allowed tools or the servers may have changed; the plugin registers what members may call.
+    this.d.mcpToolsChanged?.()
+    this.mcpReadAt = 0
     this.executor.launch()
     this.pass()
     return { ok: true, settings: this.settings }
@@ -1589,6 +1620,7 @@ export class SuperagentHost {
       if (router !== undefined && !loaded(router)) out.push({ code: 'router-not-loaded', session: router })
       for (const member of members) if (!loaded(member)) out.push({ code: 'member-not-loaded', session: member })
     }
+    for (const server of this.mcp.status()) if (server.state !== 'ready') out.push({ code: server.state === 'no-seat' ? 'mcp-no-seat' : 'mcp-token-unavailable', title: server.name, ...(server.problem !== undefined ? { detail: server.problem } : {}) })
     if (this.routerFailure !== undefined && router !== undefined) out.push({ code: 'router-turn-failed', session: router, minutes: Math.max(0, Math.floor((now - Date.parse(this.routerFailure.at)) / 60_000)), detail: this.routerFailure.error })
     for (const binding of this.executor.list()) {
       const ticket = this.store.tickets.get(binding.ticketId)
@@ -1613,6 +1645,7 @@ export class SuperagentHost {
       a2a: { enabled: this.settingsValue.sources.a2a, address: this.a2a.address ?? null, health: this.a2a.health },
       refusals: { counts: Object.fromEntries(this.refusalCounts), recent: [...this.refusalRecent] },
       credentialAudit: [...this.credentialHits],
+      mcp: { servers: this.mcp.status(), calls: this.mcp.calls().slice(-50) },
       settingsHistory: this.settingsHistory.list(),
       modelResults: Object.fromEntries(this.modelResults),
       ...(this.prs.problem !== undefined ? { pullRequestProblem: this.prs.problem } : {}),
