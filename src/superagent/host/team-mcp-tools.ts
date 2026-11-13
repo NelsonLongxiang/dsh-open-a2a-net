@@ -5,8 +5,14 @@
  *
  * Tools are registered once per name on this host, whichever teams have that server; a call is resolved to the caller's own
  * team, so a session of another team, or of no team, is refused at the call.
+ *
+ * Names never collide (#690 review F2): a raw tool name that is not already a clean tool name (punctuation, or longer than
+ * fits) gets a short hash of itself, and when two teams' servers offer the same name with different descriptions or
+ * parameters, each gets a hash of its own descriptor. A registered tool is bound to that exact descriptor: a call runs only
+ * when the caller's own team offers it, and runs that team's raw tool name.
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/team-mcp-tools
  */
+import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { McpError, type McpToolInfo } from './team-mcp.ts'
@@ -14,9 +20,23 @@ import type { SuperagentHost } from './index.ts'
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
-/** The tool name a team MCP tool is offered under: letters, digits, _ and -, at most 64. */
+const NAME_MAX = 64
+const hash8 = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 8)
+const withSuffix = (name: string, suffix: string): string => `${name.slice(0, NAME_MAX - suffix.length - 1)}_${suffix}`
+
+/**
+ * The tool name a team MCP tool is offered under: letters, digits, _ and -, at most 64. A raw name that had to be changed to
+ * fit carries a hash of the raw name, so `write.file` and `write_file` are two tools.
+ */
 export function teamToolName(server: string, tool: string): string {
-  return `team__${server}__${tool.replace(/[^A-Za-z0-9_-]/g, '_')}`.slice(0, 64)
+  const plain = `team__${server}__${tool}`
+  if (/^[A-Za-z0-9_-]+$/.test(plain) && plain.length <= NAME_MAX) return plain
+  return withSuffix(`team__${server}__${tool.replace(/[^A-Za-z0-9_-]/g, '_')}`, hash8(tool))
+}
+
+/** A tool's descriptor as a server offered it: its server, raw name, description and parameters. */
+export function mcpToolFingerprint(server: string, tool: McpToolInfo): string {
+  return createHash('sha256').update(JSON.stringify([server, tool.name, tool.description ?? null, tool.inputSchema ?? null])).digest('hex').slice(0, 16)
 }
 
 type Spec = Record<string, unknown>
@@ -49,28 +69,36 @@ const said = (title: string, value: Record<string, unknown>) => {
 
 /** The host's team MCP tools: registered and withdrawn as the teams' allowed tools change. */
 export class TeamMcpTools {
-  private readonly registered = new Map<string, { server: string; tool: string; dispose: () => void }>()
+  private readonly registered = new Map<string, { server: string; tool: string; fingerprint: string; dispose: () => void }>()
 
   constructor(private readonly ctx: Context, private readonly teamOf: (sessionId: string) => SuperagentHost | undefined, private readonly teams: () => readonly SuperagentHost[], private readonly logger: { warn(format: string, ...args: unknown[]): void }) {}
 
   /** Register what any team now offers; withdraw what none does. */
   refresh(): void {
-    const wanted = new Map<string, { server: string; tool: McpToolInfo }>()
+    // Every distinct descriptor any team offers, by its base name.
+    const byName = new Map<string, Map<string, { server: string; tool: McpToolInfo }>>()
     for (const team of this.teams()) for (const server of team.mcp.status()) for (const tool of team.mcp.offered(server.name)) {
-      const name = teamToolName(server.name, tool.name)
-      if (!wanted.has(name)) wanted.set(name, { server: server.name, tool })
+      const base = teamToolName(server.name, tool.name)
+      const same = byName.get(base) ?? new Map<string, { server: string; tool: McpToolInfo }>()
+      same.set(mcpToolFingerprint(server.name, tool), { server: server.name, tool })
+      byName.set(base, same)
+    }
+    const wanted = new Map<string, { server: string; tool: McpToolInfo; fingerprint: string }>()
+    for (const [base, same] of byName) {
+      // One descriptor: its base name. Teams disagreeing on what this tool is: each descriptor is a tool of its own.
+      for (const [fingerprint, entry] of same) wanted.set(same.size === 1 ? base : withSuffix(base, fingerprint.slice(0, 8)), { ...entry, fingerprint })
     }
     for (const [name, entry] of [...this.registered]) {
       const want = wanted.get(name)
-      if (want !== undefined && want.server === entry.server && want.tool.name === entry.tool) continue
+      if (want !== undefined && want.fingerprint === entry.fingerprint) continue
       try { entry.dispose() } catch { /* already gone */ }
       this.registered.delete(name)
     }
-    for (const [name, { server, tool }] of wanted) {
+    for (const [name, { server, tool, fingerprint }] of wanted) {
       if (this.registered.has(name)) continue
       try {
-        const dispose = this.ctx.tools.register(this.define(name, server, tool))
-        this.registered.set(name, { server, tool: tool.name, dispose })
+        const dispose = this.ctx.tools.register(this.define(name, server, tool, fingerprint))
+        this.registered.set(name, { server, tool: tool.name, fingerprint, dispose })
       } catch (error) { this.logger.warn('superagent: team MCP tool %s not registered: %s', name, String(error)) }
     }
   }
@@ -78,7 +106,7 @@ export class TeamMcpTools {
   /** The names registered now (for tests and the team page). */
   names(): readonly string[] { return [...this.registered.keys()] }
 
-  private define(name: string, server: string, tool: McpToolInfo) {
+  private define(name: string, server: string, tool: McpToolInfo, fingerprint: string) {
     return defineTool({
       name,
       description: `Team MCP server ${server}, tool ${tool.name} — called by the host with the team's token (you never need a token), for the ticket you are working on. ${tool.description ?? ''}`.slice(0, 1_200),
@@ -94,10 +122,17 @@ export class TeamMcpTools {
         if (h.settings.serves?.members.includes(me) === true) return { ok: false, code: 'remote-member', error: 'a member serving another team host cannot call that team\'s MCP servers yet' }
         const ticketId = h.executor.bindingOf(me)?.ticketId
         if (ticketId === undefined) return { ok: false, code: 'no-ticket', error: 'you have no running ticket: a member calls the team\'s MCP servers only for the ticket it works on' }
+        // F2: the caller's own team must offer this exact tool (same server, raw name, description, parameters).
+        const own = h.mcp.offered(server).find(t => mcpToolFingerprint(server, t) === fingerprint)
+        if (own === undefined) return { ok: false, code: 'not-offered', error: `your team's ${server} server does not offer this tool as registered; its tool list may have changed` }
+        // F1: the credential is the calling member's own seat, for the ticket bound to it now — never the seat another
+        // member is named for, nor the one a ticket's receipts show.
+        const named = h.executor.memberOfTicket(ticketId)?.member
+        if (named !== undefined && named !== me) return { ok: false, code: 'not-your-ticket', error: 'the ticket you run is now named for another member: the team MCP is not called for it' }
+        const seat = h.mcpSeatOf(me)
         const toolArgs = args !== null && typeof args === 'object' && !Array.isArray(args) ? args as Record<string, unknown> : {}
         try {
-          const seat = h.seatOf(ticketId)?.seatId
-          const out = await h.mcp.callTool(server, tool.name, toolArgs, { by: me, ticketId, ...(seat !== undefined ? { seat } : {}) })
+          const out = await h.mcp.callTool(server, own.name, toolArgs, { by: me, ticketId, ...(seat !== undefined ? { seat } : {}) })
           return { ok: true, isError: out.isError, size: out.size, ...(out.clipped ? { clipped: true } : {}), result: out.text }
         } catch (error) {
           return error instanceof McpError ? { ok: false, code: error.code, error: error.message } : { ok: false, code: 'server', error: String(error instanceof Error ? error.message : error).slice(0, 300) }

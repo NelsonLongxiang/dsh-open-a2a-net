@@ -127,6 +127,10 @@ export class TeamMcp {
   /** Each server's tool list as last read (names, descriptions, input schemas). */
   private readonly catalog = new Map<string, McpToolInfo[]>()
   private readonly problems = new Map<string, string>()
+  /** The full URL each server's sessions and tool list belong to: a changed endpoint, even on the same origin, starts them afresh. */
+  private readonly endpoints = new Map<string, string>()
+  /** Per server, the seats whose token was refused or could not be had at a call, and why (cleared when that seat works again). */
+  private readonly faults = new Map<string, Map<string, string>>()
   private readonly records: McpCallRecord[] = []
   private nextId = 1
 
@@ -149,12 +153,16 @@ export class TeamMcp {
   }
 
   /** Each server's state, for the team page and health (never a token). */
-  status(): Array<{ name: string; url: string; state: McpServerState; problem?: string; tools?: readonly string[]; offered: number; seats: Array<{ seatId: string; expiresAt: string }> }> {
+  status(): Array<{ name: string; url: string; state: McpServerState; problem?: string; tools?: readonly string[]; offered: number; seats: Array<{ seatId: string; expiresAt: string }>; faults?: Array<{ seatId: string; problem: string }> }> {
     this.prune()
     return this.d.servers().map(s => {
-      const problem = this.problems.get(s.name)
-      const state: McpServerState = this.catalog.has(s.name) ? 'ready' : this.d.catalogSeat() === undefined ? 'no-seat' : 'unavailable'
-      return { name: s.name, url: s.url, state, ...(problem !== undefined && state !== 'ready' ? { problem } : {}), ...(s.tools !== undefined ? { tools: s.tools } : {}), offered: this.offered(s.name).length, seats: this.tokens.get(s.name)?.seats.status() ?? [] }
+      const faults = [...(this.faults.get(s.name) ?? new Map<string, string>())].map(([seatId, problem]) => ({ seatId, problem }))
+      const listed = this.catalog.has(s.name)
+      // A list read once is not enough: a seat whose calls are refused makes the server not ready, so health shows it and the
+      // pass keeps trying to recover it.
+      const state: McpServerState = listed && faults.length === 0 ? 'ready' : !listed && this.d.catalogSeat() === undefined ? 'no-seat' : 'unavailable'
+      const problem = listed ? (faults[0] !== undefined ? `seat ${faults[0].seatId}: ${faults[0].problem}` : undefined) : this.problems.get(s.name)
+      return { name: s.name, url: s.url, state, ...(problem !== undefined && state !== 'ready' ? { problem } : {}), ...(s.tools !== undefined ? { tools: s.tools } : {}), offered: this.offered(s.name).length, seats: this.tokens.get(s.name)?.seats.status() ?? [], ...(faults.length > 0 ? { faults } : {}) }
     })
   }
 
@@ -166,7 +174,37 @@ export class TeamMcp {
   }
 
   /** Read every server's tool list again (the team's servers or seats changed). */
-  async refreshAll(): Promise<void> { for (const s of this.d.servers()) await this.refreshTools(s.name) }
+  async refreshAll(): Promise<void> {
+    for (const s of this.d.servers()) {
+      await this.refreshTools(s.name)
+      await this.recoverSeats(s.name)
+    }
+  }
+
+  /** Exchange again for each seat whose calls failed on its token; a seat that gets one is no longer faulted. */
+  private async recoverSeats(name: string): Promise<void> {
+    const faulted = this.faults.get(name)
+    if (faulted === undefined) return
+    const server = this.d.servers().find(s => s.name === name)
+    if (server === undefined) return
+    for (const seat of [...faulted.keys()]) {
+      try { await this.token(server, seat); this.clearFault(name, seat) } catch (error) { faulted.set(seat, String(error instanceof Error ? error.message : error).slice(0, 300)) }
+    }
+    this.d.toolsChanged?.()
+  }
+
+  private setFault(name: string, seat: string, problem: string): void {
+    const held = this.faults.get(name) ?? new Map<string, string>()
+    held.set(seat, problem.slice(0, 300))
+    this.faults.set(name, held)
+  }
+
+  private clearFault(name: string, seat: string): void {
+    const held = this.faults.get(name)
+    if (held === undefined) return
+    held.delete(seat)
+    if (held.size === 0) this.faults.delete(name)
+  }
 
   /** Read a server's tool list again, as one of the team's seats; the host then registers them as tools. */
   async refreshTools(name: string): Promise<void> {
@@ -176,8 +214,10 @@ export class TeamMcp {
       if (seat === undefined) throw new McpError('no-seat', "the team has no member with a seat id yet: the market issues tokens to seats in this host's roster")
       const result = await this.call(server, 'tools/list', {}, seat)
       const tools = Array.isArray(result.tools) ? result.tools as Array<Record<string, unknown>> : []
+      this.endpoints.set(name, server.url)
       this.catalog.set(name, tools.filter(t => typeof t.name === 'string' && TOOL.test(t.name)).map(t => ({ name: t.name as string, ...(typeof t.description === 'string' ? { description: t.description.slice(0, 1_000) } : {}), ...(t.inputSchema !== undefined ? { inputSchema: t.inputSchema } : {}) })))
       this.problems.delete(name)
+      this.clearFault(name, seat)
     } catch (error) {
       this.catalog.delete(name)
       this.problems.set(name, String(error instanceof Error ? error.message : error).slice(0, 300))
@@ -192,13 +232,21 @@ export class TeamMcp {
   prune(): void {
     const servers = this.d.servers()
     const names = new Set(servers.map(s => s.name))
+    const forget = (name: string): void => {
+      this.catalog.delete(name); this.problems.delete(name); this.faults.delete(name); this.endpoints.delete(name)
+      for (const key of [...this.sessions.keys()]) if (key.startsWith(`${name}${SEP}`)) this.sessions.delete(key)
+    }
     for (const [name, held] of [...this.tokens.entries()]) {
       const server = servers.find(s => s.name === name)
-      if (server === undefined || new URL(server.url).origin !== held.origin) {
-        this.tokens.delete(name); this.catalog.delete(name); this.problems.delete(name)
-        for (const key of [...this.sessions.keys()]) if (key.startsWith(`${name}${SEP}`)) this.sessions.delete(key)
-      }
+      if (server === undefined || new URL(server.url).origin !== held.origin) { this.tokens.delete(name); forget(name) }
     }
+    // Sessions and the tool list belong to one endpoint: a new path or port on the same origin keeps the tokens (they are the
+    // market's, by origin) but nothing the old endpoint said.
+    for (const [name, url] of [...this.endpoints.entries()]) {
+      const server = servers.find(s => s.name === name)
+      if (server === undefined || server.url !== url) forget(name)
+    }
+    for (const name of [...this.faults.keys()]) if (!names.has(name)) this.faults.delete(name)
     for (const name of [...this.catalog.keys()]) if (!names.has(name)) this.catalog.delete(name)
     for (const key of [...this.sessions.keys()]) if (!names.has(key.split(SEP)[0] ?? '')) this.sessions.delete(key)
   }
@@ -219,6 +267,7 @@ export class TeamMcp {
     this.prune()
     const token = await this.token(server, seat)
     const key = `${server.name}${SEP}${seat}`
+    if (!this.endpoints.has(server.name)) this.endpoints.set(server.name, server.url)
     const id = this.nextId++
     const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}`, 'mcp-protocol-version': PROTOCOL }
     const session = this.sessions.get(key)
@@ -292,10 +341,13 @@ export class TeamMcp {
       const result = await this.call(server, 'tools/call', { name: tool, arguments: args }, who.seat)
       const clipped = clipResult(result)
       const isError = result.isError === true
+      this.clearFault(name, who.seat)
       this.record({ ...base, size: clipped.size, outcome: isError ? 'error' : 'ok' })
       return { ...clipped, isError }
     } catch (error) {
-      this.record({ ...base, size: 0, outcome: error instanceof McpError && (error.code === 'token-refused' || error.code === 'token-unavailable') ? error.code : 'error' })
+      const tokenFault = error instanceof McpError && (error.code === 'token-refused' || error.code === 'token-unavailable')
+      if (tokenFault) { this.setFault(name, who.seat, error.message); this.d.toolsChanged?.() }
+      this.record({ ...base, size: 0, outcome: tokenFault ? error.code as 'token-refused' | 'token-unavailable' : 'error' })
       throw error
     }
   }

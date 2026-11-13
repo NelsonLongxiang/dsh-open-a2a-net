@@ -132,3 +132,67 @@ describe('team MCP calls as the member\'s seat', () => {
     expect(team.status()[0]).toMatchObject({ state: 'unavailable', problem: expect.stringContaining('refused') })
   })
 })
+
+describe('#690 review F3–F5 negative regressions', () => {
+  const server: TeamMcpServer = { name: 'market', url: `${MARKET}/mcp`, transport: 'streamable-http' }
+  function mcp(valid: Set<string>) {
+    const calls: Array<{ url: string; method: string; session?: string }> = []
+    const transport: McpTransport = async (url, headers, body) => {
+      const req = JSON.parse(body) as { id?: number; method: string }
+      calls.push({ url, method: req.method, ...(headers['mcp-session-id'] !== undefined ? { session: headers['mcp-session-id'] } : {}) })
+      const status = valid.has((headers.authorization ?? '').replace(/^Bearer /, '')) ? 200 : 401
+      const result = req.method === 'tools/list' ? { tools: [{ name: 'list_benches' }] } : {}
+      return { status, headers: { get: (n: string) => n === 'mcp-session-id' ? `sess-${url}` : n === 'content-type' ? 'application/json' : null }, text: async () => JSON.stringify({ jsonrpc: '2.0', id: req.id, result }) }
+    }
+    return { transport, calls }
+  }
+
+  it('F5: an answer already expired when it arrives, or claiming more than the one-hour token, is not kept and nothing reaches MCP', async () => {
+    const now = 1_800_000_000_000
+    for (const expires_at of [new Date(now - 1_000).toISOString(), new Date(now + 24 * 3_600_000).toISOString()]) {
+      const m = market(req => ({ status: 200, body: { token: 'tok-x', token_type: 'Bearer', expires_at, seat: { host: req.host, seat_id: req.seat_id } } }))
+      const t = mcp(new Set(['tok-x']))
+      const team = new TeamMcp({ servers: () => [server], now: () => new Date(now).toISOString(), nowMs: () => now, catalogSeat: () => 'seat-m1', signer, tokenFetch: m.fetch as never, transport: t.transport })
+      await expect(team.callTool('market', 'list_benches', {}, { by: 's', seat: 'seat-m1' })).rejects.toMatchObject({ code: 'token-unavailable', message: expect.stringContaining('one-hour') })
+      expect(t.calls).toEqual([])
+      const seats = new SeatTokens(MARKET, { signer, now: () => now, fetch: m.fetch as never })
+      await expect(seats.tokenFor('seat-m1')).rejects.toMatchObject({ code: 'unreachable' })
+      expect(seats.status()).toEqual([])
+    }
+  })
+
+  it('F3: a seat refused at a call after the list was read makes the server not ready, with a health problem, until a refresh recovers it', async () => {
+    const m = market((req, n) => token(req, n, Date.now()))
+    const valid = new Set<string>(['tok-seat-m1-1'])
+    const t = mcp(valid)
+    const team = new TeamMcp({ servers: () => [server], now: () => new Date().toISOString(), catalogSeat: () => 'seat-m1', signer, tokenFetch: m.fetch as never, transport: t.transport })
+    await team.refreshTools('market')
+    expect(team.status()[0]).toMatchObject({ state: 'ready' })
+    await expect(team.callTool('market', 'list_benches', {}, { by: 's2', seat: 'seat-m2' })).rejects.toMatchObject({ code: 'token-refused' })
+    expect(team.status()[0]).toMatchObject({ state: 'unavailable', problem: expect.stringContaining('seat-m2'), faults: [{ seatId: 'seat-m2' }] })
+    // The market accepts seat-m2 again: the recovery pass exchanges for it and the server is ready again.
+    valid.add('tok-seat-m1-4').add('tok-seat-m1-5').add('tok-seat-m2-6')
+    await team.refreshAll()
+    expect(team.status()[0]).toMatchObject({ state: 'ready' })
+    expect(team.status()[0]).not.toHaveProperty('faults')
+  })
+
+  it('F4: a new endpoint on the same origin drops the old session and tool list; the next call starts a new session there', async () => {
+    let url = `${MARKET}/mcp`
+    const m = market((req, n) => token(req, n, Date.now()))
+    const t = mcp(new Set(['tok-seat-m1-1']))
+    const team = new TeamMcp({ servers: () => [{ ...server, url }], now: () => new Date().toISOString(), catalogSeat: () => 'seat-m1', signer, tokenFetch: m.fetch as never, transport: t.transport })
+    await team.refreshTools('market')
+    expect(team.status()[0]).toMatchObject({ state: 'ready', offered: 1 })
+    url = `${MARKET}/mcp-v2`
+    expect(team.status()[0]).toMatchObject({ state: 'unavailable', offered: 0 })
+    t.calls.length = 0
+    await team.callTool('market', 'list_benches', {}, { by: 's', seat: 'seat-m1' })
+    expect(t.calls.map(c => c.url)).toEqual([url, url, url])
+    expect(t.calls[0]).toMatchObject({ method: 'initialize' })
+    expect(t.calls[0]).not.toHaveProperty('session')
+    expect(t.calls[2]).toMatchObject({ method: 'tools/call', session: `sess-${url}` })
+    // Same origin: the token was kept (one exchange in all).
+    expect(m.seen).toHaveLength(1)
+  })
+})

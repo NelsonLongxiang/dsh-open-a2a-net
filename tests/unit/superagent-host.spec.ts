@@ -1199,6 +1199,31 @@ describe('design v5: the team is a canvas team', () => {
     } finally { void h.stop() }
   })
 
+  it('#690 F1: a refused reassignment of a running ticket changes nothing — the running member keeps it and its name', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const h = new SuperagentHost({
+      home: mkdtempSync(join(tmpdir(), 'sa-690-assign-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      canvasTeam: name => name === 'ops' ? { local: ['session-r', 'session-a', 'session-b'], remote: [] } : undefined,
+    })
+    expect(h.saveSettings({ canvas: 'ops', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    try {
+      const asked = h.request('核对一节文档') as { triggerId: string }
+      expect(routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'doc', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(h.executor.list()).toHaveLength(1) })
+      const running = h.executor.list()[0]!
+      const ticketId = running.ticketId
+      const before = h.executor.memberOfTicket(ticketId)
+      const other = running.member === 'session-a' ? 'session-b' : 'session-a'
+      h.engine.retryTicket = () => { throw new Error('notRetryable') }
+      expect(h.assignTicket(ticketId, other)).toMatchObject({ ok: false })
+      expect(h.executor.memberOfTicket(ticketId)).toEqual(before)
+      expect(h.executor.bindingOf(running.member)?.ticketId).toBe(ticketId)
+      expect(h.seatOf(ticketId)?.seat).toBe(running.member)
+    } finally { void h.stop() }
+  })
+
   it('v5 acceptance F1/F3: an upgraded team (router stored, no canvas bound) can be composed and bound; its running work stays put meanwhile', async () => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const { routeItem } = await import('../../src/superagent/host/tools.ts')

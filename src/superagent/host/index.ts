@@ -701,6 +701,8 @@ export class SuperagentHost {
     const seatId = this.named.seatIdOf(session)
     return { seat, ...(seatId !== undefined ? { seatId } : {}), ...(name !== undefined && name !== '' && name !== seat ? { name } : {}), role }
   }
+  /** The stable seat id a member's team MCP calls are made as (#690 F1): the member's own, from the roster. */
+  mcpSeatOf(member: string): string | undefined { return this.named.seatIdOf(member) }
   memberListLine(): string { return `The team's members: ${this.pool().map(id => this.memberName(id)).join('; ') || '(none)'}.` }
 
   /** A member by its session id, the first eight of it, or its name; undefined when none matches, or more than one. */
@@ -783,10 +785,15 @@ export class SuperagentHost {
     const member = this.resolveMember(value)
     if (member === undefined) return { ok: false, code: 'member', error: `no such member: ${value}. ${this.memberListLine()}` }
     const latest = ticket.assignments.at(-1)
-    this.named.assigned(ticketId)
-    if (latest?.state === 'pending') { this.executor.setMember(ticketId, member); return { ok: true, ticket_id: ticketId, member: this.memberName(member) } }
+    if (latest?.state === 'pending') { this.named.assigned(ticketId); this.executor.setMember(ticketId, member); return { ok: true, ticket_id: ticketId, member: this.memberName(member) } }
+    // A refused reassignment leaves nothing changed (#690 F1): the running member keeps the ticket, its name and its hold.
+    const before = this.executor.memberOfTicket(ticketId)
     this.executor.setMember(ticketId, member)
-    try { this.engine.retryTicket(ticketId) } catch (error) { return { ok: false, code: error instanceof UserError ? error.code : 'refused', error: `the ticket is running and its member has not reported it cannot go on: ${error instanceof Error ? error.message : String(error)}` } }
+    try { this.engine.retryTicket(ticketId) } catch (error) {
+      this.executor.restoreMember(ticketId, before)
+      return { ok: false, code: error instanceof UserError ? error.code : 'refused', error: `the ticket is running and its member has not reported it cannot go on: ${error instanceof Error ? error.message : String(error)}` }
+    }
+    this.named.assigned(ticketId)
     this.pass()
     return { ok: true, ticket_id: ticketId, member: this.memberName(member) }
   }

@@ -13,6 +13,10 @@ import { randomBytes } from 'node:crypto'
 export const SEAT_TOKEN_TAG = 'wm-seat-token/1'
 /** A token is exchanged again when less than this is left of it. */
 export const SEAT_TOKEN_REFRESH_MS = 5 * 60_000
+/** The market issues one-hour tokens (spec: expires_in 3600); an answer claiming longer than this, counted from the request, is not believed. */
+export const SEAT_TOKEN_TTL_MS = 60 * 60_000
+/** Clock difference tolerated between this host and the market when checking an answer's expiry. */
+const SKEW_MS = 60_000
 const SEAT_ID = /^[A-Za-z0-9._:-]{1,64}$/
 const TIMEOUT_MS = 15_000
 
@@ -100,9 +104,15 @@ export class SeatTokens {
     if (response.status !== 200) throw new SeatTokenError('unreachable', `the market answered HTTP ${String(response.status)} for a seat token`)
     let out: { token?: unknown; token_type?: unknown; expires_at?: unknown; expires_in?: unknown; seat?: { host?: unknown; seat_id?: unknown } }
     try { out = await response.json() as typeof out } catch { throw new SeatTokenError('unreachable', 'the market\'s seat-token answer was not JSON') }
-    const expires = typeof out.expires_at === 'string' ? Date.parse(out.expires_at) : typeof out.expires_in === 'number' ? ts + out.expires_in * 1_000 : NaN
+    const received = this.now()
+    const expires = typeof out.expires_at === 'string' ? Date.parse(out.expires_at) : typeof out.expires_in === 'number' ? received + out.expires_in * 1_000 : NaN
     if (typeof out.token !== 'string' || out.token === '' || /\s/.test(out.token) || out.token_type !== 'Bearer' || !Number.isFinite(expires) || out.seat?.seat_id !== seatId || out.seat?.host !== host) {
       throw new SeatTokenError('unreachable', 'the market\'s seat-token answer was not a token for this seat')
+    }
+    // Checked against when the answer arrived and the one-hour contract: an expired token, or one claiming to outlive it, is
+    // never kept nor sent to an MCP server.
+    if (expires <= received || expires > ts + SEAT_TOKEN_TTL_MS + SKEW_MS) {
+      throw new SeatTokenError('unreachable', `the market's seat-token answer expires ${new Date(expires).toISOString()}, outside the one-hour token it issues`)
     }
     this.held.set(seatId, { token: out.token, expiresAt: expires })
     return out.token
