@@ -76,6 +76,10 @@ const CREDENTIAL_KIND_TEXT: Record<CredentialKind, string> = { 'credential-file'
 
 /** Staffing changes (S1a): a team's confirmation card answers one of these. */
 export const STAFFING_CONFIRM = '确认执行', STAFFING_REFUSE = '不执行'
+/** Design M12: the choices on a `sender` card, for a request from a sender the team's bot list does not hold. */
+export const SENDER_TAKE = '接这一单', SENDER_TAKE_LIST = '接这一单，并把发送方加进名单', SENDER_DECLINE = '不接'
+/** M12 limits: open `sender` cards at a time, and how old a message may be to wait on one. */
+export const SENDER_CARDS_MAX = 10, SENDER_HOLD_MAX_AGE_MS = 24 * 3_600_000
 
 export class SuperagentHost {
   readonly store: JsonRepositories
@@ -190,7 +194,7 @@ export class SuperagentHost {
       logger: d.logger,
     })
     this.receipts = new A2aReceipts({ store: this.store, a2a: this.a2a, a2aOn: () => this.settingsValue.sources.a2a, now: () => this.now(), seatOf: ticketId => this.seatOf(ticketId),
-      parentOf: ticketId => this.splits.parentOf(ticketId), splitView: ticketId => this.splitView(ticketId), logger: d.logger })
+      parentOf: ticketId => this.splits.parentOf(ticketId), splitView: ticketId => this.splitView(ticketId), senderHold: triggerId => this.senderHold(triggerId), logger: d.logger })
     this.prs = new PrFollower({
       path: join(dir, 'pr-follow.json'), tickets: () => this.store.tickets.list(), engine: () => this.engine, gh: d.gh ?? defaultGh,
       allowed: () => this.settingsValue.allowed.github, paused: () => this.settingsValue.paused, logger: d.logger,
@@ -218,7 +222,7 @@ export class SuperagentHost {
     })
     this.engine = new Engine({
       repo: this.store,
-      policy: () => teamPolicy(this.settings),
+      policy: () => teamPolicy(this.settings, { taken: triggerId => this.senderChoice(triggerId) === 'taken' }),
       scope: teamScope(() => this.settingsValue),
       assessor, executor, outbox,
       // P2 light path: decided inside the intake's unit of work, before any pass can hand the message to the router.
@@ -970,6 +974,19 @@ export class SuperagentHost {
       this.d.staffingDecided?.(card.by, this, chosen === STAFFING_CONFIRM)
       return { ok: true, confirmed: chosen === STAFFING_CONFIRM }
     }
+    // Design M12: the owner takes, or not, one request from a sender the bot list does not hold.
+    if (card.source === 'sender') {
+      if (chosen === '') return { ok: false, code: 'choice', error: 'choose whether to take this request' }
+      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      if (chosen === SENDER_DECLINE) { this.pass(); return { ok: true, taken: false } }
+      const trigger = this.store.triggers.get(card.by)
+      if (chosen === SENDER_TAKE_LIST && trigger !== undefined && !this.settingsValue.bots.a2a.includes(trigger.actor.id)) {
+        const out = this.saveSettings({ bots: { ...this.settingsValue.bots, a2a: [...this.settingsValue.bots.a2a, trigger.actor.id] } }, () => true, this.d.presetOf ?? (() => undefined))
+        if (!out.ok) this.d.logger.warn('superagent: sender %s not put on the bot list: %s', trigger.actor.id, out.error)
+      }
+      const again = trigger === undefined ? { ok: false as const, code: 'unknownTrigger', error: 'the message is gone' } : this.reevaluate(card.by)
+      return { ok: true, taken: true, ...(again.ok ? { queued: again.queued } : { note: again.error }) }
+    }
     // Design tool-requests T4: a tool request is applied to the team's grants, not ticketed.
     if (card.source === 'tool') {
       this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
@@ -1237,6 +1254,37 @@ export class SuperagentHost {
     const queued = this.engine.reevaluate(triggerId)
     this.pass()
     return { ok: true, queued }
+  }
+
+  /** Design M12: the owner's choice on a message's `sender` card: waiting, taken (either way) or declined; undefined with no card. */
+  senderChoice(triggerId: string): 'hold' | 'taken' | 'declined' | undefined {
+    if (this.decisions.open().some(card => card.source === 'sender' && card.by === triggerId)) return 'hold'
+    const decided = this.decisions.lastDecided('sender', triggerId)?.decided?.text
+    if (decided === undefined) return undefined
+    return decided.startsWith(`决定：${SENDER_TAKE}`) ? 'taken' : 'declined'
+  }
+
+  /**
+   * Design M12: a message the gate refused only for its sender not being on the bot list waits on a `sender` card for the
+   * owner, within limits: one waiting card per sender, {@link SENDER_CARDS_MAX} at a time, a message at most a day old.
+   * @returns the message's state, or undefined when it is not held (refused as before).
+   */
+  senderHold(triggerId: string): 'hold' | 'taken' | 'declined' | undefined {
+    const known = this.senderChoice(triggerId)
+    if (known !== undefined) return known
+    const trigger = this.store.triggers.get(triggerId)
+    if (trigger === undefined || trigger.source !== 'a2a' || trigger.human === true || trigger.channel?.address.task === undefined) return undefined
+    if (Date.parse(this.now()) - Date.parse(trigger.at) > SENDER_HOLD_MAX_AGE_MS || this.a2a.answered(trigger.channel.address.task)) return undefined
+    const open = this.decisions.open().filter(card => card.source === 'sender')
+    if (open.length >= SENDER_CARDS_MAX || open.some(card => this.store.triggers.get(card.by)?.actor.id === trigger.actor.id)) return undefined
+    const who = trigger.actor.id
+    const out = this.decisions.propose({ source: 'sender', by: triggerId, at: this.now(),
+      question: clip(`${who} 发来一条需求，发送方不在团队名单上：接不接？`, 400),
+      reason: clip(`发送方不在团队的 A2A 名单上，团队不会自己接。需求原文：\n${trigger.text}`, 3_000),
+      spec: { level: 'P1', options: [SENDER_TAKE, SENDER_TAKE_LIST, SENDER_DECLINE], recommended: SENDER_TAKE } })
+    if (!out.ok) { this.d.logger.warn('superagent: no sender card for %s: %s', triggerId, out.error); return undefined }
+    this.d.logger.info('superagent: A2A message %s from %s waits on the owner (card %s)', triggerId, trigger.actor.id, out.id)
+    return 'hold'
   }
 
   /** Staffing changes (S1a): one confirmation card on this team for a change; its id. */
