@@ -45,6 +45,9 @@ export class SuperagentTeams {
   /** The team a session has a role in. */
   ofSession(sessionId: string): SuperagentHost | undefined { return this.all().find(team => team.roleOf(sessionId) !== undefined) }
 
+  /** A team's id ('' for the primary team), or undefined when it is not one of these. */
+  idOf(team: SuperagentHost): string | undefined { return team === this.primary ? '' : [...this.extras].find(([, t]) => t === team)?.[0] }
+
   /** The team bound to a canvas. */
   ofCanvas(canvas: string): SuperagentHost | undefined { return this.all().find(team => team.settings.canvas === canvas) }
 

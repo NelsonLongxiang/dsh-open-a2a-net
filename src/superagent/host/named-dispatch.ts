@@ -116,6 +116,12 @@ export class NamedDispatch {
   }
 
   /** A member's seat id. */
+  /** The session a seat stands for now (in the pool, not left), or undefined. */
+  memberOfSeat(seatId: string): string | undefined {
+    const row = this.data.seats[seatId]
+    return row !== undefined && row.left === undefined && this.d.pool().includes(row.member) ? row.member : undefined
+  }
+
   seatIdOf(member: string): string | undefined {
     return Object.entries(this.data.seats).find(([, row]) => row.member === member && row.left === undefined)?.[0]
   }

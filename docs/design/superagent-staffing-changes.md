@@ -117,6 +117,9 @@ It cannot read or move credentials, widen tools, or reach the owner's user.
 
 1. **S1: entry, ledger, policy and confirmation cards**, with `member.retire` and `team.rules.set`. High tier. About 1.5 days. Split on 2026-11-12 ([superagent-builder](superagent-builder.md) TB6):
    - **S1a, the core:** the executor (host-run), the ledger with parent and child entries, the policy, the confirmation cards, `source` as a field (`owner-local | market:<handle>`), and the W2 extensions. The team builder's first real source.
+     - *Built 2026-11-13* (`src/superagent/host/staffing.ts`). It carries out `team.create`, `member.add` (with a profile) and `team.rules.set` (with a scope).
+     - `team.retire`, `member.retire` and `member.retemplate` are refused as `not-yet`: retiring is not in a blueprint, and a template needs S2. They are `off` for `owner-local`.
+     - The owner's route is `/__dsh_a2a/superagent/staffing`: GET lists the ledger; POST `submit` (with `agree: true`) or `agree` needs the GUI login.
    - **S1b, the market's entry:** `staffing.sources`, Sig3, `staffingChanges`, receipts and `rosterSeq`.
 2. **S2: templates and `member.add`/`member.retemplate` on this instance**, with node identities as seats and the roster `templates` catalogue. High tier. About 2 days.
 3. **S3: `member.add` on a member host under another system user, and `team.create`/`team.retire`.** High tier. About 2 days. The separate-user precondition is gone (2026-11-12); a linked member instance is still a valid member host.
