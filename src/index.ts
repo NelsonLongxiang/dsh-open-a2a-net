@@ -2152,7 +2152,8 @@ export function apply(ctx: Context, config: Config): void {
     registerBuilderTools(ctx, id => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET, () => ({
       teams: superagentTeams!.all().map(team => ({ ref: (id => id === '' ? 'primary' : id ?? '?')(superagentTeams!.idOf(team)), settings: team.settings, revisions: team.ruleChanges.view().revisions, seatOf: (session: string) => team.named.seatIdOf(session), children: team.settings.canvas !== undefined ? canvasStore.childrenOf(team.settings.canvas) : [] })),
       sessions: joinedSessions.list().filter(id => sessionNodes.has(id)), nameOf: id => { const agent = sessionNodes.get(id); return agent === undefined ? id : nodeMetadataOf(agent).name }, presetOf: sessionPresetOf, staffing: staffing?.list() ?? [],
-    }))
+    }), { staffing: () => staffing, personMessage: id => { const agent = ctx.get('agents')?.get(SessionId(id)) as Agent | undefined; return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
+      teamRules: ref => { const team = superagentTeams!.get(ref === 'primary' ? '' : ref); return team === undefined || (ref === '' ) ? undefined : { ...(team.settings.canvas !== undefined ? { canvas: team.settings.canvas } : {}), rules: team.settings.rules, dispatch: team.settings.dispatch } } })
     // A member's turn ending is the executor's turn-end fact (PR-C1).
     ctx.on('agent/status', payload => { superagentRoleTools.sync(payload.agent as unknown as RoleAgent); if (payload.status === 'idle') superagentTeams!.ofSession(String(payload.agent.id))?.memberIdle(String(payload.agent.id)) })
     // A failed turn is retried or fails the ticket for a person (upstream); without this it read as still working.

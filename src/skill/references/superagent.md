@@ -177,7 +177,11 @@ A request whose first line is `[A2A dispatch] {json}` is read by the host, not o
 
 - **What it is.** A session the owner creates under the `superagent-builder` preset. It holds no team role.
 - **What it can do.** It reads the organisation with `superagent_org_read` and drafts rules from `superagent_rule_templates`. It may read files (`read` / `glob` / `grep`). Nothing else is allowed: no shell, no writes, no other session, no A2A.
-- **What it does with that.** It advises the owner in its own session. Blueprints, carried out through the staffing changes below, come with BS2.
+- **What it does with that.** It advises the owner in its own session.
+- **Blueprints (BS2).** It drafts a blueprint with `superagent_blueprint_propose`: a batch of the staffing changes below, with a diff it shows the owner.
+  - Only after the owner's own typed message in that session does `superagent_blueprint_apply` let the host carry it out. A blueprint that touches an existing team also waits for that team's card.
+  - `superagent_blueprint_withdraw` drops a pending blueprint.
+  - A failure is undone in reverse; the builder reports what is left and never retries by itself.
 - **What the inventory leaves out.** Never credentials, MCP servers, tool grants or blocks, bots, allow-lists, GitHub settings or file paths.
 
 ## Staffing changes (S1a)
