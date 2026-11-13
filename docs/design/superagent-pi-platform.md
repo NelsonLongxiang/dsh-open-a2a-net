@@ -98,7 +98,7 @@ cursor 制 v2 桥已运行），席位 init、publish、canvas 建链全部手�
 |---|---|---|
 | PR-A | 本设计稿 | 高档（design_pass） |
 | PR-B | host：`platforms/`＋入队 pin key＋派发第四路＋`superagent-team` 面开 CLI claim＋pi 卡片＋unit/wire。实现：席位 key 存 canvas 的 `seatKeys`（不进 `memberOwners`，那里只收限定会话 ref）；队成员里 pi 席位是带 `platform: 'pi'` 的远程成员行；卡片里的 CLI 命令名以 PR-C 落地为准 | 高档（准入语义变更） |
-| PR-C | CLI `ticket` 子命令＋扩展打包＋`pi install`＋README 安装节 | 高档（评审席可酌情降中档） |
+| PR-C | CLI `ticket` 子命令＋扩展打包＋`pi install`＋README 安装节。实现：`publish --pi-seat` 声明；`ticket` 六词走 body-bound CLI claim；扩展 `pi/extension/a2a-seat.ts` 装到 Pi 文档规定的 `~/.pi/agent/extensions/`（P6 原写 `~/.pi/extensions/`，以 Pi 1.5 文档为准），用自己的 `inbox --after` 游标；严格类型检查对照本仓 `pi-api.d.ts`（按 Pi 1.5.2 的类型声明摘取的子集） | 高档（评审席可酌情降中档） |
 
 全部 base＝`next/0.8`；正文只写 Refs；不 force-push；测试退出码挡提交。
 

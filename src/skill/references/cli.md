@@ -416,3 +416,18 @@ class instead: 0 sent, 4 gone, 5 the task already carries a different receipt
 - `node.json` holds plugin config keys (`team`, `session`, `agentName`, `apiKey`, `peers`, `originClaimUrl`, `originClaimAudiences`, `forwardDirect`, …; `dshHome` is the file form of `--home`, `host`/`port` the file form of the flags); flags win. `--host` is meant for `127.0.0.1` (default) or `0.0.0.0` — the value reaches the listener unvalidated (only `--port` is validated). The node also forces `sessionNodes: true` and `wakeJoinedOnBoot: false`, and defaults `announce: true` (an always-on node exists to be found; a file `announce` still overrides it). Defaults: `--host 127.0.0.1`, `--port 13090`, `--home ~/.a2a-net/node` (separate from the CLI's own `~/.a2a`). Bind beyond loopback only with an `apiKey`.
 - The runtime needs the tested DSH packages next to this one. In an empty folder: `npm i @nelsonlongxiang/dsh-open-a2a-net@<version>` plus the pinned set `serve` prints when one is missing (npm's `latest` tags of those packages are older and do not work), then `npx a2a-net serve --config node.json`.
 - Link it like any host: list the DSH hosts in its `peers` and add the node's URL to theirs; put CLIs and the DSH sessions they work with in a canvas team on the node (or rely on #282 S3 for canvases owned elsewhere).
+
+## Pi seats (`publish --pi-seat`, `ticket`, `pi install`)
+
+A Pi seat is a CLI identity that declares `piSeat` on its own signed card (`a2a-net publish --pi-seat`), deposited on
+the superagent team's host. Once the team's owner adds it to the team canvas (its key is pinned there), its work arrives
+in its mailbox with the ticket id as `task_id`, and it answers on the team host with signed, body-bound ops:
+
+- `a2a-net ticket read` · `ticket idle [--text T]` · `ticket error [--transient] -- <what failed>`
+- `a2a-net ticket ack|handback --trigger <trigger id> -- <text>`
+- `a2a-net ticket report --ticket <id> --state progress|waiting|ready|blocked|failed|dropped [--question Q] [--answers <trigger id>] [--pull-request <url>] -- <summary>`
+
+Refusals keep the host's code: `not-member` (not this team's seat under the pinned key), `op` (a seat has only these
+six ops: no rule changes), `untrusted-origin` (unsigned or not body-bound). `a2a-net pi install [--dir DIR] [--force]`
+copies the `a2a-seat` Pi extension (default `~/.pi/agent/extensions/`), which polls the mailbox with its own cursor and
+reports read and turn end. Installing never joins a team. Design: docs/design/superagent-pi-platform.md.

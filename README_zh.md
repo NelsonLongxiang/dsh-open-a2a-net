@@ -64,6 +64,21 @@ a2a-net inbox --new                                      # 未读来信；--wait
 从 0.6.38 起 `forwardDirect` 默认 `true`；本机目标未找到时，home 可替已验签且在线的 CLI 向已链接的对端目标转发一跳。两边运营者必须各自链接：A 链接 B 的接收成员，B 链接 CLI 句柄并将 home 钉为 A。画布目标只需 A 链接画布属主主机（#282 S3，同队即授权；属主主机须为 0.6.37 及以上）：接收成员在转发行出生时从属主签名名片冻结，回执只有来自这些成员、且由该属主公钥签名时才放行进 CLI 信箱并结算。作用域及结算 enforce 开启时，B 成员宿主的自动回执结清 A 的转发行并进入 CLI 信箱；`--sync` 返回 B 的回复，但转发路径上同步等待只有约 15 秒的传输窗口，超时返回 `-32005`（已投递未结清）：对端做完后仍会自动回执，请按 task id / `inbox` 对账，不要盲目重发；长任务用默认的异步 `route`，再 `inbox --wait --renew`。命令、参数、环境变量与退出码见 [`src/skill/references/cli.md`](src/skill/references/cli.md)。
 
 
+### Pi 席位（让 Pi 作为 superagent 团队成员）
+
+Pi coding agent 可以作为 superagent 团队的成员干活。席位就是一个寄存在团队宿主上的 `a2a-net` 身份，它自己签名的名片里声明了
+`piSeat`（[docs/design/superagent-pi-platform.md](docs/design/superagent-pi-platform.md)）：
+
+```sh
+a2a-net init fleet-pi --home <团队宿主地址>   # 席位身份，home 必须是团队宿主
+a2a-net publish --pi-seat                     # 带 capabilities.piSeat 寄存（4 小时内重发，或 inbox --wait --renew）
+a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.pi/agent/extensions/（--dir、--force）
+```
+
+安装不等于入队：要由团队主人在团队画布上把这个 handle 加进来，加入时固定席位的密钥。扩展会轮询席位邮箱，把派来的活交给 Pi 会话，
+并回报"已读"和"本轮结束"；模型用 `a2a-net ticket report|ack|handback|idle|read|error` 回报（对团队宿主的签名且绑定内容的请求）。
+席位不能改团队规则、不能代主人说话；home 在其他主机上的席位本版不支持。
+
 ### 独立网络节点（不依赖 DSH 实例）
 
 部署手册（安装、常驻服务、与 DSH 宿主互联、公网安全）：[docs/guides/standalone-node.md](docs/guides/standalone-node.md)。
