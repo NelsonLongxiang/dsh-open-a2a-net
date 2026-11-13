@@ -173,6 +173,21 @@ A request whose first line is `[A2A dispatch] {json}` is read by the host, not o
 - **`rework`** (capability `reworkReturns`, `{"of": "<returned task id>"}`) is accepted by the host at once as a new ticket, 「打回重做：<title>」. It goes on the member that last worked the returned ticket, or the `for` seat.
 - **Seats.** Each member slot has a stable `seatId`, carried in the roster. `POST /__dsh_a2a/superagent { action: 'move-seat', from, to }` moves it to the session that replaced a member.
 
+## Staffing changes (S1a)
+
+- **What it is.** The host's executor of staffing changes ([superagent-staffing-changes](../../../docs/design/superagent-staffing-changes.md), [superagent-builder](../../../docs/design/superagent-builder.md) TB3/TB4). A change is one ledger entry with ordered operations:
+  - `team.create {canvas, router}`;
+  - `member.add {team, session, profile?: {role, rules[], repo}}`;
+  - `team.rules.set {team, scope: team | dispatch | member:<seatId>, value}`.
+- **How teams are named.** A team that exists is named by its id (`primary` for the primary team). A team the same change creates is named by its canvas.
+- **Sessions.** Only existing sessions: the host starts none (S39). Any other field is refused as `not-allowed`, and retiring or templates as `not-yet`.
+- **The owner's route.** `POST /__dsh_a2a/superagent/staffing { action: 'submit', change: { id, summary?, ops }, agree?: true }` or `{ action: 'agree', id }`. It needs the GUI login. `GET` lists the ledger.
+- **What runs it.**
+  - The owner's agreement runs a change that only builds new teams.
+  - A change to a team that exists also waits for that team's confirmation card (确认执行 / 不执行).
+  - The host carries it out with the canvas and team routes' own checks.
+- **On a failure.** The host undoes the completed operations in reverse. An undo that fails leaves the entry `partial`, with a P1 card on each existing team it touched.
+
 ## For the owner
 
 The owner control route is `/__dsh_a2a/superagent`. One DSH instance can run several teams: `GET /__dsh_a2a/superagent/teams` lists them and `POST { canvas, router }` there adds one. On the control route, `teamId` in a POST body or `?teamId=` on a GET picks a team by id; without it the route means the instance's primary team. Each team has its own settings, rules, tickets and A2A address, and a session has one role across all of them. The list also has the teams linked instances advertise (a team advertises itself only while its A2A Source is on), and `POST { action: 'send', address, session, text }` there sends one a request as that session. It goes through the ordinary route, and the receiving team treats it as any A2A message.

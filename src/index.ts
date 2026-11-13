@@ -144,6 +144,8 @@ import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
 import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
+import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
+import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { guiOwnerProven, ownerOrNoLogin, touchesRules } from './superagent/host/owner-proof.ts'
 import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
@@ -2057,6 +2059,7 @@ export function apply(ctx: Context, config: Config): void {
   const followupRelay = (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected=true): 'inserted'|void => followupDelivery.deliver(agent,text,sender,localFrom,taskId,callerKey,taskExpected)
   // superagent design v4, PR-B: superagent's domain engine in this host (on by default, idle until a team is bound). The router gets
   // candidate cards in its own session (host relay, not A2A) and decides only through the superagent_* tools.
+  let staffing: StaffingExecutor | undefined
   const superagentTeams: SuperagentTeams | undefined = config.superagent === true ? new SuperagentTeams({
     home: join(home, 'a2a'), logger,
     deliverToSession: (id, text) => { const agent = sessionNodes.get(id); if (agent === undefined) return false; followupRelay(agent, text, config.team); return true },
@@ -2108,6 +2111,7 @@ export function apply(ctx: Context, config: Config): void {
     // /api/session/* answers 401 without a browser cookie, so the loopback call could never work (review of #566).
     // A session not loaded yet is skipped; the next start or pool change applies it.
     selectModel: (sessionId, pick) => selectSessionModel(sessionNodes.has(sessionId), ctx.get('sessionController' as never), sessionId, pick),
+    staffingDecided: (changeId, team, confirmed) => { const ref = staffingTeamRef(superagentTeams!, team); if (ref !== undefined) void staffing?.cardDecided(changeId, ref, confirmed) },
     bootSettled: () => bootPrewarm.settled(),
     workspaceOf: id => { const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd; return typeof cwd === 'string' ? cwd : undefined },
     hasTool: (id, name) => {
@@ -2125,6 +2129,10 @@ export function apply(ctx: Context, config: Config): void {
     warmPeerCards: () => { for (const url of peerStore.list()) void cachedCardFetch(url).catch(() => undefined) },
   }) : undefined
   teamsHandle = superagentTeams
+  // Staffing changes (S1a): the host's executor, through the canvas and team routes' own checks.
+  if (superagentTeams !== undefined) staffing = createStaffing({ path: join(home, 'a2a', 'superagent', 'staffing.json'), teams: superagentTeams, canvasStore, canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
+    sessionValid: id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, presetOf: sessionPresetOf, memberForWrite: id => canvasMemberForWrite(id),
+    teamCanvasRefusal: (canvas, member) => superagentTeams.canvasMemberRefusal(canvas, member, sessionPresetOf), revokeCanvasMember: (id, reason, name) => revokeCanvasMember(id, reason, name), logger })
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
   const superagentRoleTools = new RoleTools({
@@ -3412,7 +3420,7 @@ export function apply(ctx: Context, config: Config): void {
     registerSuperagentFaces(webServer, {
       ctx, config, superagentHost, superagentTeams, homeUrl: () => superagentHomeUrl, controlRoute, readJsonBody, recordActivity, routeTrunk,
       sessionNodes, sessionPresetOf, sessionTeamOf, joinedSessions, archivedSessionFilter, verifyOriginClaim, fetchPeerCard, peerStore, cardCache,
-      ownCanvasFingerprint, peerAdmissionLinkState, blobStore,
+      ownCanvasFingerprint, peerAdmissionLinkState, blobStore, ...(staffing !== undefined ? { staffing } : {}),
       linkRequester: (canvas: string, handle: string, home: unknown) => linkRootRequester({ store: canvasStore, deposited: h => cliDeposits.directoryRows().some(row => row.team === h), pinHome: cliHomeForAdd }, canvas, handle, home),
     })
   })

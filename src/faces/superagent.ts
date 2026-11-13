@@ -22,6 +22,7 @@ import { verifyCard } from '../card.ts'
 import { claimCovers } from '../task-auth.ts'
 import { guiOwnerProven, ownerOrNoLogin, touchesRules } from '../superagent/host/owner-proof.ts'
 import { canvasOwnerFingerprint, splitCanvasOwner } from '../canvas-id.ts'
+import type { StaffingExecutor, StaffingChange } from '../superagent/host/staffing.ts'
 
 /** What the superagent faces need from the host's closure. */
 export interface SuperagentFaceDeps {
@@ -48,6 +49,8 @@ export interface SuperagentFaceDeps {
   readonly ownCanvasFingerprint: string
   readonly peerAdmissionLinkState: (peerUrl: string) => { link: 'linked' | 'stranger'; verified: boolean }
   readonly blobStore: BlobStore
+  /** Staffing changes (S1a): the host's executor. */
+  readonly staffing?: StaffingExecutor
   /**
    * superagent-root-team S5: link a root team's identity to the team's canvas as a requester pinned to its home host, so
    * the wire admits its deliveries from that host. A requested home must be a linked host listing the identity; without
@@ -297,6 +300,34 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
       }),
     }), 'a2a: superagent models face')
     // Design M3/M5: the instance's teams, and adding one.
+    // Staffing changes (S1a): the owner's own route to the host's executor. Reading is the control route; a change or an
+    // agreement needs the owner's GUI login (a team session has a shell here, and loopback proves nothing; design D10).
+    if (d.staffing !== undefined) {
+      const staffing = d.staffing
+      ctx.effect(() => webServer.register({
+        kind: 'exact',
+        path: '/__dsh_a2a/superagent/staffing',
+        handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+          const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
+          if (req.method === 'GET') { send(200, { entries: staffing.list() }); return }
+          readJsonBody(req, res, (body) => {
+            const fields = body as { action?: unknown; change?: unknown; id?: unknown; agree?: unknown }
+            void guiOwnerProven(homeUrl(), req.headers.cookie).then(async (proven) => {
+              if (!proven) { send(403, { ok: false, code: 'owner-proof', error: '编制变更需要在已登录的 DSH 界面里操作，这个请求没有登录凭据。' }); return }
+              if (fields.action === 'submit') {
+                const change = (fields.change ?? {}) as Partial<StaffingChange>
+                // This route speaks only for the owner: the market's entry (S1b) comes with its own signature.
+                if (change.source !== undefined && change.source !== 'owner-local') { send(200, { ok: false, code: 'not-allowed', error: 'this route submits owner-local changes only' }); return }
+                const out = await staffing.submit({ id: String(change.id ?? ''), source: 'owner-local', by: { person: 'owner' }, ...(typeof change.summary === 'string' ? { summary: change.summary } : {}), ops: Array.isArray(change.ops) ? change.ops : [] } as StaffingChange)
+                if (out.ok && fields.agree === true && out.entry.state === 'awaiting') { send(200, await staffing.agree(out.entry.id, 'owner-route')); return }
+                send(200, out)
+              } else if (fields.action === 'agree') send(200, await staffing.agree(typeof fields.id === 'string' ? fields.id : '', 'owner-route'))
+              else send(200, { ok: false, error: 'action must be submit or agree' })
+            }, (error: unknown) => { send(500, { ok: false, error: String(error) }) })
+          })
+        }),
+      }), 'a2a: superagent staffing face')
+    }
     ctx.effect(() => webServer.register({
       kind: 'exact',
       path: '/__dsh_a2a/superagent/teams',
