@@ -26,7 +26,8 @@ export interface RailTabs<K extends string> {
   select(key: K, opts?: { focus?: boolean }): void
   selected(): K
   setBadge(key: K, text: string, tone?: RailTone): void
-  /** Hide a tab (data mode moves its pane to the stage); a hidden selected tab falls back to the first visible one. */
+  /** Hide a tab (data mode moves its pane to the stage); a hidden selected tab falls back to the first visible one, and
+   * gets the selection back when it shows again, unless the viewer chose another tab meanwhile. */
   setHidden(key: K, hidden: boolean): void
 }
 
@@ -93,6 +94,9 @@ export function createRailTabs<K extends string>(defs: ReadonlyArray<RailTabDef<
   const visible = (): K[] => defs.map(d => d.key).filter(k => !hidden.has(k))
   const stored = readStored()
   let current: K = defs.find(d => d.key === stored)?.key ?? defs[0]!.key
+  /** The tab the viewer last chose (or the stored one): a tab hidden at startup (团队 before its state arrives) or in
+   * data mode takes the selection back when it shows again, instead of leaving the viewer on the fallback. */
+  let wanted: K = current
 
   list.addEventListener('keydown', ev => {
     const keys = visible()
@@ -123,6 +127,7 @@ export function createRailTabs<K extends string>(defs: ReadonlyArray<RailTabDef<
     if (hidden.has(key)) return
     const changed = key !== current
     current = key
+    wanted = key
     writeStored(key)
     paint()
     if (o.focus === true) tabs.get(key)!.focus()
@@ -138,7 +143,8 @@ export function createRailTabs<K extends string>(defs: ReadonlyArray<RailTabDef<
   function setHidden(key: K, h: boolean): void {
     if (h) hidden.add(key)
     else hidden.delete(key)
-    if (hidden.has(current)) current = visible()[0] ?? defs[0]!.key
+    if (!h && key === wanted) current = key
+    else if (hidden.has(current)) current = visible()[0] ?? defs[0]!.key
     paint()
   }
 
