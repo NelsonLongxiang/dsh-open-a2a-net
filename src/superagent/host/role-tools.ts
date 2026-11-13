@@ -17,7 +17,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/role-tools
  */
 
-export type Role = 'router' | 'member' | 'observer'
+export type Role = 'router' | 'member' | 'observer' | 'builder'
 
 /** The router's tools: upstream orchestrator_route / _read / _reply / _ticket_request_status. */
 /**
@@ -29,6 +29,8 @@ export const ROUTER_PRESET = 'superagent-router'
 export const MEMBER_PRESET = 'superagent-member'
 /** A member who may also open tickets (design D15): the preset is what makes a session one. */
 export const OBSERVER_PRESET = 'superagent-observer'
+/** The team builder (组队顾问, docs/design/superagent-builder.md TB1): no team role; it reads and proposes, the owner decides. */
+export const BUILDER_PRESET = 'superagent-builder'
 
 /**
  * DSH's schedule tools, for each role's own session (owner 2026-11-10): reminders and follow-ups it keeps for itself. A target
@@ -62,8 +64,15 @@ export const MEMBER_TOOLS: readonly string[] = [...MEMBER_WORK_TOOLS, ...SCHEDUL
 /** An observer's tools: a member's, and opening a ticket (design D15). */
 export const OBSERVER_TOOLS: readonly string[] = [...MEMBER_TOOLS, 'a2a_ticket_request', 'a2a_decision_propose']
 
+/**
+ * The team builder's tools (TB2): its own inventory and the rule templates, read-only files, and its own schedules and
+ * identity. Everything else is refused at the call, whatever its preset carries: no shell, no writes, no other session, no
+ * A2A sending, no canvas or team route. Blueprints (propose / apply / withdraw) come with BS2.
+ */
+export const BUILDER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, ...SELF_TOOLS, 'read', 'glob', 'grep', 'superagent_org_read', 'superagent_rule_templates']
+
 /** The tools only a team's sessions have: a session with no role is not offered them. */
-export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS.filter(name => !SCHEDULE_TOOLS.includes(name) && !SELF_TOOLS.includes(name) && !YGL_READ_TOOLS.includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_decision_decide']
+export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS.filter(name => !SCHEDULE_TOOLS.includes(name) && !SELF_TOOLS.includes(name) && !YGL_READ_TOOLS.includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates']
 
 /**
  * Design tool-requests T6 (owner 2026-11-11: granting tools one by one was too much to operate). A member or an observer may
@@ -86,7 +95,7 @@ export function memberBoundary(role: Role, name: string): boolean {
 const TRANSPORT = new Set(['run_code'])
 
 export function roleTools(role: Role): readonly string[] {
-  return role === 'router' ? ROUTER_TOOLS : role === 'observer' ? OBSERVER_TOOLS : MEMBER_TOOLS
+  return role === 'router' ? ROUTER_TOOLS : role === 'builder' ? BUILDER_TOOLS : role === 'observer' ? OBSERVER_TOOLS : MEMBER_TOOLS
 }
 
 /** Why a schedule call would reach beyond the calling session, or undefined when it stays in it. */
@@ -115,6 +124,7 @@ export const grantClass = (role: Role): 'router' | 'member' => role === 'router'
 
 export function roleToolRefusal(role: Role, name: string, args?: unknown, granted: readonly string[] = [], blocked: readonly string[] = []): string | undefined {
   if (TRANSPORT.has(name)) return undefined
+  if (role === 'builder') return roleTools(role).includes(name) ? scheduleTargetRefusal(name, args) : `[superagent-role-tools] the team builder only reads and proposes, through ${BUILDER_TOOLS.join(', ')}; ${name} is not one of them`
   if (role !== 'router') {
     // T6: a member or an observer has everything but the boundary and what the owner blocked.
     if (blocked.includes(name) && !roleTools(role).includes(name)) return `[superagent-role-tools] the owner has blocked ${name} for this team's members`
@@ -229,7 +239,7 @@ export class RoleTools {
     const scope = scopeKeyOf(agent.ctx)
     if (scope === undefined) { this.d.logger.warn('superagent: no tool scope for %s; its tools are guarded, not hidden', id); return }
     const has = (name: string): boolean => { try { return tools.get(name, scope) !== undefined } catch { return false } }
-    if (role !== 'router') {
+    if (role === 'member' || role === 'observer') {
       // T6: a member or an observer sees everything its scope has but the boundary and the owner's blocks.
       const deny = [...new Set([...MEMBER_DENY, ...TEAM_TOOLS, ...YGL_WORK_TOOLS, ...blocked])].filter(name => (memberBoundary(role, name) || (blocked.includes(name) && !roleTools(role).includes(name))) && has(name))
       try { this.applied.set(id, { role, key, dispose: deny.length === 0 ? () => {} : tools.restrict({ deny }) }) } catch (error) { this.d.logger.warn('superagent: tools of %s not restricted: %s', id, String(error)) }

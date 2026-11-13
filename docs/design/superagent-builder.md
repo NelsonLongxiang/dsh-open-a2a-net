@@ -87,13 +87,21 @@ A blueprint is a #626 staffing change with a source of `owner-local`. It is one 
 
    This is the first half of #626 S1.
 2. **BS1, the builder preset and inventory** (mid tier): the preset, the `builder` role in the guard, `superagent_org_read`, `superagent_rule_templates` and the built-in templates. Nothing writes yet. It can be built beside S1a.
+   - *Built 2026-11-13.* The builder role goes to a session under `superagent-builder` that holds no team role.
+   - The inventory copies named fields only, so no W3 field can reach it.
+   - The templates come from the ops and market-trial teams on the test host and from a root team's children. The ops members' own intake texts were not kept, so the member templates come from the repository split and the member card's line.
 3. **BS2, blueprints** (high tier, after S1a): `superagent_blueprint_propose`, `_apply` and `_withdraw`, the D10 gate, per-team cards for existing teams, rollback, and the history line.
 4. **S1b, the market's entry** (#626 S1's second half): `staffing.sources`, Sig3, `staffingChanges`, receipts and `rosterSeq`. The market loses nothing by waiting: until then, teams are built on the node and the market claims them (#626 §8.5).
 5. **Later:** `member.add` from job templates (#626 S2), child teams across hosts in a blueprint, and retiring through the builder.
 
 Each high-tier step needs a non-self review PASS.
 
-## Points that change a boundary: for the owner's ruling
+## Points that change a boundary: ruled by the owner (2026-11-13, all four approved as written)
+
+The owner approved the four points below on 2026-11-13 (「是的 可以」), and the acceptance requirements for BS1/BS2 (「可以，按你的建议」):
+- BS1 ships in a preview first, and a real builder session runs `superagent_org_read` on a test host before BS2;
+- the rule templates are distilled from running teams;
+- BS2's acceptance includes a deliberate failure mid-blueprint on a throwaway team.
 
 1. **Agreement in a conversation causes a team to be built.** Until now, composing a canvas and binding a team were the owner's acts on the page or the control route. With BS2, the owner's typed message in the builder session lets the host do both. This is the gate the router's rule changes already use (D10), applied to staffing.
 2. **A session other than the member drafts a member's rules.** D10a says a member's rules change only on the page or by that member's own proposal. The builder adds a third way, always owner-confirmed. For a new member, the agreement is in the blueprint conversation. For an existing member, it is on that team's card.

@@ -60,7 +60,7 @@ import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedB
 import { formatReceipt, holdsRow, parseReceipt, receiptExtras, receiptTaskId, taskIdRefusal } from './receipt.ts'
 import { SuperagentHost } from './superagent/host/index.ts'
 import { registerSuperagentTools } from './superagent/host/tools.ts'
-import { RoleTools, scopeKeyOf, type RoleAgent } from './superagent/host/role-tools.ts'
+import { BUILDER_PRESET, RoleTools, scopeKeyOf, type RoleAgent } from './superagent/host/role-tools.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
@@ -144,6 +144,7 @@ import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
 import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
+import { registerBuilderTools } from './superagent/host/builder-tools.ts'
 import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { guiOwnerProven, ownerOrNoLogin, touchesRules } from './superagent/host/owner-proof.ts'
@@ -2136,7 +2137,8 @@ export function apply(ctx: Context, config: Config): void {
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
   const superagentRoleTools = new RoleTools({
-    roleOf: id => superagentTeams?.ofSession(id)?.toolRoleOf(id), grantedOf: id => superagentTeams?.ofSession(id)?.grantedTools(id) ?? [], blockedOf: id => superagentTeams?.ofSession(id)?.settings.blockedTools ?? [], onRefused: (id, role, name) => superagentTeams?.ofSession(id)?.requestTool(id, role, name),
+    // superagent-builder TB1: a session under the builder preset that holds no team role is the team builder.
+    roleOf: id => superagentTeams?.ofSession(id)?.toolRoleOf(id) ?? (superagentTeams !== undefined && sessionPresetOf(id) === BUILDER_PRESET ? 'builder' : undefined), grantedOf: id => superagentTeams?.ofSession(id)?.grantedTools(id) ?? [], blockedOf: id => superagentTeams?.ofSession(id)?.settings.blockedTools ?? [], onRefused: (id, role, name) => superagentTeams?.ofSession(id)?.requestTool(id, role, name),
     agentOf: id => ctx.get('agents')?.get(SessionId(id)) as RoleAgent | undefined,
     logger,
   })
@@ -2146,6 +2148,11 @@ export function apply(ctx: Context, config: Config): void {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
     ctx.effect(() => { superagentTeams!.start(); void ensureTeamYglHome({ logger }); return () => { void superagentTeams!.stop() } }, 'a2a: superagent engine passes')
     registerSuperagentTools(ctx, id => superagentTeams!.ofSession(id))
+    // superagent-builder BS1: the team builder's inventory and rule templates (read-only).
+    registerBuilderTools(ctx, id => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET, () => ({
+      teams: superagentTeams!.all().map(team => ({ ref: (id => id === '' ? 'primary' : id ?? '?')(superagentTeams!.idOf(team)), settings: team.settings, revisions: team.ruleChanges.view().revisions, seatOf: (session: string) => team.named.seatIdOf(session), children: team.settings.canvas !== undefined ? canvasStore.childrenOf(team.settings.canvas) : [] })),
+      sessions: joinedSessions.list().filter(id => sessionNodes.has(id)), nameOf: id => { const agent = sessionNodes.get(id); return agent === undefined ? id : nodeMetadataOf(agent).name }, presetOf: sessionPresetOf, staffing: staffing?.list() ?? [],
+    }))
     // A member's turn ending is the executor's turn-end fact (PR-C1).
     ctx.on('agent/status', payload => { superagentRoleTools.sync(payload.agent as unknown as RoleAgent); if (payload.status === 'idle') superagentTeams!.ofSession(String(payload.agent.id))?.memberIdle(String(payload.agent.id)) })
     // A failed turn is retried or fails the ticket for a person (upstream); without this it read as still working.
