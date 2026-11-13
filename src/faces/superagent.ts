@@ -187,7 +187,7 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
     }), 'a2a: superagent control route')
     // PR-C2: the two host-to-host faces. Each takes a signed, body-bound OriginClaim and judges the signer's card key against
     // the key the owner pinned: the team host's key on a member host, the member host's key on the team host.
-    const signedFace = (path: string, judge: (body: Record<string, unknown>, claim: { caller: string; key: string }) => Record<string, unknown>, label: string): void => {
+    const signedFace = (path: string, judge: (body: Record<string, unknown>, claim: { caller: string; key: string; cli: boolean }) => Record<string, unknown>, label: string, acceptCli = false): void => {
       ctx.effect(() => webServer.register({
         kind: 'exact',
         path,
@@ -203,14 +203,15 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
               const rawBody = Buffer.concat(chunks)
               let body: Record<string, unknown>
               try { body = JSON.parse(rawBody.toString('utf8')) as Record<string, unknown> } catch { send({ ok: false, error: 'not JSON' }); return }
-              const claim = await verifyOriginClaim(req, { rawBody })
+              // Pi platform P4: the team face also takes a CLI claim (a Pi seat deposited here); the member face does not.
+              const claim = await verifyOriginClaim(req, { rawBody, ...(acceptCli ? { cli: true } : {}) })
               if (!claim.ok || !claim.bound || claim.bodyBound !== true || typeof claim.card.publicKey !== 'string') {
                 recordActivity('in', path, String(req.headers['x-a2a-caller'] ?? 'unknown'), false)
                 superagentHost.noteRefusal('superagent-untrusted-origin', { caller: String(req.headers['x-a2a-caller'] ?? 'unknown'), target: path })
                 send({ ok: false, code: 'untrusted-origin', error: `a signed, body-bound OriginClaim is required (${claim.ok ? 'unbound' : claim.reason})` })
                 return
               }
-              const out = judge(body, { caller: claim.caller, key: claim.card.publicKey })
+              const out = judge(body, { caller: claim.caller, key: claim.card.publicKey, cli: claim.cli === true })
               recordActivity('in', path, claim.caller, out.ok === true)
               // A signer that is not the pinned key (an impostor sharing a handle) is refused by identity; a malformed body is not counted.
               if (out.ok !== true && ['not-signer', 'not-team', 'not-member'].includes(String(out.code))) superagentHost.noteRefusal(`superagent-${String(out.code)}`, { caller: claim.caller, target: path })
@@ -228,8 +229,8 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
     }
     signedFace('/a2a/superagent-member', (body, claim) => firstTeam(team => team.assignedWork(body.op, body.member, claim.key, body.text)), 'a2a: superagent member face')
     signedFace('/a2a/superagent-team', (body, claim) => typeof body.member === 'string' && claimCovers(body.member, claim.caller)
-      ? firstTeam(team => team.remoteEvent(body.op, body.member, claim.key, body.report))
-      : { ok: false, code: 'not-signer', error: 'the signer does not speak for that member' }, 'a2a: superagent team face')
+      ? firstTeam(team => team.remoteEvent(body.op, body.member, claim.key, body.report, claim.cli))
+      : { ok: false, code: 'not-signer', error: 'the signer does not speak for that member' }, 'a2a: superagent team face', true)
   }
 
   /** Design M8: the teams linked instances advertise on their cards; only a team whose A2A Source is on is advertised. */

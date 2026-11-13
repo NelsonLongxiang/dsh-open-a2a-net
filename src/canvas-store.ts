@@ -48,6 +48,8 @@ export interface CanvasSnapshot {
   readonly children?: Readonly<Record<string, readonly CanvasChild[]>>
   /** superagent-root-team S5: CLI identities on other hosts that send a team requests (not members), each pinned to its home in cliHome. */
   readonly requesters?: Readonly<Record<string, readonly string[]>>
+  /** superagent pi platform P2: the key pinned for a Pi seat (a CLI handle member), from its deposit card when it was added. */
+  readonly seatKeys?: Readonly<Record<string, string>>
 }
 
 /** A root team's child: another team (`<zone>/canvas/<name>@<fp8>`), the key of its owning host, and how many root tickets it takes at once. */
@@ -123,6 +125,7 @@ export class CanvasStore {
   private roots = new Set<string>()
   private children: Record<string, CanvasChild[]> = {}
   private requesters: Record<string, string[]> = {}
+  private seatKeys: Record<string, string> = {}
   private disk: string | undefined
   private readOnlyReason = ''
   private lastWriteError = ''
@@ -205,6 +208,7 @@ export class CanvasStore {
       }
       this.teams = kept.slice(0, CANVAS_TEAM_CAP)
       this.restoreRequesters(snapshot)
+      this.restoreSeatKeys(snapshot)
       if (snapshot.cliHome !== null && typeof snapshot.cliHome === 'object' && !Array.isArray(snapshot.cliHome)) {
         for (const [handle, home] of Object.entries(snapshot.cliHome)) {
           if (CLI_HANDLE_RE.test(handle) && typeof home === 'string' && validHomeOrigin(home) && this.linked(handle)) this.cliHome[handle] = home
@@ -252,6 +256,19 @@ export class CanvasStore {
     }
   }
 
+  /** Pi platform P2: pinned seat keys of CLI handles that are still members somewhere; anything else is dropped. */
+  private restoreSeatKeys(snapshot: Partial<CanvasSnapshot>): void {
+    this.seatKeys = {}
+    const raw = snapshot.seatKeys
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return
+    for (const [handle, key] of Object.entries(raw)) {
+      if (CLI_HANDLE_RE.test(handle) && typeof key === 'string' && key !== '' && key.length <= 200 && this.teams.some(t => t.members.includes(handle))) this.seatKeys[handle] = key
+    }
+  }
+
+  /** Pi platform P2: the key pinned for a Pi seat, or undefined for any other member. */
+  seatKeyOf(handle: string): string | undefined { return this.seatKeys[handle] }
+
   /** Whether some team holds the handle as a member or a requester (a pinned home lives only that long). */
   private linked(handle: string): boolean {
     return this.teams.some(t => t.members.includes(handle)) || Object.values(this.requesters).some(list => list.includes(handle))
@@ -269,6 +286,7 @@ export class CanvasStore {
       this.roots = new Set(previous.roots ?? [])
       this.children = Object.fromEntries(Object.entries(previous.children ?? {}).map(([name, list]) => [name, list.map(c => ({ ...c }))]))
       this.requesters = Object.fromEntries(Object.entries(previous.requesters ?? {}).map(([name, list]) => [name, [...list]]))
+      this.seatKeys = { ...previous.seatKeys }
       this.revision = previous.revision ?? 0
       throw error
     }
@@ -278,7 +296,7 @@ export class CanvasStore {
   }
 
   private serialize(): string {
-    return JSON.stringify({ teams: this.teams, memberOwners: this.memberOwners, suspendedMembers: this.suspended, cliHome: this.cliHome, cliHomeCleared: [...this.cliHomeCleared], roots: [...this.roots], children: this.children, requesters: this.requesters, revision: this.revision })
+    return JSON.stringify({ teams: this.teams, memberOwners: this.memberOwners, suspendedMembers: this.suspended, cliHome: this.cliHome, cliHomeCleared: [...this.cliHomeCleared], roots: [...this.roots], children: this.children, requesters: this.requesters, seatKeys: this.seatKeys, revision: this.revision })
   }
   private write(): void {
     if (this.readOnlyReason) throw Error(this.readOnlyReason)
@@ -291,7 +309,8 @@ export class CanvasStore {
       ...(this.cliHomeCleared.size ? { cliHomeCleared: [...this.cliHomeCleared] } : {}),
       ...(this.roots.size ? { roots: [...this.roots] } : {}),
       ...(Object.keys(this.children).length ? { children: Object.fromEntries(Object.entries(this.children).map(([name, list]) => [name, list.map(c => ({ ...c }))])) } : {}),
-      ...(Object.keys(this.requesters).length ? { requesters: Object.fromEntries(Object.entries(this.requesters).map(([name, list]) => [name, [...list]])) } : {}) }
+      ...(Object.keys(this.requesters).length ? { requesters: Object.fromEntries(Object.entries(this.requesters).map(([name, list]) => [name, [...list]])) } : {}),
+      ...(Object.keys(this.seatKeys).length ? { seatKeys: { ...this.seatKeys } } : {}) }
     const bytes = JSON.stringify(snapshot)
     if (this.path !== '') {
       mkdirSync(dirname(this.path), { recursive: true })
@@ -598,14 +617,19 @@ export class CanvasStore {
     if (qualified && (!options.ownerKey || !validMemberOwner(id, options.ownerKey) || this.ownerConflict(id, options.ownerKey))) return false
     const entry = this.teams.find(t => t.name === name)
     if (entry === undefined) return false
+    // Pi platform P2: a CLI handle added with a key is a Pi seat; a key already pinned is never replaced by a re-add (remove it
+    // and add it again to pin a new key).
+    const seatKey = !qualified && CLI_HANDLE_RE.test(id) && options.ownerKey !== undefined ? options.ownerKey : undefined
     if (entry.members.includes(id)) {
       if (qualified && this.memberOwners[id] === undefined) return false // Existing unknown slots require explicit confirmation, not re-add.
+      if (seatKey !== undefined && this.seatKeys[id] === undefined) { this.seatKeys[id] = seatKey; this.persist() }
       if (home !== undefined && this.cliHome[id] !== home) { this.cliHome[id] = home; this.cliHomeCleared.delete(id); this.persist() }
       return true
     }
     if (entry.members.length >= CANVAS_MEMBER_CAP) return false
     entry.members.push(id)
     if (qualified) this.memberOwners[id] = options.ownerKey!
+    if (seatKey !== undefined && this.seatKeys[id] === undefined) this.seatKeys[id] = seatKey
     if (home !== undefined) { this.cliHome[id] = home; this.cliHomeCleared.delete(id) }
     this.persist()
     return true
@@ -629,6 +653,7 @@ export class CanvasStore {
 
   private forgetUnusedHome(id: string): void {
     if (!this.linked(id)) { delete this.cliHome[id]; this.cliHomeCleared.delete(id) }
+    if (!this.teams.some(t => t.members.includes(id))) delete this.seatKeys[id]
   }
 
   /**
