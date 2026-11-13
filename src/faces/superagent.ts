@@ -23,6 +23,7 @@ import { claimCovers } from '../task-auth.ts'
 import { guiOwnerProven, ownerOrNoLogin, touchesRules } from '../superagent/host/owner-proof.ts'
 import { canvasOwnerFingerprint, splitCanvasOwner } from '../canvas-id.ts'
 import type { StaffingExecutor, StaffingChange } from '../superagent/host/staffing.ts'
+import type { SidebarSends } from '../sidebar-sends.ts'
 
 /** What the superagent faces need from the host's closure. */
 export interface SuperagentFaceDeps {
@@ -51,6 +52,8 @@ export interface SuperagentFaceDeps {
   readonly blobStore: BlobStore
   /** Staffing changes (S1a): the host's executor. */
   readonly staffing?: StaffingExecutor
+  /** The team tab's own sends to other instances and what came back for them. */
+  readonly sidebarSends?: Pick<SidebarSends, 'register' | 'of'>
   /**
    * superagent-root-team S5: link a root team's identity to the team's canvas as a requester pinned to its home host, so
    * the wire admits its deliveries from that host. A requested home must be a linked host listing the identity; without
@@ -65,7 +68,7 @@ export interface SuperagentFaceDeps {
  * @param d - what the faces need from the host.
  */
 export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceDeps): void {
-  const { ctx, config, superagentHost, superagentTeams, homeUrl, controlRoute, readJsonBody, recordActivity, routeTrunk, sessionNodes, sessionPresetOf, sessionTeamOf, joinedSessions, archivedSessionFilter, verifyOriginClaim, fetchPeerCard, peerStore, cardCache, ownCanvasFingerprint, peerAdmissionLinkState, blobStore } = d
+  const { ctx, config, superagentHost, superagentTeams, homeUrl, controlRoute, readJsonBody, recordActivity, routeTrunk, sessionNodes, sessionPresetOf, sessionTeamOf, joinedSessions, archivedSessionFilter, verifyOriginClaim, fetchPeerCard, peerStore, cardCache, ownCanvasFingerprint, peerAdmissionLinkState, blobStore, sidebarSends } = d
   {
     // superagent design v4, PR-B: the owner's workbench face of the engine (owner control route only).
     // GET: the engine state; POST: settings (router, allowed senders, Sources, pause), request (the workbench Source),
@@ -333,7 +336,13 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
       path: '/__dsh_a2a/superagent/teams',
       handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
         const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
-        if (req.method === 'GET') { send(200, { teams: [...superagentTeams.rows().map(row => ({ ...row, ...(row.canvas !== undefined ? { address: `${config.team}/canvas/${row.canvas}` } : {}) })), ...linkedTeams()] }); return }
+        if (req.method === 'GET') {
+          // ?session=<id>: also the requests that session's team tab sent to other instances, with their receipts.
+          const asked = new URL(req.url ?? '/', 'http://localhost').searchParams.get('session') ?? ''
+          send(200, { teams: [...superagentTeams.rows().map(row => ({ ...row, ...(row.canvas !== undefined ? { address: `${config.team}/canvas/${row.canvas}` } : {}) })), ...linkedTeams()],
+            ...(asked !== '' && sidebarSends !== undefined ? { sent: sidebarSends.of(asked) } : {}) })
+          return
+        }
         readJsonBody(req, res, (body) => {
           const fields = body as { canvas?: unknown; router?: unknown; action?: unknown; address?: unknown; session?: unknown; text?: unknown }
           if (fields.action === 'send') {
@@ -343,7 +352,12 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
             if (!linkedTeams().some(team => team.address === address)) { send(200, { ok: false, code: 'not-listed', error: 'that team is not on a linked instance, or it takes no A2A requests' }); return }
             if (text === '' || text.length > 20_000) { send(200, { ok: false, code: 'text', error: 'text is required, at most 20000 characters' }); return }
             if (agent === undefined) { send(200, { ok: false, code: 'not-joined', error: 'join this session to the A2A network first: a request to another instance is sent as this session' }); return }
-            void routeTrunk({ team: address, message: text, async: true }, agent, new AbortController().signal).then((out) => { send(200, { ...out, sender: sessionTeamOf(agent) }) }, (error: unknown) => { send(200, { ok: false, error: String(error) }) })
+            void routeTrunk({ team: address, message: text, async: true }, agent, new AbortController().signal).then((out) => {
+              const sender = sessionTeamOf(agent)
+              // Its receipts come back to the tab, not into the session (owner ruling 2026-11-13).
+              if (out.ok !== false && typeof out.task_id === 'string') sidebarSends?.register({ taskId: out.task_id, session: String(agent.id), sender, address, text })
+              send(200, { ...out, sender })
+            }, (error: unknown) => { send(200, { ok: false, error: String(error) }) })
             return
           }
           send(200, superagentTeams.add({ canvas: fields.canvas, router: fields.router }, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf))

@@ -50,7 +50,7 @@ import { createPlanningMenus } from './planning-menus'
 import { createNodeFlyer, mountBoardSearch } from './planning-search'
 import { applyBoardRelayout } from './planning-relayout'
 import { createDissolveGuard, mirrorRoute } from './planning-mirror'
-import { settleBoard, tidyMembers } from './planning-overlap'
+import { separateCards, settleBoard, tidyMembers } from './planning-overlap'
 import { createLayoutUndo, type LayoutSnap } from './planning-undo'
 import { createNodeList } from './planning-nodelist'
 import { cardText } from './planning-card-text'
@@ -907,6 +907,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
           deps.onNodePick?.(id)
         }
       } else {
+        separateCards(model, new Set(gesture.ids)) // first: cards put down stay, cards under them yield, so a reorder reads final spots
         dropDispatch({ root, vp, model, emitAction }, gesture, ev)
         markDirty()
       }

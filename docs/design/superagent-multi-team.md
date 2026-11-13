@@ -26,8 +26,17 @@ Today one DSH instance runs one team. `SuperagentHost` holds one settings file, 
 
 ### Sending to another instance
 
-- **M9 No new trust.** A request to another instance goes over A2A to that team's canvas address, sent as the session the tab is open in. The receiving team treats it as it treats any A2A message: an agent's, admitted only if the sender is on its bot list, and opened as a ticket only under `auto` with a matching rule. The view says so, and names the sender to add. The receipt comes back to that session.
+- **M9 No new trust.** A request to another instance goes over A2A to that team's canvas address, sent as the session the tab is open in. The receiving team treats it as it treats any A2A message: an agent's, admitted only if the sender is on its bot list, and opened as a ticket only under `auto` with a matching rule. The view says so, and names the sender to add. The receipt comes back to the tab, not into the session (owner ruling 2026-11-13: it had landed as a new message that woke the session's model). It settles the ledger like any receipt, then the host keeps it for the tab (`src/sidebar-sends.ts`, `GET …/superagent/teams?session=<id>` → `sent`), and the tab lists each request with what came back. A receipt this host's settlement judge refused is still kept, marked unverified. Anything else the team sends that session still reaches it.
 - **M10 A team's own sessions cannot send.** A router or member has no A2A route today, and the view does not give it one.
+- **M12 An unlisted sender waits for the owner (owner ruling 2026-11-13, option C).** A request from another instance that the team's bot list does not hold is no longer refused outright. Instead it waits on a decision card for the receiving team's owner (source `sender`, keyed by the message's trigger). The card offers three choices:
+  - 「接这一单」: the gate admits that one message as an explicit request (basis `listed`, authority `owner-once`), and the engine judges it again.
+  - 「接这一单，并把发送方加进名单」: the same, and the sender also goes on `bots.a2a`. Later messages then pass through the bot path: `auto` plus a matching rule.
+  - 「不接」: the sender gets the refusal receipt, saying the owner declined.
+
+  While the card waits, the sender gets an `acknowledged` receipt, so its row leaves the queue count, and the tab shows it as waiting. No new trust is added: the decision is the receiving owner's, typed by them (D10). Limits keep a stranger from filling the decision list:
+  - one waiting card per sender, and at most ten at a time;
+  - a message older than a day is not held;
+  - every other unlisted message is refused as before.
 
 ## Not doing
 

@@ -380,8 +380,9 @@ describe('context menu', () => {
     // most) — the race under test is in-flight writes + old-payload polls.
     // (The original leave+rejoin pair died with the drag-out removal.)
     const b = v.root.querySelector<HTMLElement>('.p-node[data-id="b"]')!
-    drag(v, b, { x: 600, y: 0 }, { x: 10, y: 10 }) // b joins 甲: add-member
-    drag(v, b, { x: 10, y: 10 }, { x: 30, y: 30 }) // b is a member now: reorder path, queued
+    // Dropped on a free spot in 甲 (2026-11-13: a card dropped ON another card pushes it aside, which would move a's edge).
+    drag(v, b, { x: 600, y: 0 }, { x: 200, y: -120 }) // b joins 甲: add-member
+    drag(v, b, { x: 200, y: -120 }, { x: 210, y: -110 }) // b is a member now: reorder path, queued
     expect(actions.length).toBeGreaterThanOrEqual(1)
     expect(actions.some(action => action.type === 'add-member')).toBe(true)
     // A poll arrives BEFORE either settles, carrying the old payload:

@@ -45,7 +45,7 @@ function bench(layout: { nodes: Record<string, { x: number; y: number }>; frames
   return { v, onCanvasAction, onDirty }
 }
 const apart = {
-  nodes: { a: { x: 100, y: 100 }, b: { x: 1100, y: 120 }, s: { x: 1150, y: 160 } },
+  nodes: { a: { x: 100, y: 100 }, b: { x: 1100, y: 120 }, s: { x: 1300, y: 160 } }, // cards apart too (2026-11-13: cards never overlap)
   frames: { T1: { x: 0, y: 0, w: 400, h: 220 }, T2: { x: 1000, y: 0, w: 400, h: 220 } },
 }
 const button = (v: { root: HTMLElement }, text: string) => [...v.root.querySelectorAll<HTMLButtonElement>('.p-toolbar button')].find(b => b.textContent === text)!

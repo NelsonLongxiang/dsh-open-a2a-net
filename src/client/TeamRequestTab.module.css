@@ -196,3 +196,32 @@
   flex-direction: column;
   gap: 8px;
 }
+
+.sent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sentRows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sentRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--dsh-border, #2a2a30);
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+
+.sentHead {
+  line-height: 1.4;
+}

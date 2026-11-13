@@ -77,6 +77,8 @@ export interface WireDeps {
   readonly superagentInbound: (team: string) => string | undefined
   /** superagent design v4: whether `team` is the team's A2A address (its requests take no target queue slot). */
   readonly superagentIntake: (team: string) => boolean
+  /** A receipt for a request a person sent from the team tab as `team`: kept for the tab, never steered into the session. */
+  readonly sidebarReceipt?: (team: string, message: string, caller: string, settled: boolean) => boolean
   /** Design v5 (D2): the team mailbox a route to the bound team canvas lands in; undefined for any other target. */
   readonly teamMailboxOf?: (team: string) => string | undefined
   /** Design v5 (D2): why a route straight to the team identity's handle is refused, if it is. */
@@ -847,6 +849,17 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           }
           // #139 (design §4.4): every answer this delivery gets carries the refusal.
           if (refusedSettlement !== undefined) withSettlementField(res, refusedSettlement)
+          // A request sent from the team tab is the person's: its receipt settles above and goes to the tab, not to the
+          // session it went out as (owner ruling 2026-11-13: a sidebar send must not turn into a new message that wakes it).
+          if (d.sidebarReceipt?.(mailTeam, message, caller, refusedSettlement === undefined) === true) {
+            recordActivity('in', team, caller, true)
+            const note = `received for the team tab of ${team}`
+            idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: note })
+            const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'sidebar', team, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_COMPLETED', note })
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
           // gh#45 CLI mailbox (wire face): a delivery targeting a DEPOSITED
           // CLI handle never resolves a session and never wakes — it lands
           // in the deposit's mailbox and answers delivered. Placement here
