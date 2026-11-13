@@ -93,6 +93,10 @@ export interface SuperagentHostDeps {
    * on other hosts with the key the canvas pinned and that host's base URL (empty while unknown). CLI handle slots are
    * not team members. Undefined when no canvas team has that name. Absent: no team can be bound.
    */
+  /** docs/design/superagent-pi-platform.md P1/P2: whether a CLI handle is a Pi seat deposited on this host, with the key to pin. */
+  readonly piSeat?: (handle: string) => { ok: true; key: string } | { ok: false; error: string }
+  /** docs/design/superagent-pi-platform.md P3: put a card into a Pi seat's CLI mailbox; false when its deposit is gone or re-keyed. */
+  readonly piDeliver?: (handle: string, pinnedKey: string, text: string, ticketId: string) => boolean
   readonly canvasTeam?: (name: string) => { readonly local: readonly string[]; readonly remote: readonly RemoteMember[]; /** superagent-root-team: a root's child teams. */ readonly children?: ReadonlyArray<{ readonly ref: string; readonly slots: number }> } | undefined
   /** Design v5 (D2): the host-face sender of the team's replies to requests that came through its canvas address. */
   readonly teamSend?: (args: readonly string[]) => Promise<string | undefined>

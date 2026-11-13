@@ -12,6 +12,7 @@
  *   pool, no new sessions) is PR-C.
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host
  */
+import { PI_PLATFORM, piCardText } from '../platforms/pi.ts'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
@@ -368,11 +369,28 @@ export class SuperagentHost {
     }
   }
 
+  /** Pi platform: the key each Pi seat's work was last delivered under (in memory: a seat's work does not outlive a restart). */
+  private readonly piPins = new Map<string, string>()
+
   /** PR-C2: put a card into a member's session — local by host relay, remote by a signed request to its host. */
   private async deliverToMember(member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string): Promise<boolean> {
     if (isChildTeam(member)) return await this.root.send(member, text, kind, ticketId)
     const remote = this.settings.remoteMembers.find(r => r.ref === member)
+    // A CLI handle is never a session (#685 review F2): a Pi seat removed while its ticket runs still gets the stop in its
+    // mailbox while its deposit is a Pi seat here (R6 takes effect at its next poll); anything else for it goes nowhere.
+    if (remote === undefined && CLI_HANDLE_RE.test(member)) {
+      // Only under the key pinned when its work was given: never a key the deposit holds now (a re-keyed seat gets nothing).
+      const pinned = kind === 'stop' ? this.piPins.get(member) : undefined
+      return pinned !== undefined ? this.d.piDeliver?.(member, pinned, piCardText(text, kind, ticketId), ticketId) ?? false : false
+    }
     if (remote === undefined) return this.d.deliverToSession(member, text)
+    // Pi platform P3: a Pi seat's work goes to its CLI mailbox on this host, as the Pi variant of the card.
+    if (remote.platform === PI_PLATFORM) {
+      const delivered = this.d.piDeliver?.(remote.ref, remote.key, piCardText(text, kind, ticketId), ticketId) ?? false
+      // #685 review F2: the key its work went out under, so a stop after the seat leaves the canvas still finds it (and only it).
+      if (delivered) this.piPins.set(remote.ref, remote.key)
+      return delivered
+    }
     if (this.d.signedPost === undefined || remote.url === '') return false
     const out = await this.d.signedPost(remote.url, '/a2a/superagent-member', { op: kind, member: remote.ref.replace(/@[0-9a-f]{8}$/, ''), ticket: ticketId, text })
     return out.ok === true
@@ -382,12 +400,18 @@ export class SuperagentHost {
    * PR-C2, team host side: a member host's signed report or turn end. It counts only when the signer's key is the key the
    * owner pinned for that member's ref (another instance sharing the zone and id8 has another key).
    */
-  remoteEvent(op: unknown, memberHandle: unknown, signerKey: string, report: unknown): Record<string, unknown> {
-    const entry = this.settings.remoteMembers.find(r => r.ref.replace(/@[0-9a-f]{8}$/, '') === memberHandle && r.key === signerKey)
+  remoteEvent(op: unknown, memberHandle: unknown, signerKey: string, report: unknown, cliSigned = false): Record<string, unknown> {
+    // Pi platform P4: a Pi seat speaks only through a CLI claim, and a remote member session only through a node claim; neither
+    // claim shape stands for the other kind of member.
+    const entry = this.settings.remoteMembers.find(r => r.ref.replace(/@[0-9a-f]{8}$/, '') === memberHandle && r.key === signerKey && (r.platform === PI_PLATFORM) === cliSigned)
     if (entry === undefined) return { ok: false, code: 'not-member', error: 'no remote member of this team is that session under that key' }
+    // #685 review F1: a member host vouches for what a person typed in its session; a Pi seat signs for itself, so nothing it
+    // says can stand for the owner. It has the P4 vocabulary only: no rule changes, and no person flag on a turn end.
+    const pi = entry.platform === PI_PLATFORM
+    if (pi && !['report', 'ack', 'handback', 'idle', 'read', 'error'].includes(String(op))) return { ok: false, code: 'op', error: 'a Pi seat may send report, ack, handback, idle, read or error: rule changes need the owner, whom a seat cannot speak for' }
     if (op === 'idle') {
       const turn = (report ?? {}) as Record<string, unknown>
-      this.executor.memberIdle(entry.ref, { quiet: turn.quiet !== false, text: typeof turn.text === 'string' ? clip(turn.text, 2_000) : '', ...(turn.person === true ? { person: true } : {}) })
+      this.executor.memberIdle(entry.ref, { quiet: turn.quiet !== false, text: typeof turn.text === 'string' ? clip(turn.text, 2_000) : '', ...(turn.person === true && !pi ? { person: true } : {}) })
       return { ok: true }
     }
     if (op === 'error') {
@@ -1047,7 +1071,12 @@ export class SuperagentHost {
     if (!this.teamBound()) return undefined
     const local = member.includes('/') ? this.d.localSessionOf?.(member.replace(/@[0-9a-f]{8}$/, '')) : member
     if (canvas === this.settingsValue.canvas) {
-      if (CLI_HANDLE_RE.test(member)) return `[superagent-team-canvas] ${canvas} is the superagent team's canvas: a CLI handle is a requester, not a member — it sends requests to the team's address instead`
+      // R4 as revised by the pi platform (P1): only a Pi seat deposited here joins a team canvas; any other CLI handle is a requester.
+      if (CLI_HANDLE_RE.test(member)) {
+        const seat = this.d.piSeat?.(member)
+        if (seat?.ok === true) return undefined
+        return `[superagent-team-canvas] ${canvas} is the superagent team's canvas: a CLI handle is a requester, not a member — it sends requests to the team's address instead${seat !== undefined ? ` (${seat.error})` : ''}`
+      }
       if (local === undefined || local === this.settingsValue.router) return undefined
       if (this.settingsValue.serves?.members.includes(local) === true) return `[superagent-team-canvas] ${local} serves another team host: a session has one team role`
       return presetRefusal(undefined, [local], presetOf)
