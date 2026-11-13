@@ -121,16 +121,18 @@ describe('the team host and its Pi seat', () => {
     expect(h.remoteEvent('rules-propose', 'dsh/bbbbbbbb', KEY_B, { value: {}, reason: 'x' }, false)).not.toMatchObject({ code: 'op' })
   })
 
-  it('#685 F2: a seat removed while its ticket runs gets the stop in its mailbox, never through a session', async () => {
-    const mailed: string[] = [], sent: string[] = []
+  it('#685 F2: a seat removed while its ticket runs gets the stop in its mailbox under its old pin only, never through a session', async () => {
+    // The deposit as the host sees it: delivery happens only while the deposit is still under the key given.
+    let depositKey: string | undefined = KEY_P
+    const mailed: Array<[string, string]> = [], sent: string[] = []
     let remotes: RemoteMember[] = [seat]
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const h = new SuperagentHost({
       canvasTeam: name => name === 'team' ? { local: ['session-r'], remote: remotes } : undefined,
       home: mkdtempSync(join(tmpdir(), 'sa-pi-stop-')), logger: { info: () => {}, warn: () => {} }, interval: () => () => {},
       deliverToSession: (id, text) => { sent.push(`${id}:${text}`); return true },
-      piSeat: handle => handle === SEAT ? { ok: true, key: KEY_P } : { ok: false, error: 'no' },
-      piDeliver: (_h, _k, text) => { mailed.push(text); return true },
+      piSeat: handle => handle === SEAT && depositKey !== undefined ? { ok: true, key: depositKey } : { ok: false, error: 'no' },
+      piDeliver: (_h, key, text) => { if (key !== depositKey) return false; mailed.push([key, text]); return true },
     })
     expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
     h.start()
@@ -139,16 +141,27 @@ describe('the team host and its Pi seat', () => {
     routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'T', scope: 's', reason: 'r' })
     await new Promise(r => setTimeout(r, 30))
     expect(mailed).toHaveLength(1)
-    // The owner takes the seat off the canvas: the pool changes and the running ticket is stopped on the seat.
+    // The owner takes the seat off the canvas: the pool changes, and nothing for it ever goes to a session.
     remotes = []
     expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
     await new Promise(r => setTimeout(r, 50))
     expect(sent.filter(line => line.startsWith(`${SEAT}:`))).toEqual([])
-    const deliverToMember = (h as unknown as { deliverToMember(m: string, t: string, k: string, id: string): Promise<boolean> }).deliverToMember.bind(h)
-    expect(await deliverToMember(SEAT, 'stop it', 'stop', 't-1')).toBe(true)
-    expect(mailed.at(-1)).toBe('stop it')
-    expect(await deliverToMember(SEAT, 'more', 'input', 't-1')).toBe(false)
-    expect(sent.filter(line => line.startsWith(`${SEAT}:`))).toEqual([])
+    const deliver = (h as unknown as { deliverToMember(m: string, t: string, k: string, id: string): Promise<boolean> }).deliverToMember.bind(h)
+    // Removed: the stop goes to the mailbox under the old pin; new work does not.
+    expect(await deliver(SEAT, 'stop it', 'stop', 't-1')).toBe(true)
+    expect(mailed.at(-1)).toEqual([KEY_P, 'stop it'])
+    expect(await deliver(SEAT, 'more', 'input', 't-1')).toBe(false)
+    expect(await deliver(SEAT, 'new', 'assign', 't-2')).toBe(false)
+    // Re-keyed: the deposit's new key is never used, so the stop goes nowhere.
+    depositKey = KEY_Q
+    expect(await deliver(SEAT, 'stop again', 'stop', 't-1')).toBe(false)
+    expect(mailed.some(([key]) => key === KEY_Q)).toBe(false)
+    // Lapsed: no deposit, nothing delivered.
+    depositKey = undefined
+    expect(await deliver(SEAT, 'stop again', 'stop', 't-1')).toBe(false)
+    // A handle never given work has no pin: nothing.
+    expect(await deliver('other-pi/0123456789abcdef', 'stop', 'stop', 't-1')).toBe(false)
+    expect(sent.filter(line => line.includes('/0123456789abcdef:'))).toEqual([])
     void h.stop()
   })
 

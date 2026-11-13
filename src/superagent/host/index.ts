@@ -369,6 +369,9 @@ export class SuperagentHost {
     }
   }
 
+  /** Pi platform: the key each Pi seat's work was last delivered under (in memory: a seat's work does not outlive a restart). */
+  private readonly piPins = new Map<string, string>()
+
   /** PR-C2: put a card into a member's session — local by host relay, remote by a signed request to its host. */
   private async deliverToMember(member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string): Promise<boolean> {
     if (isChildTeam(member)) return await this.root.send(member, text, kind, ticketId)
@@ -376,12 +379,18 @@ export class SuperagentHost {
     // A CLI handle is never a session (#685 review F2): a Pi seat removed while its ticket runs still gets the stop in its
     // mailbox while its deposit is a Pi seat here (R6 takes effect at its next poll); anything else for it goes nowhere.
     if (remote === undefined && CLI_HANDLE_RE.test(member)) {
-      const seat = kind === 'stop' ? this.d.piSeat?.(member) : undefined
-      return seat?.ok === true ? this.d.piDeliver?.(member, seat.key, piCardText(text, kind, ticketId), ticketId) ?? false : false
+      // Only under the key pinned when its work was given: never a key the deposit holds now (a re-keyed seat gets nothing).
+      const pinned = kind === 'stop' ? this.piPins.get(member) : undefined
+      return pinned !== undefined ? this.d.piDeliver?.(member, pinned, piCardText(text, kind, ticketId), ticketId) ?? false : false
     }
     if (remote === undefined) return this.d.deliverToSession(member, text)
     // Pi platform P3: a Pi seat's work goes to its CLI mailbox on this host, as the Pi variant of the card.
-    if (remote.platform === PI_PLATFORM) return this.d.piDeliver?.(remote.ref, remote.key, piCardText(text, kind, ticketId), ticketId) ?? false
+    if (remote.platform === PI_PLATFORM) {
+      const delivered = this.d.piDeliver?.(remote.ref, remote.key, piCardText(text, kind, ticketId), ticketId) ?? false
+      // #685 review F2: the key its work went out under, so a stop after the seat leaves the canvas still finds it (and only it).
+      if (delivered) this.piPins.set(remote.ref, remote.key)
+      return delivered
+    }
     if (this.d.signedPost === undefined || remote.url === '') return false
     const out = await this.d.signedPost(remote.url, '/a2a/superagent-member', { op: kind, member: remote.ref.replace(/@[0-9a-f]{8}$/, ''), ticket: ticketId, text })
     return out.ok === true
