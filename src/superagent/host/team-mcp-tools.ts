@@ -126,22 +126,36 @@ export class TeamMcpTools {
         const me = exec.agent === undefined ? undefined : String(exec.agent.id)
         const h = me === undefined ? undefined : this.teamOf(me)
         if (h === undefined || me === undefined) return { ok: false, code: 'not-team', error: 'team MCP tools serve only a superagent team\'s members' }
-        // An observer is a member in every other way (design D15): roleOf answers member for both.
-        if (h.roleOf(me) !== 'member') return { ok: false, code: 'not-member', error: 'team MCP tools serve only the team\'s members (the router gets none in this version)' }
-        if (h.settings.serves?.members.includes(me) === true) return { ok: false, code: 'remote-member', error: 'a member serving another team host cannot call that team\'s MCP servers yet' }
-        const ticketId = h.executor.bindingOf(me)?.ticketId
-        if (ticketId === undefined) return { ok: false, code: 'no-ticket', error: 'you have no running ticket: a member calls the team\'s MCP servers only for the ticket it works on' }
-        // F2: the caller's own team must offer this exact tool (same server, raw name, description, parameters).
-        const own = h.mcp.offered(server).find(t => mcpToolFingerprint(server, t) === fingerprint)
-        if (own === undefined) return { ok: false, code: 'not-offered', error: `your team's ${server} server does not offer this tool as registered; its tool list may have changed` }
-        // F1: the credential is the calling member's own seat, for the ticket bound to it now — never the seat another
-        // member is named for, nor the one a ticket's receipts show.
-        const named = h.executor.memberOfTicket(ticketId)?.member
-        if (named !== undefined && named !== me) return { ok: false, code: 'not-your-ticket', error: 'the ticket you run is now named for another member: the team MCP is not called for it' }
+        // #690 re-review R1: the calling authority is checked at the start and again, live, after every wait and right before
+        // anything is sent (TeamMcp calls `authority` then): the caller still a local member of this team, still bound to the
+        // same running ticket and assignment, the ticket still not named for another member, its seat unchanged, and its team
+        // still offering this exact tool. Any change refuses the call with nothing sent.
+        const binding = h.executor.bindingOf(me)
         const seat = h.mcpSeatOf(me)
+        const check = (): { code: string; error: string } | undefined => {
+          // An observer is a member in every other way (design D15): roleOf answers member for both.
+          if (h.roleOf(me) !== 'member') return { code: 'not-member', error: 'team MCP tools serve only the team\'s members (the router gets none in this version)' }
+          if (h.settings.serves?.members.includes(me) === true) return { code: 'remote-member', error: 'a member serving another team host cannot call that team\'s MCP servers yet' }
+          const now = h.executor.bindingOf(me)
+          if (binding === undefined || now === undefined) return { code: 'no-ticket', error: 'you have no running ticket: a member calls the team\'s MCP servers only for the ticket it works on' }
+          if (now.ticketId !== binding.ticketId || now.assignmentId !== binding.assignmentId || now.at !== binding.at) return { code: 'ticket-changed', error: 'the ticket you were running when you called this tool is no longer the one you run; nothing was sent' }
+          // F1: the credential is the calling member's own seat, for the ticket bound to it now — never the seat another
+          // member is named for, nor the one a ticket's receipts show.
+          const named = h.executor.memberOfTicket(binding.ticketId)?.member
+          if (named !== undefined && named !== me) return { code: 'not-your-ticket', error: 'the ticket you run is now named for another member: the team MCP is not called for it' }
+          if (h.mcpSeatOf(me) !== seat) return { code: 'seat-changed', error: 'your seat id changed while this call waited; nothing was sent' }
+          // F2: the caller's own team must offer this exact tool (same server, raw name, description, parameters).
+          if (!h.mcp.offered(server).some(t => mcpToolFingerprint(server, t) === fingerprint)) return { code: 'not-offered', error: `your team's ${server} server does not offer this tool as registered; its tool list may have changed` }
+          return undefined
+        }
+        const refused = check()
+        if (refused !== undefined) return { ok: false, ...refused }
+        const ticketId = binding!.ticketId
+        const own = h.mcp.offered(server).find(t => mcpToolFingerprint(server, t) === fingerprint)!
         const toolArgs = args !== null && typeof args === 'object' && !Array.isArray(args) ? args as Record<string, unknown> : {}
+        const authority = (): McpError | undefined => { const r = check(); return r === undefined ? undefined : new McpError('authority', `${r.code}: ${r.error}`) }
         try {
-          const out = await h.mcp.callTool(server, own.name, toolArgs, { by: me, ticketId, ...(seat !== undefined ? { seat } : {}) })
+          const out = await h.mcp.callTool(server, own.name, toolArgs, { by: me, ticketId, ...(seat !== undefined ? { seat } : {}), authority })
           return { ok: true, isError: out.isError, size: out.size, ...(out.clipped ? { clipped: true } : {}), result: out.text }
         } catch (error) {
           return error instanceof McpError ? { ok: false, code: error.code, error: error.message } : { ok: false, code: 'server', error: String(error instanceof Error ? error.message : error).slice(0, 300) }

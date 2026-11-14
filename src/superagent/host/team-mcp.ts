@@ -76,7 +76,7 @@ const TIMEOUT_MS = 30_000
 const RECORDS_KEPT = 200
 
 export class McpError extends Error {
-  constructor(readonly code: 'token-unavailable' | 'token-refused' | 'no-seat' | 'unknown-server' | 'not-allowed' | 'changed' | 'server', message: string) { super(message) }
+  constructor(readonly code: 'token-unavailable' | 'token-refused' | 'no-seat' | 'unknown-server' | 'not-allowed' | 'changed' | 'authority' | 'server', message: string) { super(message) }
 }
 
 /** The text of a streamable-HTTP answer: plain JSON, or the `data:` lines of an event stream; the message with `id`. */
@@ -118,6 +118,12 @@ export interface TeamMcpDeps {
 export interface McpToolInfo { readonly name: string; readonly description?: string; readonly inputSchema?: unknown }
 
 const SEP = '\u0000'
+
+/**
+ * The caller's authority for one call, checked live (#690 re-review R1): undefined while it holds, else the refusal. A
+ * request already sent when it stops holding is not taken back (the server may have acted); one not yet sent never goes.
+ */
+export type Guard = () => McpError | undefined
 
 /** The team's MCP side: seat tokens in memory, one session per server and seat, calls and their records. */
 export class TeamMcp {
@@ -277,11 +283,20 @@ export class TeamMcp {
     if (live === undefined || this.configOf(live) !== this.configOf(server)) throw new McpError('changed', `the team's MCP server ${server.name} was changed or removed while this call waited; nothing more was sent to it`)
   }
 
-  private async rpc(server: TeamMcpServer, method: string, params: unknown, seat: string, notify = false): Promise<Record<string, unknown>> {
+  /** The caller's live authority (#690 re-review R1): refused with nothing sent when it no longer holds. */
+  private stillAuthorized(guard: Guard | undefined): void {
+    const refused = guard?.()
+    if (refused !== undefined) throw refused
+  }
+
+  private async rpc(server: TeamMcpServer, method: string, params: unknown, seat: string, notify = false, guard?: Guard): Promise<Record<string, unknown>> {
     this.prune()
     this.stillCurrent(server)
+    this.stillAuthorized(guard)
     const token = await this.token(server, seat)
+    // After the credential wait, immediately before sending: the server and the caller's authority are both still current.
     this.stillCurrent(server)
+    this.stillAuthorized(guard)
     const key = `${server.name}${SEP}${seat}`
     if (!this.endpoints.has(server.name)) this.endpoints.set(server.name, server.url)
     const id = this.nextId++
@@ -318,20 +333,20 @@ export class TeamMcp {
     return (answer.result ?? {}) as Record<string, unknown>
   }
 
-  private async ensureSession(server: TeamMcpServer, seat: string): Promise<void> {
+  private async ensureSession(server: TeamMcpServer, seat: string, guard?: Guard): Promise<void> {
     // Prune before deciding: a session of an endpoint the owner since changed is gone first, so a new endpoint is initialized.
     this.prune()
     if (this.sessions.has(`${server.name}${SEP}${seat}`)) return
-    await this.rpc(server, 'initialize', { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: 'dsh-open-a2a-net-team-host', version: '1' } }, seat)
-    await this.rpc(server, 'notifications/initialized', undefined, seat, true)
+    await this.rpc(server, 'initialize', { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: 'dsh-open-a2a-net-team-host', version: '1' } }, seat, false, guard)
+    await this.rpc(server, 'notifications/initialized', undefined, seat, true, guard)
   }
 
   /** One request as a seat: a forgotten session starts again once; a refused token is exchanged again once. */
-  private async call(server: TeamMcpServer, method: string, params: unknown, seat: string): Promise<Record<string, unknown>> {
+  private async call(server: TeamMcpServer, method: string, params: unknown, seat: string, guard?: Guard): Promise<Record<string, unknown>> {
     for (let attempt = 0; ; attempt++) {
       try {
-        await this.ensureSession(server, seat)
-        return await this.rpc(server, method, params, seat)
+        await this.ensureSession(server, seat, guard)
+        return await this.rpc(server, method, params, seat, false, guard)
       } catch (error) {
         const again = error instanceof McpError && (error.message === 'session-expired' || error.code === 'token-refused')
         if (!again || attempt >= 1) throw error
@@ -344,7 +359,7 @@ export class TeamMcp {
   }
 
   /** M2: one tool call as the member's seat, for its running ticket; recorded without arguments or result. */
-  async callTool(name: string, tool: string, args: Record<string, unknown>, who: { by: string; seat?: string; ticketId?: string }): Promise<{ text: string; size: number; clipped: boolean; isError: boolean }> {
+  async callTool(name: string, tool: string, args: Record<string, unknown>, who: { by: string; seat?: string; ticketId?: string; authority?: Guard }): Promise<{ text: string; size: number; clipped: boolean; isError: boolean }> {
     const at = this.d.now()
     const base = { at, server: name, tool, by: who.by, ...(who.seat !== undefined ? { seatId: who.seat } : {}), ...(who.ticketId !== undefined ? { ticketId: who.ticketId } : {}) }
     let server: TeamMcpServer
@@ -358,7 +373,7 @@ export class TeamMcp {
       throw new McpError('no-seat', "you have no seat id yet: the market issues tokens to seats in this host's roster")
     }
     try {
-      const result = await this.call(server, 'tools/call', { name: tool, arguments: args }, who.seat)
+      const result = await this.call(server, 'tools/call', { name: tool, arguments: args }, who.seat, who.authority)
       const clipped = clipResult(result)
       const isError = result.isError === true
       this.clearFault(name, who.seat)
@@ -367,7 +382,7 @@ export class TeamMcp {
     } catch (error) {
       const tokenFault = error instanceof McpError && (error.code === 'token-refused' || error.code === 'token-unavailable')
       if (tokenFault) { this.setFault(name, who.seat, error.message); this.d.toolsChanged?.() }
-      this.record({ ...base, size: 0, outcome: tokenFault ? error.code as 'token-refused' | 'token-unavailable' : 'error' })
+      this.record({ ...base, size: 0, outcome: tokenFault ? error.code as 'token-refused' | 'token-unavailable' : error instanceof McpError && (error.code === 'authority' || error.code === 'changed') ? 'refused' : 'error' })
       throw error
     }
   }
