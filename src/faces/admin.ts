@@ -15,6 +15,7 @@
  *   entry module, not this file (tsc mirrors src/ under lib/).
  * @module src/faces/admin
  */
+import type { ScopeHint } from '../scope-hints.ts'
 import { isRootAction, rootAction, type CanvasRootDeps } from '../canvas-root.ts'
 import { childLabel } from '../superagent/host/root-dispatch.ts'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -126,6 +127,8 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly pruneCanvasMemberships: () => void
   // Read at use time through `d` (accessors onto index.ts's bindings).
   readonly cardCache: Map<string, CardCacheEntry>
+  /** Owner-board suggestions: peer sessions sharing a peer canvas with local sessions, declared nowhere here (scope-hints.ts). */
+  readonly scopeHints?: () => readonly ScopeHint[]
   readonly remoteRowsCache: RemoteRowsCache
   readonly legacyInboundCount: number
   readonly unboundInboundCount: number
@@ -506,6 +509,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // org (full-card canvasOrg) from the warm card cache — the
           // board renders REMOTE team frames from this. Absent until a
           // linked fetch warmed the card.
+          // Production feedback 2026-11-14: one-click suggestions for the board's team area (owner face only).
+          scopeHints: d.scopeHints?.() ?? [],
           peerOrg: peerStore.list().map(url => {
             const entry = d.cardCache.get(url)
             const card = entry?.card
