@@ -157,4 +157,63 @@ describe('#91 F3 — a2a file send / file fetch (real CLI, real host)', () => {
       await a.dispose()
     }
   }, 120_000)
+
+  it('file grants / file revoke: each CLI identity sees and revokes only its own grants on its home host', async () => {
+    const a = await bootNode({ name: 'A', session: 'mesh-grants', team: 'dsh', sessionNodes: true, port: await reservePort(), home: tmpHome() })
+    try {
+      expect((await post(`${a.baseUrl}/__dsh_a2a/join`, { id: 'session-0123456789abcdef' })).ok).not.toBe(false)
+      const identity = async (name: string, uuid: string) => {
+        const HOME = mkdtempSync(join(tmpdir(), `a2a-grants-${name}-`))
+        const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: a.baseUrl, A2A_RETRY_BASE_MS: '10' }
+        expect((await runCli(['init', name, '--uuid', uuid], env)).code).toBe(0)
+        const id = JSON.parse(readFileSync(join(HOME, 'cli.json'), 'utf8')) as { privateKeyPem: string }
+        const card = signCard({ name, session: `cli-${name}`, team: `${name}/${uuid}`, capabilities: { route: true, async: true }, expiresAt: Date.now() + 172_800_000 }, createPrivateKey(id.privateKeyPem))
+        expect((await post(`${a.baseUrl}/__dsh_a2a/cli-deposit`, { action: 'publish', card: JSON.stringify(card) })).ok).toBe(true)
+        return env
+      }
+      const ops = await identity('ops-cli', 'a1b2c3d4e5f60718')
+      const other = await identity('other-cli', '0f1e2d3c4b5a6978')
+      const work = mkdtempSync(join(tmpdir(), 'a2a-grants-files-'))
+      writeFileSync(join(work, 'chunk-01.bin'), '分块一')
+      writeFileSync(join(work, 'self.txt'), '给自己')
+      const sent = await runCli(['file', 'send', join(work, 'chunk-01.bin'), 'dsh/01234567', '--task', 'direct-image001'], ops)
+      expect(sent.code, sent.stderr).toBe(0)
+      expect((await runCli(['file', 'send', join(work, 'self.txt'), HANDLE], ops)).code).toBe(0)
+
+      const listOf = async (env: Record<string, string>) => JSON.parse((await runCli(['file', 'grants', '--json'], env)).stdout) as { ok: boolean; grants: Array<Record<string, any>>; usage: Record<string, number> }
+      const mine = await listOf(ops)
+      expect(mine.ok).toBe(true)
+      expect(mine.grants.map(g => g.name).sort()).toEqual(['chunk-01.bin', 'self.txt'])
+      expect(mine.grants.find(g => g.name === 'chunk-01.bin')).toMatchObject({ to: 'dsh/01234567', taskId: 'direct-image001', fetched: false, sha256: sha('分块一') })
+      expect(mine.usage).toMatchObject({ files: 2, maxFiles: 256, maxBytes: 1024 * 1024 * 1024 })
+      expect((await listOf(other)).grants).toEqual([])
+
+      // Adversarial: another identity cannot revoke it (answered as missing), and the grant still serves.
+      const stolen = await runCli(['file', 'revoke', sha('分块一'), 'dsh/01234567', '--json'], other)
+      expect(stolen.code).not.toBe(0)
+      expect(JSON.parse(stolen.stdout)).toMatchObject({ ok: false, code: 'not-found' })
+      expect((await listOf(ops)).grants).toHaveLength(2)
+
+      // An unsigned request is refused outright.
+      const unsigned = await globalThis.fetch(`${a.baseUrl}/a2a/blob-grants`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'list' }) })
+      expect(unsigned.status).toBe(403)
+
+      // A fetch is seen by the sender.
+      const inbox = JSON.parse((await runCli(['inbox', '--json'], ops)).stdout) as unknown
+      const rows = (Array.isArray(inbox) ? inbox : ((inbox as { mail?: unknown[] }).mail ?? [])) as Array<Record<string, unknown>>
+      const line = /\[A2A file\] v1 \S+ \S+ \S+ \S+/.exec(rows.map(r => String(r.text ?? '')).join('\n'))![0]
+      expect((await runCli(['file', 'fetch', line, '--out', mkdtempSync(join(tmpdir(), 'a2a-grants-out-'))], ops)).code).toBe(0)
+      expect((await listOf(ops)).grants.find(g => g.name === 'self.txt')).toMatchObject({ fetched: true, fetches: 1 })
+
+      // The owner revokes: the space is free at once.
+      const revoked = await runCli(['file', 'revoke', sha('分块一'), 'dsh/01234567'], ops)
+      expect(revoked.code, revoked.stderr).toBe(0)
+      expect(revoked.stdout).toContain('bytes freed')
+      const after = await listOf(ops)
+      expect(after.grants.map(g => g.name)).toEqual(['self.txt'])
+      expect(after.usage.files).toBe(1)
+    } finally {
+      await a.dispose()
+    }
+  }, 120_000)
 })

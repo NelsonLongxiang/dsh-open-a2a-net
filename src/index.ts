@@ -3953,6 +3953,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const fileTools = createFileTools({ ctx, config, blobStore, canvasMembersOf: name => canvasStore.membersOf(name).map(member => member.startsWith('session-') ? `${config.team}/${id8(member)}` : member), ownCardUrl: () => ownCardUrl, sessionTeamOf, a2aJoinGateRefusal, routeTrunk, peerFetch, originClaimHeaders })
   fileTools.registerFileSend()
   fileTools.registerFileFetch()
+  fileTools.registerFileGrants()
+  fileTools.registerFileRevoke()
 
   /**
    * The routing trunk (0.6.9): the one failover sequence behind both the
