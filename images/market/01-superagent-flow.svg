@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img">
+<defs>
+<pattern id="dot" width="25" height="25" patternUnits="userSpaceOnUse">
+<circle cx="2" cy="2" r=".8" fill="#8a9aa8" opacity=".18"/>
+</pattern>
+<marker id="arrow" markerWidth="11" markerHeight="11" refX="9" refY="5" orient="auto-start-reverse">
+<path d="M1 1 L9 5 L1 9" fill="none" stroke="#375f88" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+<rect width="1600" height="1000" fill="#fcfaf5"/>
+<rect width="1600" height="1000" fill="url(#dot)"/>
+<g font-family="'Segoe UI','Microsoft YaHei',sans-serif">
+<g font-family="'Segoe UI','Microsoft YaHei',sans-serif">
+<text x="78" y="64" font-size="20" fill="#526b80" font-weight="600">OPEN A2A NET  /  SUPERAGENT</text>
+<rect x="1195" y="33" width="325" height="44" rx="22" fill="#e8eff6" stroke="#bdcddc"/>
+<text x="1220" y="62" font-size="19" fill="#345c80" font-weight="600">OPT-IN 0.8 PREVIEW</text>
+<text x="77" y="150" font-size="48" fill="#172f49" font-weight="650">一个需求，变成团队可推进的工单</text>
+<text x="80" y="195" font-size="22" fill="#678095" font-weight="400">From one request to scoped, assigned work</text>
+<text x="80" y="923" font-size="20" fill="#617489" font-weight="400">原创手绘功能示意 · 虚构案例 · 非实际产品界面</text>
+<text x="80" y="955" font-size="17" fill="#8292a0" font-weight="400">Original illustration · Fictional example · Not a product UI capture</text>
+<text x="1460" y="948" font-size="26" fill="#647e96" font-weight="500">01</text>
+</g>
+<g transform="rotate(-0.7 232 430)">
+<path d="M87,286 Q232,283 378,288 Q389,289 386,301 L384,564 Q386,577 373,574 L90,575 Q76,574 78,562 L80,297 Q78,284 87,286Z" fill="#fff0ca" stroke="#31455a" stroke-width="2.7"/>
+<path d="M90,291 Q232,287 374,293" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
+</g>
+<text x="103" y="325" font-size="25" fill="#5c4a2a" font-weight="650">01  你提出需求</text>
+<text x="104" y="359" font-size="16" fill="#958266" font-weight="600">YOUR REQUEST</text>
+<text x="104" y="408" font-size="22" fill="#5f625e" font-weight="400">“整理一份产品调研简报”</text>
+<text x="104" y="445" font-size="22" fill="#5f625e" font-weight="400">范围：公开资料</text>
+<text x="104" y="482" font-size="22" fill="#5f625e" font-weight="400">交付：结论 + 来源</text>
+<text x="104" y="519" font-size="22" fill="#5f625e" font-weight="400">完成条件：可以复核</text>
+<path d="M400,427 Q439.5,427 479,427" fill="none" stroke="#375f88" stroke-width="3.5" stroke-linecap="round"  marker-end="url(#arrow)"/>
+<g transform="rotate(0.6 650 430)">
+<path d="M505,286 Q650,283 796,288 Q807,289 804,301 L802,564 Q804,577 791,574 L508,575 Q494,574 496,562 L498,297 Q496,284 505,286Z" fill="#e5f0fd" stroke="#31455a" stroke-width="2.7"/>
+<path d="M508,291 Q650,287 792,293" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
+</g>
+<text x="522" y="325" font-size="25" fill="#23496a" font-weight="650">02  总工判断受理</text>
+<text x="522" y="359" font-size="16" fill="#6b8ba8" font-weight="600">ROUTER ASSESSMENT</text>
+<text x="522" y="408" font-size="22" fill="#4e647b" font-weight="400">核对来源与团队规则</text>
+<text x="522" y="445" font-size="22" fill="#4e647b" font-weight="400">受理后建立有范围的工单</text>
+<text x="522" y="482" font-size="22" fill="#4e647b" font-weight="400">明确交付物与责任成员</text>
+<text x="522" y="519" font-size="22" fill="#4e647b" font-weight="400">不默认接受所有请求</text>
+<path d="M819,427 Q858.5,427 898,427" fill="none" stroke="#375f88" stroke-width="3.5" stroke-linecap="round"  marker-end="url(#arrow)"/>
+<g transform="rotate(-0.3 1214.5 430)">
+<path d="M924,286 Q1214.5,283 1506,288 Q1517,289 1514,301 L1512,564 Q1514,577 1501,574 L927,575 Q913,574 915,562 L917,297 Q915,284 924,286Z" fill="#eaf3e6" stroke="#31455a" stroke-width="2.7"/>
+<path d="M927,291 Q1214.5,287 1502,293" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
+</g>
+<text x="944" y="325" font-size="25" fill="#385b3c" font-weight="650">03  既定成员执行与汇报</text>
+<text x="944" y="359" font-size="16" fill="#789679" font-weight="600">FIXED MEMBERS · REPORTS</text>
+<g transform="rotate(-0.4 1063.5 460)">
+<path d="M954,389 Q1063.5,386 1174,391 Q1185,392 1182,404 L1180,521 Q1182,534 1169,531 L957,532 Q943,531 945,519 L947,400 Q945,387 954,389Z" fill="#ffffff" stroke="#31455a" stroke-width="2.7"/>
+<path d="M957,394 Q1063.5,390 1170,396" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
+</g>
+<g transform="rotate(0.5 1341 460)">
+<path d="M1210,389 Q1341,386 1473,391 Q1484,392 1481,404 L1479,521 Q1481,534 1468,531 L1213,532 Q1199,531 1201,519 L1203,400 Q1201,387 1210,389Z" fill="#ffffff" stroke="#31455a" stroke-width="2.7"/>
+<path d="M1213,394 Q1341,390 1469,396" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
+</g>
+<text x="968" y="425" font-size="23" fill="#314a45" font-weight="600">调研成员</text>
+<text x="968" y="462" font-size="20" fill="#61746a" font-weight="400">采集来源</text>
+<text x="968" y="493" font-size="20" fill="#61746a" font-weight="400">汇报进展与交付</text>
+<text x="1225" y="425" font-size="23" fill="#314a45" font-weight="600">需要人拍板？</text>
+<text x="1225" y="462" font-size="20" fill="#61746a" font-weight="400">提出选项与推荐项</text>
+<text x="1225" y="493" font-size="20" fill="#61746a" font-weight="400">决定回到对应工单</text>
+<path d="M1200,590 Q717.5,650 235,640" fill="none" stroke="#375f88" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="9 8" marker-end="url(#arrow)"/>
+<text x="518" y="706" font-size="24" fill="#476984" font-weight="600">你的补充、追问与决策，持续跟随同一件事</text>
+<text x="531" y="744" font-size="18" fill="#7e93a4" font-weight="400">Follow-ups and decisions stay with the ticket</text>
+<g transform="rotate(0.1 796.5 826)">
+<path d="M88,787 Q796.5,784 1506,789 Q1517,790 1514,802 L1512,855 Q1514,868 1501,865 L91,866 Q77,865 79,853 L81,798 Q79,785 88,787Z" fill="#f1f4f7" stroke="#31455a" stroke-width="2.7"/>
+<path d="M91,792 Q796.5,788 1502,794" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
+</g>
+<text x="106" y="821" font-size="22" fill="#455e74" font-weight="400">A2A 网络负责发现、路由与回执；Superagent 在其上组织需求、工单、成员与人的决策。</text>
+<text x="106" y="850" font-size="17" fill="#7b8c9d" font-weight="400">A2A connects the sessions. Superagent coordinates the work.</text>
+</g>
+</svg>
