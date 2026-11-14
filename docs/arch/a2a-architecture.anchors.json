@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "6ec54018fb1687cca918909ce90ed8a495d67da748adb09796683455228a30ac",
+    "src/index.ts": "250ed0438ef7967f52162fb69db9e2f373a0c0362ddb7f3a4b3245634312a766",
     "src/faces/admin.ts": "5078475b0f9608bb9643e90b71a76e773b97a96126cc5e39848e03712c3541fa",
     "src/canvas-store.ts": "dafeaf63aa7c285933e0ab5ddad298740715fc6d3462be8d7a580a3908350224",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",

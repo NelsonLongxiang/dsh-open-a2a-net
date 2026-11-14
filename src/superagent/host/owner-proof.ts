@@ -1,12 +1,13 @@
 /**
- * superagent: what proves the owner on a rule change made through the team page (docs/design/superagent-router-owner-asks.md, D10).
+ * Browser-owner proof for superagent page operations (decision cards C5/C8, rules D10).
  *
- * Team sessions have a shell on this machine, so a request from loopback proves nothing. The host's own GUI login does: the
- * browser holds a cookie only that login issues. The plugin cannot read how the host checks it, so it asks the host: the
- * cookie is presented to a host route that answers 401 without a login. A host with no such login proves nobody, and the
- * write is refused; a change agreed in conversation still works there.
+ * A browser login is bound to its original authority. Replaying just its Cookie header to a loopback URL rejects valid
+ * domain/forwarded-port logins. Let Host Connection admit the unchanged incoming request instead: it owns Host/Origin,
+ * cookie lifetime and credential checks. Only its browser-owner Peer may perform these operations, never an API Peer.
+ * Missing/older Connection services fail closed; no HTTP probe, API-key or unauthenticated-host fallback is used.
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/owner-proof
  */
+import type { IncomingMessage } from 'node:http'
 
 const RULE_FIELDS = ['rules', 'dispatch', 'profiles', 'prepare', 'prompts', 'extraTools', 'approvers', 'blockedTools', 'mcp'] as const
 
@@ -19,35 +20,43 @@ export function touchesRules(settings: unknown): boolean {
   return RULE_FIELDS.some(field => field in fields) || 'github' in fields || nested('allowed') || nested('sources')
 }
 
-type Probe = (url: string, init: RequestInit) => Promise<{ status: number }>
-
-/**
- * Whether a request may act as the owner on what today's control route already lets through: a live login when the host has
- * one. On a host with no login there is nothing to prove against, and the control route stands (decision cards C5).
- * @param home - this host's own base URL.
- * @param cookie - the request's Cookie header.
- * @param probe - fetch, or a stub in tests.
- * @returns whether to go on.
- */
-export async function ownerOrNoLogin(home: string | undefined, cookie: string | undefined, probe: Probe = fetch): Promise<boolean> {
-  if (home === undefined) return false
-  if ((await probe(`${home}${PROBE_PATH}`, probeInit({}))).status !== 401) return true
-  return cookie !== undefined && cookie !== '' && await guiOwnerProven(home, cookie, probe)
+/** The public Host Connection contract needed here, structurally typed for older optional host dependencies. */
+export interface BrowserOwnerConnection {
+  readonly browserPeer: { readonly id: string }
+  admit(request: Pick<IncomingMessage, 'headers'>): { readonly peer: { readonly id: string } } | { readonly rejection: 401 | 403 }
 }
-const PROBE_PATH = '/api/session/a2a-owner-proof'
-const probeInit = (headers: Record<string, string>): RequestInit => ({ method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ type: 'client-request', rpcId: 'a2a-owner-proof', method: 'session/a2a-owner-proof', payload: { args: {} } }) })
+
+export type BrowserOwnerProof = { readonly ok: true } | {
+  readonly ok: false
+  readonly status: 401 | 403 | 503
+  readonly code: 'owner-proof' | 'owner-auth-unavailable'
+  readonly error: string
+}
+
+const unavailable = (): BrowserOwnerProof => ({ ok: false, status: 503, code: 'owner-auth-unavailable', error: '当前 DSH 的浏览器主人鉴权服务不可用，未执行操作；请升级或恢复宿主鉴权服务后重试。' })
 
 /**
- * Whether `cookie` is a live login on this host.
- * @param home - this host's own base URL.
- * @param cookie - the request's Cookie header.
- * @param probe - fetch, or a stub in tests.
- * @returns true only when the host refuses the probe without the cookie and accepts it with the cookie.
+ * Verify the original request as the Host's authenticated browser owner. Never rebuild its authority, trust proxy headers
+ * independently, copy credentials to another request, or accept an API operator merely because it is authenticated.
  */
-export async function guiOwnerProven(home: string | undefined, cookie: string | undefined, probe: Probe = fetch): Promise<boolean> {
-  if (home === undefined || cookie === undefined || cookie === '') return false
-  const ask = async (headers: Record<string, string>): Promise<number> => (await probe(`${home}${PROBE_PATH}`, probeInit(headers))).status
-  if (await ask({}) !== 401) return false
-  const status = await ask({ cookie })
-  return status !== 401 && status < 500
+export function browserOwnerProof(connection: unknown, request: Pick<IncomingMessage, 'headers'>): BrowserOwnerProof {
+  try {
+    if (connection === null || typeof connection !== 'object') return unavailable()
+    const host = connection as BrowserOwnerConnection
+    if (typeof host.admit !== 'function' || typeof host.browserPeer?.id !== 'string' || host.browserPeer.id === '') return unavailable()
+    const admission = host.admit(request)
+    if (admission === null || typeof admission !== 'object') return unavailable()
+    if ('rejection' in admission) {
+      if (admission.rejection !== 401 && admission.rejection !== 403) return unavailable()
+      return { ok: false, status: admission.rejection, code: 'owner-proof', error: admission.rejection === 401
+        ? '此请求没有有效的 DSH 浏览器登录，请在当前访问地址重新登录后重试。'
+        : '此请求未通过 DSH 的 Host/Origin 来源校验，未执行操作。' }
+    }
+    if (typeof admission.peer?.id !== 'string' || admission.peer.id === '') return unavailable()
+    if (admission.peer.id !== host.browserPeer.id) return { ok: false, status: 403, code: 'owner-proof', error: '此操作只允许已登录的 DSH 浏览器主人；API 凭据不能代替浏览器主人确认。' }
+    return { ok: true }
+  } catch {
+    // A disposed/unavailable provider must not authorize the write, and its error may contain sensitive request details.
+    return unavailable()
+  }
 }
