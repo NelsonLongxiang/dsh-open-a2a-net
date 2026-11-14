@@ -34,6 +34,16 @@ import type { TeamMembershipStore } from '../team-store.ts'
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
 /** One directory row shared with listDirectoryTeams (which stays in index.ts). */
+/** The row fields a2a_teams publishes (its output schema); anything else on a row is internal. */
+const PUBLIC_TEAM_ROW_KEYS = ['team', 'memberRef', 'session', 'name', 'seatName', 'kind', 'owner', 'memberCount', 'description', 'local', 'origin', 'via', 'workspace', 'legacy', 'unreachable', 'teams'] as const
+
+/** A directory row as a2a_teams publishes it: the declared fields only. */
+export function publicTeamRow(row: DirectoryTeamRow): DirectoryTeamRow {
+  const out: Record<string, unknown> = {}
+  for (const key of PUBLIC_TEAM_ROW_KEYS) if (row[key] !== undefined) out[key] = row[key]
+  return out as DirectoryTeamRow
+}
+
 export type DirectoryTeamRow = { memberRef?: string; team: string; session: string; name: string; seatName?: string; kind?: 'canvas'; owner?: string; memberCount?: number; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; /** gh#106: the peer's last card fetch missed — this row is its kept card, not a live answer. */ unreachable?: boolean; teams?: string[]; /** Internal S5 scope hint, stripped before the tool's public output. */ canvasMembers?: readonly string[] }
 
 /** Everything the information-plane tools capture from apply(). */
@@ -321,6 +331,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
                   via: { type: 'string', description: 'The peer URL this row was discovered through (host:port), when it came from a peer card.' },
                   workspace: { type: 'string', description: 'The session\'s working directory, when shared.' },
                   legacy: { type: 'boolean', description: 'true when the publishing node advertises no roster capability (pre-roster peer).' },
+                  unreachable: { type: 'boolean', description: 'true when the peer\'s last card fetch missed: the row is its kept card, not a live answer (gh#106).' },
                   teams: { type: 'array', items: { type: 'string' }, description: 'Roster teams the node declared for this handle (card teamMemberships).' },
                 },
               },
@@ -332,7 +343,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           type: 'text',
           text: (value.teams.length === 0
             ? `No A2A teams${(value.query ?? '') === '' ? '' : ` matching "${String(args.query)}"`} are currently reachable.`
-            : value.teams.map(team => `- ${team.team}${team.local === true ? ' [this host]' : ''}${team.name === '' ? '' : ` (${team.name})`}${team.kind === 'canvas' ? ` [canvas owner=${team.owner ?? '?'} members=${String(team.memberCount ?? '?')}]` : ''}${team.description === '' ? '' : ` — ${team.description}`}${typeof team.origin === 'string' && team.origin !== '' && team.local !== true ? ` @ ${team.origin}` : ''}${typeof team.workspace === 'string' && team.workspace !== '' ? ` [${team.workspace}]` : ''}`).join('\n'))
+            : value.teams.map(team => `- ${team.team}${team.local === true ? ' [this host]' : ''}${team.unreachable === true ? ' [unreachable: last card]' : ''}${team.name === '' ? '' : ` (${team.name})`}${team.kind === 'canvas' ? ` [canvas owner=${team.owner ?? '?'} members=${String(team.memberCount ?? '?')}]` : ''}${team.description === '' ? '' : ` — ${team.description}`}${typeof team.origin === 'string' && team.origin !== '' && team.local !== true ? ` @ ${team.origin}` : ''}${typeof team.workspace === 'string' && team.workspace !== '' ? ` [${team.workspace}]` : ''}`).join('\n'))
             + (value.note === undefined ? '' : `\n${value.note}`),
         }],
       },
@@ -395,7 +406,9 @@ export function createInfoTools(deps: InfoToolsDeps) {
           note = `teamScopeInfo on: ${String(joined.size)} joined team${joined.size === 1 ? '' : 's'} on this host — ${String(hidden)} row${hidden === 1 ? '' : 's'} outside your collaboration circle withheld (${String(hiddenRemote)} remote, ${String(hiddenLocal)} local [this host] session rows; the process team, your own row, and your canvas teams always show). To widen the scope: a human composes the shared canvas team (the board drag), the owner adds the EXACT team name to teamJoinAllowlist (patterns carry no mint rights, gh#11), or the owner sets teamScopeInfo: false for the open plane`
         }
         // Canvas members are a private scope hint, not part of the tool schema.
-        teams = teams.map(({ canvasMembers: _canvasMembers, ...row }) => row)
+        // Production feedback 2026-11-14: only the fields the output schema declares leave the tool (its additionalProperties is
+        // false), so an internal or future row field can never fail the whole listing.
+        teams = teams.map(row => publicTeamRow(row))
         if (query === '') return { ok: true, query: '', teams, ...(note !== undefined ? { note } : {}) }
         const matches = (team: DirectoryTeamRow): boolean =>
           team.team.toLowerCase().includes(query) || team.name.toLowerCase().includes(query) || team.description.toLowerCase().includes(query)

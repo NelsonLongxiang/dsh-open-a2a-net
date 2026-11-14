@@ -273,7 +273,8 @@ export class A2aSource {
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(task) || `ack-${task}`.length > 80) return 'gone'
     const acked = (this.stateValue[ACKED_KEY] ?? {}) as Record<string, string>
     if (acked[task] !== undefined) return 'already'
-    const check = JSON.parse(await this.context.commands.run('a2a-net', ['admission', caller, ...(ingress === 'local' ? ['--local'] : []), '--json'])) as { admitted?: unknown; rule?: unknown }
+    // #697 review R1: the question names the task, so a link judged at its birth answers for it alone.
+    const check = JSON.parse(await this.context.commands.run('a2a-net', ['admission', caller, ...(ingress === 'local' ? ['--local'] : []), '--task', task, '--json'])) as { admitted?: unknown; rule?: unknown }
     if (check.admitted !== true || typeof check.rule !== 'string' || !LINK_RULES.has(check.rule)) return 'gone'
     try {
       await this.context.commands.run('a2a-net', ['receipt', task, '--acknowledged', '--to', caller, ...seatArgs(by), '--json', '--exit-class', '--', text])

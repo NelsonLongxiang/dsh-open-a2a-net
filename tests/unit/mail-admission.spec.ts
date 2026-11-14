@@ -69,7 +69,10 @@ describe('p1-mail-admission', () => {
 
   it('the CLI signs the same bytes the host verifies', () => {
     const cli = readFileSync(join(process.cwd(), 'cli/a2a.mjs'), 'utf8')
-    expect(cli).toContain("JSON.stringify(['a2a-admission', id.handle, caller, ingress, ts])")
+    expect(cli).toContain("['a2a-admission', id.handle, caller, ingress, ts]")
     expect(admissionQueryPayload('h', 'c', 'local', 1)).toBe(JSON.stringify(['a2a-admission', 'h', 'c', 'local', 1]))
+    // #697 review R1: a query about one task signs it too, in a domain-separated form.
+    expect(cli).toContain("['a2a-admission/2', id.handle, caller, ingress, ts, task]")
+    expect(admissionQueryPayload('h', 'c', 'wire', 1, 't-1')).toBe(JSON.stringify(['a2a-admission/2', 'h', 'c', 'wire', 1, 't-1']))
   })
 })
