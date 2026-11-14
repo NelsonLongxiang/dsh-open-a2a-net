@@ -40,6 +40,7 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 | `a2a_whoami` | 我在网络里是谁？ | 调用会话的节点 id、加入/在线状态、可路由句柄、roster + canvas 成员关系、属主的 `teamJoinAllowlist`、`teamScopeRouting` 开关，以及最近被拒的加入/退出尝试。 |
 | `a2a_teams` | 我能路由到哪些团队？ | `[this host]` 本机行加上作用域内的 peer 团队，带活动摘录。 |
 | `a2a_route` | 向一个团队发消息。 | `context_id` 续聊；`async: true` 投递不等待；在候选间故障切换。 |
+| `a2a_task_read` | 那条任务的正文到底写了什么？ | 按任务号返回投递给**本会话**的 A2A 任务原文。适用于 `a2a_tasks` 里只看得到标题（`delivered-unconsumed`）、送达时本会话正忙、正文没进对话的任务。只有当初接收的会话能读，别的会话一律按“不存在”答复；原文保留 72 小时，单条按 UTF-8 计 64 KiB，超出部分截断。读取即算已消费，结果算对端内容。对宿主从未登记过的插话投递（原文整个丢了的那种），会话空闲时还会以原任务的身份走排队补送一次；领取、撤回、状态未知都按普通排队任务对账，绝不盲目重发。 |
 | `a2a_tasks` | 哪些异步任务还欠回执？ | 三层：欠账行保留续聊 `context_id`；过 TTL 的行自动转死信（仍可结清）；结局落入有界归档；跨重启持久化。 |
 | `a2a_probe` | 舰队健康吗？ | 每个作用域内 peer 一次验签取卡（或指定一个 url）；`N reachable, M down`；失败分为 `unreachable` 与 `rejected`。 |
 | `a2a_team_join` | 把一个已加入节点声明为某团队成员。 | 白名单门禁：只有 `teamJoinAllowlist` 里的**精确名**才授权加入（空列表拒绝一切加入）。通配/前缀条目会在 `a2a_whoami` 里显示，但不授权任何加入（`[PATTERN_NO_MINT]`）；画布队伍在工作台分配，从不经此工具（`[CANVAS_TEAM]`）。尝试记录进状态面的 `registry.teamAudit`。模型工具只能为调用会话自己的节点声明（否则 `[NOT_SELF]`），且该节点须已入网（否则 `[NOT_JOINED]`）。 |
@@ -48,6 +49,8 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 | `a2a_report` | 不在网时向本宿主监督面报告。 | 唯一能在未入网时向本宿主写入的入口（只读的 `a2a_whoami` 同样不受加入门约束）：单向，落入状态面的 reports 环（保留最近 64 条），不授予在场或路由权。每会话 30s 一次、≤4000 字；同会话同文在 10 分钟内已上报 3 次后，第 4 次起按循环熔断拒绝。 |
 | `a2a_status` | 本节点此刻在做什么？ | 作用域内受跟踪 peers 及质量分、在途路由、近期路由活动，以及幂等窗口汇总（占用 + claim/replay/conflict 计数）。 |
 | `a2a_file_send` | 把文件交给一个团队，又不把文件塞进消息。 | 每个文件（每次 ≤16 个，单个 ≤64 MiB）暂存在本宿主、授权给该团队 24 小时，然后只路由**一条**带 `[A2A file]` 引用行的消息；字节从不随消息走（#91）。需本宿主已发布卡片地址（`announce`），否则拒绝发送。 |
+| `a2a_file_grants` | 查看自己的文件授权和暂存区占用。 | 列出本会话发出、仍有效的文件通道授权：sha256、大小、文件名、目标、授权与到期时间、所属任务、对方是否已取件；另给暂存区占用和上限（256 个文件、1 GiB）。 |
+| `a2a_file_revoke` | 撤回一条文件授权。 | 按 `sha256` 和 `to` 撤销本会话自己发出的一条授权；文件不再被任何授权引用时立即删除、腾出空间。别人的授权按“不存在”答复。CLI 对应 `a2a-net file grants` / `a2a-net file revoke <sha256> <to>`。 |
 | `a2a_file_fetch` | 拉取别人引用的文件。 | 带本会话身份（`caller_session`）并盖上本宿主节点的 OriginClaim 信封，从暂存它的宿主拉取一条 `[A2A file]` 引用（引用指向本宿主时直接读本机暂存）；先核对大小和 sha256，再存到 `<cwd>/a2a-inbox/`。授权只对一个会话（或整台宿主、或某画布队的成员）；拉取总会把本会话标为读过对端内容。 |
 
 ## a2a-net CLI（会话之外的调用方）
@@ -63,6 +66,22 @@ a2a-net inbox --new                                      # 未读来信；--wait
 
 从 0.6.38 起 `forwardDirect` 默认 `true`；本机目标未找到时，home 可替已验签且在线的 CLI 向已链接的对端目标转发一跳。两边运营者必须各自链接：A 链接 B 的接收成员，B 链接 CLI 句柄并将 home 钉为 A。画布目标只需 A 链接画布属主主机（#282 S3，同队即授权；属主主机须为 0.6.37 及以上）：接收成员在转发行出生时从属主签名名片冻结，回执只有来自这些成员、且由该属主公钥签名时才放行进 CLI 信箱并结算。作用域及结算 enforce 开启时，B 成员宿主的自动回执结清 A 的转发行并进入 CLI 信箱；`--sync` 返回 B 的回复，但转发路径上同步等待只有约 15 秒的传输窗口，超时返回 `-32005`（已投递未结清）：对端做完后仍会自动回执，请按 task id / `inbox` 对账，不要盲目重发；长任务用默认的异步 `route`，再 `inbox --wait --renew`。命令、参数、环境变量与退出码见 [`src/skill/references/cli.md`](src/skill/references/cli.md)。
 
+
+### Pi 席位（让 Pi 作为 superagent 团队成员）
+
+Pi coding agent 可以作为 superagent 团队的成员干活。席位就是一个寄存在团队宿主上的 `a2a-net` 身份，它自己签名的名片里声明了
+`piSeat`（[docs/design/superagent-pi-platform.md](docs/design/superagent-pi-platform.md)）：
+
+```sh
+a2a-net init fleet-pi --home <团队宿主地址>   # 席位身份，home 必须是团队宿主
+a2a-net publish --pi-seat                     # 带 capabilities.piSeat 寄存；续期会保留它（publish --renew）
+a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.pi/agent/extensions/（--dir、--force）
+```
+
+安装不等于入队：要由团队主人在团队画布上把这个 handle 加进来，加入时固定席位的密钥。续期（`publish --renew`、`inbox --wait --renew`）沿用上次显式 publish 的声明，`piSeat` 不会丢；不带 `--pi-seat` 的显式 `publish` 才会撤销它。扩展每小时续期一次，游标按席位分开保存（同一席位同时只由一个 Pi 进程消费），"本轮结束"在宿主收下之前会一直保留重发。扩展会轮询席位邮箱，把派来的活交给 Pi 会话，
+并回报"已读"和"本轮结束"；模型用 `a2a-net ticket report|ack|handback|idle|read|error` 回报（对团队宿主的签名且绑定内容的请求）。
+席位不能改团队规则、不能代主人说话；home 在其他主机上的席位本版不支持。提问就是一张决策卡：
+`ticket report --question Q --options A|B --recommended A`。席位的"本轮结束"不带文字，有变化要用 `ticket report` 主动回报。
 
 ### 独立网络节点（不依赖 DSH 实例）
 

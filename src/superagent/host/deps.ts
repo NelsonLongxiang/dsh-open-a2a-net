@@ -45,6 +45,14 @@ export interface SuperagentHostDeps {
   readonly hasTool?: (sessionId: string, name: string) => boolean
   /** Staffing changes (S1a): a team's confirmation card for a change was decided. */
   readonly staffingDecided?: (changeId: string, team: import('./index.ts').SuperagentHost, confirmed: boolean) => void
+  /** superagent-team-mcp: the HTTP exchange with a team's MCP server (fetch by default; a stub in tests). */
+  readonly mcpTransport?: import('./team-mcp.ts').McpTransport
+  /** The node's identity at the market, for seat-token exchanges signed with the node key (owner 2026-11-13). */
+  readonly seatSigner?: import('./seat-token.ts').SeatSigner
+  /** The seat-token exchange's HTTP (fetch by default; a stub in tests). */
+  readonly seatTokenFetch?: import('./seat-token.ts').SeatTokenFetch
+  /** superagent-team-mcp: a team's MCP tools changed; the plugin registers the tools members may call again. */
+  readonly mcpToolsChanged?: () => void
   /** Make the team's ygl-trees project in the team workspace (design Y1c); idempotent. */
   readonly ensureYglProject?: (name: string) => void
   readonly stageFiles?: (sessionId: string, paths: readonly string[], canvas: string) => { ok: true; files: DecisionFile[] } | { ok: false; code: string; error: string }
@@ -96,7 +104,8 @@ export interface SuperagentHostDeps {
   /** docs/design/superagent-pi-platform.md P1/P2: whether a CLI handle is a Pi seat deposited on this host, with the key to pin. */
   readonly piSeat?: (handle: string) => { ok: true; key: string } | { ok: false; error: string }
   /** docs/design/superagent-pi-platform.md P3: put a card into a Pi seat's CLI mailbox; false when its deposit is gone or re-keyed. */
-  readonly piDeliver?: (handle: string, pinnedKey: string, text: string, ticketId: string) => boolean
+  /** `run`: the mailbox row's context id (#688 R2/C1): the binding's run id for work, `stop.<run>` for a stop of that run. */
+  readonly piDeliver?: (handle: string, pinnedKey: string, text: string, ticketId: string, run?: string) => boolean
   readonly canvasTeam?: (name: string) => { readonly local: readonly string[]; readonly remote: readonly RemoteMember[]; /** superagent-root-team: a root's child teams. */ readonly children?: ReadonlyArray<{ readonly ref: string; readonly slots: number }> } | undefined
   /** Design v5 (D2): the host-face sender of the team's replies to requests that came through its canvas address. */
   readonly teamSend?: (args: readonly string[]) => Promise<string | undefined>

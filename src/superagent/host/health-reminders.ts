@@ -10,7 +10,7 @@
  */
 
 /** One health problem, as health() reports it. */
-export interface HealthProblem { readonly code: string; readonly session?: string; readonly ticketId?: string; readonly detail?: string }
+export interface HealthProblem { readonly code: string; readonly session?: string; readonly ticketId?: string; readonly detail?: string; readonly title?: string }
 
 /** How often the host looks (reliability R7: 对照上游的每小时,这里 15 分钟). */
 export const HEALTH_TICK_MS = 15 * 60_000
@@ -18,12 +18,14 @@ export const HEALTH_TICK_MS = 15 * 60_000
 export const HOLD_IGNORE_MS = 24 * 3_600_000, HOLD_OTHER_MS = 3_600_000
 
 /** The problems a reminder card is about, one key each. */
-export const problemKey = (problem: HealthProblem): string => `${problem.code}:${problem.session ?? problem.ticketId ?? ''}`
+export const problemKey = (problem: HealthProblem): string => `${problem.code}:${problem.session ?? problem.ticketId ?? problem.title ?? ''}`
 
 /** What a problem's card says, in the words the health banner already uses (no internal codes). */
 export const problemText = (problem: HealthProblem): string =>
   problem.code === 'router-not-loaded' ? `总工会话 ${problem.session ?? ''} 没有加载，需求送不到它，打开这个会话即可`
   : problem.code === 'router-turn-failed' ? `总工会话 ${problem.session ?? ''} 上一回合失败（${problem.detail ?? '未知原因'}），需求在等它判断；常见原因是模型额度用完或服务中断`
+  : problem.code === 'mcp-no-seat' ? `团队 MCP 服务器 ${problem.title ?? ''} 还用不了：团队里还没有带席位 id 的成员，市场只给名册里的席位发令牌`
+  : problem.code === 'mcp-token-unavailable' ? `团队 MCP 服务器 ${problem.title ?? ''} 换不到席位令牌，成员对它的调用会失败：${problem.detail ?? ''}`
   : problem.code === 'member-not-loaded' ? `成员会话 ${problem.session ?? ''} 没有加载，工单派不给它，打开这个会话即可`
   : problem.ticketId !== undefined ? `工单 ${problem.ticketId} 很久没有动静`
   : `问题 ${problem.code}`
