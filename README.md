@@ -302,6 +302,8 @@ Distilled from the 0.1.x–0.5.x delivery cycles by the network's research node;
 
 ## Verify
 
+Repository ownership and output locations: [repository layout](docs/guides/repository-layout.md). Keep local feedback and received files out of Git; place one-off outputs under project `tmp/<task>/`, not the root. `pnpm verify:layout` checks the index and actual root without deleting anything. `pnpm verify` owns its test temp root under project `tmp/` rather than the system temp directory.
+
 Tests are layered by depth (contract: `docs/testing-layers.md`): each layer
 has its own directory and script, so iteration can target one depth.
 
