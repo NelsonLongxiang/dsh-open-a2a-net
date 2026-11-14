@@ -209,6 +209,8 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 
 ## 验证
 
+目录职责与产物去向见[仓库目录规范](docs/guides/repository-layout.md)。本机反馈和收件不进 Git；一次性产物放项目 `tmp/<任务标识>/`，不落根目录。`pnpm verify:layout` 只读检查索引与真实根目录，不执行删除；`pnpm verify` 的测试临时根分配在项目内，而非系统临时区。
+
 测试按深度分层（契约见 `docs/testing-layers.md`）：每层独立目录 + 独立脚本，可按层迭代。
 
 ```sh

@@ -7,7 +7,7 @@ export default defineConfig({
   test: {
     // A plugin instance in a test makes the superagent team's ygl-trees workspace and projects (ygl-home.ts); without this it
     // would write them into the developer's real ~/.ygl-trees-superagent.
-    env: { SUPERAGENT_YGL_HOME: mkdtempSync(join(tmpdir(), 'a2a-test-ygl-')) },
+    env: { SUPERAGENT_YGL_HOME: process.env.A2A_TEST_YGL_HOME ?? mkdtempSync(join(tmpdir(), 'a2a-test-ygl-')) },
     // jsdom is requested per-file through @vitest-environment docblocks.
     server: {
       deps: {
@@ -18,6 +18,8 @@ export default defineConfig({
       },
     },
     exclude: [
+      // Node's built-in test runner owns the filesystem/CLI layout checks.
+      'tests/repository-layout.test.mjs',
       // nexus-stage carries its own suite, consumed by the root gate via
       // `npm --prefix nexus-stage run test` — never double-scan it here.
       '**/nexus-stage/**',
