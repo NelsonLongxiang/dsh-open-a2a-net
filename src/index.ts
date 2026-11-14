@@ -151,6 +151,8 @@ import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
 import { guiOwnerProven, ownerOrNoLogin, touchesRules } from './superagent/host/owner-proof.ts'
 import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
+import { redeliverLost, TaskBodies } from './task-bodies.ts'
+import { registerTaskRead } from './tools/task-read.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerFileFaces } from './faces/files.ts'
@@ -693,6 +695,8 @@ export function apply(ctx: Context, config: Config): void {
   const canvasStore = new CanvasStore(join(home, 'a2a', 'canvas.json'), { legacyBareMembers: config.canvasLegacyBareMembers !== false, ownPublicKey: encodePublicKey(createPublicKey(nodePrivateKey)) })
   // #91 file channel: the sender host's blob store (docs/design/file-channel.md).
   const blobStore = new BlobStore(join(home, 'a2a'))
+  // Inbound session deliveries' text (market request 2026-11-14): a2a_task_read and the idle redelivery read it.
+  const taskBodies = new TaskBodies(join(home, 'a2a', 'task-bodies.json'))
   // Spatial presentation state for the full-page stage (contract v2).
   const layoutStore = new LayoutStore(join(home, 'a2a', 'canvas-layout.json'))
 
@@ -2511,6 +2515,14 @@ export function apply(ctx: Context, config: Config): void {
       const matches=reminderAgents().filter(a=>sessionTeamOf(a)===row.sender!.id);return matches.length===1?matches[0]:undefined
     },
     followup:(agent:ReminderAgent,text:string)=>followupRelay(agent as Agent,text,config.team),
+    // A delivery whose steer was never consumed: its original text, once, as the original sender's content (it taints).
+    // #693 review F1/F2: only a delivery the ledger never tracked (a lost steer), as a queued delivery OF THE ORIGINAL TASK,
+    // so its reservation, claim, withdrawal and an unknown outcome follow the ordinary correspondence.
+    redeliver:(agent:ReminderAgent,row:TaskRecord)=>redeliverLost({
+      deliveryFor:taskId=>taskLedger.deliveryFor(taskId),bodies:taskBodies,
+      relay:(text,from,taskId)=>{followupRelay(agent as Agent,text,from,undefined,taskId,undefined,true)},
+      warn:(taskId,error)=>logger.warn('a2a: redelivery of %s not admitted: %s',taskId,String(error)),
+    },String(agent.id),row.taskId),
     warn:code=>logger.warn('a2a: idle reconciliation reminder failed (%s)',code),
   })
   const requestReminderScan = ():void => {queueMicrotask(()=>idleReminders.scan())}
@@ -2639,6 +2651,12 @@ export function apply(ctx: Context, config: Config): void {
    * marker instead of a (false) completion.
    * @param taskId - the correlation key the steered receipt header carries.
    */
+  /** Keep an admitted session delivery's text for its receiver (src/task-bodies.ts); a receipt is settlement traffic, not a task. */
+  function keepTaskBody(taskId: string | undefined, target: Agent, from: string, message: string): void {
+    if (taskId === undefined || taskId === '' || parseReceipt(message) !== null) return
+    try { taskBodies.keep(taskId, String(target.id), from === '' ? 'unknown' : from, message) } catch (error) { logger.warn('a2a: task body of %s not kept: %s', taskId, String(error)) }
+  }
+
   async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number,acceptance?:'inserted'|void) => void, callerKey?: string): Promise<
     { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; status?: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; localMiss?: true }
   > {
@@ -2718,6 +2736,8 @@ export function apply(ctx: Context, config: Config): void {
       const text = `${headerLine}\n\n${message}`
       try {
         const floor = sessionEventsOf(agent).length
+        // #693 review F3: the one seam every admitted session delivery passes (wire async and sync, same-host sync).
+        keepTaskBody(taskId, agent, caller, message)
         const acceptance=followupRelay(agent, text, caller === '' ? undefined : caller, localFrom, taskId, callerKey, onSteered!==undefined)
         onSteered?.(agent, floor,acceptance)
         if(acceptance==='inserted'){removeFinalWaiter(String(agent.id),waiter);resolve({ok:true,reply:ACCEPTANCE_INSERTED_NOTE,acceptance,placeholder:true});return}
@@ -3176,6 +3196,7 @@ export function apply(ctx: Context, config: Config): void {
       logger,
       config,
       cliDeposits,
+      keepTaskBody,
       canvasStore, canvasMemberForWrite,
       teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
       teamCanvasBound: (canvas: string) => superagentTeams?.ofCanvas(canvas) !== undefined,
@@ -3955,6 +3976,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   fileTools.registerFileFetch()
   fileTools.registerFileGrants()
   fileTools.registerFileRevoke()
+  // Market request 2026-11-14: the receiving session reads an inbound task's original text (src/tools/task-read.ts).
+  registerTaskRead({ ctx, taskBodies, markConsumed: taskId => taskLedger.markConsumed(taskId, true) })
 
   /**
    * The routing trunk (0.6.9): the one failover sequence behind both the
@@ -4358,6 +4381,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
         // #114 S5: the consumption search starts at the pre-steer log length.
         const steerFloor = sessionEventsOf(target).length
+        keepTaskBody(taskId, target, callerSession ?? session, message)
         const acceptance=followupRelay(target, `[A2A direct] (task ${taskId}) 未验证（in-process） ${sanitizeFromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam, originAgentId, taskId, undefined, parseReceipt(message)===null)
         if(acceptance!=='inserted')armReceiptAutosend(target, taskId, callerTeam, message, steerFloor)
         // #139: the caller's outbound row is born with this admission and the member that received it.
