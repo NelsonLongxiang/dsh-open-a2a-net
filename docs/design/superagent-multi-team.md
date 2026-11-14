@@ -2,6 +2,8 @@
 
 Status: agreed with the owner on 2026-11-09, not built yet.
 
+> Update (2026-11-13): built — several teams on one instance landed in PR #536 (`9ede749`, 2026-11-09), code in `src/superagent/host/teams.ts` (M1–M6). The "not built yet" line above is the state when this design was agreed.
+
 ## Context
 
 The owner wants to send a request to a team without leaving the conversation, from a view in DSH's right bar, and to choose which team gets it. Teams can be on the same DSH instance or on another instance or host.

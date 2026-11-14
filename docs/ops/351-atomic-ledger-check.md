@@ -1,5 +1,7 @@
 # #351 独立前置P1：账本原子提交与写错误可见（待高档复核）
 
+> 补记（2026-11-13）：已于 2026-11-06 经 PR#354（`cd3a264`）合入 master，高档复核为评审席非作者 PASS。标题里的「待复核 / 未合并」是写这份记录时的状态，正文保持原样。
+
 授权direct-e44d43ed49a2/direct-b7af83bf3c57/direct-7ac45ccba3c8，独立masterf636331分支，与PR353解码修复和PR352语义方向无关。只修TaskLedger持久化缺陷，不改queuedFor/回执词表/授权/同步归属，不补现有积压，不部署。
 
 - 独立小helper：同目录uuid临时文件wx/0600，写全、fsync、close后rename替换原文件，失败只清本次owned临时件；不truncate旧tasks.json，不扫删别人文件。文件fsync+rename不是Windows目录断电持久保证，本PR不声称实现跨机/多进程CAS或POSIX目录fsync。共享home仍原单writer约束。

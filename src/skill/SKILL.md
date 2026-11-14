@@ -34,8 +34,10 @@ network shapes:
 - **one host**: install, join the sessions, give them a shared team;
 - **two hosts that reach each other**: one shared `apiKey`, `announce` plus
   peers seeded both ways, and a canvas team naming both handles;
-- **hosts that cannot reach each other**: host forwarding is not shipped
-  yet (#57), so tunnel or delegate per hop.
+- **hosts that cannot reach each other**: an online CLI deposited on a home
+  host gets one-hop forwarding (shipped 0.6.34, on by default from 0.6.38 via
+  `forwardDirect`, links required on both sides); sessions still tunnel or
+  delegate per hop. See setup.md §3.
 
 The owner does the gestures (install, config, join, allowlist, canvas). The
 agent prepares the exact config and verifies each step with `a2a_whoami`,
@@ -103,7 +105,9 @@ renders the same data for humans.
   that received the delivery accepted the round. Either the target session is
   not live/joined there, or X lives on ANOTHER host and the caller delivered
   straight to this host's `/a2a/direct` (the `a2a-net` CLI does this):
-  direct delivery never relays to peers — `a2a_route` from a session does.
+  direct delivery is not relayed, except the one-hop forward for an
+  authenticated online CLI deposited on that home (`forwardDirect`, links on
+  both sides; setup.md §3) — `a2a_route` from a session routes to peers itself.
 - `[PATTERN_NO_MINT]` / `[ALLOWLIST_DENY]` on `a2a_team_join` — only an EXACT
   allowlisted name joins; adding that name is the owner's act of creating
   the team. `[CANVAS_TEAM]` — canvas membership is assigned in the workbench,

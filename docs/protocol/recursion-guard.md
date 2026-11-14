@@ -5,7 +5,9 @@
 > returns structured `budget-exhausted` (-32007) with a receiptless row.
 > A home-host CLI forward mints a fresh token and sends `DEFAULT_HOP_BUDGET - 1`;
 > a receiving host never forwards an already-forwarded request again.
-> Not yet implemented: the visited set (§4.3) and deadlineAt enforcement (§4.4).
+> Not yet implemented: the visited set (§4.3) and deadlineAt enforcement (§4.4)
+> (the header field is parsed but not compared), nor the ledger meters
+> `hopsConsumed` / `hopsRemaining` (§4 item 5) — checked against `src/` on 2026-11-13.
 > The independent local zone-walk bound remains `ZONE_DEPTH_CAP = 5` (src/zone.ts).
 
 - **Status**: proposed (work-order P5 / ROUND-2 Cluster C2)
