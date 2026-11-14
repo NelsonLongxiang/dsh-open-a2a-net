@@ -27,7 +27,13 @@ capability flags) plus unsigned serve-fresh fields.
   publisher's `origin` and `via` (#159); they do not become extra session
   nodes in state `remote`. With `teamScopeInfo` on, a remote canvas row is
   included only when it names an unambiguously resolved joined session on this
-  host. With it off, discoverable rows are open like other remote rows.
+  host. A remote session row is included the same way: when that host's own
+  canvas holds the session beside a joined session of this host, the row
+  carries `sharedVia` (rendered `[shared via <canvas>]`) — the relation routing
+  already admits. With it off, discoverable rows are open like other remote rows.
+  A refused `a2a_probe` says which side declares nothing; the fix is an owner's
+  canvas edit on either workbench board (the board's 协作提示 chip offers the
+  one-click add when the peer's canvas already holds a local session).
   `canvasOrg` is unsigned serve-fresh data, **not** a signed membership proof:
   discovery does not replace the receiver's OriginClaim/target admission.
   A model caller's same-named canvas candidates are checked against that
