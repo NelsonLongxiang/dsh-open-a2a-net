@@ -82,6 +82,30 @@ describe('team MCP tool names (#690 F2)', () => {
     expect(b.calls).toHaveLength(1)
   })
 
+  it('re-review F2: three descriptors whose names would collide — two hashed `put`s and a raw `put_<hash>` — get three tools', async () => {
+    const one = { name: 'put', description: 'v1', inputSchema: schema('path') }
+    const two = { name: 'put', description: 'v2', inputSchema: schema('key') }
+    // A legitimate raw name equal to what the first hashed `put` would be called.
+    const clash = { name: `put_${mcpToolFingerprint('files', one).slice(0, 8)}`, description: 'raw', inputSchema: schema('x') }
+    const a = fakeTeam({ 'sa': { seat: 'seat-a', ticket: 't-a' } }, { files: [one] })
+    const b = fakeTeam({ 'sb': { seat: 'seat-b', ticket: 't-b' } }, { files: [two] })
+    const c = fakeTeam({ 'sc': { seat: 'seat-c', ticket: 't-c' } }, { files: [clash] })
+    const r = registry([a, b, c], { sa: 0, sb: 1, sc: 2 })
+    r.tools.refresh()
+    const names = r.tools.names()
+    expect(names).toHaveLength(3)
+    expect(new Set(names).size).toBe(3)
+    // The raw name keeps its plain name; each team runs its own descriptor through exactly one tool.
+    expect(names).toContain(`team__files__${clash.name}`)
+    for (const [team, session] of [[a, 'sa'], [b, 'sb'], [c, 'sc']] as const) {
+      const ran = []
+      for (const n of names) if ((await r.defs.get(n)!.execute({}, { agent: { id: session } })).ok === true) ran.push(n)
+      expect(ran).toHaveLength(1)
+      expect(team.calls).toHaveLength(1)
+    }
+    expect(c.calls[0]).toMatchObject({ tool: clash.name })
+  })
+
   it('a changed description or schema under the same raw name replaces the registered tool (F4)', () => {
     const a = fakeTeam({ 'sa': { seat: 'seat-a', ticket: 't-a' } }, { files: [{ name: 'put', description: 'v1', inputSchema: schema('path') }] })
     const r = registry([a], { sa: 0 })

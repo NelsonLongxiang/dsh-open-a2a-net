@@ -76,7 +76,7 @@ const TIMEOUT_MS = 30_000
 const RECORDS_KEPT = 200
 
 export class McpError extends Error {
-  constructor(readonly code: 'token-unavailable' | 'token-refused' | 'no-seat' | 'unknown-server' | 'not-allowed' | 'server', message: string) { super(message) }
+  constructor(readonly code: 'token-unavailable' | 'token-refused' | 'no-seat' | 'unknown-server' | 'not-allowed' | 'changed' | 'server', message: string) { super(message) }
 }
 
 /** The text of a streamable-HTTP answer: plain JSON, or the `data:` lines of an event stream; the message with `id`. */
@@ -213,6 +213,7 @@ export class TeamMcp {
       const server = this.server(name)
       if (seat === undefined) throw new McpError('no-seat', "the team has no member with a seat id yet: the market issues tokens to seats in this host's roster")
       const result = await this.call(server, 'tools/list', {}, seat)
+      this.stillCurrent(server)
       const tools = Array.isArray(result.tools) ? result.tools as Array<Record<string, unknown>> : []
       this.endpoints.set(name, server.url)
       this.catalog.set(name, tools.filter(t => typeof t.name === 'string' && TOOL.test(t.name)).map(t => ({ name: t.name as string, ...(typeof t.description === 'string' ? { description: t.description.slice(0, 1_000) } : {}), ...(t.inputSchema !== undefined ? { inputSchema: t.inputSchema } : {}) })))
@@ -263,9 +264,24 @@ export class TeamMcp {
     }
   }
 
+  /** A server's whole configuration as the owner saved it: name, endpoint and allowed tools. */
+  private configOf(server: TeamMcpServer): string { return JSON.stringify([server.name, server.url, server.transport, server.tools ?? null]) }
+
+  /**
+   * #690 re-review F4: the server a request is about to go to is still the one this call started with — same endpoint, same
+   * allowed tools, still configured. Checked after every wait and before anything is sent or written back, so a removed or
+   * changed server gets nothing more from a call that began under the old configuration.
+   */
+  private stillCurrent(server: TeamMcpServer): void {
+    const live = this.d.servers().find(s => s.name === server.name)
+    if (live === undefined || this.configOf(live) !== this.configOf(server)) throw new McpError('changed', `the team's MCP server ${server.name} was changed or removed while this call waited; nothing more was sent to it`)
+  }
+
   private async rpc(server: TeamMcpServer, method: string, params: unknown, seat: string, notify = false): Promise<Record<string, unknown>> {
     this.prune()
+    this.stillCurrent(server)
     const token = await this.token(server, seat)
+    this.stillCurrent(server)
     const key = `${server.name}${SEP}${seat}`
     if (!this.endpoints.has(server.name)) this.endpoints.set(server.name, server.url)
     const id = this.nextId++
@@ -277,6 +293,8 @@ export class TeamMcp {
     const body = JSON.stringify(notify ? { jsonrpc: '2.0', method, ...(params !== undefined ? { params } : {}) } : { jsonrpc: '2.0', id, method, ...(params !== undefined ? { params } : {}) })
     const send: McpTransport = this.d.transport ?? (async (url, h, b, signal) => await fetch(url, { method: 'POST', headers: h, body: b, signal, redirect: 'error' }))
     const response = await send(server.url, headers, body, AbortSignal.timeout(TIMEOUT_MS))
+    // The answer of a server changed meanwhile is not written back (no session, no result).
+    this.stillCurrent(server)
     if (response.status === 401 || response.status === 403) {
       // The market checks every call (host active, key pinned, seat in the roster, not revoked): this token is done.
       this.seatTokens(server).drop(seat)
@@ -301,6 +319,8 @@ export class TeamMcp {
   }
 
   private async ensureSession(server: TeamMcpServer, seat: string): Promise<void> {
+    // Prune before deciding: a session of an endpoint the owner since changed is gone first, so a new endpoint is initialized.
+    this.prune()
     if (this.sessions.has(`${server.name}${SEP}${seat}`)) return
     await this.rpc(server, 'initialize', { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: 'dsh-open-a2a-net-team-host', version: '1' } }, seat)
     await this.rpc(server, 'notifications/initialized', undefined, seat, true)

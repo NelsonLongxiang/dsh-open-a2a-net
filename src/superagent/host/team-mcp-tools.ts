@@ -83,10 +83,19 @@ export class TeamMcpTools {
       same.set(mcpToolFingerprint(server.name, tool), { server: server.name, tool })
       byName.set(base, same)
     }
-    const wanted = new Map<string, { server: string; tool: McpToolInfo; fingerprint: string }>()
+    // Each descriptor's preferred name: its base when it alone has that base, else the base with its own hash. Names are then
+    // given out once each (#690 re-review F2): preferred names that are a tool's plain raw name go first, so a legitimate
+    // `put_<hash>` keeps its name, and any later claimant of a taken name moves on to a further hash. Nothing is overwritten.
+    const claims: Array<{ preferred: string; plain: boolean; server: string; tool: McpToolInfo; fingerprint: string }> = []
     for (const [base, same] of byName) {
-      // One descriptor: its base name. Teams disagreeing on what this tool is: each descriptor is a tool of its own.
-      for (const [fingerprint, entry] of same) wanted.set(same.size === 1 ? base : withSuffix(base, fingerprint.slice(0, 8)), { ...entry, fingerprint })
+      for (const [fingerprint, entry] of same) claims.push({ preferred: same.size === 1 ? base : withSuffix(base, fingerprint.slice(0, 8)), plain: same.size === 1 && base === `team__${entry.server}__${entry.tool.name}`, ...entry, fingerprint })
+    }
+    claims.sort((a, b) => Number(b.plain) - Number(a.plain) || (a.preferred < b.preferred ? -1 : a.preferred > b.preferred ? 1 : 0) || (a.fingerprint < b.fingerprint ? -1 : 1))
+    const wanted = new Map<string, { server: string; tool: McpToolInfo; fingerprint: string }>()
+    for (const { preferred, server, tool, fingerprint } of claims) {
+      let name = preferred
+      for (let k = 0; wanted.has(name); k++) name = withSuffix(preferred, hash8(`${fingerprint}:${String(k)}`))
+      wanted.set(name, { server, tool, fingerprint })
     }
     for (const [name, entry] of [...this.registered]) {
       const want = wanted.get(name)

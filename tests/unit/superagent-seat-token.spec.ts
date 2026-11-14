@@ -196,3 +196,62 @@ describe('#690 review F3–F5 negative regressions', () => {
     expect(m.seen).toHaveLength(1)
   })
 })
+
+describe('#690 re-review F4: a call does not outlive its configuration', () => {
+  function recorder() {
+    const calls: Array<{ url: string; method: string; session?: string }> = []
+    const transport: McpTransport = async (url, headers, body) => {
+      const req = JSON.parse(body) as { id?: number; method: string }
+      calls.push({ url, method: req.method, ...(headers['mcp-session-id'] !== undefined ? { session: headers['mcp-session-id'] } : {}) })
+      const result = req.method === 'tools/list' ? { tools: [{ name: 'remove_record' }] } : {}
+      return { status: 200, headers: { get: (n: string) => n === 'mcp-session-id' ? `sess-${url}` : n === 'content-type' ? 'application/json' : null }, text: async () => JSON.stringify({ jsonrpc: '2.0', id: req.id, result }) }
+    }
+    return { calls, transport }
+  }
+
+  it('a server removed while the call waits for its seat token gets nothing: no initialize, no tools/call', async () => {
+    let servers: TeamMcpServer[] = [{ name: 'market', url: `${MARKET}/mcp`, transport: 'streamable-http' }]
+    let release: (() => void) | undefined
+    const gate = new Promise<void>(r => { release = r })
+    const m = market((req, n) => token(req, n, Date.now()))
+    const slowFetch = async (url: string, init: { body: string }) => { await gate; return await m.fetch(url, init) }
+    const t = recorder()
+    const team = new TeamMcp({ servers: () => servers, now: () => new Date().toISOString(), catalogSeat: () => 'seat-m1', signer, tokenFetch: slowFetch as never, transport: t.transport })
+    const pending = team.callTool('market', 'remove_record', {}, { by: 's', seat: 'seat-m1' })
+    // The owner removes the server (saveSettings mcp: null) while the exchange is outstanding; then the token arrives.
+    servers = []
+    release!()
+    await expect(pending).rejects.toMatchObject({ code: 'changed' })
+    expect(t.calls).toEqual([])
+  })
+
+  it('a path switched with no prune in between: the first call to the new endpoint initializes there first', async () => {
+    let url = `${MARKET}/mcp`
+    const m = market((req, n) => token(req, n, Date.now()))
+    const t = recorder()
+    const team = new TeamMcp({ servers: () => [{ name: 'market', url, transport: 'streamable-http' }], now: () => new Date().toISOString(), catalogSeat: () => 'seat-m1', signer, tokenFetch: m.fetch as never, transport: t.transport })
+    await team.callTool('market', 'remove_record', {}, { by: 's', seat: 'seat-m1' })
+    url = `${MARKET}/mcp-v2`
+    t.calls.length = 0
+    await team.callTool('market', 'remove_record', {}, { by: 's', seat: 'seat-m1' })
+    expect(t.calls.map(c => c.method)).toEqual(['initialize', 'notifications/initialized', 'tools/call'])
+    expect(t.calls.every(c => c.url === url)).toBe(true)
+    expect(t.calls[0]).not.toHaveProperty('session')
+  })
+
+  it('an endpoint changed while a request is out: its answer writes back no session and no tool list', async () => {
+    let url = `${MARKET}/mcp`
+    const m = market((req, n) => token(req, n, Date.now()))
+    let switchOn: string | undefined = 'tools/list'
+    const inner = recorder()
+    const transport: McpTransport = async (u, h, b) => { const out = await inner.transport(u, h, b); if ((JSON.parse(b) as { method: string }).method === switchOn) { url = `${MARKET}/mcp-v2`; switchOn = undefined } return out }
+    const team = new TeamMcp({ servers: () => [{ name: 'market', url, transport: 'streamable-http' }], now: () => new Date().toISOString(), catalogSeat: () => 'seat-m1', signer, tokenFetch: m.fetch as never, transport })
+    await team.refreshTools('market')
+    // No tool list from the old endpoint, and no session of it: the next read starts afresh at the new endpoint.
+    expect(team.status()[0]).toMatchObject({ state: 'unavailable', offered: 0 })
+    inner.calls.length = 0
+    await team.refreshTools('market')
+    expect(inner.calls.map(c => [c.url, c.method, c.session ?? null])).toEqual([[url, 'initialize', null], [url, 'notifications/initialized', `sess-${url}`], [url, 'tools/list', `sess-${url}`]])
+    expect(team.status()[0]).toMatchObject({ state: 'ready', offered: 1 })
+  })
+})

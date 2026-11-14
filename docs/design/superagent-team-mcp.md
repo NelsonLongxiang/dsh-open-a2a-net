@@ -36,6 +36,7 @@ This replaces the owner-entered team token in M1 and the revocation handling in 
   - Tool names never collide. A raw name changed to fit carries a hash of itself. Teams offering one name with different descriptors get a tool each. A call runs only the caller team's exact descriptor; a changed descriptor replaces the registered tool.
   - A seat refused at a call, after the list was read, makes the server `unavailable` with that seat named. Health shows it, and the 5-minute recovery pass exchanges for that seat again.
   - Sessions and the tool list belong to the server's full URL: a new path on the same origin starts them afresh (tokens, which are the market's by origin, are kept).
+  - Re-review: tool names are given out once each across all teams (a raw name that is already plain keeps it; a later claimant of a taken name moves on to a further hash), so no descriptor is dropped. A call re-checks the server's whole configuration (endpoint and allowed tools) after every wait and before it sends or writes anything back; a server removed or changed meanwhile gets nothing more (`changed`). Sessions are pruned before deciding whether one can be reused, so a new endpoint is always initialized first.
   - A token answer is checked against when it arrived and the one-hour contract. An expired one, or one claiming longer, is never kept nor sent to a server.
 - **Accepted difference (L22).**
   - Teams on one host share the node key, so they are not isolated from each other at the market. The market narrows this when upstream gives teams or seats their own keys.
