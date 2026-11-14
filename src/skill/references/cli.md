@@ -343,10 +343,14 @@ Files do not go through session messages: use the file channel below, never JPFI
     that declares `progressReceipts`; a team's host face refuses others
     (exit 4).
   - `--acknowledged` says the task is taken up and its result follows. It settles nothing: the caller's row stays owed until the result receipt, leaves the queue count, and expires 7 days after the acknowledgement instead of 24 hours after dispatch. It rides task id `ack-<task_id>`, so the later receipt is not refused.
-- `admission <caller> [--local] [--json]` asks the home host how `<caller>`
+- `admission <caller> [--local] [--task ID] [--json]` asks the home host how `<caller>`
   would be admitted delivering to this identity right now, recomputed from the
   host's current links: `{caller, admitted, rule}`. `--local` asks for the
-  same-host face (a session on the home host). The query is signed with this
+  same-host face (a session on the home host). `--task` asks about one task the
+  caller sent (signed too, in a domain-separated form): a superagent-intake task
+  is judged by its own birth — the host it was admitted from, under that key —
+  so another host with the same handle never answers for it; without `--task`
+  no intake link counts. The query is signed with this
   identity's key, and the host answers only the identity itself — a holder of
   the host key cannot ask about another identity's links — with the rule name
   and nothing more. Exit 0 once answered (admitted or not), 1 when the host

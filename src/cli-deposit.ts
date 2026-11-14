@@ -184,8 +184,10 @@ const publicKeyOf = (cardJson: string): string => {
  * superagent p1-mail-admission (M-2): the bytes a CLI identity signs to ask its home host how a caller would be admitted
  * to it. The CLI builds the same array (cli/a2a.mjs); a unit test pins the two together.
  */
-export const admissionQueryPayload = (handle: string, caller: string, ingress: 'local' | 'wire', ts: number): string =>
-  JSON.stringify(['a2a-admission', handle, caller, ingress, ts])
+export const admissionQueryPayload = (handle: string, caller: string, ingress: 'local' | 'wire', ts: number, task?: string): string =>
+  // #697 review R1: a query about one task signs that task too (a domain-separated form), so a link judged for a task's
+  // birth is never borrowed by another task of the same caller.
+  task === undefined ? JSON.stringify(['a2a-admission', handle, caller, ingress, ts]) : JSON.stringify(['a2a-admission/2', handle, caller, ingress, ts, task])
 
 /** How far an admission query's timestamp may stray from this host's clock (the OriginClaim window). */
 export const ADMISSION_QUERY_WINDOW_MS = 300_000
@@ -195,13 +197,13 @@ export const ADMISSION_QUERY_WINDOW_MS = 300_000
  * with, fresh, over exactly these fields. Anything else is refused — so a holder of the control key cannot ask about
  * another identity's links (global review of the p1-mail-admission design).
  */
-export function verifyAdmissionQuery(cardJson: string | undefined, q: { handle: string; caller: string; ingress: 'local' | 'wire'; ts: number; sig: string }, now: number): boolean {
+export function verifyAdmissionQuery(cardJson: string | undefined, q: { handle: string; caller: string; ingress: 'local' | 'wire'; ts: number; sig: string; task?: string }, now: number): boolean {
   if (cardJson === undefined || !Number.isFinite(q.ts) || Math.abs(now - q.ts) > ADMISSION_QUERY_WINDOW_MS || q.sig === '') return false
   const key = publicKeyOf(cardJson)
   if (key === '') return false
   try {
     const publicKey = createPublicKey({ key: Buffer.from(key, 'base64'), format: 'der', type: 'spki' })
-    return verify(null, Buffer.from(admissionQueryPayload(q.handle, q.caller, q.ingress, q.ts)), publicKey, Buffer.from(q.sig, 'base64'))
+    return verify(null, Buffer.from(admissionQueryPayload(q.handle, q.caller, q.ingress, q.ts, q.task)), publicKey, Buffer.from(q.sig, 'base64'))
   } catch {
     return false
   }

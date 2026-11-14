@@ -471,7 +471,8 @@ export async function sendReply(ctx: SourceContext, commands: Commands, message:
   if (caller === undefined || task === undefined || !replyAllowed(message.channel.address, { mode: 'reply' })) return gone('The reply has no caller to go to')
   try {
     if (ctx.config<A2aConfig>(KIND)?.mode !== 'reply') throw new Error('The a2a Source is not in reply mode')
-    const check = JSON.parse(await commands.run(PROGRAM, ['admission', caller, ...(ingress === 'local' ? ['--local'] : []), '--json'])) as unknown
+    // #697 review R1: the question names the task, so a link judged at its birth answers for it alone.
+    const check = JSON.parse(await commands.run(PROGRAM, ['admission', caller, ...(ingress === 'local' ? ['--local'] : []), '--task', task, '--json'])) as unknown
     const rule = isRecord(check) && check.admitted === true && typeof check.rule === 'string' ? check.rule : undefined
     if (rule === undefined || !LINK_RULES.has(rule)) return gone(`${caller} is no longer linked to this identity; the reply was not sent`)
     // A held receipt (the host's call: an acknowledged request whose ticket has no result yet) leaves the task's one
