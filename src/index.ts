@@ -6,7 +6,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net
  */
 
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, timingSafeEqual, sign as edSign } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import { selectLanIPv4 } from './lan-ip.ts'
@@ -147,9 +147,12 @@ import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint }
 import { registerBuilderTools } from './superagent/host/builder-tools.ts'
 import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
+import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
 import { guiOwnerProven, ownerOrNoLogin, touchesRules } from './superagent/host/owner-proof.ts'
 import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
+import { redeliverLost, TaskBodies } from './task-bodies.ts'
+import { registerTaskRead } from './tools/task-read.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerFileFaces } from './faces/files.ts'
@@ -692,6 +695,8 @@ export function apply(ctx: Context, config: Config): void {
   const canvasStore = new CanvasStore(join(home, 'a2a', 'canvas.json'), { legacyBareMembers: config.canvasLegacyBareMembers !== false, ownPublicKey: encodePublicKey(createPublicKey(nodePrivateKey)) })
   // #91 file channel: the sender host's blob store (docs/design/file-channel.md).
   const blobStore = new BlobStore(join(home, 'a2a'))
+  // Inbound session deliveries' text (market request 2026-11-14): a2a_task_read and the idle redelivery read it.
+  const taskBodies = new TaskBodies(join(home, 'a2a', 'task-bodies.json'))
   // Spatial presentation state for the full-page stage (contract v2).
   const layoutStore = new LayoutStore(join(home, 'a2a', 'canvas-layout.json'))
 
@@ -2065,6 +2070,7 @@ export function apply(ctx: Context, config: Config): void {
   // superagent design v4, PR-B: superagent's domain engine in this host (on by default, idle until a team is bound). The router gets
   // candidate cards in its own session (host relay, not A2A) and decides only through the superagent_* tools.
   let staffing: StaffingExecutor | undefined
+  let teamMcpTools: TeamMcpTools | undefined
   const superagentTeams: SuperagentTeams | undefined = config.superagent === true ? new SuperagentTeams({
     home: join(home, 'a2a'), logger,
     deliverToSession: (id, text) => { const agent = sessionNodes.get(id); if (agent === undefined) return false; followupRelay(agent, text, config.team); return true },
@@ -2089,9 +2095,9 @@ export function apply(ctx: Context, config: Config): void {
     // with the key the canvas pinned and the base URL of the linked peer whose signed card carries that key.
     // Pi platform P1/P2/P3: whether a CLI handle is a Pi seat deposited here, and the mailbox delivery to one.
     piSeat: handle => piSeatAdmission(handle, cliDeposits.get(handle)),
-    piDeliver: (handle, pinnedKey, text, ticketId) => {
+    piDeliver: (handle, pinnedKey, text, ticketId, run) => {
       if (!piDeliverable(cliDeposits.get(handle), pinnedKey)) return false
-      cliDeposits.mail(handle, 'superagent', text, undefined, { taskId: ticketId })
+      cliDeposits.mail(handle, 'superagent', text, undefined, { taskId: ticketId, ...(run !== undefined ? { contextId: run } : {}) })
       return true
     },
     canvasTeam: name => {
@@ -2126,6 +2132,9 @@ export function apply(ctx: Context, config: Config): void {
     // A session not loaded yet is skipped; the next start or pool change applies it.
     selectModel: (sessionId, pick) => selectSessionModel(sessionNodes.has(sessionId), ctx.get('sessionController' as never), sessionId, pick),
     staffingDecided: (changeId, team, confirmed) => { const ref = staffingTeamRef(superagentTeams!, team); if (ref !== undefined) void staffing?.cardDecided(changeId, ref, confirmed) },
+    mcpToolsChanged: () => teamMcpTools?.refresh(),
+    // Seat tokens for the market's MCP: the node key signs the exchange; the root is the origin this host publishes its card on.
+    seatSigner: { root: () => originOf(ownCardUrl), host: () => ownCanvasFingerprint, sign: text => edSign(undefined, Buffer.from(text, 'utf8'), nodePrivateKey).toString('base64') },
     bootSettled: () => bootPrewarm.settled(),
     workspaceOf: id => { const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd; return typeof cwd === 'string' ? cwd : undefined },
     hasTool: (id, name) => {
@@ -2167,6 +2176,8 @@ export function apply(ctx: Context, config: Config): void {
       sessions: joinedSessions.list().filter(id => sessionNodes.has(id)), nameOf: id => { const agent = sessionNodes.get(id); return agent === undefined ? id : nodeMetadataOf(agent).name }, presetOf: sessionPresetOf, staffing: staffing?.list() ?? [],
     }), { staffing: () => staffing, personMessage: id => { const agent = ctx.get('agents')?.get(SessionId(id)) as Agent | undefined; return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
       teamRules: ref => { const team = superagentTeams!.get(ref === 'primary' ? '' : ref); return team === undefined || (ref === '' ) ? undefined : { ...(team.settings.canvas !== undefined ? { canvas: team.settings.canvas } : {}), rules: team.settings.rules, dispatch: team.settings.dispatch } } })
+    // superagent-team-mcp M2: each allowed tool of a team's MCP server is a tool of its own; the host holds the token.
+    teamMcpTools = new TeamMcpTools(ctx, id => superagentTeams!.ofSession(id), () => superagentTeams!.all(), logger)
     // A member's turn ending is the executor's turn-end fact (PR-C1).
     ctx.on('agent/status', payload => { superagentRoleTools.sync(payload.agent as unknown as RoleAgent); if (payload.status === 'idle') superagentTeams!.ofSession(String(payload.agent.id))?.memberIdle(String(payload.agent.id)) })
     // A failed turn is retried or fails the ticket for a person (upstream); without this it read as still working.
@@ -2504,6 +2515,14 @@ export function apply(ctx: Context, config: Config): void {
       const matches=reminderAgents().filter(a=>sessionTeamOf(a)===row.sender!.id);return matches.length===1?matches[0]:undefined
     },
     followup:(agent:ReminderAgent,text:string)=>followupRelay(agent as Agent,text,config.team),
+    // A delivery whose steer was never consumed: its original text, once, as the original sender's content (it taints).
+    // #693 review F1/F2: only a delivery the ledger never tracked (a lost steer), as a queued delivery OF THE ORIGINAL TASK,
+    // so its reservation, claim, withdrawal and an unknown outcome follow the ordinary correspondence.
+    redeliver:(agent:ReminderAgent,row:TaskRecord)=>redeliverLost({
+      deliveryFor:taskId=>taskLedger.deliveryFor(taskId),bodies:taskBodies,
+      relay:(text,from,taskId)=>{followupRelay(agent as Agent,text,from,undefined,taskId,undefined,true)},
+      warn:(taskId,error)=>logger.warn('a2a: redelivery of %s not admitted: %s',taskId,String(error)),
+    },String(agent.id),row.taskId),
     warn:code=>logger.warn('a2a: idle reconciliation reminder failed (%s)',code),
   })
   const requestReminderScan = ():void => {queueMicrotask(()=>idleReminders.scan())}
@@ -2632,6 +2651,12 @@ export function apply(ctx: Context, config: Config): void {
    * marker instead of a (false) completion.
    * @param taskId - the correlation key the steered receipt header carries.
    */
+  /** Keep an admitted session delivery's text for its receiver (src/task-bodies.ts); a receipt is settlement traffic, not a task. */
+  function keepTaskBody(taskId: string | undefined, target: Agent, from: string, message: string): void {
+    if (taskId === undefined || taskId === '' || parseReceipt(message) !== null) return
+    try { taskBodies.keep(taskId, String(target.id), from === '' ? 'unknown' : from, message) } catch (error) { logger.warn('a2a: task body of %s not kept: %s', taskId, String(error)) }
+  }
+
   async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number,acceptance?:'inserted'|void) => void, callerKey?: string): Promise<
     { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; status?: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; localMiss?: true }
   > {
@@ -2711,6 +2736,8 @@ export function apply(ctx: Context, config: Config): void {
       const text = `${headerLine}\n\n${message}`
       try {
         const floor = sessionEventsOf(agent).length
+        // #693 review F3: the one seam every admitted session delivery passes (wire async and sync, same-host sync).
+        keepTaskBody(taskId, agent, caller, message)
         const acceptance=followupRelay(agent, text, caller === '' ? undefined : caller, localFrom, taskId, callerKey, onSteered!==undefined)
         onSteered?.(agent, floor,acceptance)
         if(acceptance==='inserted'){removeFinalWaiter(String(agent.id),waiter);resolve({ok:true,reply:ACCEPTANCE_INSERTED_NOTE,acceptance,placeholder:true});return}
@@ -3169,6 +3196,7 @@ export function apply(ctx: Context, config: Config): void {
       logger,
       config,
       cliDeposits,
+      keepTaskBody,
       canvasStore, canvasMemberForWrite,
       teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
       teamCanvasBound: (canvas: string) => superagentTeams?.ofCanvas(canvas) !== undefined,
@@ -3946,6 +3974,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const fileTools = createFileTools({ ctx, config, blobStore, canvasMembersOf: name => canvasStore.membersOf(name).map(member => member.startsWith('session-') ? `${config.team}/${id8(member)}` : member), ownCardUrl: () => ownCardUrl, sessionTeamOf, a2aJoinGateRefusal, routeTrunk, peerFetch, originClaimHeaders })
   fileTools.registerFileSend()
   fileTools.registerFileFetch()
+  fileTools.registerFileGrants()
+  fileTools.registerFileRevoke()
+  // Market request 2026-11-14: the receiving session reads an inbound task's original text (src/tools/task-read.ts).
+  registerTaskRead({ ctx, taskBodies, markConsumed: taskId => taskLedger.markConsumed(taskId, true) })
 
   /**
    * The routing trunk (0.6.9): the one failover sequence behind both the
@@ -4349,6 +4381,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         const receiptHint = callerTeam === undefined ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${callerTeam}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
         // #114 S5: the consumption search starts at the pre-steer log length.
         const steerFloor = sessionEventsOf(target).length
+        keepTaskBody(taskId, target, callerSession ?? session, message)
         const acceptance=followupRelay(target, `[A2A direct] (task ${taskId}) 未验证（in-process） ${sanitizeFromClause(callerSession ?? session)} (routed to ${team}) sent:\n\n${message}${receiptHint}`, callerTeam, originAgentId, taskId, undefined, parseReceipt(message)===null)
         if(acceptance!=='inserted')armReceiptAutosend(target, taskId, callerTeam, message, steerFloor)
         // #139: the caller's outbound row is born with this admission and the member that received it.

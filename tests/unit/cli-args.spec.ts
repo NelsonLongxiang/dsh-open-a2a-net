@@ -603,6 +603,27 @@ describe('a2a-net CLI: inbox --wait', () => {
     expect(host.actions).not.toContain('publish')
   })
 
+  it('#688 F4: a renewal signs what the last explicit publish declared (piSeat stays); only an explicit publish withdraws it', async () => {
+    if (!existsSync(join(process.cwd(), 'lib', 'card.js'))) return
+    const host = await mailHost()
+    const HOME = await scoutHome()
+    const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }
+    const caps = () => host.seen.filter(r => r.body.action === 'publish').map(r => (JSON.parse(String(r.body.card)) as { capabilities: Record<string, unknown> }).capabilities)
+    expect((await runCli(['publish', '--pi-seat'], env)).code).toBe(0)
+    expect(caps().at(-1)).toMatchObject({ piSeat: true })
+    // The documented renewal path (inbox --wait --renew) with no deposit listed: it re-publishes, still a seat.
+    await runCli(['inbox', '--wait', '--renew', '--interval', '100ms', '--timeout', '200ms'], env)
+    expect(caps().length).toBeGreaterThanOrEqual(2)
+    for (const renewed of caps().slice(1)) expect(renewed).toMatchObject({ piSeat: true })
+    expect((await runCli(['publish', '--renew'], env)).code).toBe(0)
+    expect(caps().at(-1)).toMatchObject({ piSeat: true })
+    // An explicit publish without the flag withdraws it, and later renewals keep that.
+    expect((await runCli(['publish'], env)).code).toBe(0)
+    expect(caps().at(-1)?.piSeat).toBeUndefined()
+    expect((await runCli(['publish', '--renew'], env)).code).toBe(0)
+    expect(caps().at(-1)?.piSeat).toBeUndefined()
+  })
+
   it('a bad duration is a usage error', async () => {
     const HOME = await scoutHome()
     // POSIX shape note: without the anchor a HOME-only env leaves the CLI

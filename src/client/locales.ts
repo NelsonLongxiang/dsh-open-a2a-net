@@ -50,6 +50,8 @@ export type A2aNetKey =
   | 'team.healthTitle'
   | 'team.healthRouter'
   | 'team.healthRouterFailed'
+  | 'team.healthMcpNoSeat'
+  | 'team.healthMcpUnavailable'
   | 'team.healthMember'
   | 'team.healthQuiet'
   | 'team.decisionsCount'
@@ -106,6 +108,8 @@ export const zh: Record<A2aNetKey, string> = {
   'team.healthTitle': '团队有 {count} 个问题',
   'team.healthRouter': '总工会话 {session} 没有加载，需求送不到它，打开这个会话即可',
   'team.healthRouterFailed': '总工会话 {session} 上一回合失败（{detail}），需求在等它判断；常见原因是模型额度用完或服务中断',
+  'team.healthMcpNoSeat': '团队 MCP 服务器 {server} 还用不了：团队里还没有带席位 id 的成员，市场只给名册里的席位发令牌',
+  'team.healthMcpUnavailable': '团队 MCP 服务器 {server} 换不到席位令牌，成员对它的调用会失败（详情见团队页健康）',
   'team.healthMember': '成员会话 {session} 没有加载，工单派不给它，打开这个会话即可',
   'team.healthQuiet': '工单「{title}」已经 {minutes} 分钟没有动静',
   'team.decisionsCount': '待你决定（{count}）',
@@ -175,6 +179,8 @@ export const en: Record<A2aNetKey, string> = {
   'team.healthTitle': 'The team has {count} problem(s)',
   'team.healthRouter': 'Router session {session} is not loaded, so requests cannot reach it. Open that session',
   'team.healthRouterFailed': 'Router session {session}\'s last turn failed ({detail}); requests wait for its judgement. A used-up model quota or an outage is the usual cause',
+  'team.healthMcpNoSeat': 'Team MCP server {server} is not usable yet: no team member has a seat id, and the market issues tokens only to seats in the roster',
+  'team.healthMcpUnavailable': 'Team MCP server {server}: no seat token can be had, so members\' calls to it fail (details in the team health)',
   'team.healthMember': 'Member session {session} is not loaded, so tickets cannot reach it. Open that session',
   'team.healthQuiet': 'Ticket “{title}” has had no activity for {minutes} minutes',
   'team.decisionsCount': 'Waiting for your decision ({count})',

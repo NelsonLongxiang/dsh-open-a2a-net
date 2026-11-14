@@ -1,6 +1,6 @@
 {
   "name": "@nelsonlongxiang/dsh-open-a2a-net",
-  "version": "0.8.1-preview.23",
+  "version": "0.8.1-preview.24",
   "description": "Open A2A network plugin for DeepSeek Harness: signed agent cards, decentralized peer/zone discovery, direct routing model tools, and joinable session nodes with a sidebar control",
   "type": "module",
   "main": "lib/index.js",
@@ -52,6 +52,7 @@
     "images",
     "README_zh.md",
     "cordis.patch.yml",
+    "pi/extension/a2a-seat.ts",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
@@ -88,7 +89,7 @@
   "scripts": {
     "prepare": "pnpm build",
     "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsdown && node scripts/copy-skill.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p pi/extension/tsconfig.json",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:wire": "vitest run tests/wire",

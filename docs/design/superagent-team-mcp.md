@@ -16,6 +16,33 @@ Status: proposed, 2026-11-11; revised 2026-11-12 for one system user. Not implem
   - **So the token must never be written to any file, log or environment variable that user can read.** Process memory is the one place left. Another process of the same user cannot read it without debugger rights, and the credential-access audit records attempts.
   - Members on another instance (`serves`) are still supported and go through the signed face.
 
+## Revision 2026-11-13 (owner: seat tokens under the node key; 「认，开工」)
+
+This replaces the owner-entered team token in M1 and the revocation handling in M3. M2 (members call through the host) stands.
+
+- **R1. A token per seat, exchanged by the host.**
+  - For each call the host holds a one-hour token for the calling member's seat, exchanged at `POST <market origin>/api/a2a/seat-token`.
+  - The request is signed with the host's node key over `JSON.stringify(["wm-seat-token/1", root, host, seat_id, ts, nonce, aud])`. Here `root` is the origin the host publishes its card on, `host` is the node key's fp8 and `aud` is the market origin (market spec: seat-token-exchange-spec).
+  - The market grants and audits per seat (`seat-<host>-<12>`).
+  - The tool list is read as one of the team's member seats.
+- **R2. Memory only; renewed before expiry; no fallback.**
+  - Tokens live only in the host process, keyed by seat. A token is exchanged again when less than 5 minutes is left of it.
+  - When none can be had (refused, rate-limited, unreachable, no seat id yet), the member's call fails with `token-unavailable` or `no-seat` and the reason.
+  - There is no owner-entered or long-lived token to fall back to. `mcp-token` is gone.
+- **R3. Refused on a call.** A 401 or 403 on a call drops that seat's token. It is exchanged again once and the call retried once; a second refusal returns `token-refused`.
+- **R4. Health.** Health shows `mcp-no-seat` (no member has a seat id yet) or `mcp-token-unavailable` (with the reason) instead of `token needed` / `token revoked`.
+- **R5. Review of #690 (F1–F5).**
+  - The credential is the calling member's own seat, for the ticket bound to it now. A ticket named for another member gets no call. A refused reassignment leaves the ticket's member, name and hold as they were.
+  - Tool names never collide. A raw name changed to fit carries a hash of itself. Teams offering one name with different descriptors get a tool each. A call runs only the caller team's exact descriptor; a changed descriptor replaces the registered tool.
+  - A seat refused at a call, after the list was read, makes the server `unavailable` with that seat named. Health shows it, and the 5-minute recovery pass exchanges for that seat again.
+  - Sessions and the tool list belong to the server's full URL: a new path on the same origin starts them afresh (tokens, which are the market's by origin, are kept).
+  - Re-review: tool names are given out once each across all teams (a raw name that is already plain keeps it; a later claimant of a taken name moves on to a further hash), so no descriptor is dropped. A call re-checks the server's whole configuration (endpoint and allowed tools) after every wait and before it sends or writes anything back; a server removed or changed meanwhile gets nothing more (`changed`). Sessions are pruned before deciding whether one can be reused, so a new endpoint is always initialized first.
+  - Third review: the caller's authority is checked live too. The wrapper checks it at the start, and TeamMcp checks it again after every wait (token exchange, session start, the token retry after a 401) and right before sending. The checks are that the caller is still this team's local member, is bound to the same running ticket and assignment, the ticket is not named for another member, the seat is unchanged, and the team still offers the exact tool. A change refuses the call (`authority`) with nothing sent. A request already sent when authority ends is not taken back; one not yet sent never goes.
+  - A token answer is checked against when it arrived and the one-hour contract. An expired one, or one claiming longer, is never kept nor sent to a server.
+- **Accepted difference (L22).**
+  - Teams on one host share the node key, so they are not isolated from each other at the market. The market narrows this when upstream gives teams or seats their own keys.
+  - Members can read the node key, as they can every file of the host's user; the host-side audit is how that is found.
+
 ## Decisions
 
 ### M1. MCP servers are team settings, held by the team host

@@ -52,8 +52,10 @@ usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…> [--task ID]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
-文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR]   (#91: bytes never ride a message)
+文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR] · file grants · file revoke <sha256> <to>   (#91: bytes never ride a message)
 superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
+pi 席位:  publish --pi-seat · publish --renew (keeps the last publish's declarations) · ticket read|idle [--text T] [--ticket ID --event ID] · ticket ack|handback --trigger ID -- <text> · ticket report --ticket ID --state S [--question Q --options A|B --recommended A [--level P1]] -- <summary>
+          · ticket error [--transient] -- <what failed> · pi install [--dir DIR] [--force]   (docs/design/superagent-pi-platform.md)
 
 host:     --home > $A2A_HOME > the home saved by 'a2a init --home URL' > ${DEFAULT_HOME}
 key:      --key > $A2A_KEY (prefer the env var: a --key value stays in shell history)
@@ -110,9 +112,10 @@ admission: admission <caller> [--local] [--json]   how <caller> would be admitte
 
 /** Flags that take a value (both '--home URL' and '--home=URL'); the rest are switches. */
 /** The capabilities a CLI identity may declare on its card (superagent-root-team S5). */
-const DECLARABLE = ['progressReceipts', 'teamRoster', 'directedSeats', 'reworkReturns']
-const VALUE_FLAGS = new Set(['--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets'])
-const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class'])
+// piSeat: docs/design/superagent-pi-platform.md P1 — this identity is a Pi seat (it may join a superagent team as a member).
+const DECLARABLE = ['progressReceipts', 'teamRoster', 'directedSeats', 'reworkReturns', 'piSeat']
+const VALUE_FLAGS = new Set(['--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir', '--recommended', '--level', '--event', '--run'])
+const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class', '--pi-seat', '--transient'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
 const HOOK_MODE = process.argv.includes('--hook')
@@ -188,6 +191,8 @@ const apiKey = () => flag('--key') ?? envValue('A2A_KEY')
 
 /** The bound form's domain tag (src/origin-claim.ts ORIGIN_CLAIM_BOUND_TAG). */
 const ORIGIN_CLAIM_BOUND_TAG = 'a2a-origin-claim/2'
+/** The body-bound form's domain tag (src/origin-claim.ts ORIGIN_CLAIM_BODY_TAG). */
+const ORIGIN_CLAIM_BODY_TAG = 'a2a-origin-claim/3'
 
 /** The origin and query-less path of an http(s) URL, or undefined (src/origin-claim.ts originOf / pathOf). */
 function claimTarget(url) {
@@ -222,16 +227,20 @@ function originClaimFor(base) {
   const privateKey = createPrivateKey(id.privateKeyPem)
   const callerUrl = `${base}/a2a/cli/${encodeURIComponent(id.handle)}`
   const sign = (form) => edSign(undefined, Buffer.from(JSON.stringify(form)), privateKey).toString('base64')
-  return (url, method) => {
+  // `body` (the exact request bytes) adds the body-bound form (src/origin-claim.ts signOriginClaim): a face that requires
+  // bodyBound (the superagent team face, pi platform P4) refuses a claim without it.
+  return (url, method, body) => {
     const ts = Date.now()
     const dialled = claimTarget(url), audience = claimAudienceOverride()
     const target = dialled !== undefined && audience !== undefined ? { ...dialled, audience } : dialled
+    const digest = body !== undefined && target !== undefined ? createHash('sha256').update(body).digest('base64url') : undefined
     // gh#133: the header names the host verifies (X-A2A-Ts/-Sig were never read, so every envelope looked absent).
     return {
       'X-A2A-Caller': id.name, 'X-A2A-Caller-Url': callerUrl, 'X-A2A-Caller-Ts': String(ts),
       ...(target !== undefined ? {
         'X-A2A-Caller-Aud': target.audience,
         'X-A2A-Caller-Sig2': sign([ORIGIN_CLAIM_BOUND_TAG, id.name, callerUrl, ts, target.audience, method.toUpperCase(), target.path]),
+        ...(digest !== undefined ? { 'X-A2A-Body-Sha256': digest, 'X-A2A-Caller-Sig3': sign([ORIGIN_CLAIM_BODY_TAG, id.name, callerUrl, ts, target.audience, method.toUpperCase(), target.path, digest]) } : {}),
       } : {}),
       'X-A2A-Caller-Sig': sign([id.name, callerUrl, ts]),
     }
@@ -335,10 +344,13 @@ const TOOL_CATALOG = [
   ['a2a_route', '向远端队发消息并等回复（长任务用 async；context_id 续谈）'],
   ['a2a_status', '网络健康：peers 质量分、在途路由、近期活动环、幂等窗占用'],
   ['a2a_tasks', '账本三层对账：pending（欠回执）/dead（超期）/archived（已结算）'],
+  ['a2a_task_read', '按任务号读回投递给本会话的任务原文（只限接收会话；CLI 的原文本就在 inbox 里）'],
   ['a2a_probe', '探活整个 tracked fleet 或单 peer：可达性+往返延迟+失败原因'],
   ['a2a_exposure', '设本会话的网络可见档：linked（下限）/fleet（自愿上调）'],
   ['a2a_file_send', '把文件暂存在本宿主并授权给目标队，只路由一条引用消息（字节不进消息）'],
   ['a2a_file_fetch', '按引用从暂存宿主拉取文件，核对大小与 sha256 后落到 a2a-inbox/'],
+  ['a2a_file_grants', '列出自己发出、仍有效的文件授权（是否已被取走、所属任务）及暂存区占用与上限'],
+  ['a2a_file_revoke', '按 sha256+目标撤销自己的一条文件授权；文件无人引用时立即回收空间'],
 ]
 
 function printAlignment() {
@@ -354,6 +366,7 @@ function printAlignment() {
     ['a2a probe', 'a2a_probe', 'peer 可达性（评分/链接/验证，读暖态）'],
     ['a2a report', 'a2a_report', '离网报告（CLI 形态：投给宿主进程队信箱）'],
     ['a2a file send/fetch', 'a2a_file_send/fetch', '文件通道（CLI 只能从自己的 home 宿主拉取）'],
+    ['a2a file grants/revoke', 'a2a_file_grants/revoke', '管理自己在 home 宿主上的文件授权（签名证明身份）'],
     ['（N/A）', 'a2a_exposure', '暴露档是会话面概念——CLI 无会话；户口即其可见性'],
     ['（拖卡入队）', 'a2a_team_join/leave', '入队是会话手势——等价物：属主把 CLI 成员卡拖进 canvas 队（画布手势=运营者链接）'],
     ['a2a skills', '（插件无）', '加载本机技能目录输出（CLI 专有）'],
@@ -703,6 +716,91 @@ async function cmdAdmission() {
  * OWNER control credential ($A2A_KEY / pocket cookie), never a CLI identity. A request made this way is an ordinary
  * message, not a person's (owner 2026-11-08): the router judges it against the team's rules, as an agent's.
  */
+const TICKET_OPS = ['report', 'ack', 'handback', 'idle', 'read', 'error']
+const REPORT_STATES = ['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped']
+
+/**
+ * Pi platform P4: a Pi seat's op on the team host it is deposited on — one signed, body-bound request to
+ * /a2a/superagent-team as this identity (the host matches it to the seat by the key pinned when the owner added it).
+ */
+async function cmdTicket() {
+  const [op] = positionals()
+  if (!TICKET_OPS.includes(op ?? '')) usage(`usage: a2a ticket ${TICKET_OPS.join('|')} …  (a Pi seat's op on its team host)`)
+  const dash = process.argv.indexOf('--')
+  const text = dash >= 0 ? process.argv.slice(dash + 1).join(' ') : (flag('--text') ?? '')
+  // #688 R2: a turn fact (idle, read, error) names its ticket, the run of it the work came in (the mailbox row's context id),
+  // and a stable event id, so the host can tell a replay, and a fact from an earlier run of the same ticket.
+  const scoped = () => {
+    const ticket = flag('--ticket'), run = flag('--run'), event = flag('--event')
+    const given = [ticket, run, event].filter(v => v !== undefined).length
+    if (given !== 0 && given !== 3) usage(`ticket ${op}: --ticket, --run and --event go together`)
+    return ticket !== undefined ? { ticket_id: ticket, run_id: run, event_id: event } : {}
+  }
+  let report
+  if (op === 'report') {
+    const state = flag('--state')
+    if (!REPORT_STATES.includes(state ?? '') || text.trim() === '') usage(`usage: a2a ticket report --ticket ID --state ${REPORT_STATES.join('|')} [--question Q --options A|B|… --recommended A [--level P0..P3]] [--answers TRIGGER] [--pull-request URL] -- <summary>`)
+    const ticket = flag('--ticket'), question = flag('--question'), answers = flag('--answers'), pr = flag('--pull-request')
+    // A question reaches the owner as a decision card (C1/C2, as a2a_ticket_report requires): what to decide between, and
+    // what the seat would do. Checked here by the same rules, so a bare question never leaves.
+    let decision = {}
+    if (question !== undefined) {
+      const options = (flag('--options') ?? '').split('|').map(o => o.trim()).filter(o => o !== '')
+      const recommended = flag('--recommended')?.trim(), level = flag('--level')
+      if (options.length < 2 || options.length > 6 || options.some(o => o.length > 300) || new Set(options).size !== options.length) usage('ticket report: --question needs --options A|B|… (2 to 6 different options, each at most 300 characters)')
+      if (recommended === undefined || !options.includes(recommended)) usage('ticket report: --question needs --recommended, one of the --options copied exactly')
+      if (level !== undefined && !['P0', 'P1', 'P2', 'P3'].includes(level)) usage('ticket report: --level is P0, P1, P2 or P3')
+      if (question.length > 2000) usage('ticket report: a question is at most 2000 characters')
+      decision = { options, recommended, ...(level !== undefined ? { level } : {}) }
+    } else if (flag('--options') !== undefined || flag('--recommended') !== undefined || flag('--level') !== undefined) usage('ticket report: --options, --recommended and --level go with --question')
+    report = { state, summary: text, ...(ticket !== undefined ? { ticket_id: ticket } : {}), ...(question !== undefined ? { question, ...decision } : {}), ...(answers !== undefined ? { answers } : {}), ...(pr !== undefined ? { pull_request: pr } : {}) }
+  } else if (op === 'ack' || op === 'handback') {
+    const trigger = flag('--trigger')
+    if (trigger === undefined || (op === 'handback' && text.trim() === '')) usage(`usage: a2a ticket ${op} --trigger ID -- <text>`)
+    report = { trigger_id: trigger, text }
+  } else if (op === 'idle') {
+    report = { quiet: text === '', text, ...scoped() }
+  } else if (op === 'error') {
+    if (text.trim() === '') usage('usage: a2a ticket error [--transient] [--ticket ID --run ID --event ID] -- <what failed>')
+    report = { error: text, transient: has('--transient'), ...scoped() }
+  } else if (op === 'read') {
+    report = scoped()
+  }
+  const member = identity().handle
+  const url = `${home()}/a2a/superagent-team`
+  const body = JSON.stringify({ op, member, ...(report !== undefined ? { report } : {}) })
+  const res = await homeFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...originClaimFor(home())(url, 'POST', body), ...keyHeaders() }, body })
+  const out = await replyOf(res)
+  if (has('--json')) { console.log(JSON.stringify(out)); if (out.ok !== true) process.exitCode = 1; return }
+  if (out.ok !== true) die(`[ticket] ${op} refused${out.code !== undefined ? ` (${String(out.code)})` : ''}: ${String(out.error ?? 'no reason given')}`)
+  console.log(`[ticket] ${op} taken${out.ticket_id !== undefined ? ` · ticket ${String(out.ticket_id)}` : ''}`)
+}
+
+/**
+ * Pi platform P6: install the Pi extension that turns this CLI identity into a Pi seat's bridge. It copies the extension
+ * shipped in this package, checks node, and prints the remaining steps. It never joins a team: admission is the owner's
+ * canvas action (N3).
+ */
+async function cmdPi() {
+  const [sub] = positionals()
+  if (sub !== 'install') usage('usage: a2a pi install [--dir DIR] [--force]')
+  const major = Number(process.versions.node.split('.')[0])
+  if (!(major >= 22)) die(`[pi] node ${process.versions.node}: the Pi seat extension needs node 22 or newer`)
+  const source = new URL('../pi/extension/a2a-seat.ts', import.meta.url)
+  if (!existsSync(source)) die('[pi] this package carries no pi/extension/a2a-seat.ts (reinstall @nelsonlongxiang/dsh-open-a2a-net)')
+  const dir = flag('--dir') ?? join(homedir(), '.pi', 'agent', 'extensions')
+  const target = join(dir, 'a2a-seat.ts')
+  if (existsSync(target) && !has('--force')) die(`[pi] ${target} exists; --force replaces it`)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(target, readFileSync(source))
+  console.log(`[pi] extension installed: ${target}`)
+  const id = storedIdentity()
+  console.log(id === undefined
+    ? '[pi] next: a2a-net init <seat-name> --home <team host URL>, then a2a-net publish --pi-seat'
+    : `[pi] next: a2a-net publish --pi-seat   (identity ${String(id.handle)}; its deposit must be on the team host)`)
+  console.log('[pi] then the team owner adds this handle to the team canvas (planning view 建队); installing does not join a team')
+}
+
 async function cmdSuperagent() {
   const [sub, ...words] = positionals()
   const url = `${home()}/__dsh_a2a/superagent`
@@ -853,20 +951,29 @@ async function renewIfExpiring(handle) {
   if (!Array.isArray(list.deposits)) return
   const mine = list.deposits.find(d => d.handle === handle)
   if (mine !== undefined && mine.expiresAt - Date.now() > 10 * 60_000) return
-  const out = await publishDeposit()
+  const out = await publishDeposit({ renew: true })
   if (out.ok === true) console.error(`[inbox] deposit renewed — ${hoursLeft(out.expiresAt)}h left`)
   else console.error(`[inbox] deposit renewal refused: ${String(out.error)}`)
 }
 
-async function publishDeposit() {
+async function publishDeposit({ renew = false } = {}) {
   const signCard = await loadSignCard()
   const id = identity()
   const privateKey = createPrivateKey(id.privateKeyPem)
   // superagent p1-mailbox-owes (S33): --owes declares, in the signed card, that this identity owes a receipt for what
-  // its mailbox takes; every publish (and --renew) states it afresh, so a publish without it withdraws the declaration.
+  // its mailbox takes; every explicit publish states it afresh, so a publish without it withdraws the declaration.
   // superagent-root-team S5: --declare (or A2A_DECLARE) adds the capabilities a requester takes — only these names.
-  const declared = (flag('--declare') ?? process.env.A2A_DECLARE ?? '').split(',').map(name => name.trim()).filter(name => DECLARABLE.includes(name))
-  const capabilities = { route: true, async: true, ...(has('--owes') ? { owes: true } : {}), ...Object.fromEntries(declared.map(name => [name, true])) }
+  // #688 review F4: what an explicit publish declared is kept in the identity file, and a renewal (inbox --wait --renew)
+  // signs the same declarations: a renewal never withdraws piSeat (or owes) — only an explicit publish without it does.
+  const kept = renew && id.published !== null && typeof id.published === 'object' ? id.published : undefined
+  const declared = kept !== undefined && Array.isArray(kept.declare)
+    ? kept.declare.filter(name => DECLARABLE.includes(name))
+    : [...(flag('--declare') ?? process.env.A2A_DECLARE ?? '').split(','), ...(has('--pi-seat') ? ['piSeat'] : [])].map(name => name.trim()).filter(name => DECLARABLE.includes(name))
+  const owes = kept !== undefined ? kept.owes === true : has('--owes')
+  if (!renew) {
+    try { writeFileSync(IDENTITY, JSON.stringify({ ...id, published: { declare: [...new Set(declared)], owes } }, null, 2), { mode: 0o600 }) } catch { /* the card still goes out; a later renewal then falls back to its own flags */ }
+  }
+  const capabilities = { route: true, async: true, ...(owes ? { owes: true } : {}), ...Object.fromEntries(declared.map(name => [name, true])) }
   const card = signCard({ name: id.name, session: `cli-${id.name}`, team: id.handle, capabilities, expiresAt: Date.now() + 2 * 24 * 60 * 60 * 1000 }, privateKey)
   return await control({ action: 'publish', card: JSON.stringify(card) })
 }
@@ -1140,15 +1247,25 @@ async function cmdFileSend() {
   if (args.length > 16) die('[file send] at most 16 files per send')
   const from = new URL(home()).origin
   const handle = identity().handle
+  // The task this send goes out in: recorded on each grant, so `file grants` can tell them apart.
+  const taskId = taskFlag() ?? newTaskId()
   const files = []
   for (const path of args) {
     let st
     try { st = statSync(path) } catch { die(`[file send] cannot read ${path}`) }
     if (!st.isFile()) die(`[file send] ${path} is not a file`)
     if (st.size > FILE_MAX) die(`[file send] ${path} is ${String(st.size)} bytes; the file channel takes at most ${String(FILE_MAX)}`)
-    const res = await homeFetch(`${home()}/__dsh_a2a/blob?to=${encodeURIComponent(team)}&name=${encodeURIComponent(basename(path))}&by=${encodeURIComponent(handle)}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/octet-stream', ...keyHeaders() }, body: readFileSync(path),
-    })
+    // #692 review F2: staged AS this identity — the target, name, task and bytes all under its signed, body-bound claim.
+    const stageUrl = `${home()}/a2a/blob-stage`
+    const body = Buffer.concat([Buffer.from(`${JSON.stringify({ to: team, name: basename(path), task_id: taskId })}\n`, 'utf8'), readFileSync(path)])
+    let res = await homeFetch(stageUrl, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', ...originClaimFor(home())(stageUrl, 'POST', body), ...keyHeaders() }, body })
+    if (res.status === 404 || res.status === 405) {
+      // An older home host: the control stage face (its grants are the operator's, so file revoke cannot take them back).
+      void res.body?.cancel()
+      res = await homeFetch(`${home()}/__dsh_a2a/blob?to=${encodeURIComponent(team)}&name=${encodeURIComponent(basename(path))}&task_id=${encodeURIComponent(taskId)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/octet-stream', ...keyHeaders() }, body: readFileSync(path),
+      })
+    }
     if (res.status === 401 || res.status === 403) die(keyHint(res.status))
     const out = await replyOf(res)
     if (out.ok !== true) die(`[file send] ${path}: ${String(out.error ?? 'refused')} — a host without the file channel answers 404/405: upgrade it`)
@@ -1157,7 +1274,37 @@ async function cmdFileSend() {
   const note = flag('--note')
   const message = [...(note !== undefined && note !== '' ? [note] : []), ...files.map(fileRef)].join('\n')
   for (const f of files) console.log(`[file send] staged ${f.name} (${String(f.size)} bytes, sha256 ${f.sha256.slice(0, 12)}…) for ${team}`)
-  await sendDirect('file send', { team, message, caller_session: handle, wait: false, task_id: taskFlag() ?? newTaskId() })
+  await sendDirect('file send', { team, message, caller_session: handle, wait: false, task_id: taskId })
+}
+
+/** file grants / file revoke: this identity's own grants on its home host, proven by a signed, body-bound claim. */
+async function grantsOp(body) {
+  const url = `${home()}/a2a/blob-grants`
+  const raw = JSON.stringify(body)
+  const res = await homeFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...originClaimFor(home())(url, 'POST', raw), ...keyHeaders() }, body: raw })
+  if (res.status === 401) die(keyHint(res.status))
+  if (res.status === 404 && body.op === 'list') die('[file grants] the home host has no grants face: upgrade it')
+  return await replyOf(res)
+}
+
+/** file grants: the live grants this identity made, and the store's occupancy and ceilings. */
+async function cmdFileGrants() {
+  const out = await grantsOp({ op: 'list' })
+  if (has('--json')) { console.log(JSON.stringify(out)); if (out.ok !== true) process.exitCode = 1; return }
+  if (out.ok !== true) die(`[file grants] refused (${String(out.code ?? '')}): ${String(out.error ?? '')}`)
+  for (const g of out.grants) console.log(`${g.sha256.slice(0, 12)}… ${String(g.size).padStart(10)} ${g.fetched ? `fetched×${String(g.fetches)}` : 'not fetched'} → ${g.to} · ${g.name} · expires ${g.expiresAt}${g.taskId ? ` · task ${g.taskId}` : ''}`)
+  const u = out.usage
+  console.log(`[file grants] ${String(out.grants.length)} of yours · store ${String(u.files)}/${String(u.maxFiles)} files, ${String(u.bytes)}/${String(u.maxBytes)} bytes`)
+}
+
+/** file revoke <sha256> <to>: revoke one of this identity's own grants; the bytes are freed when nothing else names them. */
+async function cmdFileRevoke() {
+  const [, sha256, to] = positionals()
+  if (!/^[0-9a-f]{64}$/.test(sha256 ?? '') || to === undefined || to === '') usage('usage: a2a file revoke <sha256> <to>')
+  const out = await grantsOp({ op: 'revoke', sha256, to })
+  if (has('--json')) { console.log(JSON.stringify(out)); if (out.ok !== true) process.exitCode = 1; return }
+  if (out.ok !== true) die(`[file revoke] refused (${String(out.code ?? '')}): ${String(out.error ?? '')}`)
+  console.log(`[file revoke] ${sha256.slice(0, 12)}… for ${to} revoked${out.reclaimed ? ` · ${String(out.bytes)} bytes freed` : ''}`)
 }
 
 /** file fetch <ref> [--out DIR]: pull one referenced file (from the home host: the CLI proves itself only there). */
@@ -1351,7 +1498,8 @@ async function main() {
     return
   }
   if (cmd === 'publish') {
-    const out = await publishDeposit()
+    // --renew: sign what the last explicit publish declared (the Pi seat extension renews this way; #688 F4).
+    const out = await publishDeposit({ renew: has('--renew') })
     if (out.ok !== true) die(`[publish] refused: ${String(out.error)}`)
     console.log(`[publish] ${String(out.handle)} online — ${hoursLeft(out.expiresAt)}h left (auto-deregister then; re-publish returns)`)
     console.log(`[publish] card url: ${cardDocUrl(String(out.cardUrl))}`)
@@ -1373,7 +1521,9 @@ async function main() {
     const sub = positionals()[0]
     if (sub === 'send') { await cmdFileSend(); return }
     if (sub === 'fetch') { await cmdFileFetch(); return }
-    usage('usage: a2a file send <path…> <team> [--note TEXT] · a2a file fetch <ref> [--out DIR]')
+    if (sub === 'grants') { await cmdFileGrants(); return }
+    if (sub === 'revoke') { await cmdFileRevoke(); return }
+    usage('usage: a2a file send <path…> <team> [--note TEXT] [--task ID] · a2a file fetch <ref> [--out DIR] · a2a file grants · a2a file revoke <sha256> <to>')
   }
   if (cmd === 'skills') { cmdSkills(); return }
   if (cmd === 'tools') { printAlignment(); return }
@@ -1473,6 +1623,8 @@ async function main() {
   if (cmd === 'receipt') { await cmdReceipt(); return }
   if (cmd === 'admission') { await cmdAdmission(); return }
   if (cmd === 'superagent') { await cmdSuperagent(); return }
+  if (cmd === 'ticket') { await cmdTicket(); return }
+  if (cmd === 'pi') { await cmdPi(); return }
   if (cmd === 'report') {
     const text = positionals().join(' ')
     if (text === '') usage('usage: a2a report <message…> — one-way report into the host process-team mailbox')

@@ -93,6 +93,7 @@ this host's joined-team scope: `[this host]` rows plus peers serving a team this
 | `a2a_whoami` | Who am I on this network? | The calling session's node id, joined/live state, routable handle, roster + canvas memberships, the owner's `teamJoinAllowlist`, the `teamScopeRouting` switch, and recent refused join/leave attempts. |
 | `a2a_teams` | Which teams can I route to? | `[this host]` rows plus in-scope peer teams, with activity excerpts. |
 | `a2a_route` | Send a message to a team. | `context_id` continues a conversation; `async: true` delivers without waiting; fails over across candidates. |
+| `a2a_task_read` | What did that task actually say? | Returns the full original text of an A2A task delivered to THIS session, by task id — for a task `a2a_tasks` shows (brief only, `delivered-unconsumed`) whose message reached the session while it was busy and never entered its conversation. Only the receiving session reads it (anyone else is answered as for a missing task); texts are kept 72 hours (64 KiB of UTF-8 each, clipped beyond). Reading consumes the delivery; the result is peer content. A delivery whose text was lost outright (a steer the host never tracked) is also redelivered when the session is idle, as a queued delivery of the original task, so its claim, withdrawal or unknown outcome is reconciled like any queued task and never resent blindly. |
 | `a2a_tasks` | Which async tasks still owe a receipt? | Three tiers: owed rows keep the follow-up `context_id`; past-TTL rows auto-dead-letter (still settleable); outcomes land in the bounded archive; persisted across restarts. |
 | `a2a_probe` | Is the fleet healthy? | One verified-card fetch per in-scope peer (or one given url); `N reachable, M down`; misses classified `unreachable` vs `rejected`. |
 | `a2a_team_join` | Declare one joined node a member of a team. | Allowlist-gated: only an **exact** name in `teamJoinAllowlist` authorizes a join (empty list denies every join). A wildcard/prefix entry is shown by `a2a_whoami` but authorizes nothing (`[PATTERN_NO_MINT]`); canvas teams are assigned in the workbench, never here (`[CANVAS_TEAM]`). Attempts land in the state face's `registry.teamAudit`. A model tool may only declare membership for the calling session's own node (else `[NOT_SELF]`), and that node must already be joined (else `[NOT_JOINED]`). |
@@ -101,6 +102,8 @@ this host's joined-team scope: `[this host]` rows plus peers serving a team this
 | `a2a_report` | Tell this host's supervision something while off the network. | The one write-ingress to this host that works while unjoined (the read-only `a2a_whoami` is exempt from the join gate too): one-way, lands in the state face's reports ring (newest 64 kept), grants no presence or routing. One report per 30s per session, ≤4000 chars; once the same session has reported the same text 3 times within 10 min, the 4th is refused as a loop. |
 | `a2a_status` | What is this node doing right now? | In-scope tracked peers with quality scores, in-flight routes, recent routing activity, and the idempotency window aggregate (occupancy + claim/replay/conflict counters). |
 | `a2a_file_send` | Hand files to a team without putting them in a message. | Stages each file (≤16 per call, ≤64 MiB each) on this host, granted to that team for 24 hours, and routes ONE message of `[A2A file]` reference lines; the bytes never ride the message (#91). Needs this host to have published a card URL (`announce`), otherwise it refuses to send. |
+| `a2a_file_grants` | See your file grants and the store's space. | Lists the file-channel grants this session made that are still live — sha256, size, name, target, granted/expiry times, the task it went out in, and whether the target fetched it — plus the store's occupancy and ceilings (256 files, 1 GiB). |
+| `a2a_file_revoke` | Take back a file grant. | Revokes one grant this session made, by `sha256` and `to`; when no grant names the file any more its bytes are deleted, so the space is free at once. Another sender's grant is answered as missing. CLI: `a2a-net file grants` / `a2a-net file revoke <sha256> <to>`. |
 | `a2a_file_fetch` | Pull a file someone referenced. | Pulls one `[A2A file]` reference from the host that staged it, carrying this session as `caller_session` and this host node's OriginClaim envelope (a reference naming this host reads the local store directly); checks size and sha256 before saving it under `<cwd>/a2a-inbox/`. A grant names one session (or a whole host, or a canvas team's members); the fetch always marks the session as having read peer content. |
 
 ## a2a-net CLI (callers outside a session)
@@ -121,6 +124,26 @@ a2a-net inbox --new                                      # unread mail; --wait b
 From 0.6.38, `forwardDirect` defaults to `true`: after a local miss the home can forward an authenticated online CLI one hop to a linked peer target. Both operators must link: A links the receiving B member; B links the CLI handle and explicitly pins A as its home. For canvas targets A links only the owner host (#282 S3, same team authorizes; the owner host must run 0.6.37 or later): receipts are admitted and settle only from receivers frozen from the owner's signed card, on that owner's key. With scope and settlement enforcement on, the member-host auto-receipt settles A’s forwarded row and lands in the CLI inbox; `--sync` returns B’s reply, but on the forwarded path a synchronous wait has only a ~15s transport window and times out with `-32005` (delivered, not settled): the target still auto-receipts when it finishes, so reconcile by task id / `inbox` and do not resend blindly; for long work use the default async `route`, then `inbox --wait --renew`. Commands, flags, environment
 variables and exit codes: [`src/skill/references/cli.md`](src/skill/references/cli.md).
 
+
+### Pi seats (a Pi agent as a superagent team member)
+
+A Pi coding agent can work as a member of a superagent team. Its seat is an `a2a-net` identity deposited on the team host
+whose own signed card declares `piSeat` ([docs/design/superagent-pi-platform.md](docs/design/superagent-pi-platform.md)):
+
+```sh
+a2a-net init fleet-pi --home <team host URL>   # the seat's identity, home = the team host
+a2a-net publish --pi-seat                     # deposit with capabilities.piSeat; renewals keep it (publish --renew)
+a2a-net pi install                            # copies the a2a-seat extension into ~/.pi/agent/extensions/ (--dir, --force)
+```
+
+Installing joins no team: the team's owner adds the handle to the team canvas, which pins the seat's key. A renewal
+(`publish --renew`, `inbox --wait --renew`) signs what the last explicit publish declared, so `piSeat` stays; an explicit
+`publish` without `--pi-seat` withdraws it. The extension renews the deposit every hour, keeps its cursor per seat (one
+Pi process consumes a seat at a time), keeps a turn end owed until the host takes it, and polls the seat's mailbox, hands each piece of work to the Pi session, and reports read and turn end. The model answers with
+`a2a-net ticket report|ack|handback|idle|read|error` (signed, body-bound requests to the team host). A seat may not change
+rules or speak for the owner, and a seat whose home is another host is not supported. A question is a decision card:
+`ticket report --question Q --options A|B --recommended A`. A seat's turn end carries no text, so report what changed
+with `ticket report`.
 
 ### Standalone network node (no DSH instance)
 
