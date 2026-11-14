@@ -50,6 +50,11 @@ describe('inbound task bodies (real CLI, real node)', () => {
       const theirs = await read.execute({ task_id: 'direct-tb0000000001' }, runContext({ id: 'session-ffffffffffffffff' } as never)) as Record<string, unknown>
       expect(theirs).toMatchObject({ ok: false, code: 'not-found' })
       expect(JSON.stringify(theirs)).not.toContain('镜像')
+
+      // #693 review F3: a synchronous route (no X-A2A-Guard: the CLI's --sync) keeps the text too.
+      const sync = await runCli(['route', 'dsh/01234567', '--sync', '--task', 'direct-tb0000000002', '同步任务的正文'], env)
+      expect(sync.code, sync.stderr).toBe(0)
+      expect(await read.execute({ task_id: 'direct-tb0000000002' }, runContext(a.agents.agent))).toMatchObject({ ok: true, text: '同步任务的正文' })
     } finally {
       await a.dispose()
     }
