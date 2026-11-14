@@ -52,7 +52,7 @@ usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…> [--task ID]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
-文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR]   (#91: bytes never ride a message)
+文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR] · file grants · file revoke <sha256> <to>   (#91: bytes never ride a message)
 superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
 pi 席位:  publish --pi-seat · publish --renew (keeps the last publish's declarations) · ticket read|idle [--text T] [--ticket ID --event ID] · ticket ack|handback --trigger ID -- <text> · ticket report --ticket ID --state S [--question Q --options A|B --recommended A [--level P1]] -- <summary>
           · ticket error [--transient] -- <what failed> · pi install [--dir DIR] [--force]   (docs/design/superagent-pi-platform.md)
@@ -348,6 +348,8 @@ const TOOL_CATALOG = [
   ['a2a_exposure', '设本会话的网络可见档：linked（下限）/fleet（自愿上调）'],
   ['a2a_file_send', '把文件暂存在本宿主并授权给目标队，只路由一条引用消息（字节不进消息）'],
   ['a2a_file_fetch', '按引用从暂存宿主拉取文件，核对大小与 sha256 后落到 a2a-inbox/'],
+  ['a2a_file_grants', '列出自己发出、仍有效的文件授权（是否已被取走、所属任务）及暂存区占用与上限'],
+  ['a2a_file_revoke', '按 sha256+目标撤销自己的一条文件授权；文件无人引用时立即回收空间'],
 ]
 
 function printAlignment() {
@@ -363,6 +365,7 @@ function printAlignment() {
     ['a2a probe', 'a2a_probe', 'peer 可达性（评分/链接/验证，读暖态）'],
     ['a2a report', 'a2a_report', '离网报告（CLI 形态：投给宿主进程队信箱）'],
     ['a2a file send/fetch', 'a2a_file_send/fetch', '文件通道（CLI 只能从自己的 home 宿主拉取）'],
+    ['a2a file grants/revoke', 'a2a_file_grants/revoke', '管理自己在 home 宿主上的文件授权（签名证明身份）'],
     ['（N/A）', 'a2a_exposure', '暴露档是会话面概念——CLI 无会话；户口即其可见性'],
     ['（拖卡入队）', 'a2a_team_join/leave', '入队是会话手势——等价物：属主把 CLI 成员卡拖进 canvas 队（画布手势=运营者链接）'],
     ['a2a skills', '（插件无）', '加载本机技能目录输出（CLI 专有）'],
@@ -1243,15 +1246,25 @@ async function cmdFileSend() {
   if (args.length > 16) die('[file send] at most 16 files per send')
   const from = new URL(home()).origin
   const handle = identity().handle
+  // The task this send goes out in: recorded on each grant, so `file grants` can tell them apart.
+  const taskId = taskFlag() ?? newTaskId()
   const files = []
   for (const path of args) {
     let st
     try { st = statSync(path) } catch { die(`[file send] cannot read ${path}`) }
     if (!st.isFile()) die(`[file send] ${path} is not a file`)
     if (st.size > FILE_MAX) die(`[file send] ${path} is ${String(st.size)} bytes; the file channel takes at most ${String(FILE_MAX)}`)
-    const res = await homeFetch(`${home()}/__dsh_a2a/blob?to=${encodeURIComponent(team)}&name=${encodeURIComponent(basename(path))}&by=${encodeURIComponent(handle)}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/octet-stream', ...keyHeaders() }, body: readFileSync(path),
-    })
+    // #692 review F2: staged AS this identity — the target, name, task and bytes all under its signed, body-bound claim.
+    const stageUrl = `${home()}/a2a/blob-stage`
+    const body = Buffer.concat([Buffer.from(`${JSON.stringify({ to: team, name: basename(path), task_id: taskId })}\n`, 'utf8'), readFileSync(path)])
+    let res = await homeFetch(stageUrl, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', ...originClaimFor(home())(stageUrl, 'POST', body), ...keyHeaders() }, body })
+    if (res.status === 404 || res.status === 405) {
+      // An older home host: the control stage face (its grants are the operator's, so file revoke cannot take them back).
+      void res.body?.cancel()
+      res = await homeFetch(`${home()}/__dsh_a2a/blob?to=${encodeURIComponent(team)}&name=${encodeURIComponent(basename(path))}&task_id=${encodeURIComponent(taskId)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/octet-stream', ...keyHeaders() }, body: readFileSync(path),
+      })
+    }
     if (res.status === 401 || res.status === 403) die(keyHint(res.status))
     const out = await replyOf(res)
     if (out.ok !== true) die(`[file send] ${path}: ${String(out.error ?? 'refused')} — a host without the file channel answers 404/405: upgrade it`)
@@ -1260,7 +1273,37 @@ async function cmdFileSend() {
   const note = flag('--note')
   const message = [...(note !== undefined && note !== '' ? [note] : []), ...files.map(fileRef)].join('\n')
   for (const f of files) console.log(`[file send] staged ${f.name} (${String(f.size)} bytes, sha256 ${f.sha256.slice(0, 12)}…) for ${team}`)
-  await sendDirect('file send', { team, message, caller_session: handle, wait: false, task_id: taskFlag() ?? newTaskId() })
+  await sendDirect('file send', { team, message, caller_session: handle, wait: false, task_id: taskId })
+}
+
+/** file grants / file revoke: this identity's own grants on its home host, proven by a signed, body-bound claim. */
+async function grantsOp(body) {
+  const url = `${home()}/a2a/blob-grants`
+  const raw = JSON.stringify(body)
+  const res = await homeFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...originClaimFor(home())(url, 'POST', raw), ...keyHeaders() }, body: raw })
+  if (res.status === 401) die(keyHint(res.status))
+  if (res.status === 404 && body.op === 'list') die('[file grants] the home host has no grants face: upgrade it')
+  return await replyOf(res)
+}
+
+/** file grants: the live grants this identity made, and the store's occupancy and ceilings. */
+async function cmdFileGrants() {
+  const out = await grantsOp({ op: 'list' })
+  if (has('--json')) { console.log(JSON.stringify(out)); if (out.ok !== true) process.exitCode = 1; return }
+  if (out.ok !== true) die(`[file grants] refused (${String(out.code ?? '')}): ${String(out.error ?? '')}`)
+  for (const g of out.grants) console.log(`${g.sha256.slice(0, 12)}… ${String(g.size).padStart(10)} ${g.fetched ? `fetched×${String(g.fetches)}` : 'not fetched'} → ${g.to} · ${g.name} · expires ${g.expiresAt}${g.taskId ? ` · task ${g.taskId}` : ''}`)
+  const u = out.usage
+  console.log(`[file grants] ${String(out.grants.length)} of yours · store ${String(u.files)}/${String(u.maxFiles)} files, ${String(u.bytes)}/${String(u.maxBytes)} bytes`)
+}
+
+/** file revoke <sha256> <to>: revoke one of this identity's own grants; the bytes are freed when nothing else names them. */
+async function cmdFileRevoke() {
+  const [, sha256, to] = positionals()
+  if (!/^[0-9a-f]{64}$/.test(sha256 ?? '') || to === undefined || to === '') usage('usage: a2a file revoke <sha256> <to>')
+  const out = await grantsOp({ op: 'revoke', sha256, to })
+  if (has('--json')) { console.log(JSON.stringify(out)); if (out.ok !== true) process.exitCode = 1; return }
+  if (out.ok !== true) die(`[file revoke] refused (${String(out.code ?? '')}): ${String(out.error ?? '')}`)
+  console.log(`[file revoke] ${sha256.slice(0, 12)}… for ${to} revoked${out.reclaimed ? ` · ${String(out.bytes)} bytes freed` : ''}`)
 }
 
 /** file fetch <ref> [--out DIR]: pull one referenced file (from the home host: the CLI proves itself only there). */
@@ -1477,7 +1520,9 @@ async function main() {
     const sub = positionals()[0]
     if (sub === 'send') { await cmdFileSend(); return }
     if (sub === 'fetch') { await cmdFileFetch(); return }
-    usage('usage: a2a file send <path…> <team> [--note TEXT] · a2a file fetch <ref> [--out DIR]')
+    if (sub === 'grants') { await cmdFileGrants(); return }
+    if (sub === 'revoke') { await cmdFileRevoke(); return }
+    usage('usage: a2a file send <path…> <team> [--note TEXT] [--task ID] · a2a file fetch <ref> [--out DIR] · a2a file grants · a2a file revoke <sha256> <to>')
   }
   if (cmd === 'skills') { cmdSkills(); return }
   if (cmd === 'tools') { printAlignment(); return }
