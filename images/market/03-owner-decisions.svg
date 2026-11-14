@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img">
+<defs>
+<pattern id="dot" width="25" height="25" patternUnits="userSpaceOnUse">
+<circle cx="2" cy="2" r=".8" fill="#8a9aa8" opacity=".18"/>
+</pattern>
+<marker id="arrow" markerWidth="11" markerHeight="11" refX="9" refY="5" orient="auto-start-reverse">
+<path d="M1 1 L9 5 L1 9" fill="none" stroke="#375f88" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+<rect width="1600" height="1000" fill="#fcfaf5"/>
+<rect width="1600" height="1000" fill="url(#dot)"/>
+<g font-family="'Segoe UI','Microsoft YaHei',sans-serif">
+<g font-family="'Segoe UI','Microsoft YaHei',sans-serif">
+<text x="78" y="64" font-size="20" fill="#526b80" font-weight="600">OPEN A2A NET  /  SUPERAGENT</text>
+<rect x="1195" y="33" width="325" height="44" rx="22" fill="#e8eff6" stroke="#bdcddc"/>
+<text x="1220" y="62" font-size="19" fill="#345c80" font-weight="600">OPT-IN 0.8 PREVIEW</text>
+<text x="77" y="150" font-size="48" fill="#172f49" font-weight="650">不是只抛问题，而是给你可选的方案</text>
+<text x="80" y="195" font-size="22" fill="#678095" font-weight="400">A decision includes a question, choices and a recommendation</text>
+<text x="80" y="923" font-size="20" fill="#617489" font-weight="400">原创手绘功能示意 · 虚构案例 · 非实际产品界面</text>
+<text x="80" y="955" font-size="17" fill="#8292a0" font-weight="400">Original illustration · Fictional example · Not a product UI capture</text>
+<text x="1460" y="948" font-size="26" fill="#647e96" font-weight="500">03</text>
+</g>
+<g transform="rotate(-0.5 284.5 546.5)">
+<path d="M93,277 Q284.5,274 477,279 Q488,280 485,292 L483,806 Q485,819 472,816 L96,817 Q82,816 84,804 L86,288 Q84,275 93,277Z" fill="#eaf1fb" stroke="#31455a" stroke-width="2.7"/>
+<path d="M96,282 Q284.5,278 473,284" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
+</g>
+<text x="114" y="323" font-size="29" fill="#315675" font-weight="650">工单推进中</text>
+<text x="115" y="362" font-size="17" fill="#7c93a8" font-weight="600">TICKET IN PROGRESS</text>
+<text x="114" y="421" font-size="23" fill="#526e87" font-weight="400">成员发现一个真正的取舍</text>
+<text x="114" y="464" font-size="23" fill="#526e87" font-weight="400">把事实、选项和建议说明白</text>
+<text x="114" y="507" font-size="23" fill="#526e87" font-weight="400">不是擅自扩大工单范围</text>
+<path d="M294,566 Q294,607.5 294,649" fill="none" stroke="#375f88" stroke-width="3.5" stroke-linecap="round"  marker-end="url(#arrow)"/>
+<text x="114" y="707" font-size="28" fill="#315675" font-weight="600">由人作出关键决定</text>
+<text x="114" y="749" font-size="19" fill="#8595a6" font-weight="400">Owner remains in control</text>
+<path d="M501,499 Q538,499 575,499" fill="none" stroke="#375f88" stroke-width="3.5" stroke-linecap="round"  marker-end="url(#arrow)"/>
+<g transform="rotate(0.4 1057.5 546.5)">
+<path d="M609,277 Q1057.5,274 1507,279 Q1518,280 1515,292 L1513,806 Q1515,819 1502,816 L612,817 Q598,816 600,804 L602,288 Q600,275 609,277Z" fill="#fff9eb" stroke="#31455a" stroke-width="2.7"/>
+<path d="M612,282 Q1057.5,278 1503,284" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
+</g>
+<text x="634" y="322" font-size="19" fill="#9c8155" font-weight="650">示例决策卡 / EXAMPLE DECISION</text>
+<text x="635" y="375" font-size="35" fill="#5c4a2c" font-weight="650">先做哪个场景的调研？</text>
+<text x="635" y="415" font-size="21" fill="#9c8a6b" font-weight="400">Which scenario should the research cover first?</text>
+<g transform="rotate(-0.35 835 515)">
+<path d="M644,450 Q835,447 1027,452 Q1038,453 1035,465 L1033,570 Q1035,583 1022,580 L647,581 Q633,580 635,568 L637,461 Q635,448 644,450Z" fill="#e8f0e3" stroke="#31455a" stroke-width="2.7"/>
+<path d="M647,455 Q835,451 1023,457" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
+</g>
+<text x="661" y="487" font-size="25" fill="#486345" font-weight="650">A  团队调研</text>
+<text x="661" y="526" font-size="22" fill="#658260" font-weight="400">推荐：更贴近当前需求</text>
+<text x="661" y="555" font-size="16" fill="#879c7f" font-weight="400">Recommended for this request</text>
+<g transform="rotate(0.2 1266 515)">
+<path d="M1069,450 Q1266,447 1464,452 Q1475,453 1472,465 L1470,570 Q1472,583 1459,580 L1072,581 Q1058,580 1060,568 L1062,461 Q1060,448 1069,450Z" fill="#ffffff" stroke="#31455a" stroke-width="2.7"/>
+<path d="M1072,455 Q1266,451 1460,457" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
+</g>
+<text x="1086" y="487" font-size="25" fill="#657387" font-weight="600">B  开发协作</text>
+<text x="1086" y="526" font-size="22" fill="#8793a2" font-weight="400">保留为后续独立范围</text>
+<text x="1086" y="555" font-size="16" fill="#9aa5b1" font-weight="400">A separate follow-up scope</text>
+<path d="M1035,615 Q1035,650.5 1035,686" fill="none" stroke="#375f88" stroke-width="3.5" stroke-linecap="round"  marker-end="url(#arrow)"/>
+<text x="738" y="741" font-size="25" fill="#6b5e45" font-weight="600">你的决定 → 回到原工单 → 成员继续执行</text>
+<text x="810" y="779" font-size="18" fill="#9b8f7b" font-weight="400">Decision returns to the same ticket</text>
+<text x="87" y="866" font-size="21" fill="#6e7b86" font-weight="400">来源、规则和重大权限变更仍受人的配置与确认约束；默认 observe 不会自动接下推断工作。</text>
+</g>
+</svg>

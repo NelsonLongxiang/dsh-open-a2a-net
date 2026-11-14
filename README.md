@@ -1,29 +1,92 @@
-# @nelsonlongxiang/dsh-open-a2a-net
+# Open A2A Net · Superagent teams and A2A collaboration
 
 English | [中文](README_zh.md)
 
 [![npm](https://img.shields.io/npm/v/@nelsonlongxiang/dsh-open-a2a-net?label=npm)](https://www.npmjs.com/package/@nelsonlongxiang/dsh-open-a2a-net)
 
-Open A2A network plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH): turns a DSH
-deployment into one node of a decentralized agent network — no central server, no registry.
+**New in the preview: Superagent turns requests into team tickets—a router accepts work, fixed members execute it, progress stays visible, and owner decisions arrive as option-based cards.**
 
-Each node publishes a **signed, expiring agent card** at `/.well-known/agent-card.json`, discovers peers through
-**seed URLs and referrals** (each card lists the peers it knows), resolves names through **zone delegations**
-(GNUnet GNS-style: a card may delegate a name to another zone), and routes **directly** to a peer's team with
-failover across the reachable half of candidates. Every main session can additionally be exposed as a **session
-node** other hosts can discover and join from the web sidebar.
+> **Version boundary: Superagent teams belong to the opt-in 0.8 preview.** On 2026-11-14 npm `latest` was still 0.7.0 and `preview` was 0.8.1-preview.25. The default install does not imply the new capabilities below.
 
-| The sidebar network panel | Context message display |
+An open-source plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). The A2A foundation handles discovery, addressing, routing and receipts between sessions and hosts. **Superagent** adds requests, scoped tickets, fixed members and human decisions on top—not just messages between multiple chats.
+
+## Preview highlight: Superagent turns routing into a visible workflow
+
+### Follow one request through the team
+
+```text
+Your request (scope, deliverable, completion criteria)
+                      ↓
+Router assesses and accepts → scoped ticket → assigned member
+                      ↑                           ↓
+        Your input and decisions ← progress / waiting / reviewable result
+```
+
+This is a workflow illustration, not a completed case study or a promise to accept every request.
+
+| What matters to you | How Superagent helps |
 | --- | --- |
-| ![Sidebar network panel](images/image-01.png) | ![Context message display](images/image-02.png) |
+| Submit a request instead of relaying it to every chat | Use the workbench or right-bar request view. The router checks source admission and team rules, then creates a scoped ticket for accepted work. |
+| See who is working and what is waiting | Tickets expose the assignee, stage and latest report. Members report progress, waiting, blocked, failed or ready-for-review work. Busy fixed members queue work; the executor does not open new sessions. |
+| Keep follow-ups and reviews with the work | Input on the same ticket thread reaches its member. When a PR is attached, review comments return to the ticket and merge/close state continues to be followed. |
+| Receive actionable choices when a person must decide | Decision cards carry a question, 2–6 options and a recommendation. The owner decides in the pending-decisions view and the answer returns to the ticket. |
+| Use fixed members across hosts | Linked-host members are supported with explicit consent and identity pins on both sides—not remote takeover of arbitrary sessions. |
 
-## Install
+### People control rules, sources and significant decisions
+
+- **Form a team before taking work.** The operator names the router, fixed members, roles/rules and permitted sources, then binds the team. The engine stays idle until it is bound. Each member executes one ticket at a time; other tickets wait.
+- **Observe does not mean auto-accept.** `off / observe / auto` governs work inferred from agent messages. The default `observe` records “would accept” without taking the work. Explicit human requests still require admitted sources.
+- **Ready is not independently accepted.** A `ready` report means reviewable work; an attached PR remains followed until merge or close. Project tests, independent acceptance and release authority remain separate.
+- **External intake is opt-in.** A2A intake is controlled by the bot list and accept mode. GitHub Issue intake is off by default and requires owner-configured repositories and allowed users; this is not automatic monitoring of every issue.
+- **No silent expansion of authority.** Rule changes need human confirmation. Members cannot widen tickets, open sessions or directly dispatch to other teams; outbound team requests follow the configured approval flow.
+
+See the [released preview Superagent guide](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/6ca847560f9bc90c17be64e9558f830a4abf5113/src/skill/references/superagent.md). Root teams are still marked in progress and are not represented here as a mature capability.
+
+### How is this different from an ordinary canvas team?
+
+| Ordinary A2A collaboration | Superagent team (0.8 preview) |
+| --- | --- |
+| Which sessions are reachable, where does this message go, and has a receipt arrived? | Is this request accepted, who owns the ticket, where does it stand, and what needs a person’s decision? |
+| Discover routable teams; the caller organizes the work | The router accepts and assigns work, fixed members execute it, and reports and follow-ups remain attached to tickets |
+
+## The A2A foundation still matters
+
+- Session discovery, direct routing and visual canvas teams on one host or across linked hosts.
+- Signed agent cards, seeds and referrals without a central registry service.
+- Async tasks followed by task id through pending receipts, dead letters and the archive. **Delivered is not completed.**
+- Model tools for ordinary session collaboration; a CLI with its own identity, home and mailbox for callers outside a session.
+
+## Superagent, illustrated
+
+The following artwork is **original hand-drawn-style functional illustration with a fictional example—not a product UI capture, interface layout or evidence of completed work**. The illustrations explain the opt-in preview workflow.
+
+![Original Superagent workflow illustration; fictional example, not a product UI](images/market/01-superagent-flow.png)
+
+![Original ticket-progress illustration; fictional example, not a product UI](images/market/02-ticket-progress.png)
+
+![Original owner-decision illustration; fictional example, not a product UI](images/market/03-owner-decisions.png)
+
+## Install and try one request
+
+**For the Superagent preview highlight described here, explicitly opt in:**
+
+```sh
+dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net@preview
+```
+
+For the 0.7.0 default release’s ordinary A2A network capabilities first:
 
 ```sh
 dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 ```
 
-Restart `dsh web`, then open the sidebar network panel (footer action).
+Tags move. Record the actual plugin and DSH versions when reporting issues. These commands target the `web` profile of regular `dsh web`; replace it for a custom profile and use the application’s plugin manager on Desktop. Restart and open the workbench as documented for your chosen release.
+
+1. Bind a test team: choose the router, members, permitted sources and rules. Cross-host members require links and consent on both sides.
+2. Submit one bounded request, for example: “Investigate this failing test and propose a fix PR. Do not deploy. Explain the result with test evidence.”
+3. Follow the ticket’s member, stage and reports. Decide cards that need your judgement, then review the deliverable under your project’s acceptance process rather than treating self-reported `ready` as done.
+
+**Trust boundaries:** cross-host operation requires setup; `announce` is off by default. Configure authentication before exposing a listener beyond loopback. Listing is not a security audit or a promise of universal A2A interoperability.
 
 (As a package name, a local path, or a Git URL; the argument is handed to pnpm unchanged. The package's `prepare`
 script is `pnpm build`, but only a Git URL install triggers it, and pnpm 11 blocks a Git package's build script:
@@ -38,7 +101,7 @@ tool runtime; the card route `/.well-known/agent-card.json` is registered only w
 
 ## What you get
 
-- **Model tools** (twelve, see the table below) — `a2a_teams` lists the teams this node can see (its own rows
+- **Model tools** (see the table below) — `a2a_teams` lists the teams this node can see (its own rows
   plus peer teams inside the joined-team scope); `a2a_route`
   sends one message to a team, reuses `context_id` to continue a remote conversation, and fails over across
   candidates when a peer is unreachable. `a2a_tasks` reconciles the receipt contract across three tiers: every route that leaves a
@@ -84,7 +147,7 @@ tool runtime; the card route `/.well-known/agent-card.json` is registered only w
 
 ## Model tools at a glance
 
-Twelve tools. With `teamScopeInfo` on (the default), `a2a_teams`, `a2a_status` and `a2a_probe` answer from
+With `teamScopeInfo` on (the default), `a2a_teams`, `a2a_status` and `a2a_probe` answer from
 this host's joined-team scope: `[this host]` rows plus peers serving a team this host's nodes declared.
 `a2a_tasks` (this host's own dispatch ledger) stays unscoped.
 

@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img">
+<defs>
+<pattern id="dot" width="25" height="25" patternUnits="userSpaceOnUse">
+<circle cx="2" cy="2" r=".8" fill="#8a9aa8" opacity=".18"/>
+</pattern>
+<marker id="arrow" markerWidth="11" markerHeight="11" refX="9" refY="5" orient="auto-start-reverse">
+<path d="M1 1 L9 5 L1 9" fill="none" stroke="#375f88" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+<rect width="1600" height="1000" fill="#fcfaf5"/>
+<rect width="1600" height="1000" fill="url(#dot)"/>
+<g font-family="'Segoe UI','Microsoft YaHei',sans-serif">
+<g font-family="'Segoe UI','Microsoft YaHei',sans-serif">
+<text x="78" y="64" font-size="20" fill="#526b80" font-weight="600">OPEN A2A NET  /  SUPERAGENT</text>
+<rect x="1195" y="33" width="325" height="44" rx="22" fill="#e8eff6" stroke="#bdcddc"/>
+<text x="1220" y="62" font-size="19" fill="#345c80" font-weight="600">OPT-IN 0.8 PREVIEW</text>
+<text x="77" y="150" font-size="48" fill="#172f49" font-weight="650">谁在做、在等什么，一眼看清</text>
+<text x="80" y="195" font-size="22" fill="#678095" font-weight="400">Assigned work, waiting input and reviewable deliverables</text>
+<text x="80" y="923" font-size="20" fill="#617489" font-weight="400">原创手绘功能示意 · 虚构案例 · 非实际产品界面</text>
+<text x="80" y="955" font-size="17" fill="#8292a0" font-weight="400">Original illustration · Fictional example · Not a product UI capture</text>
+<text x="1460" y="948" font-size="26" fill="#647e96" font-weight="500">02</text>
+</g>
+<g transform="rotate(0.1 799 537.5)">
+<path d="M88,273 Q799,270 1511,275 Q1522,276 1519,288 L1517,792 Q1519,805 1506,802 L91,803 Q77,802 79,790 L81,284 Q79,271 88,273Z" fill="#ffffff" stroke="#31455a" stroke-width="2.7"/>
+<path d="M91,278 Q799,274 1507,280" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
+</g>
+<text x="110" y="319" font-size="25" fill="#314b62" font-weight="650">虚构协作案例：产品调研简报</text>
+<text x="110" y="353" font-size="16" fill="#8999a8" font-weight="600">FICTIONAL EXAMPLE  /  PRODUCT RESEARCH BRIEF</text>
+<path d="M484,405 Q518.5,405 553,405" fill="none" stroke="#375f88" stroke-width="3.5" stroke-linecap="round"  marker-end="url(#arrow)"/>
+<path d="M1032,405 Q1066,405 1100,405" fill="none" stroke="#375f88" stroke-width="3.5" stroke-linecap="round"  marker-end="url(#arrow)"/>
+<g transform="rotate(-0.4 295.5 553)">
+<path d="M119,386 Q295.5,383 473,388 Q484,389 481,401 L479,710 Q481,723 468,720 L122,721 Q108,720 110,708 L112,397 Q110,384 119,386Z" fill="#e8f1ff" stroke="#31455a" stroke-width="2.7"/>
+<path d="M122,391 Q295.5,387 469,393" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
+</g>
+<text x="136" y="429" font-size="25" fill="#315e87" font-weight="600">进行中  ·  Working</text>
+<text x="137" y="480" font-size="25" fill="#243d55" font-weight="600">调研成员 · 汇集公开来源</text>
+<text x="137" y="528" font-size="22" fill="#59738c" font-weight="400">最近报告：已整理主要差异</text>
+<text x="137" y="569" font-size="22" fill="#59738c" font-weight="400">下一步：交叉核对关键结论</text>
+<text x="137" y="610" font-size="22" fill="#59738c" font-weight="400">责任与阶段留在工单上</text>
+<g transform="rotate(0.4 799.5 553)">
+<path d="M577,386 Q799.5,383 1023,388 Q1034,389 1031,401 L1029,710 Q1031,723 1018,720 L580,721 Q566,720 568,708 L570,397 Q568,384 577,386Z" fill="#fff2d6" stroke="#31455a" stroke-width="2.7"/>
+<path d="M580,391 Q799.5,387 1019,393" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
+</g>
+<text x="595" y="429" font-size="25" fill="#896024" font-weight="600">待你决定  ·  Needs you</text>
+<text x="595" y="480" font-size="25" fill="#5a4a30" font-weight="600">简报侧重哪个使用场景？</text>
+<text x="595" y="528" font-size="22" fill="#8b7757" font-weight="400">A. 团队调研　B. 开发协作</text>
+<text x="595" y="569" font-size="22" fill="#8b7757" font-weight="400">推荐：先覆盖团队调研</text>
+<text x="595" y="610" font-size="22" fill="#8b7757" font-weight="400">你的选择返回对应成员</text>
+<g transform="rotate(-0.5 1300.5 553)">
+<path d="M1123,386 Q1300.5,383 1479,388 Q1490,389 1487,401 L1485,710 Q1487,723 1474,720 L1126,721 Q1112,720 1114,708 L1116,397 Q1114,384 1123,386Z" fill="#e8f2e8" stroke="#31455a" stroke-width="2.7"/>
+<path d="M1126,391 Q1300.5,387 1475,393" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
+</g>
+<text x="1141" y="429" font-size="25" fill="#437148" font-weight="600">待审交付  ·  Ready</text>
+<text x="1141" y="480" font-size="25" fill="#304f36" font-weight="600">简报 + 来源清单</text>
+<text x="1141" y="528" font-size="22" fill="#638168" font-weight="400">成员已报告可供查看</text>
+<text x="1141" y="569" font-size="22" fill="#638168" font-weight="400">由你或项目流程复核</text>
+<text x="1141" y="610" font-size="22" fill="#638168" font-weight="400">不是自动验收通过</text>
+<g transform="rotate(0 798 853.5)">
+<path d="M89,832 Q798,829 1508,834 Q1519,835 1516,847 L1514,865 Q1516,878 1503,875 L92,876 Q78,875 80,863 L82,843 Q80,830 89,832Z" fill="#f4f1e9" stroke="#31455a" stroke-width="2.7"/>
+<path d="M92,837 Q798,833 1504,839" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
+</g>
+<text x="106" y="861" font-size="21" fill="#6c6c67" font-weight="400">固定成员忙时排队；ready ≠ 验收通过。以下是功能概念，不是产品界面布局。</text>
+</g>
+</svg>
