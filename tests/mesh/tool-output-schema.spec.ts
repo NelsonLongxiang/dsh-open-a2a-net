@@ -63,4 +63,28 @@ describe('read tools validate against their own output schema (real runtime, rea
       expect(mine).not.toHaveProperty('auth')
     } finally { await A.dispose(); await B.dispose() }
   }, 90_000)
+
+  it('a2a_teams listing everything still validates when a peer is unreachable (its kept card\'s rows carry unreachable)', async () => {
+    // Production feedback 2026-11-14: the full listing failed the output schema while a peer was down; a query that
+    // filtered those rows out hid it.
+    const pA = await reservePort(); const pB = await reservePort()
+    const open = { sessionNodes: true, teamScopeInfo: false, cardCacheTtlMs: 50 }
+    const A = await bootNode({ name: 'A', session: 'hostA', team: 'alpha', agentId: A_ID, port: pA, peers: [`http://127.0.0.1:${pB}`], home: tmpHome(), ...open } as never)
+    const B = await bootNode({ name: 'B', session: 'hostB', team: 'cargo', agentId: B_ID, port: pB, peers: [`http://127.0.0.1:${pA}`], home: tmpHome(), ...open } as never)
+    let bDown = false
+    try {
+      await postJson(A.baseUrl, '/__dsh_a2a/join', { id: A_ID })
+      await postJson(B.baseUrl, '/__dsh_a2a/join', { id: B_ID })
+      // A has B's card …
+      await vi.waitFor(async () => { const out = await viaRuntime(A, 'a2a_teams'); expect(JSON.stringify(out.value)).toContain('cargo/') }, { timeout: 10000 })
+      // … then B goes away: A keeps B's last card and marks its rows unreachable.
+      await B.dispose(); bDown = true
+      await vi.waitFor(async () => {
+        const out = await viaRuntime(A, 'a2a_teams')
+        expect(out.isError, JSON.stringify(out.error ?? out.value).slice(0, 400)).not.toBe(true)
+        const rows = (out.value as { teams: Array<Record<string, unknown>> }).teams
+        expect(rows.some(r => String(r.team).startsWith('cargo/') && r.unreachable === true)).toBe(true)
+      }, { timeout: 15000 })
+    } finally { await A.dispose(); if (!bDown) await B.dispose() }
+  }, 90_000)
 })

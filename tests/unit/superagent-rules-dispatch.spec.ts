@@ -4,7 +4,7 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { guiOwnerProven, touchesRules } from '../../src/superagent/host/owner-proof.ts'
+import { touchesRules } from '../../src/superagent/host/owner-proof.ts'
 import { DEFAULT_SETTINGS, parseSettings } from '../../src/superagent/host/policy.ts'
 
 const canvasOf = (ids: string[]) => (name: string) => name === 'team' ? { local: ids, remote: [] } : undefined
@@ -216,14 +216,7 @@ describe('the owner asks in the session', () => {
 })
 
 describe('the owner\'s proof for a page edit', () => {
-  const host = (auth: boolean) => vi.fn(async (_url: string, init: RequestInit) => ({ status: !auth ? 404 : new Headers(init.headers).has('cookie') ? 404 : 401 }))
-  it('needs a cookie the host accepts and a host that refuses without one', async () => {
-    expect(await guiOwnerProven('http://h', 'c=1', host(true))).toBe(true)
-    expect(await guiOwnerProven('http://h', undefined, host(true))).toBe(false)
-    expect(await guiOwnerProven('http://h', 'c=1', vi.fn(async () => ({ status: 401 })))).toBe(false)
-    expect(await guiOwnerProven('http://h', 'c=1', host(false))).toBe(false)
-    expect(await guiOwnerProven(undefined, 'c=1', host(true))).toBe(false)
-  })
+  // Original-request browser-owner proof is exercised in superagent-owner-proof.spec.ts.
   it('asks only for writes that touch a rule', () => {
     for (const settings of [{ rules: [] }, { dispatch: '' }, { profiles: {} }]) expect(touchesRules(settings)).toBe(true)
     expect(touchesRules({ acceptMode: 'auto', bots: { a2a: [] } })).toBe(false)

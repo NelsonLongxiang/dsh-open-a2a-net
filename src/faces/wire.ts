@@ -125,6 +125,12 @@ export interface WireDeps {
   readonly scanSessionLogList: () => Array<{ id: string; mtimeMs: number; sizeBytes: number }>
   readonly readSessionLogTail: (id: string, limit: number) => { ok: true; id: string; messages: Array<{ role: string; text: string; time?: number }> } | { ok: false; error: string }
   readonly taskLedger: TaskLedger
+  /**
+   * Superagent intake (owner ruling 2026-11-14, option B): the canvas team a request from a session on a linked host may
+   * reach, or undefined. Only a superagent team's canvas address, only a bound claim from a linked peer's root card whose
+   * zone covers the caller, never this host's own key; the team owner's sender card decides the rest (M12).
+   */
+  readonly superagentIntakeBasis?: (team: string, caller: string, claim: Extract<OriginClaimResult, { ok: true }>, taskId: string) => Promise<string | undefined>
   /** Keep an admitted session delivery's text for its receiver (src/task-bodies.ts; receipts are skipped there). */
   readonly keepTaskBody?: (taskId: string, target: Agent, from: string, message: string) => void
   readonly refuseIfFlooded: (caller: string, message: string, team: string, taskId: string, res: ServerResponse) => boolean
@@ -721,6 +727,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           if (teamAnswer !== null && earlyClaim.ok) {
             const basis = d.teamReceiptBasis?.(teamAnswer.taskId, caller, team, teamAnswer.envelope?.onBehalfOf, earlyClaim)
             if (basis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'peer-org', basis: [basis] }
+          }
+          // Owner ruling 2026-11-14 (option B): a request (never a receipt) from a session on a linked host to a superagent
+          // team's canvas address passes the host gate; whether the team takes it is the team owner's decision (M12 card).
+          if (!admission.ok && echoed === null && teamAnswer === null && earlyClaim.ok && parseReceipt(message) === null) {
+            // The canvas address the caller named (a superagent team's mailbox is its own handle: `mailTeam` is not it).
+            const basis = await d.superagentIntakeBasis?.(team, caller, earlyClaim, taskId).catch(() => undefined)
+            if (basis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'superagent-intake', basis: [basis] }
           }
           const callerRefusal = refusalOf(admission)
           if (callerRefusal !== undefined || !admission.ok) {

@@ -74,7 +74,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly teamMemberships: TeamMembershipStore
   readonly cliDeposits: CliDepositStore
   /** superagent p1-mail-admission (M-2): the admission `caller` would get delivering to a deposited handle now. */
-  readonly admissionRecheck: (caller: string, handle: string, local: boolean) => Admission
+  readonly admissionRecheck: (caller: string, handle: string, local: boolean, task?: string) => Admission
   readonly groupStore: GroupStore
   readonly canvasStore: CanvasStore
   readonly canvasMemberForWrite: (ref: string, peer?: unknown) => Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }>
@@ -679,14 +679,15 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // superagent p1-mail-admission (M-2): how `caller` would be admitted to this identity NOW. Answered only to the
           // identity itself — the query is signed with its deposit's key (the control key alone is not enough) — and only
           // with admitted + rule, never the basis or the refusal text.
-          const q = body as { handle?: unknown; caller?: unknown; ingress?: unknown; ts?: unknown; sig?: unknown }
+          const q = body as { handle?: unknown; caller?: unknown; ingress?: unknown; ts?: unknown; sig?: unknown; task?: unknown }
           const handle = typeof q.handle === 'string' ? q.handle : ''
           const caller = typeof q.caller === 'string' ? q.caller : ''
           const ingress = q.ingress === 'local' ? 'local' as const : 'wire' as const
-          const signed = handle !== '' && caller !== '' && verifyAdmissionQuery(cliDeposits.get(handle)?.cardJson, { handle, caller, ingress, ts: typeof q.ts === 'number' ? q.ts : NaN, sig: typeof q.sig === 'string' ? q.sig : '' }, Date.now())
+          const task = typeof q.task === 'string' && q.task !== '' ? q.task : undefined
+          const signed = handle !== '' && caller !== '' && verifyAdmissionQuery(cliDeposits.get(handle)?.cardJson, { handle, caller, ingress, ts: typeof q.ts === 'number' ? q.ts : NaN, sig: typeof q.sig === 'string' ? q.sig : '', ...(task !== undefined ? { task } : {}) }, Date.now())
           if (!signed) payload = JSON.stringify({ ok: false })
           else {
-            const verdict = d.admissionRecheck(caller, handle, ingress === 'local')
+            const verdict = d.admissionRecheck(caller, handle, ingress === 'local', task)
             payload = JSON.stringify({ ok: true, admitted: verdict.ok, ...(verdict.ok ? { rule: verdict.rule } : {}) })
           }
         } else if (action === 'revoke') {
