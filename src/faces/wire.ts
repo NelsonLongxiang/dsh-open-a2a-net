@@ -130,7 +130,7 @@ export interface WireDeps {
    * reach, or undefined. Only a superagent team's canvas address, only a bound claim from a linked peer's root card whose
    * zone covers the caller, never this host's own key; the team owner's sender card decides the rest (M12).
    */
-  readonly superagentIntakeBasis?: (team: string, caller: string, claim: Extract<OriginClaimResult, { ok: true }>) => string | undefined
+  readonly superagentIntakeBasis?: (team: string, caller: string, claim: Extract<OriginClaimResult, { ok: true }>) => Promise<string | undefined>
   /** Keep an admitted session delivery's text for its receiver (src/task-bodies.ts; receipts are skipped there). */
   readonly keepTaskBody?: (taskId: string, target: Agent, from: string, message: string) => void
   readonly refuseIfFlooded: (caller: string, message: string, team: string, taskId: string, res: ServerResponse) => boolean
@@ -732,7 +732,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // team's canvas address passes the host gate; whether the team takes it is the team owner's decision (M12 card).
           if (!admission.ok && echoed === null && teamAnswer === null && earlyClaim.ok && parseReceipt(message) === null) {
             // The canvas address the caller named (a superagent team's mailbox is its own handle: `mailTeam` is not it).
-            const basis = d.superagentIntakeBasis?.(team, caller, earlyClaim)
+            const basis = await d.superagentIntakeBasis?.(team, caller, earlyClaim).catch(() => undefined)
             if (basis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'superagent-intake', basis: [basis] }
           }
           const callerRefusal = refusalOf(admission)

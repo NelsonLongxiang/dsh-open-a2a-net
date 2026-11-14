@@ -39,10 +39,11 @@ Today one DSH instance runs one team. `SuperagentHost` holds one settings file, 
   - every other unlisted message is refused as before.
 
 - **M13 A linked host's session reaches a superagent team (owner ruling 2026-11-14, option B).** Two instances that use the same zone (the default `dsh`) could not ask each other's superagent teams: the host gate's target-level rule (F5) wanted the caller to share a team with the team itself, and a team session joins no other team. Now a request — never a receipt — reaches a superagent team's canvas address when:
-  - it carries a bound OriginClaim from the root card of a host the operator linked, not this host's own key and not a CLI identity;
-  - that host's card lists the caller as one of its sessions, and the caller is not a handle of this host's own sessions.
+  - it carries a bound OriginClaim from a root card, not this host's own key and not a CLI identity;
+  - the host at exactly that origin is linked under exactly that key: a bilateral seed, or a key-pinned canvas remote reference confirmed for that key. A bare legacy reference's zone match does not count (#697 review F1);
+  - that host's card, read fresh for this request, lists the caller as one of its sessions — never an earlier cached listing (#697 review F2) — and the caller is not a handle of this host's own sessions.
 
-  The host records it under rule `superagent-intake`, an operator link (the operator linked the host), which the team's A2A Source listens to. Whether the team takes the request stays the owner's decision: an unlisted sender waits on a sender card (M12), with its limits. Only superagent canvas addresses are opened; any other team keeps the old rule. The authorization recheck holds while the target is still a superagent team and the sender's host is still linked; the Source's admission query holds while a linked host still lists the caller.
+  The host records it under rule `superagent-intake`, an operator link (the operator linked the host), which the team's A2A Source listens to. Whether the team takes the request stays the owner's decision: an unlisted sender waits on a sender card (M12), with its limits. Only superagent canvas addresses are opened; any other team keeps the old rule. The origin and key each caller was admitted under are kept (`<a2a home>/superagent-intake.json`); the authorization recheck and the Source's admission query hold only while the host at that origin is still linked under that key (and, for the authorization record, the target is still a superagent team).
 
 ## Not doing
 

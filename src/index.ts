@@ -151,6 +151,7 @@ import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
 import { guiOwnerProven, ownerOrNoLogin, touchesRules } from './superagent/host/owner-proof.ts'
 import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
+import { IntakeOrigins } from './intake-origins.ts'
 import { redeliverLost, TaskBodies } from './task-bodies.ts'
 import { registerTaskRead } from './tools/task-read.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
@@ -695,6 +696,8 @@ export function apply(ctx: Context, config: Config): void {
   const canvasStore = new CanvasStore(join(home, 'a2a', 'canvas.json'), { legacyBareMembers: config.canvasLegacyBareMembers !== false, ownPublicKey: encodePublicKey(createPublicKey(nodePrivateKey)) })
   // #91 file channel: the sender host's blob store (docs/design/file-channel.md).
   const blobStore = new BlobStore(join(home, 'a2a'))
+  // #697 review: the origin and key each superagent-intake caller was admitted under, for the rechecks.
+  const intakeOrigins = new IntakeOrigins(join(home, 'a2a', 'superagent-intake.json'))
   // Inbound session deliveries' text (market request 2026-11-14): a2a_task_read and the idle redelivery read it.
   const taskBodies = new TaskBodies(join(home, 'a2a', 'task-bodies.json'))
   // Spatial presentation state for the full-page stage (contract v2).
@@ -3033,53 +3036,77 @@ export function apply(ctx: Context, config: Config): void {
 
   /**
    * Owner ruling 2026-11-14 (option B): the canvas team a session on a linked host may ask — a superagent team's canvas
-   * address only. The claim is a bound one from a linked peer's root card whose zone covers the caller, never this
-   * host's own key and never a CLI identity (those have their own links). Whether the team takes the request is the team
-   * owner's sender card (M12); this only lets it reach the team.
+   * address only. #697 review: the evidence is the request's own — its bound claim from a root card (not this host's key,
+   * not a CLI identity), the host at exactly that origin and key linked by the operator ({@link intakeHostLinked}: a
+   * bilateral seed or a key-pinned remote reference, never a bare-ref zone match), and that host's card, read FRESH now,
+   * listing the caller as one of its sessions (never an earlier cached listing). The admitted origin and key are kept for
+   * the rechecks. Whether the team takes the request stays the team owner's sender card (M12).
    */
-  function superagentIntakeBasis(team: string, caller: string, claim: { readonly bound?: boolean; readonly cli?: boolean; readonly callerUrl: string; readonly caller: string; readonly card: { readonly publicKey?: unknown } }): string | undefined {
+  async function superagentIntakeBasis(team: string, caller: string, claim: { readonly bound?: boolean; readonly cli?: boolean; readonly callerUrl: string; readonly caller: string; readonly card: { readonly publicKey?: unknown } }): Promise<string | undefined> {
     if (superagentTeams === undefined || claim.cli === true || claim.bound !== true || !isRootOriginUrl(claim.callerUrl) || !claimCovers(caller, claim.caller)) return undefined
     const canvas = canvasStore.list().find(name => canvasTeamOf(name) === team)
     if (canvas === undefined || superagentTeams.ofCanvas(canvas) === undefined) return undefined
     const key = claim.card.publicKey
     if (typeof key !== 'string' || key === '' || key === encodePublicKey(createPublicKey(nodePrivateKey))) return undefined
-    const peer = [...cardCache.entries()].find(([, entry]) => entry.card?.publicKey === key)
-    if (peer === undefined || peerAdmissionLinkState(peer[0]).link !== 'linked') return undefined
-    // The caller is a session that signing host itself lists — never one of this host's own handles.
-    if (!intakeCallerOf(peer[1].card, caller)) return undefined
-    return team
+    if (!intakeCallerShape(caller)) return undefined
+    let origin: string
+    try { origin = new URL(claim.callerUrl).origin } catch { return undefined }
+    for (const url of peerStore.list()) {
+      try { if (new URL(url).origin !== origin) continue } catch { continue }
+      const card = await fetchPeerCard(url)
+      if (card === undefined || card.publicKey !== key) continue
+      cardCache.set(url, { at: Date.now(), card })
+      if (!intakeHostLinked(origin, key)) continue
+      if (!(card.sessionTeams ?? []).some(row => row.team === caller)) continue
+      intakeOrigins.record(caller, origin, key)
+      return team
+    }
+    return undefined
   }
 
-  /** Whether `caller` is a session handle a linked host's card lists, and not a handle of this host's own sessions. */
-  function intakeCallerOf(card: { readonly sessionTeams?: unknown } | undefined, caller: string): boolean {
+  /** A session handle shape, and not one of this host's own sessions. */
+  function intakeCallerShape(caller: string): boolean {
     if (!/^[^/\s]+\/[0-9a-f]{8}$/.test(caller)) return false
-    if (joinedSessions.list().some(id => `${config.team}/${id8(id)}` === caller) || [...sessionNodes.keys()].some(id => `${config.team}/${id8(id)}` === caller)) return false
-    const rows = Array.isArray(card?.sessionTeams) ? card.sessionTeams as Array<{ team?: unknown }> : []
-    return rows.some(row => row?.team === caller)
+    return !joinedSessions.list().some(id => `${config.team}/${id8(id)}` === caller) && ![...sessionNodes.keys()].some(id => `${config.team}/${id8(id)}` === caller)
   }
 
   /**
-   * The link recheck of an intake caller (the Source's admission query, which carries no signer key): the identity it asks
-   * for is a superagent team's mailbox, and some linked host's card still lists the caller as one of its sessions.
+   * #697 review F1: whether the operator linked the host at exactly `origin` under `key` — a bilateral seed (we seed that
+   * origin and its card, under that key, seeds us) or a key-pinned canvas remote reference confirmed for that key. A bare
+   * legacy reference's zone match (peerAdmissionLinkState's compatibility basis) is never a link here.
+   */
+  function intakeHostLinked(origin: string, key: string): boolean {
+    const ourOrigin = ownCardUrl === '' ? '' : (() => { try { return new URL(ownCardUrl).origin } catch { return '' } })()
+    const sameOrigin = (u: string): boolean => { try { return new URL(u).origin === origin } catch { return false } }
+    const bilateral = ourOrigin !== '' && config.peers.some(sameOrigin) && [...cardCache.entries()].some(([url, entry]) =>
+      sameOrigin(url) && entry.card?.publicKey === key && (entry.card.peers ?? []).some(peer => { try { return new URL(peer).origin === ourOrigin } catch { return false } }))
+    if (bilateral) return true
+    const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))
+    return canvasStore.list().some(name => canvasStore.remoteMembersOf(name).some(ref => splitQualifiedMember(ref) !== undefined && canvasStore.ownerKeyOf(ref) === key && memberProvenance(ref, key, ownKey) === 'confirmed-remote'))
+  }
+
+  /**
+   * The link recheck of an intake caller (the Source's admission query carries no signer key): the identity it asks for is
+   * a superagent team's mailbox, and the host this caller was admitted from — the origin and key kept at intake — is still
+   * linked under that key.
    */
   function superagentIntakeRecheck(caller: string, handle: string): Admission | undefined {
     const owner = superagentTeams?.all().find(host => host.a2aAddress === handle)
     const canvas = owner?.settings.canvas
     if (owner === undefined || canvas === undefined || canvas === '') return undefined
-    const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))
-    const listed = [...cardCache.entries()].some(([url, entry]) => entry.card !== undefined && entry.card.publicKey !== ownKey && peerAdmissionLinkState(url).link === 'linked' && intakeCallerOf(entry.card as never, caller))
-    return listed ? { ok: true, via: 'peer-org', rule: 'superagent-intake', basis: [canvasTeamOf(canvas)] } : undefined
+    const admitted = intakeOrigins.get(caller)
+    return admitted !== undefined && intakeHostLinked(admitted.origin, admitted.key) ? { ok: true, via: 'peer-org', rule: 'superagent-intake', basis: [canvasTeamOf(canvas)] } : undefined
   }
 
-  /** The recheck of a superagent-intake record: the target is still a superagent team and the signer's origin still a linked peer. */
-  function recheckSuperagentIntake(target: string, auth: { readonly claim?: { readonly origin: string } }): Admission {
+  /** The recheck of a superagent-intake record: the target is still a superagent team, and the admitted origin's host is still linked under its key. */
+  function recheckSuperagentIntake(target: string, caller: string, auth: { readonly claim?: { readonly origin: string } }): Admission {
     const canvas = canvasStore.list().find(name => canvasTeamOf(name) === target)
     const stillTeam = canvas !== undefined && superagentTeams?.ofCanvas(canvas) !== undefined
-    const origin = auth.claim?.origin
-    const stillLinked = origin !== undefined && [...cardCache.keys()].some(url => { try { return new URL(url).origin === origin && peerAdmissionLinkState(url).link === 'linked' } catch { return false } })
+    const admitted = intakeOrigins.get(caller)
+    const stillLinked = admitted !== undefined && admitted.origin === auth.claim?.origin && intakeHostLinked(admitted.origin, admitted.key)
     return stillTeam && stillLinked
       ? { ok: true, via: 'peer-org', rule: 'superagent-intake', basis: [target] }
-      : { ok: false, refusal: `the superagent intake of ${target} no longer holds: ${stillTeam ? 'the sender\'s host is no longer linked' : 'the target is no longer a superagent team'}` }
+      : { ok: false, refusal: `the superagent intake of ${target} no longer holds: ${stillTeam ? 'the sender\'s host is no longer linked under the key it was admitted with' : 'the target is no longer a superagent team'}` }
   }
 
   /** Inbound admission with the rule and shared teams that admitted the caller (gh#114 S1). */
@@ -3162,7 +3189,7 @@ export function apply(ctx: Context, config: Config): void {
       cause,
       rows: () => taskLedger.list(),
       // A local-candidate record (#139) is judged as the local candidate admits; every other one by the wire face.
-      judge: (caller, target, ingress, auth) => auth.admission_rule === 'remote-ref-cli' ? recheckRemoteCliAuthorization(admissionRecords, auth) : auth.admission_rule === 'superagent-intake' ? recheckSuperagentIntake(target, auth) : (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
+      judge: (caller, target, ingress, auth) => auth.admission_rule === 'remote-ref-cli' ? recheckRemoteCliAuthorization(admissionRecords, auth) : auth.admission_rule === 'superagent-intake' ? recheckSuperagentIntake(target, caller, auth) : (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
     })
     if (entry === undefined) return
     const revoke = entry.tasks.filter(task => task.verdict === 'would-revoke').length
