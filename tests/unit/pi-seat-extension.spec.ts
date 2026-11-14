@@ -131,10 +131,10 @@ describe('stale lock reclaim compares ownership (#688 re-review R1)', () => {
 
   it('real processes racing for one dead lock: exactly one takes it, and it still holds it after the others are done', async () => {
     const { spawn } = await import('node:child_process')
-    const { fileURLToPath } = await import('node:url')
     const dir = mkdtempSync(join(tmpdir(), 'pi-seat-race-'))
     const path = join(dir, 'seat.json')
-    const module = fileURLToPath(new URL('../../pi/extension/a2a-seat.ts', import.meta.url))
+    // A file URL, not a path: import() of a Windows path (D:\…) is not a URL scheme it accepts (#688 C3).
+    const module = new URL('../../pi/extension/a2a-seat.ts', import.meta.url).href
     for (let round = 0; round < 5; round++) {
       writeFileSync(`${path}.lock`, JSON.stringify({ pid: deadPid(), token: 'dead' }))
       const start = Date.now() + 400
@@ -193,6 +193,20 @@ describe('facts are scoped to their ticket and replay-safe (R2)', () => {
     await new Promise(r => setTimeout(r, 30))
     expect(most).toBe(1)
     expect(p.facts().filter(f => f.startsWith('idle'))).toEqual(['idle t-1'])
+  })
+})
+
+describe('a stop is a control row for its run (#688 C1)', () => {
+  it('a stop arriving while the run is in flight removes it, so nothing is owed for it later', async () => {
+    const ext = await load(mkdtempSync(join(tmpdir(), 'pi-seat-')))
+    const p = pi(A, args => args[0] === 'inbox' ? inbox(A, 'ep:2', [work('t-1', 1), { from: 'superagent', text: 'stop t-1', seq: 2, task_id: 't-1', context_id: 'stop.run-t-1' }]) : ok())
+    ext.default(p.api as never)
+    await p.fire('session_start')
+    expect(p.sent).toEqual(['work t-1', 'stop t-1'])
+    expect(state(ext)).toMatchObject({ cursor: 'ep:2', inflight: [] })
+    expect(p.facts()).toEqual(['read t-1'])
+    await p.fire('agent_settled', { aborted: false })
+    expect(p.facts()).toEqual(['read t-1'])
   })
 })
 

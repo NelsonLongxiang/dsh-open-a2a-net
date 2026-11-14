@@ -16,6 +16,8 @@
  *   context id: each binding of a ticket has its own) and an event id made once and persisted, so the host acknowledges a
  *   replay without acting on it and ignores a fact that is not for the seat's current run. Owed facts are sent one at a
  *   time, oldest first, before any new work is fetched.
+ * - A stop is a control row for one run (context id `stop.<run>`): it is shown to the Pi session, and that run's ticket
+ *   leaves the in-flight list with no fact owed (the host has already let it go). It is never taken as new work.
  * - In-flight work survives the consumer: the tickets handed over are recorded before the cursor moves; a consumer that
  *   finds tickets still in flight (its predecessor stopped without the run settling) owes an error for each of them.
  * - Shutdown fences: each session start opens a generation with its own AbortController; nothing from a closed
@@ -43,6 +45,8 @@ export interface SeatState { readonly handle: string; readonly home: string; cur
 
 /** The sender name the team host writes a seat's work under (src/index.ts piDeliver). */
 export const TEAM_SENDER = 'superagent'
+/** The context id prefix of a stop row: `stop.<run>` ends that run's work. */
+export const STOP_PREFIX = 'stop.'
 const CLI = process.env.A2A_NET ?? 'a2a-net'
 const POLL_MS = Math.max(5_000, Number(process.env.A2A_SEAT_POLL_MS ?? 15_000) || 15_000)
 const RENEW_MS = 60 * 60_000
@@ -255,7 +259,10 @@ export default function a2aSeat(pi: ExtensionAPI): void {
       if (read.cursorAhead === true) { warn(ctx, 'ahead', `the stored cursor ${state.cursor} was not issued by ${state.home}; nothing is read until it is reset (delete ${path})`); return }
       if (read.lost === null || (typeof read.lost === 'number' && read.lost > 0) || read.epochChanged === true) warn(ctx, `lost-${String(read.next)}`, read.epochChanged === true ? 'the team host restarted its mailbox store: mail from before may be gone' : `${String(read.lost)} message(s) were pushed out of the mailbox before they were read`)
       // Work names its ticket (task id) and its run (context id); a row without both is not work this seat can account for.
-      const work = (read.mail ?? []).filter(row => row.from === TEAM_SENDER && typeof row.text === 'string' && row.text !== '' && typeof row.task_id === 'string' && row.task_id !== '' && typeof row.context_id === 'string' && row.context_id !== '')
+      // A stop names the run it ends as `stop.<run>` (#688 C1).
+      const team = (read.mail ?? []).filter(row => row.from === TEAM_SENDER && typeof row.text === 'string' && row.text !== '' && typeof row.task_id === 'string' && row.task_id !== '' && typeof row.context_id === 'string' && row.context_id !== '')
+      const stops = team.filter(row => (row.context_id as string).startsWith(STOP_PREFIX) && (row.context_id as string).length > STOP_PREFIX.length)
+      const work = team.filter(row => !(row.context_id as string).startsWith(STOP_PREFIX))
       if (!owns(gen)) return
       // In flight first (durable), then the handover, then the cursor and the read facts: a consumer that dies in between
       // leaves its successor the tickets to account for, never a silent gap.
@@ -268,6 +275,12 @@ export default function a2aSeat(pi: ExtensionAPI): void {
         saveState(path, state)
       }
       for (const row of work) {
+        if (ctx.isIdle()) pi.sendUserMessage(row.text as string)
+        else pi.sendUserMessage(row.text as string, { deliverAs: 'followUp' })
+      }
+      for (const row of stops) {
+        const run = (row.context_id as string).slice(STOP_PREFIX.length)
+        state.inflight = state.inflight.filter(w => !(w.ticket === row.task_id && w.run === run))
         if (ctx.isIdle()) pi.sendUserMessage(row.text as string)
         else pi.sendUserMessage(row.text as string, { deliverAs: 'followUp' })
       }

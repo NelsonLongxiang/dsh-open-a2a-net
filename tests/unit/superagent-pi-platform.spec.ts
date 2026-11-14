@@ -4,7 +4,7 @@
  * the team host) is a team member: admitted to the team canvas with its key pinned, given work through its mailbox, and
  * heard only through a CLI claim under the pinned key.
  */
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -226,10 +226,71 @@ describe('the team host and its Pi seat', () => {
     again.start()
     try {
       expect(again.remoteEvent('read', SEAT, KEY_P, { ticket_id: binding.ticketId, run_id: run, event_id: 'ev-read' }, true)).toEqual({ ok: true, duplicate: true })
-      expect(again.remoteEvent('error', SEAT, KEY_P, { error: 'old run', ticket_id: binding.ticketId, run_id: 'an-earlier-run', event_id: 'ev-old' }, true)).toEqual({ ok: true, duplicate: true })
+      // A stale fact is never recorded (it had no effect): replayed after the restart it is stale again, and still does nothing.
+      expect(again.remoteEvent('error', SEAT, KEY_P, { error: 'old run', ticket_id: binding.ticketId, run_id: 'an-earlier-run', event_id: 'ev-old' }, true)).toEqual({ ok: true, stale: true })
       // A fact without its run is refused.
       expect(again.remoteEvent('idle', SEAT, KEY_P, { quiet: true, text: '', ticket_id: binding.ticketId, event_id: 'ev-x' }, true)).toMatchObject({ ok: false, code: 'report' })
     } finally { void again.stop() }
+  })
+
+  it('#688 C1: a seat removed mid-run gets the stop as a control row for that run', async () => {
+    const mailed: Array<[string, string, string | undefined]> = []
+    const remotes: RemoteMember[] = [seat]
+    const h = await make((_h, _k, text, ticket, run) => { mailed.push([ticket, text, run]); return true }, [], remotes)
+    h.start()
+    try {
+      const { routeItem } = await import('../../src/superagent/host/tools.ts')
+      const asked = h.request('one') as { triggerId: string }
+      routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'one', scope: 's', reason: 'r' })
+      await new Promise(r => setTimeout(r, 30))
+      const binding = h.executor.bindingOf(SEAT)!
+      remotes.splice(0, remotes.length)
+      h.poolChanged()
+      await new Promise(r => setTimeout(r, 30))
+      const stop = mailed.find(([ticket, text]) => ticket === binding.ticketId && text.includes('is no longer yours'))
+      expect(stop?.[2]).toBe(`stop.${runOf(binding)}`)
+    } finally { void h.stop() }
+  })
+
+  it('#688 C2: a fact whose record fails is not acknowledged; its retry is stale (the effect consumed the binding), never a silent duplicate', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-pi-journal-'))
+    const h = await make(() => true, [], [seat], home)
+    h.start()
+    try {
+      const { routeItem } = await import('../../src/superagent/host/tools.ts')
+      const asked = h.request('one') as { triggerId: string }
+      routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'one', scope: 's', reason: 'r' })
+      await new Promise(r => setTimeout(r, 30))
+      const binding = h.executor.bindingOf(SEAT)!
+      // The journal cannot be written (its path is a directory): the idle still applies, but is not acknowledged.
+      mkdirSync(join(home, 'superagent', 'pi-events.json'), { recursive: true })
+      const idle = { quiet: true, text: '', ticket_id: binding.ticketId, run_id: runOf(binding), event_id: 'ev-idle' }
+      expect(h.remoteEvent('idle', SEAT, KEY_P, idle, true)).toMatchObject({ ok: false, code: 'journal', retryable: true })
+      expect(h.executor.bindingOf(SEAT)?.ticketId).not.toBe(binding.ticketId)
+      // The retry: not a duplicate (nothing was recorded), and stale — the run it names was released by the first.
+      expect(h.remoteEvent('idle', SEAT, KEY_P, idle, true)).toEqual({ ok: true, stale: true })
+    } finally { void h.stop() }
+  })
+
+  it('#688 C2: a fact whose effect fails records nothing; its retry applies it', async () => {
+    const h = await make(() => true, [], [seat])
+    h.start()
+    try {
+      const { routeItem } = await import('../../src/superagent/host/tools.ts')
+      const asked = h.request('one') as { triggerId: string }
+      routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'one', scope: 's', reason: 'r' })
+      await new Promise(r => setTimeout(r, 30))
+      const binding = h.executor.bindingOf(SEAT)!
+      const idle = { quiet: true, text: '', ticket_id: binding.ticketId, run_id: runOf(binding), event_id: 'ev-idle' }
+      const real = h.executor.memberIdle.bind(h.executor)
+      h.executor.memberIdle = () => { throw new Error('interrupted') }
+      expect(() => h.remoteEvent('idle', SEAT, KEY_P, idle, true)).toThrow('interrupted')
+      expect(h.executor.bindingOf(SEAT)).toEqual(binding)
+      h.executor.memberIdle = real
+      expect(h.remoteEvent('idle', SEAT, KEY_P, idle, true)).toEqual({ ok: true })
+      expect(h.executor.bindingOf(SEAT)?.ticketId).not.toBe(binding.ticketId)
+      expect(h.remoteEvent('idle', SEAT, KEY_P, idle, true)).toEqual({ ok: true, duplicate: true })
+    } finally { void h.stop() }
   })
 
   it('a seat is heard only through a CLI claim under its pinned key; a node claim never speaks for it, nor a CLI claim for a session', async () => {

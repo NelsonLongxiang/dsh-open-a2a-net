@@ -384,15 +384,18 @@ export class SuperagentHost {
     const remote = this.settings.remoteMembers.find(r => r.ref === member)
     // A CLI handle is never a session (#685 review F2): a Pi seat removed while its ticket runs still gets the stop in its
     // mailbox while its deposit is a Pi seat here (R6 takes effect at its next poll); anything else for it goes nowhere.
+    // #688 C1: a Pi seat's mailbox row names the run in its context id; a stop is a control row for that run (`stop.<run>`),
+    // so the seat ends that run's work without taking it as new work.
+    const context = run === undefined ? undefined : kind === 'stop' ? `stop.${run}` : run
     if (remote === undefined && CLI_HANDLE_RE.test(member)) {
       // Only under the key pinned when its work was given: never a key the deposit holds now (a re-keyed seat gets nothing).
       const pinned = kind === 'stop' ? this.piPins.get(member) : undefined
-      return pinned !== undefined ? this.d.piDeliver?.(member, pinned, piCardText(text, kind, ticketId), ticketId, run) ?? false : false
+      return pinned !== undefined ? this.d.piDeliver?.(member, pinned, piCardText(text, kind, ticketId), ticketId, context) ?? false : false
     }
     if (remote === undefined) return this.d.deliverToSession(member, text)
     // Pi platform P3: a Pi seat's work goes to its CLI mailbox on this host, as the Pi variant of the card.
     if (remote.platform === PI_PLATFORM) {
-      const delivered = this.d.piDeliver?.(remote.ref, remote.key, piCardText(text, kind, ticketId), ticketId, run) ?? false
+      const delivered = this.d.piDeliver?.(remote.ref, remote.key, piCardText(text, kind, ticketId), ticketId, context) ?? false
       // #685 review F2: the key its work went out under, so a stop after the seat leaves the canvas still finds it (and only it).
       if (delivered) this.piPins.set(remote.ref, remote.key)
       return delivered
@@ -425,9 +428,16 @@ export class SuperagentHost {
       if (typeof fact.ticket_id !== 'string' || typeof fact.run_id !== 'string' || !id.test(fact.run_id) || typeof fact.event_id !== 'string' || !id.test(fact.event_id)) return { ok: false, code: 'report', error: 'a Pi seat names the ticket (ticket_id), the run (run_id) and the event (event_id) of a turn fact' }
       if (this.piEvents().has(entry.ref, fact.run_id, fact.event_id)) return { ok: true, duplicate: true }
       const binding = this.executor.bindingOf(entry.ref)
-      const current = binding !== undefined && binding.ticketId === fact.ticket_id && runOf(binding) === fact.run_id
-      this.piEvents().add(entry.ref, fact.run_id, fact.event_id)
-      if (!current) return { ok: true, stale: true }
+      if (binding === undefined || binding.ticketId !== fact.ticket_id || runOf(binding) !== fact.run_id) return { ok: true, stale: true }
+      // #688 C2: the effect first, then its record. A failed effect records nothing (the retry applies it); a failed record
+      // after the effect is not acknowledged, and its retry finds the binding the effect consumed gone (stale) or, for a
+      // read, marks it read again.
+      const effect = this.piFact(entry.ref, op, fact)
+      try { this.piEvents().add(entry.ref, fact.run_id, fact.event_id) } catch (error) {
+        this.d.logger.warn('superagent: Pi seat %s fact %s applied but not recorded: %s', entry.ref, fact.event_id, String(error))
+        return { ok: false, code: 'journal', retryable: true, error: 'the fact was applied but this host could not record it; send it again' }
+      }
+      return effect
     }
     if (op === 'idle') {
       const turn = (report ?? {}) as Record<string, unknown>
@@ -452,6 +462,14 @@ export class SuperagentHost {
     // #688 G1: a Pi seat's question is a decision card, as a local member's a2a_ticket_report requires (C1/C2): no bare question.
     if (pi && typeof r.question === 'string') { const decision = parseDecision(r); if (typeof decision === 'string') return { ok: false, code: 'decision', error: `a question for the owner is a decision card: ${decision}` } }
     return this.report(entry.ref, { state: r.state as ReportState, summary: r.summary, ...(typeof r.question === 'string' || r.question === null ? { question: r.question as string | null } : {}), ...(typeof r.answers === 'string' ? { answers: r.answers } : {}), ...(typeof r.question === 'string' && typeof parseDecision(r) !== 'string' ? { decision: parseDecision(r) as DecisionSpec } : {}) }, typeof r.ticket_id === 'string' ? r.ticket_id : undefined, typeof r.pull_request === 'string' ? r.pull_request : undefined)
+  }
+
+  /** A Pi seat's turn fact for its current run (#688): the executor hears it. */
+  private piFact(ref: string, op: 'idle' | 'read' | 'error', fact: Record<string, unknown>): Record<string, unknown> {
+    if (op === 'idle') this.executor.memberIdle(ref, { quiet: fact.quiet !== false, text: typeof fact.text === 'string' ? clip(fact.text, 2_000) : '' })
+    else if (op === 'error') this.executor.memberError(ref, Object.assign(new Error(typeof fact.error === 'string' ? fact.error : 'failed'), fact.transient === true ? {} : { status: 400 }))
+    else this.executor.memberRead(ref)
+    return { ok: true }
   }
 
   /** PR-C2, member host side: work the served team host sends one of this host's member sessions, signed by its pinned key. */

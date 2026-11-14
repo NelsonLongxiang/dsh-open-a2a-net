@@ -426,7 +426,7 @@ export class MemberExecutor implements Executor {
       // It holds no turn and may be on another ticket by now: nothing to stop. A member removed from the team is told.
       this.parked = this.parked.filter(b => b !== parked)
       this.save()
-      if (this.leaving.delete(parked.member)) void this.tryDeliver(parked.member, `[superagent] ticket ${ticket.id} «${ticket.title}» is no longer yours (you were removed from the team). Do not report on it again.`, 'stop', ticket.id)
+      if (this.leaving.delete(parked.member)) void this.tryDeliver(parked.member, `[superagent] ticket ${ticket.id} «${ticket.title}» is no longer yours (you were removed from the team). Do not report on it again.`, 'stop', ticket.id, runOf(parked))
     }
     if (binding !== undefined) {
       this.bindings = this.bindings.filter(b => b !== binding)
@@ -437,7 +437,7 @@ export class MemberExecutor implements Executor {
       const why = this.leaving.delete(binding.member) ? 'you were removed from the team' : reason
       // Upstream cancels the worker's turn; here the member stays out of the pool until that turn has ended.
       if (!ownEnd && this.d.cancelTurn?.(binding.member) === true) this.stopping.set(binding.member, Date.now())
-      if (!ownEnd) void this.tryDeliver(binding.member, `[superagent] ticket ${ticket.id} «${ticket.title}» is no longer yours (${why}). Stop working on it; do not report on it again.`, 'stop', ticket.id)
+      if (!ownEnd) void this.tryDeliver(binding.member, `[superagent] ticket ${ticket.id} «${ticket.title}» is no longer yours (${why}). Stop working on it; do not report on it again.`, 'stop', ticket.id, runOf(binding))
     }
     queueMicrotask(() => this.launch())
   }
