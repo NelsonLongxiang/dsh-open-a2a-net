@@ -23,9 +23,10 @@ export const PROGRAM = 'a2a-net'
 export const TRUSTED_PROOFS: ReadonlySet<string> = new Set(['origin-claim', 'in-process', 'cli-identity'])
 /**
  * The host admission rules that are an operator's link (S36; p3 design Q1): a canvas both share, a pinned remote ref, or a
- * CLI identity deposited through this host's control route. roster-shared is not one — members join a roster themselves.
+ * CLI identity deposited through this host's control route, or a session of a host the operator linked asking a superagent
+ * team (superagent-intake, owner ruling 2026-11-14). roster-shared is not one — members join a roster themselves.
  */
-export const LINK_RULES: ReadonlySet<string> = new Set(['canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'cli-deposit'])
+export const LINK_RULES: ReadonlySet<string> = new Set(['canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'cli-deposit', 'superagent-intake'])
 /** S27 L1: task ids this Source sends start with this; a row carrying one is never taken in (filtered as loop). */
 export const LOOP_PREFIX = 'a2a-'
 export const HEALTH = { read: 'a2a', deposit: 'a2a-deposit', reply: 'a2a-reply' } as const
@@ -50,7 +51,7 @@ export const KV_TTL_DAYS = 7
 /** S25 O5: a message still unsent this long after its first failure is gone. */
 export const GONE_AFTER_MS = 24 * 3_600_000
 /** The host's admission vocabulary (src/cli-deposit.ts MAIL_ADMISSIONS): a row record keeps an admission only from this set. */
-export const ADMISSION_VALUES: ReadonlySet<string> = new Set(['scope-off', 'host-face', 'local-exempt', 'roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org', 'node-fact', 'cli-deposit'])
+export const ADMISSION_VALUES: ReadonlySet<string> = new Set(['scope-off', 'host-face', 'local-exempt', 'roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org', 'node-fact', 'cli-deposit', 'superagent-intake'])
 /** The host's proof vocabulary (src/task-auth.ts AuthProof): a row record keeps a proof only from this closed set. */
 const PROOF_VALUES: ReadonlySet<string> = new Set(['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound', 'cli-identity', 'in-process', 'none'])
 /** The structured health values a health record may keep; free text (such as a CLI error) stays in the live report only. */

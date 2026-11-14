@@ -108,7 +108,7 @@ const MAIL_PROOFS = ['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound
  * p1-mail-admission: the AdmissionRule names a restored row may carry (task-auth.ts); anything else is dropped. Kept
  * literal like MAIL_PROOFS (no runtime import back into task-auth); a unit test pins it to task-auth's full set.
  */
-export const MAIL_ADMISSIONS = ['scope-off', 'host-face', 'local-exempt', 'roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org', 'node-fact', 'cli-deposit'] as const satisfies readonly AdmissionRule[]
+export const MAIL_ADMISSIONS = ['scope-off', 'host-face', 'local-exempt', 'roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org', 'node-fact', 'cli-deposit', 'superagent-intake'] as const satisfies readonly AdmissionRule[]
 
 /**
  * Both lists cover their whole union: `satisfies` above keeps each entry a real value; these fail to compile when
