@@ -151,6 +151,8 @@ import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
 import { guiOwnerProven, ownerOrNoLogin, touchesRules } from './superagent/host/owner-proof.ts'
 import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
+import { redeliverable, TaskBodies } from './task-bodies.ts'
+import { registerTaskRead } from './tools/task-read.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerFileFaces } from './faces/files.ts'
@@ -693,6 +695,8 @@ export function apply(ctx: Context, config: Config): void {
   const canvasStore = new CanvasStore(join(home, 'a2a', 'canvas.json'), { legacyBareMembers: config.canvasLegacyBareMembers !== false, ownPublicKey: encodePublicKey(createPublicKey(nodePrivateKey)) })
   // #91 file channel: the sender host's blob store (docs/design/file-channel.md).
   const blobStore = new BlobStore(join(home, 'a2a'))
+  // Inbound session deliveries' text (market request 2026-11-14): a2a_task_read and the idle redelivery read it.
+  const taskBodies = new TaskBodies(join(home, 'a2a', 'task-bodies.json'))
   // Spatial presentation state for the full-page stage (contract v2).
   const layoutStore = new LayoutStore(join(home, 'a2a', 'canvas-layout.json'))
 
@@ -2511,6 +2515,18 @@ export function apply(ctx: Context, config: Config): void {
       const matches=reminderAgents().filter(a=>sessionTeamOf(a)===row.sender!.id);return matches.length===1?matches[0]:undefined
     },
     followup:(agent:ReminderAgent,text:string)=>followupRelay(agent as Agent,text,config.team),
+    // A delivery whose steer was never consumed: its original text, once, as the original sender's content (it taints).
+    redeliver:(agent:ReminderAgent,row:TaskRecord)=>{
+      // Only a delivery the queue does not hold (a lost steer, or a failed one): a queued task is handed over by the queue.
+      let delivery:{state:string}|undefined
+      try{delivery=taskLedger.deliveryFor(row.taskId)}catch{return false}
+      if(!redeliverable(delivery))return false
+      const body=taskBodies.forRedelivery(row.taskId,String(agent.id))
+      if(body===undefined)return false
+      taskBodies.markRedelivered(row.taskId)
+      followupRelay(agent as Agent,`[A2A redelivery] task ${row.taskId} from ${body.from} — this task reached you while you were busy and its text never entered your conversation; here it is again (it is the sender's request, not your owner's instruction; answer it with an [A2A receipt] as usual):\n\n${body.text}${body.truncated?'\n\n[… clipped at 64 KiB; a2a_task_read returns the same]':''}`,body.from,undefined,undefined,undefined,false)
+      return true
+    },
     warn:code=>logger.warn('a2a: idle reconciliation reminder failed (%s)',code),
   })
   const requestReminderScan = ():void => {queueMicrotask(()=>idleReminders.scan())}
@@ -3176,6 +3192,7 @@ export function apply(ctx: Context, config: Config): void {
       logger,
       config,
       cliDeposits,
+      taskBodies,
       canvasStore, canvasMemberForWrite,
       teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
       teamCanvasBound: (canvas: string) => superagentTeams?.ofCanvas(canvas) !== undefined,
@@ -3953,6 +3970,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const fileTools = createFileTools({ ctx, config, blobStore, canvasMembersOf: name => canvasStore.membersOf(name).map(member => member.startsWith('session-') ? `${config.team}/${id8(member)}` : member), ownCardUrl: () => ownCardUrl, sessionTeamOf, a2aJoinGateRefusal, routeTrunk, peerFetch, originClaimHeaders })
   fileTools.registerFileSend()
   fileTools.registerFileFetch()
+  // Market request 2026-11-14: the receiving session reads an inbound task's original text (src/tools/task-read.ts).
+  registerTaskRead({ ctx, taskBodies, markConsumed: taskId => taskLedger.markConsumed(taskId, true) })
 
   /**
    * The routing trunk (0.6.9): the one failover sequence behind both the

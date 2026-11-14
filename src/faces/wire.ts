@@ -125,6 +125,8 @@ export interface WireDeps {
   readonly scanSessionLogList: () => Array<{ id: string; mtimeMs: number; sizeBytes: number }>
   readonly readSessionLogTail: (id: string, limit: number) => { ok: true; id: string; messages: Array<{ role: string; text: string; time?: number }> } | { ok: false; error: string }
   readonly taskLedger: TaskLedger
+  /** Inbound session deliveries' text, for the receiving session's a2a_task_read and the idle redelivery (src/task-bodies.ts). */
+  readonly taskBodies?: { keep(taskId: string, receiver: string, from: string, text: string): void }
   readonly refuseIfFlooded: (caller: string, message: string, team: string, taskId: string, res: ServerResponse) => boolean
   /** gh#224: refuses a new delivery once the target already owes `targetQueueCap` receipts. */
   readonly refuseIfQueueFull: (caller: string, message: string, team: string, taskId: string, mailbox: boolean, res: ServerResponse) => boolean
@@ -1029,6 +1031,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 // nothing can pay, and a nudge chasing an answer nobody owes.
                 if (!deliveredReceipt) {
                   taskLedger.trackInbound(taskId, team, receiptTarget, contextId === '' ? undefined : contextId, receiptExpectation !== 'process-label', briefOf(message), auth, deliveredTo === team ? undefined : deliveredTo, String(target.id), consumedProbe)
+                  try { d.taskBodies?.keep(taskId, String(target.id), caller, message) } catch (error) { logger.warn('a2a: task body of %s not kept: %s', taskId, String(error)) }
                   if(acceptance!=='inserted')armReceiptAutosend(target, taskId, receiptTarget, message, steerFloor)
                   if(acceptance!=='inserted')armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
                 }
@@ -1101,6 +1104,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const receiptTarget = callback !== '' ? callback : caller
             const auth = buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ...(admission.rule === 'remote-ref-cli' && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget, receivedAt: admittedAt.at })
             try{taskLedger.trackInbound(taskId, team, receiptTarget, contextId, receiptExpectationOf(receiptTarget) !== 'process-label', briefOf(message), auth, syncTarget === team ? undefined : syncTarget, String(target.id), acceptance==='inserted'?false:taskLedger.deliveryFor(taskId)?.state==='claimed')}catch(error){taskLedger.noteAdmittedBookkeepingFailure(error);throw new AdmittedBookkeepingError(error)}
+            try { d.taskBodies?.keep(taskId, String(target.id), caller, message) } catch (error) { logger.warn('a2a: task body of %s not kept: %s', taskId, String(error)) }
             if(acceptance!=='inserted')armReceiptAutosend(target, taskId, receiptTarget, message, floor)
           }
           await routeIntoAgent(team, message, caller, taskId, proofClause, directHeader, undefined, syncSteered, claim.ok?claim.card.publicKey:undefined).then(async (outcome) => {

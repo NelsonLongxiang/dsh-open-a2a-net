@@ -344,6 +344,7 @@ const TOOL_CATALOG = [
   ['a2a_route', '向远端队发消息并等回复（长任务用 async；context_id 续谈）'],
   ['a2a_status', '网络健康：peers 质量分、在途路由、近期活动环、幂等窗占用'],
   ['a2a_tasks', '账本三层对账：pending（欠回执）/dead（超期）/archived（已结算）'],
+  ['a2a_task_read', '按任务号读回投递给本会话的任务原文（只限接收会话；CLI 的原文本就在 inbox 里）'],
   ['a2a_probe', '探活整个 tracked fleet 或单 peer：可达性+往返延迟+失败原因'],
   ['a2a_exposure', '设本会话的网络可见档：linked（下限）/fleet（自愿上调）'],
   ['a2a_file_send', '把文件暂存在本宿主并授权给目标队，只路由一条引用消息（字节不进消息）'],
