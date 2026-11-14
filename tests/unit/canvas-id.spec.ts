@@ -2,10 +2,19 @@
 import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
 import { createHash, generateKeyPairSync } from 'node:crypto'
-import { canvasOwnerFingerprint, qualifiedCanvasId, splitCanvasOwner } from '../../src/canvas-id.ts'
+import { canvasOwnerFingerprint, qualifiedCanvasId, splitCanvasOwner, homeCanvasTeam } from '../../src/canvas-id.ts'
 import { encodePublicKey } from '../../src/card.ts'
 
 describe('canvas owner ids', () => {
+  it('normalizes only the home owner for delivery and recovery fingerprints, not a foreign owner', () => {
+    const home = canvasOwnerFingerprint(key)
+    const foreign = (home[0] === '0' ? '1' : '0') + home.slice(1)
+    expect(homeCanvasTeam('dsh/canvas/ops@' + home, home)).toBe('dsh/canvas/ops')
+    expect(homeCanvasTeam('dsh/canvas/ops@' + foreign, home)).toBe('dsh/canvas/ops@' + foreign)
+    expect(homeCanvasTeam('dsh/canvas/ops', home)).toBe('dsh/canvas/ops')
+    expect(homeCanvasTeam('dsh/abcdef12@' + home, home)).toBe('dsh/abcdef12@' + home)
+  })
+
   const key = encodePublicKey(generateKeyPairSync('ed25519').publicKey)
   it('fingerprints the SPKI DER bytes: 8 lowercase hex, stable, empty without a key', () => {
     const fp = canvasOwnerFingerprint(key)

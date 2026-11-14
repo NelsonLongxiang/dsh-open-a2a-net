@@ -189,7 +189,7 @@ export const name = 'a2a'
 export const inject = ['tools', 'timer', 'systemPrompt']
 
 import { Config } from './config.ts'
-import { canvasOwnerFingerprint, splitCanvasOwner } from './canvas-id.ts'
+import { canvasOwnerFingerprint, splitCanvasOwner, homeCanvasTeam } from './canvas-id.ts'
 import { forwardReceiptBasis, teamReceiptBasis } from './direct-forward.ts'
 import { NudgeObservability } from './nudge-observability.ts'
 export { Config }
@@ -2156,7 +2156,7 @@ export function apply(ctx: Context, config: Config): void {
     memberTurn: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : memberTurnFrom(id, sessionEventsOf(agent), ctx.get('jobs' as never)) },
     teamSend: args => teamCanvasSend(args),
     outboundOutcome: ({ sender, task, address, message }) => {
-      const verdict = idempotencyStore.query(task, peerPayloadFingerprint({ caller: sender, team: address, message, noWait: true }))
+      const verdict = idempotencyStore.query(task, peerPayloadFingerprint({ caller: sender, team: homeCanvasTeam(address, ownCanvasFingerprint), message, noWait: true }))
       if (!verdict.found) return { delivery: 'unknown' }
       const row = taskLedger.find(task)
       if (verdict.status === 'completed') return { delivery: 'accepted' }

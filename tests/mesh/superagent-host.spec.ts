@@ -17,6 +17,7 @@ import WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, type Config } from '../../src/index.ts'
+import { canvasOwnerFingerprint } from '../../src/canvas-id.ts'
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { cliEnv, MockGuiConnection, mockGuiLogin, bootNode, postJson, reservePort } from './harness.ts'
@@ -85,6 +86,101 @@ beforeEach(() => { vi.stubGlobal('WebSocket', function throwOnSocket() { throw n
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('superagent engine in the a2a host', () => {
+  it.each(['source-off', 'paused'] as const)('R1: %s refuses before consuming the outbound decision; the same card survives restart and sends once', async blocked => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-approval-guard-'))
+    let port = await reservePort()
+    let m = await mount(home, { teamScopeRouting: true, forwardDirect: true }, port)
+    try {
+      expect(await m.team(R_ID, [M_ID], { sources: { a2a: true } })).toMatchObject({ ok: true })
+      let sender = ''
+      await vi.waitFor(async () => { sender = (await m.state()).a2a.address ?? ''; expect(sender).not.toBe('') }, { timeout: 8000 })
+      expect(await m.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'destination', id: sender })).toMatchObject({ ok: true })
+      expect(await m.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'destination', id: O_ID })).toMatchObject({ ok: true })
+      const request = await m.sa({ action: 'request', text: 'approval guard regression' })
+      await vi.waitFor(() => expect(m.R.steered.some(text => text.includes(request.triggerId))).toBe(true), { timeout: 8000 })
+      const accepted = await m.tool('superagent_route', m.R, { items: [{ trigger_id: request.triggerId, kind: 'accept', title: 'original', scope: 'fixture', reason: 'owner fixture', member: M_ID }] })
+      const ticket = accepted.results[0].ticket_id
+      await vi.waitFor(async () => expect((await m.state()).executor.bindings.some((row: any) => row.ticketId === ticket && row.member === M_ID)).toBe(true), { timeout: 8000 })
+      const raised = await m.tool('a2a_outbound_request', m.M, { ticket_id: ticket, address: 'dsh/canvas/destination', text: 'one approved request', why: 'fixture' })
+      expect(raised.ok).toBe(true)
+      expect(await m.sa({ action: 'settings', settings: blocked === 'paused' ? { paused: true } : { sources: { a2a: false } } })).toMatchObject({ ok: true })
+      const choose = { id: raised.card_id, how: 'choose', option: '批准：以团队名义发出' }
+      expect(await m.post('/__dsh_a2a/superagent/decisions', choose)).toMatchObject({ ok: false, code: 'a2a-off' })
+      const waiting = await (await globalThis.fetch('http://127.0.0.1:' + port + '/__dsh_a2a/superagent/decisions')).json() as { decisions: Array<{ id: string }> }
+      expect(waiting.decisions.some(card => card.id === raised.card_id)).toBe(true)
+      const pending = (await m.state()).outbound.find((row: any) => row.card === raised.card_id)
+      expect(pending).toMatchObject({ state: 'waiting' })
+      expect(pending).not.toHaveProperty('task')
+      expect(pending).not.toHaveProperty('approval')
+      expect(m.O.steered).toHaveLength(0)
+      await m.dispose()
+      port = await reservePort() // A fresh listener avoids reusing the disposed server's pooled HTTP connection.
+      m = await mount(home, { teamScopeRouting: true, forwardDirect: true }, port)
+      expect(await m.post('/__dsh_a2a/superagent/decisions', choose)).toMatchObject({ ok: false, code: 'a2a-off' })
+      expect(await m.sa({ action: 'settings', settings: { paused: false, sources: { a2a: true } } })).toMatchObject({ ok: true })
+      await vi.waitFor(async () => {
+        const deposited = await globalThis.fetch('http://127.0.0.1:' + port + '/a2a/cli/' + encodeURIComponent(sender) + '/.well-known/agent-card.json')
+        expect(deposited.status).toBe(200)
+      }, { timeout: 8000 })
+      expect(await m.post('/__dsh_a2a/superagent/decisions', choose)).toMatchObject({ ok: true, approved: true })
+      await vi.waitFor(async () => {
+        const delivered = (await m.state()).outbound.find((row: any) => row.card === raised.card_id)
+        expect(['sent', 'answered']).toContain(delivered.state)
+        expect(delivered.attempts).toMatchObject([{ delivery: 'accepted' }])
+        expect(delivered.attempts).toHaveLength(1)
+      }, { timeout: 15000 })
+      expect(m.O.steered).toHaveLength(1)
+      expect(await m.post('/__dsh_a2a/superagent/decisions', choose)).toMatchObject({ ok: false, code: 'stale' })
+      expect(m.O.steered).toHaveLength(1)
+    } finally { await m.dispose() }
+  }, 45_000)
+
+  it.each(['home', 'foreign'] as const)('R2: %s-owned canvas binds the exact wire fingerprint without redirecting a foreign owner to home', async owner => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-owned-recovery-'))
+    const m = await mount(home, { teamScopeRouting: true, forwardDirect: false })
+    try {
+      expect(await m.team(R_ID, [M_ID], { sources: { a2a: true } })).toMatchObject({ ok: true })
+      let sender = ''
+      await vi.waitFor(async () => { sender = (await m.state()).a2a.address ?? ''; expect(sender).not.toBe('') }, { timeout: 8000 })
+      await vi.waitFor(async () => expect((await m.state()).a2a.health['a2a-deposit']?.state).toBe('ready'), { timeout: 8000 })
+      const hostCard = await (await globalThis.fetch('http://127.0.0.1:' + m.port + '/.well-known/agent-card.json')).json() as { publicKey: string }
+      const homeOwner = canvasOwnerFingerprint(hostCard.publicKey)
+      const foreignOwner = (homeOwner[0] === '0' ? '1' : '0') + homeOwner.slice(1)
+      const address = 'dsh/canvas/destination@' + (owner === 'home' ? homeOwner : foreignOwner)
+      expect(await m.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'destination', id: sender })).toMatchObject({ ok: true })
+      const request = await m.sa({ action: 'request', text: 'qualified destination regression' })
+      await vi.waitFor(() => expect(m.R.steered.some(text => text.includes(request.triggerId))).toBe(true), { timeout: 8000 })
+      const accepted = await m.tool('superagent_route', m.R, { items: [{ trigger_id: request.triggerId, kind: 'accept', title: 'original', scope: 'fixture', reason: 'owner fixture', member: M_ID }] })
+      const ticket = accepted.results[0].ticket_id
+      await vi.waitFor(async () => expect((await m.state()).executor.bindings.some((row: any) => row.ticketId === ticket && row.member === M_ID)).toBe(true), { timeout: 8000 })
+      const raised = await m.tool('a2a_outbound_request', m.M, { ticket_id: ticket, address, text: 'qualified approved text', why: 'fixture' })
+      expect(raised.ok).toBe(true)
+      expect(await m.post('/__dsh_a2a/superagent/decisions', { id: raised.card_id, how: 'choose', option: '批准：以团队名义发出' })).toMatchObject({ ok: true, approved: true })
+      let failed: any
+      await vi.waitFor(async () => { failed = (await m.state()).outbound.find((row: any) => row.card === raised.card_id); expect(failed).toMatchObject({ state: 'failed', address, attempts: [{ delivery: 'not-sent' }] }) }, { timeout: 15000 })
+      const originalApproval = structuredClone(failed.approval), task = failed.task
+      expect(m.O.steered).toHaveLength(0)
+      expect(await m.sa({ action: 'outbound-reconcile', card_id: raised.card_id, task_id: task })).toMatchObject({ ok: true, state: 'failed', task })
+      expect(m.O.steered).toHaveLength(0)
+      expect(await m.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'destination', id: O_ID })).toMatchObject({ ok: true })
+      const retry = await m.sa({ action: 'outbound-retry', card_id: raised.card_id, task_id: task })
+      if (owner === 'foreign') {
+        expect(retry, JSON.stringify(retry)).toMatchObject({ ok: false, code: 'outbound-not-sent' })
+        expect(m.O.steered).toHaveLength(0)
+        const retained = (await m.state()).outbound.find((row: any) => row.card === raised.card_id)
+        expect(retained).toMatchObject({ state: 'failed', address, approval: originalApproval, attempts: [{ task, delivery: 'not-sent' }, { task: expect.any(String), delivery: 'not-sent' }] })
+        expect(retained.task).not.toBe(task)
+        return // Same canvas name at home must not satisfy a foreign-owner request.
+      }
+      expect(retry, JSON.stringify(retry)).toMatchObject({ ok: true, state: 'sent' })
+      await vi.waitFor(() => expect(m.O.steered).toHaveLength(1), { timeout: 8000 })
+      expect((await m.state()).outbound.find((row: any) => row.card === raised.card_id)).toMatchObject({ address, approval: originalApproval, attempts: [{ task, delivery: 'not-sent' }, { task: retry.task, delivery: 'accepted' }] })
+      expect(await m.sa({ action: 'outbound-retry', card_id: raised.card_id, task_id: task })).toMatchObject({ ok: false, code: 'outbound-changed' })
+      expect(m.O.steered).toHaveLength(1)
+    } finally { await m.dispose() }
+  }, 45_000)
+
+
   it('owner recovers one original approved outbound after restart: durable not-sent proof, no reapproval, one real peer delivery', async () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-recover-mesh-'))
     const port = await reservePort(), peerPort = await reservePort()

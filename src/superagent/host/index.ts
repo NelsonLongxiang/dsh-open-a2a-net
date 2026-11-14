@@ -1115,7 +1115,13 @@ export class SuperagentHost {
       return { ok: true, granted: chosen.startsWith('批准') }
     }
     // Design outbound-requests O4: the decision sends, or not; the result reaches the ticket as a note.
-    if (card.source === 'outbound') { this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored); void this.outbound.decided(card.id, chosen === OUTBOUND_APPROVE, this.settingsValue.canvas ?? '', ticketId => this.store.tickets.get(ticketId)?.title).catch(error => this.d.logger.warn('superagent: approved outbound %s needs reconciliation: %s', card.id, String(error))); return { ok: true, approved: chosen === OUTBOUND_APPROVE } }
+    if (card.source === 'outbound') {
+      // Refuse before consuming the decision: re-enabling the Source can then approve this same card.
+      if (chosen === OUTBOUND_APPROVE && (!this.settingsValue.sources.a2a || this.settingsValue.paused)) return { ok: false, code: 'a2a-off', error: '团队来源已停用或暂停；原卡仍待批准，没有发出。' }
+      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      void this.outbound.decided(card.id, chosen === OUTBOUND_APPROVE, this.settingsValue.canvas ?? '', ticketId => this.store.tickets.get(ticketId)?.title).catch(error => this.d.logger.warn('superagent: approved outbound %s needs reconciliation: %s', card.id, String(error)))
+      return { ok: true, approved: chosen === OUTBOUND_APPROVE }
+    }
     if (card.ticketId !== undefined) {
       const out = this.answer(card.ticketId, answer)
       if (!out.ok) return out

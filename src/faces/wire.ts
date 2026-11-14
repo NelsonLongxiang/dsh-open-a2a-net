@@ -18,7 +18,7 @@ import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { A2aPeerCard, A2aRouteResult } from '../types.ts'
 import type { ForwardRequest } from '../direct-forward.ts'
 import { CanvasStore, isRemoteMemberRef, validRemoteMemberRef } from '../canvas-store.ts'
-import { splitCanvasOwner } from '../canvas-id.ts'
+import { homeCanvasTeam } from '../canvas-id.ts'
 import { CLI_HANDLE_RE, type CliDepositStore } from '../cli-deposit.ts'
 import type { IdempotencyStore } from '../idempotency-store.ts'
 import type { JoinedSessions } from '../joined-store.ts'
@@ -643,8 +643,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             return
           }
           // #282 S2: our own `<canvas>@<fp8>` is our canvas; a foreign suffix stays for the forward walk.
-          const ownerQualified = splitCanvasOwner(typeof body.team === 'string' ? body.team : '')
-          const team = ownerQualified.owner !== undefined && ownerQualified.owner === d.ownCanvasFingerprint ? ownerQualified.team : typeof body.team === 'string' ? body.team : ''
+          const team = homeCanvasTeam(typeof body.team === 'string' ? body.team : '', d.ownCanvasFingerprint)
           const message = typeof body.message === 'string' ? body.message : ''
           // Design v5 (D2): a route to the bound team canvas is admitted and mailed as one to the team's address; the
           // requester's own spelling is what the team answers on behalf of (review R1).
@@ -925,7 +924,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           d.touchWakeDemand()
           const forwardMiss = async (original: string): Promise<void> => {
             // #282 S2 review P1: forward with the id the caller sent — our own `@fp8` must find no other owner.
-            const result = await d.forwardDirect({ team: typeof body.team === 'string' && ownerQualified.owner !== undefined ? body.team : team, message, caller, taskId, contextId, noWait,
+            const result = await d.forwardDirect({ team: typeof body.team === 'string' ? body.team : team, message, caller, taskId, contextId, noWait,
               auth: buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget: caller, receivedAt: admittedAt.at }),
               localCliProof: claim.ok && claim.cli === true && claim.bound && claim.caller === caller, guarded: req.headers['x-a2a-guard'] !== undefined }).catch((error: unknown): A2aRouteResult => ({ ok: false, error: `forwarding unavailable: ${String(error)}`, code: -32000, task_id: taskId }))
             const failure = result.ok ? '' : result.acceptance==='unknown'?ACCEPTANCE_UNKNOWN_NOTE:await d.diagnoseCanvas(team, original + ' — ' + result.error, claim.ok && claim.cli === true && claim.bound && claim.caller === caller ? caller : undefined)
