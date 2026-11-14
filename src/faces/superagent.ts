@@ -117,6 +117,14 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
                 send(200, saved.ok ? { ok: true, added, allowed: saved.settings.allowed.github } : saved)
               })().catch((error: unknown) => { send(500, { ok: false, error: String(error) }) })
               return
+            } else if (fields.action === 'outbound-reconcile' || fields.action === 'outbound-retry') {
+              if (!requireBrowserOwner(req, send)) return
+              const allowed = new Set(['action', 'teamId', 'card_id', 'task_id'])
+              if (Object.keys(fields).some(key => !allowed.has(key)) || typeof fields.card_id !== 'string' || typeof fields.task_id !== 'string' || fields.card_id.length > 100 || fields.task_id.length > 80) {
+                send(400, { ok: false, code: 'outbound-input', error: '仅接受原卡片与显示的原 task，不可替换目标、原文或发送身份。' }); return
+              }
+              void sa.recoverOutbound(fields.card_id, fields.task_id, fields.action === 'outbound-retry').then(result => send(200, result)).catch(() => send(503, { ok: false, code: 'outbound-unavailable', error: '恢复服务不可用，未确认再次发送；请按原 task 对账。' }))
+              return
             } else if (fields.action === 'request') {
               send(200, sa.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined, fields.via === 'cli' ? 'cli' : undefined))
             } else if (fields.action === 'answer') {
@@ -182,7 +190,7 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
                 : sa.engine.retryTicket(ticketId)
               sa.pass()
               send(200, { ok: true, ticket })
-            } else send(200, { ok: false, error: 'action must be settings, request, answer, serve, move-seat, admit-root, stop, retry or reevaluate' })
+            } else send(200, { ok: false, error: 'action must be settings, request, answer, serve, move-seat, admit-root, stop, retry, outbound-reconcile, outbound-retry or reevaluate' })
           } catch (error) { send(200, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
         }, 64_000)
       }),

@@ -28,7 +28,7 @@ import { RosterReports } from './roster.ts'
 import { MemberExecutor, runOf, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
 import { PiEvents } from './pi-events.ts'
 import { ReviewRequests } from './review-requests.ts'
-import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, type OutboundAsk } from './outbound.ts'
+import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, type OutboundAsk, type OutboundRecord, type OutboundApproval } from './outbound.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { SettingsHistory } from './settings-history.ts'
 import { HealthReminders, HEALTH_TICK_MS, type HealthProblem } from './health-reminders.ts'
@@ -219,7 +219,9 @@ export class SuperagentHost {
       () => this.decisions.open().filter(card => card.source === 'health').map(card => ({ id: card.id, ...(card.reason !== undefined ? { reason: card.reason } : {}) })),
       () => this.now(),
     )
-    this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), ask: (address, text) => this.a2a.askReview(address, text), logger: d.logger, now: () => this.now(), note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: outbound note on %s lost: %s', ticketId, String(error)) } } })
+    this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), ask: (address, text, task, sender) => this.a2a.askApproved(address, text, task!, sender!),
+      sender: create => create ? this.a2a.ensureIdentity() : Promise.resolve(this.a2a.address ?? ''), approval: record => this.outboundApproval(record),
+      query: async (record, attempt) => d.outboundOutcome?.({ sender: attempt.sender, task: attempt.task, address: record.address, message: record.approval!.message }) ?? { delivery: 'unknown' }, logger: d.logger, now: () => this.now(), note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: outbound note on %s lost: %s', ticketId, String(error)) } } })
     this.reviews = new ReviewRequests({
       path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
       ask: (address, text) => this.a2a.askReview(address, text),
@@ -978,9 +980,33 @@ export class SuperagentHost {
     const checked = this.outbound.check(session, ask, { role: this.toolRoleOf(session), a2aOn: this.settingsValue.sources.a2a, own: ownAddresses(this.d.handleOf, this.settingsValue.canvas, [this.settingsValue.router, ...this.pool()]),
       ticket: ticket === undefined ? undefined : { open: !ticket.ended, title: ticket.title, holder: this.executor.list().find(b => b.ticketId === ticket.id)?.member } })
     if (!checked.ok) return checked
-    const out = this.decisions.propose({ source: 'outbound', by: session, at: this.now(), question: `${this.memberName(session)} ${checked.question}`, ...(checked.reason !== undefined ? { reason: checked.reason } : {}), spec: { level: 'P0', options: [OUTBOUND_APPROVE, OUTBOUND_DECLINE], recommended: OUTBOUND_APPROVE } })
+    const out = this.decisions.propose({ source: 'outbound', by: session, at: this.now(), question: `${this.memberName(session)} ${checked.question}`, ...(checked.reason !== undefined ? { reason: checked.reason } : {}), spec: { level: 'P0', options: [OUTBOUND_APPROVE, OUTBOUND_DECLINE], recommended: OUTBOUND_APPROVE }, outbound: { ticketId: checked.ticketId, address: checked.address, text: checked.text, team: this.settingsValue.canvas ?? '', title: ticket!.title } })
     if (out.ok && out.reused !== true) this.outbound.waiting(out.id, checked.ticketId, checked.address, checked.text, session)
     return out.ok ? { ok: true, card_id: out.id } : out
+  }
+
+  /** Validate retained server-owned approval, not recovery-call text or a member's assertion. */
+  private outboundApproval(record: Readonly<OutboundRecord>): OutboundApproval {
+    const deny = (code: string, error: string): OutboundApproval => ({ ok: false, code, error })
+    if (!this.settingsValue.sources.a2a || this.settingsValue.paused) return deny('a2a-off', '团队来源已停用或暂停，未恢复发送。')
+    const ticket = this.store.tickets.get(record.ticketId)
+    if (ticket === undefined || ticket.ended !== undefined) return deny('ticket', '原工单不存在或已结束，未恢复发送。')
+    const card = this.decisions.get(record.card), payload = card?.outbound
+    if (card?.source !== 'outbound' || card.decided === undefined || card.by !== record.by || payload === undefined
+      || card.decided.text.split('\n')[0] !== '决定：' + OUTBOUND_APPROVE
+      || !Number.isFinite(Date.parse(card.decided.at)) || Date.parse(this.now()) < Date.parse(card.decided.at)
+      || Date.parse(this.now()) - Date.parse(card.decided.at) > 30 * 86_400_000
+      || payload.ticketId !== record.ticketId || payload.address !== record.address || payload.text !== record.text
+      || payload.team === '' || payload.team !== this.settingsValue.canvas) return deny('outbound-approval', '缺少相符且有效的原批准载荷，未恢复发送；旧记录需维护核账。')
+    const title = payload.title.length > 80 ? payload.title.slice(0, 80) + '…' : payload.title
+    return { ok: true, at: card.decided.at, team: payload.team,
+      message: '[来自 superagent 团队 ' + payload.team + ' 的请求 · 工单「' + title + '」]\n' + payload.text }
+  }
+
+  /** Only invoked by the browser-owner face; this does not expand any model role's tools. */
+  async recoverOutbound(card: string, task: string, retry: boolean): Promise<Record<string, unknown>> {
+    try { return { ...await this.outbound.recover(card, task, retry) } }
+    catch { return { ok: false, code: 'outbound-storage', error: '外发状态未能可靠保存，未确认再次发送；请按原 task 对账。' } }
   }
 
   /** Design outbound-requests O3: an approver the owner named decides an outbound card it did not raise, with a reason. */
@@ -1089,7 +1115,7 @@ export class SuperagentHost {
       return { ok: true, granted: chosen.startsWith('批准') }
     }
     // Design outbound-requests O4: the decision sends, or not; the result reaches the ticket as a note.
-    if (card.source === 'outbound') { this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored); void this.outbound.decided(card.id, chosen === OUTBOUND_APPROVE, this.settingsValue.canvas ?? '', ticketId => this.store.tickets.get(ticketId)?.title); return { ok: true, approved: chosen === OUTBOUND_APPROVE } }
+    if (card.source === 'outbound') { this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored); void this.outbound.decided(card.id, chosen === OUTBOUND_APPROVE, this.settingsValue.canvas ?? '', ticketId => this.store.tickets.get(ticketId)?.title).catch(error => this.d.logger.warn('superagent: approved outbound %s needs reconciliation: %s', card.id, String(error))); return { ok: true, approved: chosen === OUTBOUND_APPROVE } }
     if (card.ticketId !== undefined) {
       const out = this.answer(card.ticketId, answer)
       if (!out.ok) return out

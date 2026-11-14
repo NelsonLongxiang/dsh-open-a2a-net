@@ -31,6 +31,8 @@ export interface StoredCard extends DecisionSpec {
   readonly source: 'router' | 'observer' | 'ticket' | 'health' | 'tool' | 'outbound' | 'staffing' | 'sender'
   readonly by: string
   readonly ticketId?: string
+  /** Server-owned immutable payload of an outbound approval, never supplied by the recovery caller. */
+  readonly outbound?: { readonly ticketId: string; readonly address: string; readonly text: string; readonly team: string; readonly title: string }
   readonly at: string
   /** Files the proposer put on the card (C8). */
   readonly files?: readonly DecisionFile[]
@@ -120,7 +122,7 @@ export class DecisionBook {
   }
 
   /** A card of the router's or an observer's own. An identical open question returns the existing card. */
-  propose(input: { source: 'router' | 'observer' | 'health' | 'tool' | 'outbound' | 'staffing' | 'sender'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
+  propose(input: { source: 'router' | 'observer' | 'health' | 'tool' | 'outbound' | 'staffing' | 'sender'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[]; outbound?: StoredCard['outbound'] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
     const question = input.question.trim()
     if (question === '' || question.length > QUESTION_MAX) return { ok: false, code: 'question', error: `question is required, at most ${String(QUESTION_MAX)} characters` }
     // Design owner-reporting R5: a choice the owner decided is final; the same question gets that decision back.
@@ -133,7 +135,7 @@ export class DecisionBook {
     if (repeated !== undefined) return { ok: true, id: repeated.id, reused: true }
     if (mine.length >= OPEN_CARDS_MAX) return { ok: false, code: 'too-many-open', error: `you already have ${String(mine.length)} decisions waiting for the owner` }
     const id = `d-${randomUUID()}`
-    this.cards.push({ id, question, ...(input.reason !== undefined ? { reason: input.reason } : {}), source: input.source, by: input.by, at: input.at, ...input.spec, ...(input.files !== undefined && input.files.length > 0 ? { files: input.files } : {}) })
+    this.cards.push({ id, question, ...(input.reason !== undefined ? { reason: input.reason } : {}), source: input.source, by: input.by, at: input.at, ...input.spec, ...(input.outbound !== undefined ? { outbound: { ...input.outbound } } : {}), ...(input.files !== undefined && input.files.length > 0 ? { files: input.files } : {}) })
     this.save()
     return { ok: true, id }
   }

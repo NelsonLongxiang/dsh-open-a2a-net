@@ -39,6 +39,24 @@ describe('idempotency store', () => {
     return { store: new IdempotencyStore(file, options), file }
   }
 
+  it('persists only explicit not-sent evidence, binding the original payload and refusing expired/foreign queries', () => {
+    let clock = 1000
+    const { store, file } = tmpStore({ now: () => clock, ttlMs: 1000 })
+    expect(store.claim('not-dispatched', 'original-body')).toBe('fresh')
+    store.recordOutcome('not-dispatched', { status: 'failed', error: 'local scope refusal', delivery: 'not-sent' })
+    const restored = new IdempotencyStore(file, { now: () => clock, ttlMs: 1000 })
+    expect(restored.query('not-dispatched', 'original-body')).toMatchObject({ found: true, status: 'failed', delivery: 'not-sent' })
+    expect(restored.query('not-dispatched', 'another-body')).toEqual({ found: false, reason: 'payload-mismatch' })
+    restored.claim('ordinary-failed', 'body')
+    restored.recordOutcome('ordinary-failed', { status: 'failed', error: 'business exception' })
+    expect(restored.query('ordinary-failed', 'body')).not.toHaveProperty('delivery')
+    restored.claim('completed', 'body')
+    restored.recordOutcome('completed', { status: 'completed', reply: 'done' })
+    expect(restored.query('completed', 'body')).not.toHaveProperty('delivery')
+    clock += 1001
+    expect(restored.query('not-dispatched', 'original-body')).toEqual({ found: false, reason: 'unknown-task' })
+  })
+
   it('fresh claim records the fingerprint; identical re-claim answers replay; different payload answers conflict', () => {
     const { store } = tmpStore()
     expect(store.claim('t-1', 'hash-a')).toBe('fresh')

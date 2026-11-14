@@ -19,7 +19,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, type Config } from '../../src/index.ts'
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { cliEnv, MockGuiConnection, mockGuiLogin } from './harness.ts'
+import { cliEnv, MockGuiConnection, mockGuiLogin, bootNode, postJson, reservePort } from './harness.ts'
 
 class ManyAgents extends Service {
   map = new Map<string, Agent>()
@@ -49,16 +49,16 @@ function makeAgent(id: string, name: string): TestAgent {
 const R_ID = 'session-a0000000aaaa1111', M_ID = 'session-b1111111bbbb2222', O_ID = 'session-c2222222cccc3333', X_ID = 'session-d3333333dddd4444'
 const execAs = (agent: Agent) => ({ signal: new AbortController().signal, agent }) as never
 
-async function mount(home: string, extra: Partial<Config> = {}) {
+async function mount(home: string, extra: Partial<Config> = {}, listenPort = 0) {
   const ctx = new Context()
   await ctx.plugin(SystemPrompt); await ctx.plugin(ToolRuntime); await ctx.plugin(TimerService)
-  await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+  await ctx.plugin(WebServer, { host: '127.0.0.1', port: listenPort })
   await ctx.plugin(ManyAgents)
   await ctx.plugin(MockGuiConnection)
   const agents = ctx.get('agents') as unknown as ManyAgents
   const [R, M, O, X] = [[R_ID, 'router'], [M_ID, 'member'], [O_ID, 'outsider'], [X_ID, 'member-x']].map(([id, name]) => makeAgent(id!, name!))
   for (const a of [R!, M!, O!, X!]) { agents.map.set(String(a.id), a); a.host = ctx }
-  apply(ctx, { apiKey: '', session: 'host-sess', team: 'dsh', routeTimeoutMs: 5_000, flushTimeoutMs: 300_000, announce: true, agentName: 'sa-host', peers: [], delegates: [], sessionNodes: true, wakeJoinedOnBoot: false, dshHome: home, superagent: true, ...extra } as unknown as Config)
+  apply(ctx, { apiKey: '', session: 'host-sess', team: 'dsh', routeTimeoutMs: 5_000, flushTimeoutMs: 300_000, announce: true, cardTtlMs: 172_800_000, agentName: 'sa-host', peers: [], delegates: [], sessionNodes: true, wakeJoinedOnBoot: false, dshHome: home, superagent: true, ...extra } as unknown as Config)
   for (const a of [R!, M!, O!, X!]) ctx.emit('agent/created', { agent: a as unknown as Agent })
   const port = (ctx as unknown as { webServer: { port: number } }).webServer.port
   const login = mockGuiLogin()
@@ -85,6 +85,60 @@ beforeEach(() => { vi.stubGlobal('WebSocket', function throwOnSocket() { throw n
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('superagent engine in the a2a host', () => {
+  it('owner recovers one original approved outbound after restart: durable not-sent proof, no reapproval, one real peer delivery', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-recover-mesh-'))
+    const port = await reservePort(), peerPort = await reservePort()
+    let m = await mount(home, { teamScopeRouting: true, teamScopeInfo: true, forwardDirect: false, peers: ['http://127.0.0.1:' + peerPort] }, port)
+    const target = await bootNode({ name: 'recovery-target', session: 'recovery-peer', team: 'beta', port: peerPort, peers: ['http://127.0.0.1:' + port], agentId: 'session-e4444444eeee5555', sessionNodes: true, silent: true, teamScopeRouting: true, teamScopeInfo: true })
+    try {
+      expect(await (await postJson(target.baseUrl, '/__dsh_a2a/join', { id: 'session-e4444444eeee5555' })).json()).toMatchObject({ id: 'session-e4444444eeee5555', team: 'beta/e4444444' })
+      expect(await m.team(R_ID, [M_ID], { sources: { a2a: true } })).toMatchObject({ ok: true })
+      let sender = ''
+      await vi.waitFor(async () => { const state = await m.state(); sender = state.a2a.address ?? ''; expect(sender !== '' && state.a2a.health['a2a-deposit']?.state === 'ready').toBe(true) }, { timeout: 20_000 })
+      const linked = await (await postJson(target.baseUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'return-link', id: sender, home: 'http://127.0.0.1:' + port })).json()
+      expect(linked, JSON.stringify(linked)).toMatchObject({ ok: true })
+      const request = await m.sa({ action: 'request', text: 'isolated recovery integration' })
+      await vi.waitFor(() => expect(m.R.steered.some(text => text.includes(request.triggerId))).toBe(true), { timeout: 8000 })
+      const accepted = await m.tool('superagent_route', m.R, { items: [{ trigger_id: request.triggerId, kind: 'accept', title: 'original cost', scope: 'isolated', reason: 'owner fixture', member: M_ID }] })
+      const ticket = accepted.results[0].ticket_id
+      expect(typeof ticket).toBe('string')
+      await vi.waitFor(async () => expect((await m.state()).executor.bindings.some((row: any) => row.ticketId === ticket && row.member === M_ID)).toBe(true), { timeout: 8000 })
+      const raised = await m.tool('a2a_outbound_request', m.M, { ticket_id: ticket, address: 'beta/e4444444', text: 'original-approved-only', why: 'isolated fixture' })
+      expect(raised.ok, JSON.stringify(raised)).toBe(true)
+      expect(await m.post('/__dsh_a2a/superagent/decisions', { id: raised.card_id, how: 'choose', option: '批准：以团队名义发出' })).toMatchObject({ ok: true, approved: true })
+      let failed: any
+      await vi.waitFor(async () => { failed = (await m.state()).outbound.find((row: any) => row.card === raised.card_id); expect(failed).toMatchObject({ state: 'failed', attempts: [{ delivery: 'not-sent', phase: 'dispatching' }] }) }, { timeout: 20_000 })
+      expect(failed.error).toContain('forwardDirect is off')
+      expect(target.steered).toHaveLength(0)
+      const originalApproval = JSON.parse(JSON.stringify(failed.approval)), originalAttempt = failed.task
+      await m.dispose()
+      m = await mount(home, { teamScopeRouting: true, teamScopeInfo: true, forwardDirect: true, peers: [target.baseUrl] }, port)
+      await vi.waitFor(async () => {
+        expect((await m.state()).a2a).toMatchObject({ enabled: true, address: sender })
+        const deposited = await globalThis.fetch('http://127.0.0.1:' + port + '/a2a/cli/' + encodeURIComponent(sender) + '/.well-known/agent-card.json')
+        expect(deposited.status).toBe(200)
+        expect(await deposited.json()).toMatchObject({ team: sender })
+      }, { timeout: 20_000 })
+      const reconcile = { action: 'outbound-reconcile', card_id: raised.card_id, task_id: originalAttempt }
+      expect(await m.sa(reconcile)).toMatchObject({ ok: true, state: 'failed', task: originalAttempt })
+      expect(target.steered).toHaveLength(0)
+      const restored = await m.sa({ ...reconcile, action: 'outbound-retry' })
+      expect(restored, JSON.stringify(restored)).toMatchObject({ ok: true, state: 'sent' })
+      expect(restored.task).not.toBe(originalAttempt)
+      await vi.waitFor(() => expect(target.steered).toHaveLength(1), { timeout: 8000 })
+      const current = (await m.state()).outbound.find((row: any) => row.card === raised.card_id)
+      expect(current).toMatchObject({ state: 'sent', task: restored.task, approval: originalApproval, attempts: [{ task: originalAttempt, delivery: 'not-sent' }, { task: restored.task, delivery: 'accepted' }] })
+      expect(current.attempts).toHaveLength(2)
+      expect(JSON.stringify(target.steered[0])).toContain('original-approved-only')
+      expect((await m.state()).outbound.filter((row: any) => row.card === raised.card_id)).toHaveLength(1)
+      expect(await m.sa({ ...reconcile, action: 'outbound-retry' })).toMatchObject({ ok: false, code: 'outbound-changed' })
+      expect(await m.sa({ ...reconcile, action: 'outbound-retry', task_id: restored.task })).toMatchObject({ ok: false, code: 'outbound-state' })
+      expect(target.steered).toHaveLength(1)
+      expect(await m.post('/__dsh_a2a/superagent/decisions', { id: raised.card_id, how: 'choose', option: '批准：以团队名义发出' })).toMatchObject({ ok: false, code: 'stale' })
+    } finally { await m.dispose(); await target.dispose() }
+  }, 90_000)
+
+
   it('workbench request → gate → router candidate → accept → ticket; follow-up fans out; isolation holds; state survives restart', async () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-host-mesh-'))
     let m = await mount(home)

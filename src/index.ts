@@ -548,6 +548,9 @@ export function apply(ctx: Context, config: Config): void {
   // the same home as the node key.
   const home = config.dshHome === '' ? resolveDshHome() : resolveDshHome(config.dshHome)
   const peerStore = new PeerStore(config.peers, join(home, 'a2a', 'peers.json'))
+  // Restored team role guards can resolve canvas members during construction.
+  // Their resolver must see an initialized (initially empty) peer cache.
+  const cardCache = new Map<string, CardCacheEntry>()
   // Node identity (docs/design/node-identity.md, N1): human-named nodes and their prompt versions.
   const nodeStore = new NodeStore(join(home, 'a2a'))
   // Peer boundary model (docs/design/peer-boundary-model.md) — connection
@@ -2152,6 +2155,16 @@ export function apply(ctx: Context, config: Config): void {
     stageFiles: (id, paths, canvas) => stageCardFiles({ blobStore, from: originOf(ownCardUrl), cwd: (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd, team: `${config.team}/canvas/${canvas}`, by: id }, paths),
     memberTurn: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : memberTurnFrom(id, sessionEventsOf(agent), ctx.get('jobs' as never)) },
     teamSend: args => teamCanvasSend(args),
+    outboundOutcome: ({ sender, task, address, message }) => {
+      const verdict = idempotencyStore.query(task, peerPayloadFingerprint({ caller: sender, team: address, message, noWait: true }))
+      if (!verdict.found) return { delivery: 'unknown' }
+      const row = taskLedger.find(task)
+      if (verdict.status === 'completed') return { delivery: 'accepted' }
+      // Forwarded/in-flight ledger rows may have unknown acceptance; they veto a retry, not certify delivery.
+      if (row !== undefined) return { delivery: 'unknown' }
+      if (verdict.status === 'failed' && verdict.delivery === 'not-sent') return { delivery: 'not-sent' }
+      return { delivery: 'unknown' }
+    },
     memberDeclares: (ref, capability) => { const member = splitQualifiedMember(ref); return member !== undefined && callerCapability(member.handle, capability) },
     callerDeclares: (caller, capability) => callerCapability(caller, capability),
     rosterSend: async (ref, text, taskId) => { await dispatchAnywhere(ref, text, session, undefined, AbortSignal.timeout(15_000), true, taskId) },
@@ -3552,7 +3565,6 @@ export function apply(ctx: Context, config: Config): void {
    * writes rare. Concurrent callers for one URL join a single in-flight
    * fetch (single-flight) instead of racing N requests.
    */
-  const cardCache = new Map<string, CardCacheEntry>()
   // superagent's HTTP faces live in src/faces/superagent.ts (#570 line ratchet); registered after cardCache exists: whenWebServerSettled may run its callback at once.
   if (superagentHost !== undefined && superagentTeams !== undefined) whenWebServerSettled((webServer) => {
     registerSuperagentFaces(webServer, {

@@ -92,6 +92,8 @@ export interface SaState {
   readonly canvasProblem?: string
   readonly pullRequestProblem?: string
   readonly reviews?: ReadonlyArray<{ ticketId: string; head: string; verdict?: { pass: boolean } }>
+  /** Transport attempts are separate from the ticket's member assignment. */
+  readonly outbound?: ReadonlyArray<{ card: string; ticketId: string; address: string; text: string; state: string; task?: string; error?: string; approval?: unknown; attempts?: ReadonlyArray<{ task: string; delivery: string; error?: string }> }>
   /** v5 acceptance F4: why a session this host serves another team with cannot take work (wrong preset). */
   readonly servesProblem?: string
   readonly canvases?: readonly string[]
@@ -449,6 +451,33 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const report = latestReport(ticket)
     if (report !== undefined) kv(card, '报告', `${REPORT[report.state] ?? report.state} · ${report.summary}`)
     if (ticket.ended?.reason !== undefined) kv(card, '结束', ticket.ended.reason)
+    for (const outbound of last?.outbound?.filter(row => row.ticketId === ticket.id) ?? []) {
+      const detail = el('div', 'wb-sa-hint')
+      detail.dataset.outbound = outbound.card
+      const states: Record<string, string> = { waiting: '等待批准', sending: '发送中／待对账', unknown: '接纳未知', failed: '确认未发出或旧失败', sent: '已发送，等回执', answered: '已回执', declined: '未批准' }
+      detail.append(el('strong', undefined, '对外请求：' + outbound.address), el('div', undefined, states[outbound.state] ?? outbound.state))
+      if (outbound.task !== undefined) detail.append(el('div', undefined, 'task ' + outbound.task))
+      if (outbound.error !== undefined) detail.append(el('div', undefined, outbound.error))
+      detail.append(el('pre', 'wb-sa-hint', outbound.text))
+      if (ticket.ended === undefined && outbound.task !== undefined && ['failed', 'unknown', 'sending'].includes(outbound.state)) {
+        const task = outbound.task
+        const act = (action: string, label: string): HTMLButtonElement => {
+          const button = el('button', 'wb-btn', label)
+          button.type = 'button'
+          button.addEventListener('click', () => {
+            if (action === 'outbound-retry' && typeof window.confirm === 'function' && !window.confirm('只恢复原批准的目标与原文。服务端必须确认原尝试未投递；未知或已送达不会重发。继续？')) return
+            button.disabled = true
+            void send({ action, card_id: outbound.card, task_id: task }, undefined, action === 'outbound-retry' ? '外发已处理，请查看原尝试和回执' : '已对账，未请求再次发送').finally(() => { button.disabled = false })
+          })
+          return button
+        }
+        detail.append(act('outbound-reconcile', '核对原外发'))
+        const lastAttempt = outbound.attempts?.at(-1)
+        if (outbound.approval !== undefined && lastAttempt?.task === task && lastAttempt.delivery === 'not-sent') detail.append(act('outbound-retry', '恢复原批准外发'))
+        else detail.append(el('div', undefined, '尚无明确未投递证据：先核对，不新卡、不重批、不重派。'))
+      }
+      card.append(detail)
+    }
     kv(card, '更新', `${ago(ticket.updatedAt, now)} · ${ticket.id}`)
     if (ticket.ended === undefined) {
       const actions = el('div', 'wb-sa-actions')
@@ -473,7 +502,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       }
       const retryable = ticket.delivery !== undefined || (person && (ticket.stage?.action === 'blocked' || ticket.stage?.action === 'failed'))
       if (retryable) {
-        const retry = el('button', 'wb-btn', '重试')
+        const retry = el('button', 'wb-btn', '重试工单（不重发外发）')
         retry.type = 'button'
         retry.addEventListener('click', () => { void send({ action: 'retry', ticket_id: ticket.id }, undefined, '已重试') })
         actions.appendChild(retry)

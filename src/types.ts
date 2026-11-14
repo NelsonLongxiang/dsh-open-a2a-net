@@ -156,6 +156,8 @@ export interface A2aRouteOk {
 
 /** Canonical `a2a_route` failure value. */
 export interface A2aRouteError {
+  /** This home made no dispatch attempt; never inferred from a failed status or error text. */
+  readonly delivery?: 'not-sent'
   readonly acceptance?:'unknown'
   readonly [RECEIPT_RETRYABLE]?:true
   /** A forwarded receipt never promises another receipt, including uncertain waits. */

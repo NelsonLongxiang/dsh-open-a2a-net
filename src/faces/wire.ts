@@ -553,6 +553,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 : {
                   found: true,
                   status: 'failed',
+                  ...(verdict.delivery === 'not-sent' ? { delivery: 'not-sent' } : {}),
                   error: verdict.error,
                   settled_at: new Date(verdict.settledAt).toISOString(),
                   task_id: taskId,
@@ -928,9 +929,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
               auth: buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget: caller, receivedAt: admittedAt.at }),
               localCliProof: claim.ok && claim.cli === true && claim.bound && claim.caller === caller, guarded: req.headers['x-a2a-guard'] !== undefined }).catch((error: unknown): A2aRouteResult => ({ ok: false, error: `forwarding unavailable: ${String(error)}`, code: -32000, task_id: taskId }))
             const failure = result.ok ? '' : result.acceptance==='unknown'?ACCEPTANCE_UNKNOWN_NOTE:await d.diagnoseCanvas(team, original + ' — ' + result.error, claim.ok && claim.cli === true && claim.bound && claim.caller === caller ? caller : undefined)
-            if (!result.ok && result.code !== -32005 && result.acceptance!=='unknown') idempotencyStore.recordOutcome(taskId, { status: 'failed', error: failure })
+            if (!result.ok && result.code !== -32005 && result.acceptance!=='unknown') idempotencyStore.recordOutcome(taskId, { status: 'failed', error: failure, ...(result.delivery === 'not-sent' ? { delivery: 'not-sent' as const } : {}) })
             else if (result.ok && result.task_status === 'TASK_STATE_COMPLETED') idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: result.reply })
-            const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, acceptance:result.acceptance,consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, ...(result.receiverBookkeeping==='failed'?{receiverBookkeeping:'failed',note:ADMITTED_BOOKKEEPING_NOTE}:{}), forwarded: true } : { acceptance:result.acceptance,error: failure, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED', ...(result.next !== undefined ? { next: result.next } : {}) })
+            const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, acceptance:result.acceptance,consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, ...(result.receiverBookkeeping==='failed'?{receiverBookkeeping:'failed',note:ADMITTED_BOOKKEEPING_NOTE}:{}), forwarded: true } : { acceptance:result.acceptance,...(result.delivery === 'not-sent' ? { delivery: 'not-sent' } : {}),error: failure, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED', ...(result.next !== undefined ? { next: result.next } : {}) })
             // #298: only a reply the peer itself declares final (`reply_final`; never a host placeholder, review of
             // #305 F3), handed to the CLI in full, marks that member's later receipt a duplicate — never a delivered,
             // mailbox or bridge shape (F1), and never when the CLI gave up and closed the socket ('finish' does not fire).

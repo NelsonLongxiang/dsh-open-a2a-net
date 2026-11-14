@@ -8,6 +8,7 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { A2aSource, cliRefusal } from '../../src/superagent/host/a2a-source.ts'
 import { OutboundRequests } from '../../src/superagent/host/outbound.ts'
 import { forwardScope } from '../../src/outbound-scope.ts'
@@ -19,12 +20,13 @@ const DEPOSIT = { ok: false, code: -32000, task_id: 'direct-ec79f7226b29', deliv
 
 function source(run: (args: string[]) => Promise<string>, enabled = true) {
   const calls: string[][] = []
+  const dir = mkdtempSync(join(tmpdir(), 'sa-outsend-'))
   const a2a = new A2aSource({
-    dir: mkdtempSync(join(tmpdir(), 'sa-outsend-')), homeUrl: () => 'http://127.0.0.1:1', apiKey: () => undefined, enabled: () => enabled,
+    dir, homeUrl: () => 'http://127.0.0.1:1', apiKey: () => undefined, enabled: () => enabled,
     receive: () => 'accepted' as never, ticket: () => undefined, logger: quiet,
     run: async args => { calls.push(args); return await run(args) },
   })
-  return { a2a, calls }
+  return { a2a, calls, dir }
 }
 const admitted = JSON.stringify({ admitted: true, rule: 'canvas-shared' })
 
@@ -105,19 +107,66 @@ describe('askReview on a refused route', () => {
   })
 })
 
+describe('persisted single-use approved attempts', () => {
+  const sender = 'superagent-team/0123456789abcdef', task = 'out-fixed-attempt'
+  function held(run: (args: string[]) => Promise<string>) {
+    const x = source(run)
+    const home = join(x.dir, 'team-cli')
+    mkdirSync(home, { recursive: true })
+    writeFileSync(join(home, 'cli.json'), JSON.stringify({ handle: sender }))
+    return x
+  }
+  it('does not silently renew or mint another task after a failed durable route', async () => {
+    const x = held(async args => { throw exited(args, { ...DEPOSIT, task_id: task, delivery: 'not-sent' }) })
+    const failure = await x.a2a.askApproved('beta/aaaaaaaa', 'original', task, sender).catch(e => e)
+    expect(failure).toMatchObject({ task, delivery: 'not-sent' })
+    expect(x.calls).toEqual([['route', 'beta/aaaaaaaa', '--json', '--task', task, '--', 'original']])
+  })
+  it('unknown acceptance, pending, malformed success and mismatched task cannot become positive send evidence', async () => {
+    for (const result of [
+      { delivered: true, acceptance: 'unknown', task_id: task },
+      { routed: true, task_id: task, prior: { status: 'pending' } },
+      { task_id: task },
+      { delivered: true, task_id: 'another-task' },
+    ]) {
+      const x = held(async () => JSON.stringify(result))
+      const failure = await x.a2a.askApproved('beta/aaaaaaaa', 'original', task, sender).catch(e => e)
+      expect(failure).toMatchObject({ task })
+      expect(failure).not.toHaveProperty('delivery', 'not-sent')
+      expect(x.calls).toHaveLength(1)
+    }
+    const x = held(async args => { throw exited(args, { ...DEPOSIT, delivery: 'not-sent', task_id: 'another-task' }) })
+    const failure = await x.a2a.askApproved('beta/aaaaaaaa', 'original', task, sender).catch(e => e)
+    expect(failure).not.toHaveProperty('delivery', 'not-sent')
+  })
+  it('requires the same held identity before route and returns an exact confirmed task unchanged', async () => {
+    const x = held(async () => JSON.stringify({ delivered: true, task_id: task }))
+    await expect(x.a2a.askApproved('beta/aaaaaaaa', 'original', task, 'superagent-team/fedcba9876543210')).rejects.toMatchObject({ task, delivery: 'not-sent' })
+    expect(x.calls).toHaveLength(0)
+    await expect(x.a2a.askApproved('beta/aaaaaaaa', 'original', task, sender)).resolves.toBe(task)
+    expect(x.calls).toHaveLength(1)
+  })
+  it('contradictory accepted or unsettled output never counts as not-sent', () => {
+    for (const contradiction of [{ routed: true }, { delivered: true }, { code: -32005 }, { task_status: 'TASK_STATE_DELIVERED' }, { acceptance: 'unknown' }]) {
+      expect(cliRefusal(JSON.stringify({ error: 'no', task_id: task, delivery: 'not-sent', ...contradiction }))).not.toHaveProperty('delivery')
+    }
+  })
+})
 describe('the outbound record of a refused send', () => {
   it('keeps the reason and the task id; the ticket note names both', async () => {
     const note = vi.fn()
-    const ask = vi.fn(async () => { throw Object.assign(new Error('a2a-net route refused: not forwarded: caller is not an online local CLI deposit · task direct-ec79f7226b29'), { task: 'direct-ec79f7226b29' }) })
+    const ask = vi.fn(async (_address: string, _text: string, task?: string) => { throw Object.assign(new Error('a2a-net route refused: not forwarded: caller is not an online local CLI deposit'), { task, delivery: 'not-sent' }) })
     const out = new OutboundRequests({ path: join(mkdtempSync(join(tmpdir(), 'sa-outrec-')), 'outbound.json'), ask, note, logger: quiet, now: () => '2026-11-12T00:00:00.000Z' })
     out.waiting('c1', 't1', 'dsh/420a84a3', '请补材料', 'session-m')
     await expect(out.decided('c1', true, 'team', () => '成本补材料')).resolves.toBeUndefined()
-    expect(out.list()[0]).toMatchObject({ state: 'failed', task: 'direct-ec79f7226b29' })
+    const task = ask.mock.calls[0]![2]!
+    expect(task).toMatch(/^out-/)
+    expect(out.list()[0]).toMatchObject({ state: 'failed', task, attempts: [expect.objectContaining({ task, delivery: 'not-sent' })] })
     expect(out.list()[0]!.error).toContain('not an online local CLI deposit')
-    expect(String(note.mock.calls[0]![1])).toContain('task direct-ec79f7226b29')
-    // A failed request's task is never read as answered by a receipt (O5 reads sent records only).
-    out.received({ meta: { receiptFor: 'direct-ec79f7226b29', proof: 'origin-claim' }, text: 'x', at: 'now' } as never)
-    expect(out.list()[0]!.state).toBe('failed')
+    expect(String(note.mock.calls[0]![1])).toContain('task ' + task)
+    // A trustworthy original-task receipt vetoes retry, even when a not-sent record conflicts with it.
+    out.received({ meta: { receiptFor: task, proof: 'origin-claim' }, text: 'x', at: 'now' } as never)
+    expect(out.list()[0]!.state).toBe('answered')
   })
 })
 
