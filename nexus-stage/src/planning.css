@@ -364,3 +364,10 @@
 #dsh-plan .p-h-nw::after, #dsh-plan .p-h-se::after{transform:rotate(-45deg)}
 #dsh-plan .p-frame.selected .p-frame-handle{opacity:1}
 #dsh-plan .p-frame.selected{outline:1px solid var(--frame-ink)}
+/* 协作提示 chip (scope-hints-chip.ts): peer canvases that hold a local session beside an undeclared peer session. */
+#dsh-plan .p-hintbtn{color:var(--accent)}
+#dsh-plan .p-hintmenu{max-height:320px; max-width:340px; overflow:auto}
+#dsh-plan .p-hint{display:grid; gap:4px; padding:6px 4px; border-bottom:1px solid var(--card-line)}
+#dsh-plan .p-hint:last-child{border-bottom:none}
+#dsh-plan .p-hint p{margin:0; font-size:12px; line-height:1.5; color:var(--ink)}
+#dsh-plan .p-hint .p-hint-none{color:var(--ink-muted)}

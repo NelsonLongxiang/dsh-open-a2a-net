@@ -138,6 +138,7 @@ import { A2aClient, type A2aFetch, type A2aSchedule, type CardFetchOutcome } fro
 import { MAX_LAYOUT_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from './runtime.ts'
 import { registerAdminFaces } from './faces/admin.ts'
+import { scopeHints } from './scope-hints.ts'
 import { registerNodeFaces } from './faces/nodes.ts'
 import { NodeStore } from './node-store.ts'
 import { createNodeBinder, NodeBindings } from './node-bind.ts'
@@ -1849,6 +1850,20 @@ export function apply(ctx: Context, config: Config): void {
           const verdict = recheckCallerAdmission(linkRecheckRecords, caller, handle, local)
           // Owner ruling 2026-11-14 (option B): a linked host's session that asked a superagent team still counts as linked.
           return verdict.ok || local ? verdict : superagentIntakeRecheck(caller, handle, task) ?? verdict
+        },
+        // Production feedback 2026-11-14: the owner board's one-click suggestions for peer sessions that share a peer canvas
+        // with local sessions but are declared nowhere here (kept cards that missed their last read give no hint).
+        scopeHints: () => {
+          const resolve = localHandleResolver()
+          const raw = new Set(canvasStore.list().flatMap(name => canvasStore.rawMembersOf(name)))
+          return scopeHints({
+            cards: peerStore.list().flatMap(url => { const entry = cardCache.get(url); return entry?.card !== undefined && entry.missAt === undefined ? [{ url, card: entry.card }] : [] }),
+            resolveLocal: resolve,
+            joined: id => joinedSessions.has(id),
+            handleOf: id => `${config.team}/${id8(id)}`,
+            canvasesOf: id => canvasTeamsOfSession(id),
+            declared: ref => raw.has(ref),
+          })
         },
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
