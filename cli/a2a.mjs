@@ -1631,6 +1631,9 @@ async function main() {
   if (cmd === 'report') {
     const text = positionals().join(' ')
     if (text === '') usage('usage: a2a report <message…> — one-way report into the host process-team mailbox')
+    // A report is a fresh task into the home mailbox, wrapped in a prefix, so a receipt
+    // sent this way never reads as one: the caller's row stays owed. Point at `receipt`.
+    if (/^\s*\[A2A receipt\]/.test(text)) usage('report: this text is a receipt — a report wraps it so it never settles the task; send it with: a2a receipt <task_id> [--outcome O] <one line…>')
     await sendDirect('report', { team: await homeZone(), message: `[a2a-net cli report] ${text}`, caller_session: identity().handle, wait: false, task_id: taskFlag() ?? newTaskId() })
     return
   }
