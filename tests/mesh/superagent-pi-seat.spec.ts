@@ -46,8 +46,8 @@ describe('a Pi seat on its team host', () => {
       const pinned = (await json(await globalThis.fetch(`${A.baseUrl}/__dsh_a2a/superagent`))).executor.remoteMembers
       expect(pinned).toEqual([expect.objectContaining({ ref: SEAT, platform: 'pi' })])
       // Its signed, body-bound op reaches the team; a body-unbound one, or one for another member, does not.
-      expect(await teamOp(A, SEAT, 'fleet-pi', seat.key, { op: 'idle', member: SEAT })).toEqual({ ok: true })
-      expect(await teamOp(A, SEAT, 'fleet-pi', seat.key, { op: 'idle', member: SEAT }, 'bound')).toMatchObject({ ok: false, code: 'untrusted-origin' })
+      expect(await teamOp(A, SEAT, 'fleet-pi', seat.key, { op: 'idle', member: SEAT, report: { ticket_id: 't-none', run_id: 'r-none', event_id: 'e-1' } })).toMatchObject({ ok: true })
+      expect(await teamOp(A, SEAT, 'fleet-pi', seat.key, { op: 'idle', member: SEAT, report: { ticket_id: 't-none', run_id: 'r-none', event_id: 'e-2' } }, 'bound')).toMatchObject({ ok: false, code: 'untrusted-origin' })
       expect(await teamOp(A, SEAT, 'fleet-pi', seat.key, { op: 'idle', member: OTHER })).toMatchObject({ ok: false, code: 'not-signer' })
       // A CLI identity that is not the seat, signing for itself, is no member.
       expect(await teamOp(A, OTHER, 'req-cli', other.key, { op: 'idle', member: OTHER })).toMatchObject({ ok: false, code: 'not-member' })

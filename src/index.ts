@@ -2088,9 +2088,9 @@ export function apply(ctx: Context, config: Config): void {
     // with the key the canvas pinned and the base URL of the linked peer whose signed card carries that key.
     // Pi platform P1/P2/P3: whether a CLI handle is a Pi seat deposited here, and the mailbox delivery to one.
     piSeat: handle => piSeatAdmission(handle, cliDeposits.get(handle)),
-    piDeliver: (handle, pinnedKey, text, ticketId) => {
+    piDeliver: (handle, pinnedKey, text, ticketId, run) => {
       if (!piDeliverable(cliDeposits.get(handle), pinnedKey)) return false
-      cliDeposits.mail(handle, 'superagent', text, undefined, { taskId: ticketId })
+      cliDeposits.mail(handle, 'superagent', text, undefined, { taskId: ticketId, ...(run !== undefined ? { contextId: run } : {}) })
       return true
     },
     canvasTeam: name => {

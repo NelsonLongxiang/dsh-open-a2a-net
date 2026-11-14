@@ -416,3 +416,20 @@ class instead: 0 sent, 4 gone, 5 the task already carries a different receipt
 - `node.json` holds plugin config keys (`team`, `session`, `agentName`, `apiKey`, `peers`, `originClaimUrl`, `originClaimAudiences`, `forwardDirect`, …; `dshHome` is the file form of `--home`, `host`/`port` the file form of the flags); flags win. `--host` is meant for `127.0.0.1` (default) or `0.0.0.0` — the value reaches the listener unvalidated (only `--port` is validated). The node also forces `sessionNodes: true` and `wakeJoinedOnBoot: false`, and defaults `announce: true` (an always-on node exists to be found; a file `announce` still overrides it). Defaults: `--host 127.0.0.1`, `--port 13090`, `--home ~/.a2a-net/node` (separate from the CLI's own `~/.a2a`). Bind beyond loopback only with an `apiKey`.
 - The runtime needs the tested DSH packages next to this one. In an empty folder: `npm i @nelsonlongxiang/dsh-open-a2a-net@<version>` plus the pinned set `serve` prints when one is missing (npm's `latest` tags of those packages are older and do not work), then `npx a2a-net serve --config node.json`.
 - Link it like any host: list the DSH hosts in its `peers` and add the node's URL to theirs; put CLIs and the DSH sessions they work with in a canvas team on the node (or rely on #282 S3 for canvases owned elsewhere).
+
+## Pi seats (`publish --pi-seat`, `ticket`, `pi install`)
+
+A Pi seat is a CLI identity that declares `piSeat` on its own signed card (`a2a-net publish --pi-seat`), deposited on
+the superagent team's host. Once the team's owner adds it to the team canvas (its key is pinned there), its work arrives
+in its mailbox with the ticket id as `task_id`, and it answers on the team host with signed, body-bound ops:
+
+- `a2a-net ticket read` · `ticket idle [--text T]` · `ticket error [--transient] -- <what failed>` — each with `--ticket <id> --run <id> --event <id>`: a Pi seat's turn facts name their ticket, the run of it (the work row's `context_id`; each binding of a ticket has its own) and an event id made once. The host records accepted events on disk and acknowledges a replay, even after a restart, without acting on it; a fact that is not for the seat's current run does nothing (`stale`). A stop arrives as a row whose `context_id` is `stop.<run>`: the end of that run, never new work. A fact that cannot be recorded is refused as `journal` (retryable) and has no effect until it can be
+- `a2a-net ticket ack|handback --trigger <trigger id> -- <text>`
+- `a2a-net ticket report --ticket <id> --state progress|waiting|ready|blocked|failed|dropped [--question Q --options A|B|… --recommended A [--level P0..P3]] [--answers <trigger id>] [--pull-request <url>] -- <summary>` — a question is a decision card for the owner: 2–6 options and the one the seat recommends, checked before it is sent
+
+A seat's turn end (`ticket idle`, sent by the extension) carries no text: report what changed with `ticket report`, as the work card asks.
+
+Refusals keep the host's code: `not-member` (not this team's seat under the pinned key), `op` (a seat has only these
+six ops: no rule changes), `untrusted-origin` (unsigned or not body-bound). `a2a-net pi install [--dir DIR] [--force]`
+copies the `a2a-seat` Pi extension (default `~/.pi/agent/extensions/`), which polls the mailbox with its own cursor and
+reports read and turn end. Installing never joins a team. Design: docs/design/superagent-pi-platform.md.
