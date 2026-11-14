@@ -15,6 +15,8 @@ export function healthLine(row: HealthRow, t: PropsLocale<'a2aNet'>['t']): strin
   const team = row.team === '' ? '' : `${row.team}：`
   if (row.code === 'router-not-loaded') return team + t('team.healthRouter', { session: (row.session ?? '').slice(8, 16) })
   if (row.code === 'router-turn-failed') return team + t('team.healthRouterFailed', { session: (row.session ?? '').slice(8, 16), detail: (row.detail ?? '').slice(0, 120) })
+  if (row.code === 'mcp-no-seat') return team + t('team.healthMcpNoSeat', { server: row.title ?? '' })
+  if (row.code === 'mcp-token-unavailable') return team + t('team.healthMcpUnavailable', { server: row.title ?? '' })
   if (row.code === 'member-not-loaded') return team + t('team.healthMember', { session: (row.session ?? '').slice(8, 16) })
   if (row.code === 'ticket-quiet') return team + t('team.healthQuiet', { title: row.title ?? row.ticketId ?? '', minutes: String(row.minutes ?? 0) })
   return team + row.code

@@ -9,15 +9,24 @@
  *   the caller's own label, the signer host itself or one of its canvas teams, or a canvas team of
  *   THIS host the caller itself is a member of ({@link grantAdmits}).
  *   A refusal never says whether the blob exists. Pulls are rate-limited per proven signer.
- * - `POST /__dsh_a2a/blob?to=<team>&name=<file>` — the control-gated STAGE face (CLI `file send`,
- *   design §3.4): raw bytes in, a grant out. No peer can write into the store.
+ * - `POST /__dsh_a2a/blob?to=<team>&name=<file>[&task_id=<id>]` — the control-gated STAGE face (CLI
+ *   `file send`, design §3.4): raw bytes in, a grant out. No peer can write into the store.
+ * - `POST /a2a/blob-stage` — a deposited CLI identity stages a file AS ITSELF (#692 review F2): the body is one
+ *   JSON line `{ to, name, task_id? }`, a newline, then the bytes, and the whole body is covered by the identity's
+ *   signed, body-bound OriginClaim. The grant's sender is the handle the signature proves. The control stage face
+ *   above records its grants under the operator namespace `control`: a control key proves no particular identity,
+ *   so its `by` query is not taken.
+ * - `POST /a2a/blob-grants` `{ op: 'list' }` | `{ op: 'revoke', sha256, to }` — a deposited CLI identity
+ *   manages ITS OWN grants (market request 2026-11-14). It takes a signed, body-bound CLI OriginClaim:
+ *   the sender is the handle the claim proves, never a field of the body. Revoking another sender's
+ *   grant is answered as a missing one.
  * @module @nelsonlongxiang/dsh-open-a2a-net/faces/files
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Config } from '../index.ts'
-import { BLOB_FILE_MAX, formatFileRef, type BlobStore } from '../blob-store.ts'
+import { BLOB_FILE_MAX, formatFileRef, type BlobGrant, type BlobStore } from '../blob-store.ts'
 import type { CanvasStore } from '../canvas-store.ts'
 import { isRootOriginUrl } from '../origin-claim.ts'
 import { claimCovers } from '../task-auth.ts'
@@ -36,7 +45,7 @@ export interface FileFaceDeps {
   /** This host's origin as its card names it; '' until it publishes one. */
   readonly ownOrigin?: () => string
   readonly canvasStore: Pick<CanvasStore, 'membersOf'> & Partial<Pick<CanvasStore, 'ownerKeyOf'>>
-  readonly verifyOriginClaim: (req: IncomingMessage, options?: { readonly cli?: boolean }) => Promise<OriginClaimResult>
+  readonly verifyOriginClaim: (req: IncomingMessage, options?: { readonly cli?: boolean; readonly rawBody?: Uint8Array }) => Promise<OriginClaimResult>
   /** #317: the peer-face key gate — this host's apiKey, or a link key from the verified peer it belongs to. */
   readonly peerKeyAdmits: (req: IncomingMessage, rawBody?: Uint8Array) => Promise<boolean>
   readonly controlRoute: (handler: (req: IncomingMessage, res: ServerResponse) => void) => (req: IncomingMessage, res: ServerResponse) => void
@@ -120,6 +129,7 @@ export function registerFileFaces(webServer: WebServer, d: FileFaceDeps): void {
       const bytes = blobStore.read(grant)
       if (bytes === undefined) { refuse(410, 'gone', 'the file is no longer stored on this host'); return }
       recordActivity('in', 'blob', caller, true)
+      blobStore.noteFetch(grant)
       res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': bytes.byteLength, 'X-A2A-Blob-Sha256': grant.sha256, 'X-A2A-Blob-Name': encodeURIComponent(grant.name) })
       res.end(bytes)
     },
@@ -133,7 +143,9 @@ export function registerFileFaces(webServer: WebServer, d: FileFaceDeps): void {
       const url = new URL(req.url ?? '/', 'http://x')
       const to = url.searchParams.get('to') ?? ''
       const name = url.searchParams.get('name') ?? 'file'
-      const by = url.searchParams.get('by') ?? 'control'
+      // #692 review F2: a control key proves no particular sender — its grants are the operator's, never an identity's.
+      const by = 'control'
+      const taskId = url.searchParams.get('task_id') ?? undefined
       const declared = Number(req.headers['content-length'] ?? NaN)
       if (Number.isFinite(declared) && declared > BLOB_FILE_MAX) { json(res, 413, { ok: false, code: 'too-large', error: `the file channel takes at most ${String(BLOB_FILE_MAX)} bytes` }); req.resume(); return }
       const chunks: Buffer[] = []
@@ -146,11 +158,101 @@ export function registerFileFaces(webServer: WebServer, d: FileFaceDeps): void {
       })
       req.on('end', () => {
         if (over) { json(res, 413, { ok: false, code: 'too-large', error: `the file channel takes at most ${String(BLOB_FILE_MAX)} bytes` }); return }
-        const staged = blobStore.stage(Buffer.concat(chunks), { name, to, by })
+        const staged = blobStore.stage(Buffer.concat(chunks), { name, to, by, ...(taskId !== undefined ? { taskId } : {}) })
         // The reference names this host as its card does, which a page reached by another address cannot know.
         const from = d.ownOrigin?.() ?? ''
         json(res, staged.ok ? 200 : staged.code === 'too-large' ? 413 : staged.code === 'full' ? 507 : 400, { ...staged, ...(staged.ok && from !== '' ? { ref: formatFileRef({ sha256: staged.sha256, size: staged.size, name: staged.name, from }) } : {}) })
       })
     }),
   }), 'a2a: file-channel stage face')
+
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: '/a2a/blob-stage',
+    handler: async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.method !== 'POST') { json(res, 405, { ok: false, error: 'POST one JSON line { to, name, task_id? }, a newline, then the bytes' }); return }
+      const declared = Number(req.headers['content-length'] ?? NaN)
+      const cap = BLOB_FILE_MAX + 4096
+      if (Number.isFinite(declared) && declared > cap) { json(res, 413, { ok: false, code: 'too-large', error: `the file channel takes at most ${String(BLOB_FILE_MAX)} bytes` }); req.resume(); return }
+      const chunks: Buffer[] = []
+      let size = 0
+      let over = false
+      req.on('data', (chunk: Buffer) => { size += chunk.byteLength; if (size > cap) { over = true; return } chunks.push(chunk) })
+      req.on('end', () => {
+        void (async () => {
+          if (over) { json(res, 413, { ok: false, code: 'too-large', error: `the file channel takes at most ${String(BLOB_FILE_MAX)} bytes` }); return }
+          const rawBody = Buffer.concat(chunks)
+          if (!await peerKeyAdmits(req, rawBody)) { json(res, 401, { ok: false, error: 'unauthorized: X-API-Key required (apiKey is configured)' }); return }
+          const claim = await verifyOriginClaim(req, { cli: true, rawBody })
+          if (!claim.ok || claim.cli !== true || claim.bodyBound !== true) {
+            recordActivity('in', 'blob-stage', String(req.headers['x-a2a-caller'] ?? 'unknown'), false)
+            json(res, 403, { ok: false, code: 'untrusted-origin', error: `a deposited CLI identity's signed, body-bound OriginClaim is required (${claim.ok ? 'not a body-bound CLI claim' : claim.reason})` })
+            return
+          }
+          const newline = rawBody.indexOf(0x0a)
+          let meta: { to?: unknown; name?: unknown; task_id?: unknown }
+          try { meta = JSON.parse(rawBody.subarray(0, newline < 0 ? 0 : newline).toString('utf8')) as typeof meta } catch { meta = {} }
+          if (newline < 0 || newline > 4096 || typeof meta.to !== 'string' || meta.to === '' || (meta.name !== undefined && typeof meta.name !== 'string') || (meta.task_id !== undefined && typeof meta.task_id !== 'string')) {
+            json(res, 400, { ok: false, code: 'bad-request', error: 'the body starts with one JSON line { to, name, task_id? } and a newline' })
+            return
+          }
+          const staged = blobStore.stage(rawBody.subarray(newline + 1), { name: meta.name ?? 'file', to: meta.to, by: claim.caller, ...(meta.task_id !== undefined ? { taskId: meta.task_id } : {}) })
+          recordActivity('in', 'blob-stage', claim.caller, staged.ok)
+          const from = d.ownOrigin?.() ?? ''
+          json(res, staged.ok ? 200 : staged.code === 'too-large' ? 413 : staged.code === 'full' ? 507 : 400, { ...staged, ...(staged.ok && from !== '' ? { ref: formatFileRef({ sha256: staged.sha256, size: staged.size, name: staged.name, from }) } : {}) })
+        })().catch(error => { json(res, 500, { ok: false, error: String(error) }) })
+      })
+    },
+  }), 'a2a: file-channel signed stage face')
+
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: '/a2a/blob-grants',
+    handler: async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.method !== 'POST') { json(res, 405, { ok: false, error: 'POST { op: "list" } or { op: "revoke", sha256, to }' }); return }
+      const chunks: Buffer[] = []
+      let size = 0
+      req.on('data', (chunk: Buffer) => { size += chunk.byteLength; if (size <= 4096) chunks.push(chunk) })
+      req.on('end', () => {
+        void (async () => {
+          if (size > 4096) { json(res, 413, { ok: false, error: 'payload too large' }); return }
+          const rawBody = Buffer.concat(chunks)
+          if (!await peerKeyAdmits(req, rawBody)) { json(res, 401, { ok: false, error: 'unauthorized: X-API-Key required (apiKey is configured)' }); return }
+          let body: { op?: unknown; sha256?: unknown; to?: unknown }
+          try { body = JSON.parse(rawBody.toString('utf8')) as typeof body } catch { json(res, 400, { ok: false, code: 'bad-request', error: 'not JSON' }); return }
+          // The sender is who the signature proves: a deposited CLI identity, body-bound so a captured envelope cannot carry another op.
+          const claim = await verifyOriginClaim(req, { cli: true, rawBody })
+          if (!claim.ok || claim.cli !== true || claim.bodyBound !== true) {
+            recordActivity('in', 'blob-grants', String(req.headers['x-a2a-caller'] ?? 'unknown'), false)
+            json(res, 403, { ok: false, code: 'untrusted-origin', error: `a deposited CLI identity's signed, body-bound OriginClaim is required (${claim.ok ? 'not a body-bound CLI claim' : claim.reason})` })
+            return
+          }
+          const by = claim.caller
+          if (body.op === 'list') {
+            recordActivity('in', 'blob-grants', by, true)
+            json(res, 200, { ok: true, grants: blobStore.grantsBy(by).map(grantView), usage: blobStore.usage() })
+            return
+          }
+          if (body.op === 'revoke') {
+            const out = blobStore.revoke(String(body.sha256 ?? ''), String(body.to ?? ''), by)
+            recordActivity('in', 'blob-grants', by, out.ok)
+            json(res, out.ok ? 200 : out.code === 'not-found' ? 404 : 400, out)
+            return
+          }
+          json(res, 400, { ok: false, code: 'bad-request', error: 'op is list or revoke' })
+        })().catch(error => { json(res, 500, { ok: false, error: String(error) }) })
+      })
+    },
+  }), 'a2a: file-channel grants face')
+}
+
+/** A grant as its sender sees it: no blob path, ISO times, whether the target fetched it. */
+export function grantView(g: BlobGrant): Record<string, string | number | boolean> {
+  return {
+    sha256: g.sha256, size: g.size, name: g.name, to: g.to,
+    grantedAt: new Date(g.grantedAt).toISOString(), expiresAt: new Date(g.expiresAt).toISOString(),
+    fetched: (g.fetches ?? 0) > 0, fetches: g.fetches ?? 0,
+    ...(g.firstFetchedAt !== undefined ? { firstFetchedAt: new Date(g.firstFetchedAt).toISOString() } : {}),
+    ...(g.taskId !== undefined ? { taskId: g.taskId } : {}),
+  }
 }

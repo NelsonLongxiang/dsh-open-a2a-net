@@ -219,6 +219,13 @@ export class MemberExecutor implements Executor {
     queueMicrotask(() => this.launch())
   }
 
+  /** Put back the member a ticket was named for before a refused reassignment (absent: none). */
+  restoreMember(ticketId: string, before: { member: string; named: boolean } | undefined): void {
+    if (before === undefined) Reflect.deleteProperty(this.ticketMembers, ticketId)
+    else this.ticketMembers[ticketId] = { ...before }
+    this.save()
+  }
+
   /** Named dispatch N4: the ticket is no longer kept for a member (the requester chose another one). */
   clearMember(ticketId: string): void {
     if (this.ticketMembers[ticketId] === undefined) return

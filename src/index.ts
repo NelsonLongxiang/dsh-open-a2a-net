@@ -6,7 +6,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net
  */
 
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, timingSafeEqual, sign as edSign } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 import { selectLanIPv4 } from './lan-ip.ts'
@@ -147,6 +147,8 @@ import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint }
 import { registerBuilderTools } from './superagent/host/builder-tools.ts'
 import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
+import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
+import { touchesRules } from './superagent/host/owner-proof.ts'
 import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
@@ -2064,6 +2066,7 @@ export function apply(ctx: Context, config: Config): void {
   // superagent design v4, PR-B: superagent's domain engine in this host (on by default, idle until a team is bound). The router gets
   // candidate cards in its own session (host relay, not A2A) and decides only through the superagent_* tools.
   let staffing: StaffingExecutor | undefined
+  let teamMcpTools: TeamMcpTools | undefined
   const superagentTeams: SuperagentTeams | undefined = config.superagent === true ? new SuperagentTeams({
     home: join(home, 'a2a'), logger,
     deliverToSession: (id, text) => { const agent = sessionNodes.get(id); if (agent === undefined) return false; followupRelay(agent, text, config.team); return true },
@@ -2125,6 +2128,9 @@ export function apply(ctx: Context, config: Config): void {
     // A session not loaded yet is skipped; the next start or pool change applies it.
     selectModel: (sessionId, pick) => selectSessionModel(sessionNodes.has(sessionId), ctx.get('sessionController' as never), sessionId, pick),
     staffingDecided: (changeId, team, confirmed) => { const ref = staffingTeamRef(superagentTeams!, team); if (ref !== undefined) void staffing?.cardDecided(changeId, ref, confirmed) },
+    mcpToolsChanged: () => teamMcpTools?.refresh(),
+    // Seat tokens for the market's MCP: the node key signs the exchange; the root is the origin this host publishes its card on.
+    seatSigner: { root: () => originOf(ownCardUrl), host: () => ownCanvasFingerprint, sign: text => edSign(undefined, Buffer.from(text, 'utf8'), nodePrivateKey).toString('base64') },
     bootSettled: () => bootPrewarm.settled(),
     workspaceOf: id => { const cwd = (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd; return typeof cwd === 'string' ? cwd : undefined },
     hasTool: (id, name) => {
@@ -2166,6 +2172,8 @@ export function apply(ctx: Context, config: Config): void {
       sessions: joinedSessions.list().filter(id => sessionNodes.has(id)), nameOf: id => { const agent = sessionNodes.get(id); return agent === undefined ? id : nodeMetadataOf(agent).name }, presetOf: sessionPresetOf, staffing: staffing?.list() ?? [],
     }), { staffing: () => staffing, personMessage: id => { const agent = ctx.get('agents')?.get(SessionId(id)) as Agent | undefined; return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
       teamRules: ref => { const team = superagentTeams!.get(ref === 'primary' ? '' : ref); return team === undefined || (ref === '' ) ? undefined : { ...(team.settings.canvas !== undefined ? { canvas: team.settings.canvas } : {}), rules: team.settings.rules, dispatch: team.settings.dispatch } } })
+    // superagent-team-mcp M2: each allowed tool of a team's MCP server is a tool of its own; the host holds the token.
+    teamMcpTools = new TeamMcpTools(ctx, id => superagentTeams!.ofSession(id), () => superagentTeams!.all(), logger)
     // A member's turn ending is the executor's turn-end fact (PR-C1).
     ctx.on('agent/status', payload => { superagentRoleTools.sync(payload.agent as unknown as RoleAgent); if (payload.status === 'idle') superagentTeams!.ofSession(String(payload.agent.id))?.memberIdle(String(payload.agent.id)) })
     // A failed turn is retried or fails the ticket for a person (upstream); without this it read as still working.
@@ -3945,6 +3953,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const fileTools = createFileTools({ ctx, config, blobStore, canvasMembersOf: name => canvasStore.membersOf(name).map(member => member.startsWith('session-') ? `${config.team}/${id8(member)}` : member), ownCardUrl: () => ownCardUrl, sessionTeamOf, a2aJoinGateRefusal, routeTrunk, peerFetch, originClaimHeaders })
   fileTools.registerFileSend()
   fileTools.registerFileFetch()
+  fileTools.registerFileGrants()
+  fileTools.registerFileRevoke()
 
   /**
    * The routing trunk (0.6.9): the one failover sequence behind both the

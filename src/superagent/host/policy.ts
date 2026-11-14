@@ -18,6 +18,7 @@
 import { createHash } from 'node:crypto'
 import type { GateResult, Mandate, Policy, PolicyEffect, SourceScope, Thread, Ticket, Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
 import { scope as a2aScope } from '../a2a-watch.ts'
+import { parseMcpServers, type TeamMcpServer } from './team-mcp.ts'
 
 /** The Sources this host runs. */
 export const SOURCES = ['workbench', 'a2a', 'github'] as const
@@ -107,6 +108,8 @@ export interface TeamSettings {
   readonly progressOff?: true
   /** Who reviews the team's pull requests: one A2A address the owner set and linked (design D5). Absent: nobody is asked. */
   readonly reviewer?: string
+  /** The team's MCP servers (design superagent-team-mcp M1). Their tokens are never settings: the host holds them in memory. */
+  readonly mcp?: readonly TeamMcpServer[]
 }
 
 /** A member's role and what it takes. */
@@ -300,6 +303,13 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
       models = router === undefined && member === undefined ? undefined : { ...(router !== undefined ? { router } : {}), ...(member !== undefined ? { member } : {}) }
     }
   }
+  // superagent-team-mcp M1: the team's MCP servers; the write replaces the list, null or '' clears it, unset keeps it.
+  let mcp = current.mcp
+  if ('mcp' in r) {
+    const parsed = parseMcpServers(r.mcp)
+    if (!parsed.ok) return { ok: false, error: parsed.error }
+    mcp = parsed.servers
+  }
   // The owner's prompt supplements (owner 2026-11-10): what the team adds to the presets; empty is empty, unset keeps what is.
   let prompts = current.prompts
   if ('prompts' in r) {
@@ -374,7 +384,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const observers = current.observers ?? []
   const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
   if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), ...(approvers !== undefined ? { approvers } : {}), ...(blockedTools !== undefined ? { blockedTools } : {}), evalTimeoutMs, paused, ...(progressOff === true ? { progressOff: true as const } : {}) } }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), ...(approvers !== undefined ? { approvers } : {}), ...(blockedTools !== undefined ? { blockedTools } : {}), evalTimeoutMs, paused, ...(progressOff === true ? { progressOff: true as const } : {}), ...(mcp !== undefined ? { mcp } : {}) } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
