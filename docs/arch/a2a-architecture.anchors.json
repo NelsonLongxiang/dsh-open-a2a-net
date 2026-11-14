@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "20283f8dcac7f79c46d90fda7020d59291648eaba954476ac1ba54fe644ca37d",
+    "src/index.ts": "6c4934a884087bf9a51c7f4235382dcbd4d67d24f8c39da3cbe14e4b39219e0b",
     "src/faces/admin.ts": "9f18e2ec2f7e2b9874752c0404c1910962d728632a3b1663f2882fd3ea5ca82c",
     "src/canvas-store.ts": "dafeaf63aa7c285933e0ab5ddad298740715fc6d3462be8d7a580a3908350224",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4287",
+      "ref": "src/index.ts:4289",
       "expect": "const callerNodeId = originAgentId"
     },
     {

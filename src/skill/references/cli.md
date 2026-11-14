@@ -94,7 +94,15 @@ Files do not go through session messages: use the file channel below, never JPFI
   face, #332) — can be fetched; the alias lookup asks only the configured home,
   and old/denied/malformed/redirected metadata fails closed. For a file on any
   other host, ask the sender to send it through your home host.
-- Sessions use the `a2a_file_send` / `a2a_file_fetch` tools for the same thing.
+- `a2a-net file send … --task <id>` records that task id on each grant (default: the task the send goes out in). The CLI stages AS its identity (`POST /a2a/blob-stage`: one JSON line `{to, name, task_id}`, a newline, then the bytes, all under its signed, body-bound claim), so the grants are its own; an older home host without that face gets the control stage, whose grants belong to the operator (`control`) and are not revocable from the CLI. Each sender's grant is its own: another sender staging the same bytes for the same target never takes yours over, and re-sending only extends yours (task and fetch record kept).
+- `a2a-net file grants [--json]` lists the grants THIS identity made that are still live: sha256, size, name,
+  `to`, granted and expiry times, task id, and whether the target fetched it (`fetched`, `fetches`,
+  `firstFetchedAt`); plus the store's occupancy and ceilings (`usage`: files/bytes of 256/1 GiB).
+- `a2a-net file revoke <sha256> <to>` revokes one of this identity's own grants; when no grant names the file
+  any more its bytes are deleted and the space is free at once. Another identity's grant is answered
+  `not-found`, as a missing one is. Both commands sign a body-bound OriginClaim on the home host
+  (`POST /a2a/blob-grants`): the identity is what the signature proves, never a field of the request.
+- Sessions use the `a2a_file_send` / `a2a_file_fetch` / `a2a_file_grants` / `a2a_file_revoke` tools for the same thing.
 
 ## Sending
 

@@ -3974,6 +3974,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const fileTools = createFileTools({ ctx, config, blobStore, canvasMembersOf: name => canvasStore.membersOf(name).map(member => member.startsWith('session-') ? `${config.team}/${id8(member)}` : member), ownCardUrl: () => ownCardUrl, sessionTeamOf, a2aJoinGateRefusal, routeTrunk, peerFetch, originClaimHeaders })
   fileTools.registerFileSend()
   fileTools.registerFileFetch()
+  fileTools.registerFileGrants()
+  fileTools.registerFileRevoke()
   // Market request 2026-11-14: the receiving session reads an inbound task's original text (src/tools/task-read.ts).
   registerTaskRead({ ctx, taskBodies, markConsumed: taskId => taskLedger.markConsumed(taskId, true) })
 
