@@ -55,8 +55,7 @@ export function piCardText(text: string, kind: 'assign' | 'input' | 'stop', tick
   return `${text}
 
 [pi seat] Answer with the a2a-net CLI, signed as this seat (the model tools named above are not available here):
-  a2a-net ticket read --ticket ${ticketId}
   a2a-net ticket ack|handback --trigger <trigger_id> -- <text>
   a2a-net ticket report --ticket ${ticketId} --state progress|waiting|ready|blocked|failed|dropped -- <summary>
-  a2a-net ticket idle | a2a-net ticket error -- <what failed>`
+(The a2a-seat extension tells the team host when you read this and when your run ends; you never send those.)`
 }

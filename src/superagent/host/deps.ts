@@ -104,7 +104,8 @@ export interface SuperagentHostDeps {
   /** docs/design/superagent-pi-platform.md P1/P2: whether a CLI handle is a Pi seat deposited on this host, with the key to pin. */
   readonly piSeat?: (handle: string) => { ok: true; key: string } | { ok: false; error: string }
   /** docs/design/superagent-pi-platform.md P3: put a card into a Pi seat's CLI mailbox; false when its deposit is gone or re-keyed. */
-  readonly piDeliver?: (handle: string, pinnedKey: string, text: string, ticketId: string) => boolean
+  /** `run`: the mailbox row's context id (#688 R2/C1): the binding's run id for work, `stop.<run>` for a stop of that run. */
+  readonly piDeliver?: (handle: string, pinnedKey: string, text: string, ticketId: string, run?: string) => boolean
   readonly canvasTeam?: (name: string) => { readonly local: readonly string[]; readonly remote: readonly RemoteMember[]; /** superagent-root-team: a root's child teams. */ readonly children?: ReadonlyArray<{ readonly ref: string; readonly slots: number }> } | undefined
   /** Design v5 (D2): the host-face sender of the team's replies to requests that came through its canvas address. */
   readonly teamSend?: (args: readonly string[]) => Promise<string | undefined>
