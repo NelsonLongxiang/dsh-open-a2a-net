@@ -5,7 +5,9 @@
 
 > 2026-11-10（#569）：预览版从 npm 回读、核对通过后，立即单独提交一次「记录已发布」：把该版本一节的标题改成「已发布到 npm 的 preview 标签」，并写上状态行（标签指向的提交、npm 发布时间、shasum、integrity、回读结果）。不要等到下一版发版时才顺手改。
 
-## 0.8.1-preview.25（预览版候选，待发布）
+## 0.8.1-preview.25（预览版，已发布到 npm 的 preview 标签）
+
+- 状态（2026-11-14）：标签 `v0.8.1-preview.25` 指向发布合并提交 `6ca847560f9bc90c17be64e9558f830a4abf5113`（发版 PR #702）；干净双构建候选 `0b3ffbb4560927d6150fd138b4412810d8ac316c` 与最终文件树相同。npmjs 发布时间 `2026-11-14T12:58:55.681Z`，`dist-tags.preview=0.8.1-preview.25`，`latest` 仍是 0.7.0。包为 375 文件／1,390,758 字节；shasum `251057c09af331db663ae54d16ba7a4eb9bd86b3`，SHA256 `caff9b4e8412a7307e1b4e1081745490e09fda8fa7cd6226f9751e7f6bd68768`，integrity `sha512-0Of8Ydd8uEZShdJIGl+3ABoyrmNmp7xs5ZPWPpL63+8Z0RBlJ6JSySTgCgKD47m4tlH2rWtp4JqQjHbfTGArtQ==`。公共 npm 下载回读与审计原始 tgz 逐字节一致；GitHub prerelease 附同一原包且服务端摘要相同。发布后元数据和 tgz 曾短暂返回 404，已等待至可见，未重复 publish。未发布到 Gitea，未安装或激活任何节点。
 
 - 本版按属主 2026-11-14「继续合并发布新的预览版，我安排远程进行测试」指令准备。只发布到 npm 的 `preview` 标签，`latest` 保持 0.7.0；发版与节点安装/激活是两回事，本席不部署生产实例。
 - 基线：master `e470262e6f97fd06eee7889a3f95ea6c26713865` 合入 next/0.8 `53463095d2f4a78e0283ceba982516b8340f4ab9`；后者已合入 owner-proof PR #691。发布合并提交、原始 tgz 和完整性信息在发版 PR 中钉定。
@@ -22,7 +24,7 @@
 
 - #691 集成头 `6b403aefb8aa44f356ad81a28b7dd827ff52d751`：类型/文档/构建/架构检查 rc=0；95 项专项通过；真实 DSH 0.2.2-rc.1 Host Connection 的本机 HTTP/HTTPS 两场景通过（证书校验开启，仅内存合成凭据），不是生产域名验收。
 - 完整 Windows 工程门禁仍 rc=1（2534 通过 / 23 失败 / 8 跳过）；原失败集串行复跑后 230 通过 / 1 失败 / 1 跳过，另有 shadow 清理 EPERM。Windows 文件模式 0666 与 0600 断言、旧 Vitest ygl 临时残留未豁免；构建布局 3 项通过、nexus 410 项通过。发布树的构建及包检查另在发版 PR 留证，不能沿用源头数字冒称全量绿。
-- 原高档非作者增量复核单 `direct-2bffca4c` 尚在队列；#691 按属主本次明确合并发布指令推进，不伪称新头非作者 PASS，也不伪称 RC/spec-validator 或运维验收通过。
+- 后续评审结论：`direct-2bffca4c` 已归档，非作者 `dsh/446ce672` 对 #691 精确头 `6b403aefb8aa44f356ad81a28b7dd827ff52d751`／tree `bb20b458f01427e3060ed6fdc058ae3b2a7d05bb` 给出增量静态代码评审 PASS，未发现新增阻断项。该结论在属主指令合并源 PR 后收到；不等于评审方跑过测试、发版候选或包独立复核，也不是 RC/spec-validator、远程浏览器或运维验收 PASS。原包内的候选时说明未回改、包未重建，本记录单独记后续事实。
 - 生产团队配置下的热重载初始化异常尚未由此修复；远程激活前先安排一致性备份及可恢复方式。建议先用已确认不存在的 `diagnostic-nonexistent-<uuid>` 决策 ID 验证：原生域名登录有效后，决策接口返回 HTTP 200 / `stale` 表示通过鉴权且未确认真实卡片；无效凭据、外来来源仍须拒绝。
 
 ## 0.8.1-preview.24（预览版，已发布到 npm 的 preview 标签）
