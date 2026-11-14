@@ -197,16 +197,73 @@ describe('facts are scoped to their ticket and replay-safe (R2)', () => {
 })
 
 describe('a stop is a control row for its run (#688 C1)', () => {
-  it('a stop arriving while the run is in flight removes it, so nothing is owed for it later', async () => {
+  it('a stop in the same batch as its work: the work is not handed over, the stop is, and nothing is owed', async () => {
     const ext = await load(mkdtempSync(join(tmpdir(), 'pi-seat-')))
     const p = pi(A, args => args[0] === 'inbox' ? inbox(A, 'ep:2', [work('t-1', 1), { from: 'superagent', text: 'stop t-1', seq: 2, task_id: 't-1', context_id: 'stop.run-t-1' }]) : ok())
     ext.default(p.api as never)
     await p.fire('session_start')
-    expect(p.sent).toEqual(['work t-1', 'stop t-1'])
+    // Work stopped in the same batch is never handed over; the stop reaches the session.
+    expect(p.sent).toEqual(['stop t-1'])
     expect(state(ext)).toMatchObject({ cursor: 'ep:2', inflight: [] })
-    expect(p.facts()).toEqual(['read t-1'])
+    expect(p.facts()).toEqual([])
     await p.fire('agent_settled', { aborted: false })
-    expect(p.facts()).toEqual(['read t-1'])
+    expect(p.facts()).toEqual([])
+  })
+})
+
+describe('a fact refused for good does not block the mailbox (#688 re-review R1)', () => {
+  const refused = (code: string): Exec => ({ stdout: JSON.stringify({ ok: false, code, error: 'x' }), stderr: '', code: 1, killed: false })
+
+  it('a read that failed, then the seat was removed: the read is refused not-member, set aside, and the stop for that run arrives', async () => {
+    const ext = await load(mkdtempSync(join(tmpdir(), 'pi-seat-')))
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    let round = 0, removed = false
+    const p = pi(A, args => {
+      if (args[0] === 'inbox') return ++round === 1 ? inbox(A, 'ep:1', [work('t-1', 1)]) : inbox(A, 'ep:2', removed ? [{ from: 'superagent', text: 'stop t-1', seq: 2, task_id: 't-1', context_id: 'stop.run-t-1' }] : [])
+      if (args[0] === 'ticket') return removed ? refused('not-member') : fail()
+      return ok()
+    })
+    ext.default(p.api as never)
+    await p.fire('session_start')
+    expect(state(ext).owed).toMatchObject([{ op: 'read', ticket: 't-1', run: 'run-t-1' }])
+    removed = true
+    await p.fire('agent_settled', { aborted: false })
+    // The settle's idle and the old read are both refused for good: set aside, not taken, and the mailbox is read again.
+    const ext2 = state(ext) as unknown as { owed: unknown[]; refused: Array<{ op: string; code: string }>; inflight: unknown[]; ended: string[] }
+    expect(ext2.owed).toEqual([])
+    expect(ext2.refused.map(f => `${f.op}:${f.code}`)).toEqual(['read:not-member', 'idle:not-member'])
+    expect(ext2.ended).toContain('run-t-1')
+    // The next poll is not blocked by the refused debt: it reads the mailbox and the stop reaches the session.
+    vi.advanceTimersByTime(15_000)
+    await tick()
+    vi.useRealTimers()
+    expect(p.calls.filter(c => c[0] === 'inbox')).toHaveLength(2)
+    expect(p.sent).toEqual(['work t-1', 'stop t-1'])
+    expect(state(ext)).toMatchObject({ cursor: 'ep:2', owed: [], inflight: [] })
+    await p.fire('session_shutdown')
+  })
+
+  it('restart with a refused debt: the new consumer sets it aside first, then reads the stop', async () => {
+    const ext = await load(mkdtempSync(join(tmpdir(), 'pi-seat-')))
+    const path = ext.seatStatePath(A, HOST)
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, JSON.stringify({ handle: A, home: HOST, cursor: 'ep:1', inflight: [], owed: [{ op: 'read', ticket: 't-1', run: 'run-t-1', event: 'ev-1' }] }))
+    const p = pi(A, args => args[0] === 'ticket' ? refused('not-member') : args[0] === 'inbox' ? inbox(A, 'ep:2', [{ from: 'superagent', text: 'stop t-1', seq: 2, task_id: 't-1', context_id: 'stop.run-t-1' }, work('t-1', 3)]) : ok())
+    ext.default(p.api as never)
+    await p.fire('session_start')
+    expect(p.calls.filter(c => c[0] === 'inbox')).toHaveLength(1)
+    expect(p.sent).toEqual(['stop t-1'])
+    expect(state(ext)).toMatchObject({ cursor: 'ep:2', owed: [], inflight: [] })
+    expect((state(ext) as unknown as { refused: Array<{ event: string; code: string }> }).refused).toMatchObject([{ event: 'ev-1', code: 'not-member' }])
+  })
+
+  it('a transport failure or a retryable refusal is still retried, never set aside', async () => {
+    const ext = await load(mkdtempSync(join(tmpdir(), 'pi-seat-')))
+    const p = pi(A, args => args[0] === 'inbox' ? inbox(A, 'ep:1', [work('t-1', 1)]) : args[0] === 'ticket' ? { stdout: JSON.stringify({ ok: false, code: 'journal', retryable: true }), stderr: '', code: 1, killed: false } : ok())
+    ext.default(p.api as never)
+    await p.fire('session_start')
+    expect(state(ext).owed).toMatchObject([{ op: 'read', ticket: 't-1' }])
+    expect((state(ext) as unknown as { refused: unknown[] }).refused).toEqual([])
   })
 })
 

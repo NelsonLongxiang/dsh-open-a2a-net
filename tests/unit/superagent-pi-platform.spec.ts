@@ -4,7 +4,7 @@
  * the team host) is a team member: admitted to the team canvas with its key pinned, given work through its mailbox, and
  * heard only through a CLI claim under the pinned key.
  */
-import { mkdirSync, mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -252,7 +252,7 @@ describe('the team host and its Pi seat', () => {
     } finally { void h.stop() }
   })
 
-  it('#688 C2: a fact whose record fails is not acknowledged; its retry is stale (the effect consumed the binding), never a silent duplicate', async () => {
+  it('#688 re-review R2: a transient error sent four times while the journal cannot be written runs no effect; once it can, exactly one', async () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-pi-journal-'))
     const h = await make(() => true, [], [seat], home)
     h.start()
@@ -262,14 +262,74 @@ describe('the team host and its Pi seat', () => {
       routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'one', scope: 's', reason: 'r' })
       await new Promise(r => setTimeout(r, 30))
       const binding = h.executor.bindingOf(SEAT)!
-      // The journal cannot be written (its path is a directory): the idle still applies, but is not acknowledged.
-      mkdirSync(join(home, 'superagent', 'pi-events.json'), { recursive: true })
-      const idle = { quiet: true, text: '', ticket_id: binding.ticketId, run_id: runOf(binding), event_id: 'ev-idle' }
-      expect(h.remoteEvent('idle', SEAT, KEY_P, idle, true)).toMatchObject({ ok: false, code: 'journal', retryable: true })
-      expect(h.executor.bindingOf(SEAT)?.ticketId).not.toBe(binding.ticketId)
-      // The retry: not a duplicate (nothing was recorded), and stale — the run it names was released by the first.
-      expect(h.remoteEvent('idle', SEAT, KEY_P, idle, true)).toEqual({ ok: true, stale: true })
+      let effects = 0
+      const real = h.executor.memberError.bind(h.executor)
+      h.executor.memberError = (member, error) => { effects++; real(member, error) }
+      const journal = join(home, 'superagent', 'pi-events.json')
+      mkdirSync(journal, { recursive: true })
+      const fact = { error: 'fetch failed: one Pi run', transient: true, ticket_id: binding.ticketId, run_id: runOf(binding), event_id: 'ev-err' }
+      for (let i = 0; i < 4; i++) expect(h.remoteEvent('error', SEAT, KEY_P, fact, true)).toMatchObject({ ok: false, code: 'journal', retryable: true })
+      expect(effects).toBe(0)
+      expect(h.executor.bindingOf(SEAT)).toEqual(binding)
+      // The journal can be written again: the same event runs once; every later replay is a duplicate.
+      rmSync(journal, { recursive: true })
+      expect(h.remoteEvent('error', SEAT, KEY_P, fact, true)).toEqual({ ok: true })
+      for (let i = 0; i < 3; i++) expect(h.remoteEvent('error', SEAT, KEY_P, fact, true)).toEqual({ ok: true, duplicate: true })
+      expect(effects).toBe(1)
+      expect(h.ticket(binding.ticketId)?.assignments.at(-1)?.state).not.toBe('failed')
     } finally { void h.stop() }
+  })
+
+  it('#688 re-review R2: an applied fact whose applied-record fails is not run again in this process', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-pi-journal2-'))
+    const h = await make(() => true, [], [seat], home)
+    h.start()
+    try {
+      const { routeItem } = await import('../../src/superagent/host/tools.ts')
+      const asked = h.request('one') as { triggerId: string }
+      routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'one', scope: 's', reason: 'r' })
+      await new Promise(r => setTimeout(r, 30))
+      const binding = h.executor.bindingOf(SEAT)!
+      let effects = 0
+      const real = h.executor.memberError.bind(h.executor)
+      const journal = join(home, 'superagent', 'pi-events.json')
+      // The effect runs, then the journal breaks before its applied record is written.
+      h.executor.memberError = (member, error) => { effects++; real(member, error); mkdirSync(`${journal}.blocked`, { recursive: true }); rmSync(journal, { force: true }); mkdirSync(journal) }
+      const fact = { error: 'fetch failed: one Pi run', transient: true, ticket_id: binding.ticketId, run_id: runOf(binding), event_id: 'ev-err' }
+      expect(h.remoteEvent('error', SEAT, KEY_P, fact, true)).toEqual({ ok: true })
+      for (let i = 0; i < 3; i++) expect(h.remoteEvent('error', SEAT, KEY_P, fact, true)).toEqual({ ok: true, duplicate: true })
+      expect(effects).toBe(1)
+    } finally { void h.stop() }
+  })
+
+  it('#688 re-review R2: a pending record left by a process that stopped before its effect: after the restart the ticket runs anew, and the old fact touches nothing', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-pi-pending-'))
+    const h = await make(() => true, [], [seat], home)
+    h.start()
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const asked = h.request('one') as { triggerId: string }
+    routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'one', scope: 's', reason: 'r' })
+    await new Promise(r => setTimeout(r, 30))
+    const binding = h.executor.bindingOf(SEAT)!
+    // The process stops between the pending record and the effect.
+    h.executor.memberIdle = () => { throw new Error('process stopped') }
+    const idle = { quiet: true, text: '', ticket_id: binding.ticketId, run_id: runOf(binding), event_id: 'ev-idle' }
+    expect(() => h.remoteEvent('idle', SEAT, KEY_P, idle, true)).toThrow('process stopped')
+    await h.stop()
+    const again = await make(() => true, [], [seat], home)
+    again.start()
+    try {
+      await new Promise(r => setTimeout(r, 30))
+      // The restart interrupted the running assignment and runs the ticket again in a new run (executor.recover).
+      const fresh = again.executor.bindingOf(SEAT)!
+      expect(fresh.ticketId).toBe(binding.ticketId)
+      expect(runOf(fresh)).not.toBe(runOf(binding))
+      const before = JSON.stringify(again.ticket(binding.ticketId))
+      // The old run's pending idle, sent again, is stale: it does not end the new run.
+      expect(again.remoteEvent('idle', SEAT, KEY_P, idle, true)).toEqual({ ok: true, stale: true })
+      expect(again.executor.bindingOf(SEAT)).toEqual(fresh)
+      expect(JSON.stringify(again.ticket(binding.ticketId))).toBe(before)
+    } finally { void again.stop() }
   })
 
   it('#688 C2: a fact whose effect fails records nothing; its retry applies it', async () => {

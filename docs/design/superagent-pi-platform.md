@@ -98,7 +98,7 @@ cursor 制 v2 桥已运行），席位 init、publish、canvas 建链全部手�
 |---|---|---|
 | PR-A | 本设计稿 | 高档（design_pass） |
 | PR-B | host：`platforms/`＋入队 pin key＋派发第四路＋`superagent-team` 面开 CLI claim＋pi 卡片＋unit/wire。实现：席位 key 存 canvas 的 `seatKeys`（不进 `memberOwners`，那里只收限定会话 ref）；队成员里 pi 席位是带 `platform: 'pi'` 的远程成员行；卡片里的 CLI 命令名以 PR-C 落地为准 | 高档（准入语义变更） |
-| PR-C | CLI `ticket` 子命令＋扩展打包＋`pi install`＋README 安装节。实现：`publish --pi-seat` 声明；`ticket` 六词走 body-bound CLI claim；扩展 `pi/extension/a2a-seat.ts` 装到 Pi 文档规定的 `~/.pi/agent/extensions/`（P6 原写 `~/.pi/extensions/`，以 Pi 1.5 文档为准），用自己的 `inbox --after` 游标；严格类型检查对照本仓 `pi-api.d.ts`（按 Pi 1.5.2 的类型声明摘取的子集）。#688 复评：席位锁的过期回收只在回收互斥锁下进行，回收前重读、移开后核对，移错的活锁用硬链接放回；派给 Pi 的活带运行 id（邮箱行 `context_id`，每次绑定一个），回合事实带 `--ticket --run --event`，宿主把已收事件写盘去重，非当前运行的事实不动新单。二次复评：停止通知是该运行的控制行（`context_id` 为 `stop.<run>`），扩展据此把该运行移出在途、不当新活；宿主先生效再记账，记账先写盘再算已见，写盘失败返回可重试，重试时绑定已被消费即判 stale | 高档（评审席可酌情降中档） |
+| PR-C | CLI `ticket` 子命令＋扩展打包＋`pi install`＋README 安装节。实现：`publish --pi-seat` 声明；`ticket` 六词走 body-bound CLI claim；扩展 `pi/extension/a2a-seat.ts` 装到 Pi 文档规定的 `~/.pi/agent/extensions/`（P6 原写 `~/.pi/extensions/`，以 Pi 1.5 文档为准），用自己的 `inbox --after` 游标；严格类型检查对照本仓 `pi-api.d.ts`（按 Pi 1.5.2 的类型声明摘取的子集）。#688 复评：席位锁的过期回收只在回收互斥锁下进行，回收前重读、移开后核对，移错的活锁用硬链接放回；派给 Pi 的活带运行 id（邮箱行 `context_id`，每次绑定一个），回合事实带 `--ticket --run --event`，宿主把已收事件写盘去重，非当前运行的事实不动新单。二次复评：停止通知是该运行的控制行（`context_id` 为 `stop.<run>`），扩展据此把该运行移出在途、不当新活；宿主先生效再记账，记账先写盘再算已见，写盘失败返回可重试，重试时绑定已被消费即判 stale。三次复评：记账改为先写 pending 再生效、生效后写 applied；pending 写不了就拒（可重试）且零生效，同一进程内一个事件至多生效一次（applied 写失败也不重放）；宿主重启会以新运行重跑工单，遗留 pending 的旧事实判 stale。扩展把宿主的终局拒绝（not-member 等）存档到 `refused`、该运行记为已结束、不再阻塞邮箱，停止通知照常收到；已结束运行的活不交给会话 | 高档（评审席可酌情降中档） |
 
 全部 base＝`next/0.8`；正文只写 Refs；不 force-push；测试退出码挡提交。
 

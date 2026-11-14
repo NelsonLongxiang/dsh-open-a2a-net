@@ -375,6 +375,8 @@ export class SuperagentHost {
   /** The team's state directory (executor.json, pi-events.json, …). */
   private readonly stateDir: string
   private piEvents(): PiEvents { return this.piEventLog ??= new PiEvents(join(this.stateDir, 'pi-events.json')) }
+  /** Pi facts whose effect ran in this process (seat, run, event): never run again here, whatever the journal managed to write. */
+  private readonly piApplied = new Set<string>()
   /** Pi platform: the key each Pi seat's work was last delivered under (in memory: a seat's work does not outlive a restart). */
   private readonly piPins = new Map<string, string>()
 
@@ -426,16 +428,26 @@ export class SuperagentHost {
       const fact = (report ?? {}) as Record<string, unknown>
       const id = /^[A-Za-z0-9._:-]{1,80}$/
       if (typeof fact.ticket_id !== 'string' || typeof fact.run_id !== 'string' || !id.test(fact.run_id) || typeof fact.event_id !== 'string' || !id.test(fact.event_id)) return { ok: false, code: 'report', error: 'a Pi seat names the ticket (ticket_id), the run (run_id) and the event (event_id) of a turn fact' }
-      if (this.piEvents().has(entry.ref, fact.run_id, fact.event_id)) return { ok: true, duplicate: true }
+      const key = `${entry.ref}\u0000${fact.run_id}\u0000${fact.event_id}`
+      const recorded = this.piEvents().state(entry.ref, fact.run_id, fact.event_id)
+      // Applied before, on disk or in this process: acknowledged again, and nothing runs twice.
+      if (recorded === 'applied' || this.piApplied.has(key)) return { ok: true, duplicate: true }
       const binding = this.executor.bindingOf(entry.ref)
       if (binding === undefined || binding.ticketId !== fact.ticket_id || runOf(binding) !== fact.run_id) return { ok: true, stale: true }
-      // #688 C2: the effect first, then its record. A failed effect records nothing (the retry applies it); a failed record
-      // after the effect is not acknowledged, and its retry finds the binding the effect consumed gone (stale) or, for a
-      // read, marks it read again.
+      // #688 re-review R2: the record first (pending), then the effect, then applied. A pending record that cannot be
+      // written refuses the fact as retryable with no effect at all, however often it is sent.
+      if (recorded === undefined) {
+        try { this.piEvents().record(entry.ref, fact.run_id, fact.event_id, 'pending') } catch (error) {
+          this.d.logger.warn('superagent: Pi seat %s fact %s not recorded, not applied: %s', entry.ref, fact.event_id, String(error))
+          return { ok: false, code: 'journal', retryable: true, error: 'this host could not record the fact, so it did not act on it; send it again' }
+        }
+      }
       const effect = this.piFact(entry.ref, op, fact)
-      try { this.piEvents().add(entry.ref, fact.run_id, fact.event_id) } catch (error) {
-        this.d.logger.warn('superagent: Pi seat %s fact %s applied but not recorded: %s', entry.ref, fact.event_id, String(error))
-        return { ok: false, code: 'journal', retryable: true, error: 'the fact was applied but this host could not record it; send it again' }
+      this.piApplied.add(key)
+      if (this.piApplied.size > 4096) this.piApplied.delete(this.piApplied.values().next().value!)
+      // The effect ran: a failed `applied` write is logged, and this process still never runs it again (piApplied).
+      try { this.piEvents().record(entry.ref, fact.run_id, fact.event_id, 'applied') } catch (error) {
+        this.d.logger.warn('superagent: Pi seat %s fact %s applied, its record left pending: %s', entry.ref, fact.event_id, String(error))
       }
       return effect
     }

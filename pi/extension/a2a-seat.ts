@@ -18,6 +18,10 @@
  *   time, oldest first, before any new work is fetched.
  * - A stop is a control row for one run (context id `stop.<run>`): it is shown to the Pi session, and that run's ticket
  *   leaves the in-flight list with no fact owed (the host has already let it go). It is never taken as new work.
+ * - A fact the host refuses for good (the seat is no longer a member, or the fact is malformed) is not acknowledged and
+ *   not retried forever: it is set aside with the refusal (kept as evidence, `refused`), its run counts as ended, and the
+ *   mailbox is read again — so a stop for that run still arrives (#688 re-review R1). Work for an ended run (stopped,
+ *   refused, or stopped in the same batch) is never handed to the session; only work of a new run is.
  * - In-flight work survives the consumer: the tickets handed over are recorded before the cursor moves; a consumer that
  *   finds tickets still in flight (its predecessor stopped without the run settling) owes an error for each of them.
  * - Shutdown fences: each session start opens a generation with its own AbortController; nothing from a closed
@@ -40,8 +44,13 @@ interface AfterRead { readonly handle?: string; readonly next?: string; readonly
 export interface OwedFact { readonly op: 'read' | 'idle' | 'error'; readonly ticket: string; readonly run: string; readonly event: string; readonly text?: string }
 /** A ticket handed to the Pi session, in the run its work came in. */
 export interface InflightWork { readonly ticket: string; readonly run: string }
-/** One seat's persisted consumer state. */
-export interface SeatState { readonly handle: string; readonly home: string; cursor: string; inflight: InflightWork[]; owed: OwedFact[] }
+/** A fact the host refused for good, kept as evidence with its refusal code. */
+export interface RefusedFact extends OwedFact { readonly code: string; readonly at: string }
+/** One seat's persisted consumer state. `ended`: runs that were stopped or whose facts were refused for good, newest last. */
+export interface SeatState { readonly handle: string; readonly home: string; cursor: string; inflight: InflightWork[]; owed: OwedFact[]; ended: string[]; refused: RefusedFact[] }
+/** The host's refusals that no retry changes: the fact is set aside, never sent again. */
+export const TERMINAL_REFUSALS: readonly string[] = ['not-member', 'report', 'op']
+const ENDED_KEPT = 128, REFUSED_KEPT = 32
 
 /** The sender name the team host writes a seat's work under (src/index.ts piDeliver). */
 export const TEAM_SENDER = 'superagent'
@@ -67,10 +76,12 @@ function loadState(path: string, handle: string, home: string): SeatState {
       // Entries without a run (written before runs) cannot be scoped: the host would refuse them, so they are not kept.
       const inflight = Array.isArray(stored.inflight) ? stored.inflight.filter((w): w is InflightWork => w !== null && typeof w === 'object' && typeof w.ticket === 'string' && typeof w.run === 'string') : []
       const owed = Array.isArray(stored.owed) ? stored.owed.filter((f): f is OwedFact => f !== null && typeof f === 'object' && ['read', 'idle', 'error'].includes(String(f.op)) && typeof f.ticket === 'string' && typeof f.run === 'string' && typeof f.event === 'string') : []
-      return { handle, home, cursor: stored.cursor, inflight, owed }
+      const ended = Array.isArray(stored.ended) ? stored.ended.filter((r): r is string => typeof r === 'string').slice(-ENDED_KEPT) : []
+      const refused = Array.isArray(stored.refused) ? stored.refused.filter((f): f is RefusedFact => f !== null && typeof f === 'object' && typeof f.ticket === 'string' && typeof f.code === 'string').slice(-REFUSED_KEPT) : []
+      return { handle, home, cursor: stored.cursor, inflight, owed, ended, refused }
     }
   } catch { /* no state yet */ }
-  return { handle, home, cursor: 'start', inflight: [], owed: [] }
+  return { handle, home, cursor: 'start', inflight: [], owed: [], ended: [], refused: [] }
 }
 
 function saveState(path: string, state: SeatState): void {
@@ -212,9 +223,16 @@ export default function a2aSeat(pi: ExtensionAPI): void {
   }
 
   const factArgs = (fact: OwedFact): string[] => {
-    const scope = ['--ticket', fact.ticket, '--run', fact.run, '--event', fact.event]
+    const scope = ['--ticket', fact.ticket, '--run', fact.run, '--event', fact.event, '--json']
     if (fact.op === 'error') return ['ticket', 'error', '--transient', ...scope, '--', fact.text ?? 'the Pi run did not settle']
     return ['ticket', fact.op, ...scope]
+  }
+
+  /** A run that is over here (stopped, or its facts refused for good): out of flight, and its work is never handed over. */
+  const endRun = (ticket: string, run: string): void => {
+    if (seat === undefined) return
+    seat.state.inflight = seat.state.inflight.filter(w => !(w.ticket === ticket && w.run === run))
+    if (!seat.state.ended.includes(run)) seat.state.ended = [...seat.state.ended, run].slice(-ENDED_KEPT)
   }
 
   /** Send the owed facts, oldest first, one at a time; true when none is left owed. */
@@ -225,7 +243,22 @@ export default function a2aSeat(pi: ExtensionAPI): void {
         const fact = seat.state.owed[0]!
         const out = await cli(gen, factArgs(fact))
         if (out === undefined || seat === undefined) return false
-        if (out.code !== 0) { warn(ctx, 'owed', `telling the team host about ticket ${fact.ticket} (${fact.op}) failed; retrying on the next poll`); return false }
+        if (out.code !== 0) {
+          let refusal: { ok?: unknown; code?: unknown; retryable?: unknown } | undefined
+          try { refusal = JSON.parse(out.stdout) as typeof refusal } catch { /* no answer: the transport failed */ }
+          const code = typeof refusal?.code === 'string' ? refusal.code : undefined
+          if (refusal?.ok === false && code !== undefined && refusal.retryable !== true && TERMINAL_REFUSALS.includes(code)) {
+            // Refused for good: set aside as evidence (never counted as taken), its run ended, and the mailbox read on.
+            warn(ctx, `refused-${fact.run}`, `the team host refused ticket ${fact.ticket} (${fact.op}): ${code}; this run is ended here and its facts are kept in ${seat.path}`)
+            endRun(fact.ticket, fact.run)
+            seat.state.refused = [...seat.state.refused, { ...fact, code, at: new Date().toISOString() }].slice(-REFUSED_KEPT)
+            seat.state.owed = seat.state.owed.filter(f => f.event !== fact.event)
+            saveState(seat.path, seat.state)
+            continue
+          }
+          warn(ctx, 'owed', `telling the team host about ticket ${fact.ticket} (${fact.op}) failed; retrying on the next poll`)
+          return false
+        }
         warned.delete('owed')
         seat.state.owed = seat.state.owed.filter(f => f.event !== fact.event)
         saveState(seat.path, seat.state)
@@ -262,7 +295,9 @@ export default function a2aSeat(pi: ExtensionAPI): void {
       // A stop names the run it ends as `stop.<run>` (#688 C1).
       const team = (read.mail ?? []).filter(row => row.from === TEAM_SENDER && typeof row.text === 'string' && row.text !== '' && typeof row.task_id === 'string' && row.task_id !== '' && typeof row.context_id === 'string' && row.context_id !== '')
       const stops = team.filter(row => (row.context_id as string).startsWith(STOP_PREFIX) && (row.context_id as string).length > STOP_PREFIX.length)
-      const work = team.filter(row => !(row.context_id as string).startsWith(STOP_PREFIX))
+      // Work of a run already ended here, or stopped in this same batch, is not handed over.
+      const stopped = new Set(stops.map(row => (row.context_id as string).slice(STOP_PREFIX.length)))
+      const work = team.filter(row => !(row.context_id as string).startsWith(STOP_PREFIX) && !state.ended.includes(row.context_id as string) && !stopped.has(row.context_id as string))
       if (!owns(gen)) return
       // In flight first (durable), then the handover, then the cursor and the read facts: a consumer that dies in between
       // leaves its successor the tickets to account for, never a silent gap.
@@ -279,8 +314,7 @@ export default function a2aSeat(pi: ExtensionAPI): void {
         else pi.sendUserMessage(row.text as string, { deliverAs: 'followUp' })
       }
       for (const row of stops) {
-        const run = (row.context_id as string).slice(STOP_PREFIX.length)
-        state.inflight = state.inflight.filter(w => !(w.ticket === row.task_id && w.run === run))
+        endRun(row.task_id as string, (row.context_id as string).slice(STOP_PREFIX.length))
         if (ctx.isIdle()) pi.sendUserMessage(row.text as string)
         else pi.sendUserMessage(row.text as string, { deliverAs: 'followUp' })
       }
