@@ -1254,9 +1254,17 @@ async function cmdFileSend() {
     try { st = statSync(path) } catch { die(`[file send] cannot read ${path}`) }
     if (!st.isFile()) die(`[file send] ${path} is not a file`)
     if (st.size > FILE_MAX) die(`[file send] ${path} is ${String(st.size)} bytes; the file channel takes at most ${String(FILE_MAX)}`)
-    const res = await homeFetch(`${home()}/__dsh_a2a/blob?to=${encodeURIComponent(team)}&name=${encodeURIComponent(basename(path))}&by=${encodeURIComponent(handle)}&task_id=${encodeURIComponent(taskId)}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/octet-stream', ...keyHeaders() }, body: readFileSync(path),
-    })
+    // #692 review F2: staged AS this identity — the target, name, task and bytes all under its signed, body-bound claim.
+    const stageUrl = `${home()}/a2a/blob-stage`
+    const body = Buffer.concat([Buffer.from(`${JSON.stringify({ to: team, name: basename(path), task_id: taskId })}\n`, 'utf8'), readFileSync(path)])
+    let res = await homeFetch(stageUrl, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', ...originClaimFor(home())(stageUrl, 'POST', body), ...keyHeaders() }, body })
+    if (res.status === 404 || res.status === 405) {
+      // An older home host: the control stage face (its grants are the operator's, so file revoke cannot take them back).
+      void res.body?.cancel()
+      res = await homeFetch(`${home()}/__dsh_a2a/blob?to=${encodeURIComponent(team)}&name=${encodeURIComponent(basename(path))}&task_id=${encodeURIComponent(taskId)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/octet-stream', ...keyHeaders() }, body: readFileSync(path),
+      })
+    }
     if (res.status === 401 || res.status === 403) die(keyHint(res.status))
     const out = await replyOf(res)
     if (out.ok !== true) die(`[file send] ${path}: ${String(out.error ?? 'refused')} — a host without the file channel answers 404/405: upgrade it`)

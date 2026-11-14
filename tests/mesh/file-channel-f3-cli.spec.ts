@@ -197,6 +197,21 @@ describe('#91 F3 — a2a file send / file fetch (real CLI, real host)', () => {
       // An unsigned request is refused outright.
       const unsigned = await globalThis.fetch(`${a.baseUrl}/a2a/blob-grants`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'list' }) })
       expect(unsigned.status).toBe(403)
+      expect((await globalThis.fetch(`${a.baseUrl}/a2a/blob-stage`, { method: 'POST', body: `${JSON.stringify({ to: 'dsh/01234567', name: 'x' })}\nbytes` })).status).toBe(403)
+
+      // #692 review F1: the other identity sends the SAME bytes to the SAME target — a grant of its own; its revoke
+      // takes back only that one, and the first sender's grant and bytes stay.
+      expect((await runCli(['file', 'send', join(work, 'chunk-01.bin'), 'dsh/01234567'], other)).code).toBe(0)
+      expect((await listOf(other)).grants).toHaveLength(1)
+      const own = JSON.parse((await runCli(['file', 'revoke', sha('分块一'), 'dsh/01234567', '--json'], other)).stdout)
+      expect(own).toMatchObject({ ok: true, reclaimed: false })
+      expect((await listOf(ops)).grants.find(g => g.name === 'chunk-01.bin')).toMatchObject({ to: 'dsh/01234567', taskId: 'direct-image001' })
+
+      // #692 review F2: a control-key stage naming the identity in by= is the operator's grant, not the identity's.
+      const forged = await (await globalThis.fetch(`${a.baseUrl}/__dsh_a2a/blob?to=dsh%2F01234567&name=forged.bin&by=${encodeURIComponent('other-cli/0f1e2d3c4b5a6978')}`, { method: 'POST', body: '冒名' })).json() as Record<string, unknown>
+      expect(forged.ok).toBe(true)
+      expect((await listOf(other)).grants).toEqual([])
+      expect(JSON.parse((await runCli(['file', 'revoke', sha('冒名'), 'dsh/01234567', '--json'], other)).stdout)).toMatchObject({ ok: false, code: 'not-found' })
 
       // A fetch is seen by the sender.
       const inbox = JSON.parse((await runCli(['inbox', '--json'], ops)).stdout) as unknown
@@ -211,7 +226,8 @@ describe('#91 F3 — a2a file send / file fetch (real CLI, real host)', () => {
       expect(revoked.stdout).toContain('bytes freed')
       const after = await listOf(ops)
       expect(after.grants.map(g => g.name)).toEqual(['self.txt'])
-      expect(after.usage.files).toBe(1)
+      // self.txt, and the operator's forged.bin (its own namespace).
+      expect(after.usage.files).toBe(2)
     } finally {
       await a.dispose()
     }

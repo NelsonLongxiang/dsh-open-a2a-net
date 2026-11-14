@@ -6,8 +6,12 @@
  * the wire face (admission, OriginClaim) and the tools sit on top of it.
  *
  * - Blobs live at `<root>/blobs/<sha256>`, written tmp + rename; identical bytes are stored once.
- * - Grants live in `<root>/blob-grants.json`, one per (sha256, to): re-sending the same blob to
- *   the same target only extends its expiry.
+ * - Grants live in `<root>/blob-grants.json`, one per (sha256, to, by): each sender's grant is its own (#692
+ *   review F1), so another sender staging the same bytes for the same target never takes it over. The same
+ *   sender re-sending only extends the expiry and keeps the grant's task and fetch record.
+ * - Every change is written before it takes effect here (#692 review F3): a failed write leaves the store
+ *   as it was, so a retry finds the same state and a restart never revives a revoked grant. Bytes no grant
+ *   names are deleted after the change is written; a delete that did not happen is retried at the next start.
  * - Capacity: one file ≤ {@link BLOB_FILE_MAX}; the store ≤ {@link BLOB_TOTAL_MAX} bytes and
  *   ≤ {@link BLOB_COUNT_MAX} blobs. A full store first drops expired grants and the blobs no
  *   live grant names, then refuses visibly — a live grant is never pushed out.
@@ -109,6 +113,8 @@ export class BlobStore {
    */
   constructor(private readonly root: string, private readonly now: () => number = () => Date.now()) {
     this.restore()
+    // Bytes a revoke could not delete (or a crash left between the written change and the delete) go now.
+    try { this.sweep() } catch { /* the next stage sweeps again */ }
   }
 
   private get grantsFile(): string { return join(this.root, 'blob-grants.json') }
@@ -138,9 +144,13 @@ export class BlobStore {
         renameSync(tmp, this.blobPath(sha256))
       }
     }
-    const grant: BlobGrant = { sha256, size: bytes.byteLength, name, to: meta.to, by: meta.by, grantedAt: at, expiresAt, ...(meta.taskId !== undefined ? { taskId: meta.taskId } : {}) }
-    this.grants = [grant, ...this.grants.filter(g => !(g.sha256 === sha256 && g.to === meta.to))]
-    this.persist()
+    // The same sender re-sending: extend, keeping its task and fetch record; anyone else's grant is left as it is.
+    const mine = (g: BlobGrant): boolean => g.sha256 === sha256 && g.to === meta.to && g.by === meta.by
+    const before = this.grants.find(mine)
+    const grant: BlobGrant = before !== undefined
+      ? { ...before, expiresAt, ...(before.taskId === undefined && meta.taskId !== undefined ? { taskId: meta.taskId } : {}) }
+      : { sha256, size: bytes.byteLength, name, to: meta.to, by: meta.by, grantedAt: at, expiresAt, ...(meta.taskId !== undefined ? { taskId: meta.taskId } : {}) }
+    this.commit([grant, ...this.grants.filter(g => !mine(g))])
     return { ok: true, sha256, size: bytes.byteLength, name, expiresAt }
   }
 
@@ -181,15 +191,14 @@ export class BlobStore {
   tagTask(sha256: string, to: string, by: string, taskId: string): void {
     if (!BLOB_TASK_RE.test(taskId)) return
     let changed = false
-    this.grants = this.grants.map(g => g.sha256 === sha256 && g.to === to && g.by === by && g.taskId === undefined ? (changed = true, { ...g, taskId }) : g)
-    if (changed) this.persist()
+    const next = this.grants.map(g => g.sha256 === sha256 && g.to === to && g.by === by && g.taskId === undefined ? (changed = true, { ...g, taskId }) : g)
+    if (changed) this.commit(next)
   }
 
-  /** The target pulled this grant's blob: count it, and keep when it first did. */
+  /** The target pulled this grant's blob: count it, and keep when it first did (that sender's grant only). */
   noteFetch(grant: BlobGrant): void {
     const at = this.now()
-    this.grants = this.grants.map(g => g.sha256 === grant.sha256 && g.to === grant.to ? { ...g, fetches: (g.fetches ?? 0) + 1, firstFetchedAt: g.firstFetchedAt ?? at } : g)
-    this.persist()
+    this.commit(this.grants.map(g => g.sha256 === grant.sha256 && g.to === grant.to && g.by === grant.by ? { ...g, fetches: (g.fetches ?? 0) + 1, firstFetchedAt: g.firstFetchedAt ?? at } : g))
   }
 
   /**
@@ -199,12 +208,13 @@ export class BlobStore {
    */
   revoke(sha256: string, to: string, by: string): RevokeResult {
     if (!SHA256_RE.test(sha256) || typeof to !== 'string' || to === '' || by === '') return { ok: false, code: 'bad-request', error: 'sha256 (64 hex) and to are required' }
-    const grant = this.grants.find(g => g.sha256 === sha256 && g.to === to)
-    if (grant === undefined || grant.by !== by) return { ok: false, code: 'not-found', error: 'you have no grant of that file to that target' }
-    this.grants = this.grants.filter(g => g !== grant)
-    const reclaimed = !this.grants.some(g => g.sha256 === sha256)
-    if (reclaimed && this.root !== '') rmSync(this.blobPath(sha256), { force: true })
-    this.persist()
+    const grant = this.grants.find(g => g.sha256 === sha256 && g.to === to && g.by === by)
+    if (grant === undefined) return { ok: false, code: 'not-found', error: 'you have no grant of that file to that target' }
+    const next = this.grants.filter(g => g !== grant)
+    // Written first: a failed write throws and nothing changed (the retry revokes it then).
+    this.commit(next)
+    const reclaimed = !next.some(g => g.sha256 === sha256)
+    if (reclaimed && this.root !== '') { try { rmSync(this.blobPath(sha256), { force: true }) } catch { /* no grant names it: the next start's sweep deletes it */ } }
     return { ok: true, sha256, to, reclaimed, bytes: reclaimed ? grant.size : 0 }
   }
 
@@ -236,12 +246,25 @@ export class BlobStore {
     if (this.grants.length !== before) this.persist()
   }
 
-  private persist(): void {
+  /** Write `next` and only then make it the store's state: a failed write throws with the state unchanged. */
+  private commit(next: BlobGrant[]): void {
+    this.write(next)
+    this.grants = next
+  }
+
+  private persist(): void { this.write(this.grants) }
+
+  private write(grants: readonly BlobGrant[]): void {
     if (this.root === '') return
     mkdirSync(this.root, { recursive: true })
     const tmp = `${this.grantsFile}.tmp-${String(process.pid)}`
-    writeFileSync(tmp, JSON.stringify({ grants: this.grants }), { mode: 0o600 })
-    renameSync(tmp, this.grantsFile)
+    try {
+      writeFileSync(tmp, JSON.stringify({ grants }), { mode: 0o600 })
+      renameSync(tmp, this.grantsFile)
+    } catch (error) {
+      try { rmSync(tmp, { force: true }) } catch { /* the tmp path itself may be what failed */ }
+      throw error
+    }
   }
 
   private restore(): void {

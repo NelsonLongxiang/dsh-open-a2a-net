@@ -6,7 +6,7 @@
 import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { BLOB_COUNT_MAX, BLOB_TOTAL_MAX, BlobStore, formatFileRef } from '../../src/blob-store.ts'
@@ -94,6 +94,71 @@ describe('BlobStore grant management', () => {
     for (const g of raw.grants) { delete g.taskId; delete g.fetches; delete g.firstFetchedAt }
     writeFileSync(file, JSON.stringify(raw))
     expect(new BlobStore(root).grantsBy('session-a')).toHaveLength(1)
+  })
+})
+
+describe('#692 review: ownership, durability and provenance', () => {
+  it('F1: B staging the same bytes for the same target gets a grant of its own; B\'s revoke leaves A\'s grant, its bytes and a restart intact', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bg-f1-'))
+    const store = new BlobStore(root)
+    store.stage(Buffer.from('public chunk'), { name: 'c', to: 'peer/t', by: 'session-a' })
+    expect(store.revoke(sha('public chunk'), 'peer/t', 'session-b')).toMatchObject({ ok: false, code: 'not-found' })
+    store.stage(Buffer.from('public chunk'), { name: 'c', to: 'peer/t', by: 'session-b' })
+    expect(store.grantsBy('session-a')).toHaveLength(1)
+    expect(store.grantsBy('session-b')).toHaveLength(1)
+    expect(store.revoke(sha('public chunk'), 'peer/t', 'session-b')).toMatchObject({ ok: true, reclaimed: false, bytes: 0 })
+    for (const s of [store, new BlobStore(root)]) {
+      expect(s.grantsBy('session-a')).toHaveLength(1)
+      expect(s.grantsBy('session-b')).toEqual([])
+      const grant = s.grantFor(sha('public chunk'), ['peer/t'])!
+      expect(grant.by).toBe('session-a')
+      expect(s.read(grant)).toEqual(Buffer.from('public chunk'))
+    }
+  })
+
+  it('F3: a revoke whose write fails changes nothing — the retry revokes it, and a restart never brings a revoked grant back', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bg-f3-'))
+    const store = new BlobStore(root)
+    store.stage(Buffer.from('shared'), { name: 's', to: 'peer/x', by: 'session-a' })
+    store.stage(Buffer.from('shared'), { name: 's', to: 'peer/y', by: 'session-b' })
+    // The write cannot happen (a directory where its tmp file goes): not a policy denial, a failing write.
+    const blocker = join(root, `blob-grants.json.tmp-${String(process.pid)}`)
+    mkdirSync(blocker)
+    expect(() => store.revoke(sha('shared'), 'peer/x', 'session-a')).toThrow()
+    expect(store.grantsBy('session-a')).toHaveLength(1)
+    expect(new BlobStore(root).grantsBy('session-a')).toHaveLength(1)
+    rmSync(blocker, { recursive: true })
+    expect(store.revoke(sha('shared'), 'peer/x', 'session-a')).toMatchObject({ ok: true, reclaimed: false })
+    const after = new BlobStore(root)
+    expect(after.grantsBy('session-a')).toEqual([])
+    expect(after.grantFor(sha('shared'), ['peer/x'])).toBeUndefined()
+    expect(after.grantFor(sha('shared'), ['peer/y'])).toBeDefined()
+  })
+
+  it('F3: bytes left behind by a stop between the written revoke and the delete are deleted at the next start', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bg-f3b-'))
+    new BlobStore(root).stage(Buffer.from('orphan'), { name: 'o', to: 'peer/x', by: 'session-a' })
+    // The revoke's write happened; the process stopped before the delete.
+    writeFileSync(join(root, 'blob-grants.json'), JSON.stringify({ grants: [] }))
+    expect(existsSync(join(root, 'blobs', sha('orphan')))).toBe(true)
+    new BlobStore(root)
+    expect(existsSync(join(root, 'blobs', sha('orphan')))).toBe(false)
+  })
+
+  it('provenance: the same sender re-sending extends the expiry and keeps its first task and fetch record, across a restart', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bg-prov-'))
+    let now = 1_000
+    const store = new BlobStore(root, () => now)
+    store.stage(Buffer.from('p'), { name: 'p', to: 'peer/x', by: 'session-a', taskId: 'direct-first' })
+    store.noteFetch(store.grantFor(sha('p'), ['peer/x'])!)
+    const first = store.grantsBy('session-a')[0]!
+    now = 5_000
+    store.stage(Buffer.from('p'), { name: 'p', to: 'peer/x', by: 'session-a' })
+    store.stage(Buffer.from('p'), { name: 'p', to: 'peer/x', by: 'session-a', taskId: 'direct-second' })
+    for (const g of [store.grantsBy('session-a')[0]!, new BlobStore(root, () => now).grantsBy('session-a')[0]!]) {
+      expect(g).toMatchObject({ taskId: 'direct-first', fetches: 1, firstFetchedAt: 1_000, grantedAt: first.grantedAt })
+      expect(g.expiresAt).toBeGreaterThan(first.expiresAt)
+    }
   })
 })
 

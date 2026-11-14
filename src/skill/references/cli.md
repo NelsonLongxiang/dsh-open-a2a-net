@@ -94,7 +94,7 @@ Files do not go through session messages: use the file channel below, never JPFI
   face, #332) — can be fetched; the alias lookup asks only the configured home,
   and old/denied/malformed/redirected metadata fails closed. For a file on any
   other host, ask the sender to send it through your home host.
-- `a2a-net file send … --task <id>` records that task id on each grant (default: the task the send goes out in).
+- `a2a-net file send … --task <id>` records that task id on each grant (default: the task the send goes out in). The CLI stages AS its identity (`POST /a2a/blob-stage`: one JSON line `{to, name, task_id}`, a newline, then the bytes, all under its signed, body-bound claim), so the grants are its own; an older home host without that face gets the control stage, whose grants belong to the operator (`control`) and are not revocable from the CLI. Each sender's grant is its own: another sender staging the same bytes for the same target never takes yours over, and re-sending only extends yours (task and fetch record kept).
 - `a2a-net file grants [--json]` lists the grants THIS identity made that are still live: sha256, size, name,
   `to`, granted and expiry times, task id, and whether the target fetched it (`fetched`, `fetches`,
   `firstFetchedAt`); plus the store's occupancy and ceilings (`usage`: files/bytes of 256/1 GiB).

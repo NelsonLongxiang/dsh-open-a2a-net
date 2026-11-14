@@ -131,7 +131,7 @@
 | F2 | `a2a_file_send`（接受一个或多个 path，多个文件合成一条引用消息，每行一个引用；设计评审 PASS 附注 a）和 `a2a_file_fetch` 两个工具、落盘清洗、sha256 校验、N4 打标 | 高 | 篡改字节时校验失败且不落盘；含 `../` 的名字落不到 `a2a-inbox/` 外面；isolated 时拒绝拉取；拉取后会话已污染 |
 | F3 | CLI 的 `file send` / `file fetch`、控制面 `POST /__dsh_a2a/blob` | 高 | 不带 apiKey 的暂存被拒；CLI 拉取的校验规则与宿主一致 |
 | F4 | FloodGuard 的 `use-file-channel` 提示，skill 文档更新 | 中 | JPFILE-PART 拒收时带新原因码和用法 |
-| G1（2026-11-14 市场派单，属主「两个都开工」） | 授权管理：发送方清点自己仍有效的授权（含是否已被取件、所属任务）与暂存区占用/上限；按 sha256+to 撤销自己的授权，文件无人引用即删、立即腾出空间；`a2a_file_send` / `file send --task` 可带 task_id；工具 `a2a_file_grants` / `a2a_file_revoke`，CLI `file grants` / `file revoke`（`POST /a2a/blob-grants`，CLI 身份签名且绑定请求体） | 高 | 撤别人的授权按“不存在”拒且原授权照常可拉；未签名请求 403；撤销后空间立即可用 |
+| G1（2026-11-14 市场派单，属主「两个都开工」） | 授权管理：发送方清点自己仍有效的授权（含是否已被取件、所属任务）与暂存区占用/上限；按 sha256+to 撤销自己的授权，文件无人引用即删、立即腾出空间；`a2a_file_send` / `file send --task` 可带 task_id；工具 `a2a_file_grants` / `a2a_file_revoke`，CLI `file grants` / `file revoke`（`POST /a2a/blob-grants`，CLI 身份签名且绑定请求体） | 高 | 撤别人的授权按“不存在”拒且原授权照常可拉；未签名请求 403；撤销后空间立即可用。评审 F1–F3：授权按（sha256, to, 发送方）各自独立，别人重发同一文件不会顶替；CLI 经 `POST /a2a/blob-stage` 以签名身份暂存（元数据与字节都在签名覆盖的请求体里），控制面暂存一律归操作员 `control`；每次变更先写盘再生效，写失败什么都不变、可重试，重启不会复活已撤授权，未删掉的字节下次启动清理；同一发送方重发只延长有效期，保留任务和取件记录 |
 
 F1 和 F2 合起来就能取代 JPFILE-PART 的主路径。F3 让 CLI 身份也能用上。F4 在部署之后做。
 

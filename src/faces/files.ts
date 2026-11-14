@@ -11,6 +11,11 @@
  *   A refusal never says whether the blob exists. Pulls are rate-limited per proven signer.
  * - `POST /__dsh_a2a/blob?to=<team>&name=<file>[&task_id=<id>]` — the control-gated STAGE face (CLI
  *   `file send`, design §3.4): raw bytes in, a grant out. No peer can write into the store.
+ * - `POST /a2a/blob-stage` — a deposited CLI identity stages a file AS ITSELF (#692 review F2): the body is one
+ *   JSON line `{ to, name, task_id? }`, a newline, then the bytes, and the whole body is covered by the identity's
+ *   signed, body-bound OriginClaim. The grant's sender is the handle the signature proves. The control stage face
+ *   above records its grants under the operator namespace `control`: a control key proves no particular identity,
+ *   so its `by` query is not taken.
  * - `POST /a2a/blob-grants` `{ op: 'list' }` | `{ op: 'revoke', sha256, to }` — a deposited CLI identity
  *   manages ITS OWN grants (market request 2026-11-14). It takes a signed, body-bound CLI OriginClaim:
  *   the sender is the handle the claim proves, never a field of the body. Revoking another sender's
@@ -138,7 +143,8 @@ export function registerFileFaces(webServer: WebServer, d: FileFaceDeps): void {
       const url = new URL(req.url ?? '/', 'http://x')
       const to = url.searchParams.get('to') ?? ''
       const name = url.searchParams.get('name') ?? 'file'
-      const by = url.searchParams.get('by') ?? 'control'
+      // #692 review F2: a control key proves no particular sender — its grants are the operator's, never an identity's.
+      const by = 'control'
       const taskId = url.searchParams.get('task_id') ?? undefined
       const declared = Number(req.headers['content-length'] ?? NaN)
       if (Number.isFinite(declared) && declared > BLOB_FILE_MAX) { json(res, 413, { ok: false, code: 'too-large', error: `the file channel takes at most ${String(BLOB_FILE_MAX)} bytes` }); req.resume(); return }
@@ -159,6 +165,45 @@ export function registerFileFaces(webServer: WebServer, d: FileFaceDeps): void {
       })
     }),
   }), 'a2a: file-channel stage face')
+
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: '/a2a/blob-stage',
+    handler: async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.method !== 'POST') { json(res, 405, { ok: false, error: 'POST one JSON line { to, name, task_id? }, a newline, then the bytes' }); return }
+      const declared = Number(req.headers['content-length'] ?? NaN)
+      const cap = BLOB_FILE_MAX + 4096
+      if (Number.isFinite(declared) && declared > cap) { json(res, 413, { ok: false, code: 'too-large', error: `the file channel takes at most ${String(BLOB_FILE_MAX)} bytes` }); req.resume(); return }
+      const chunks: Buffer[] = []
+      let size = 0
+      let over = false
+      req.on('data', (chunk: Buffer) => { size += chunk.byteLength; if (size > cap) { over = true; return } chunks.push(chunk) })
+      req.on('end', () => {
+        void (async () => {
+          if (over) { json(res, 413, { ok: false, code: 'too-large', error: `the file channel takes at most ${String(BLOB_FILE_MAX)} bytes` }); return }
+          const rawBody = Buffer.concat(chunks)
+          if (!await peerKeyAdmits(req, rawBody)) { json(res, 401, { ok: false, error: 'unauthorized: X-API-Key required (apiKey is configured)' }); return }
+          const claim = await verifyOriginClaim(req, { cli: true, rawBody })
+          if (!claim.ok || claim.cli !== true || claim.bodyBound !== true) {
+            recordActivity('in', 'blob-stage', String(req.headers['x-a2a-caller'] ?? 'unknown'), false)
+            json(res, 403, { ok: false, code: 'untrusted-origin', error: `a deposited CLI identity's signed, body-bound OriginClaim is required (${claim.ok ? 'not a body-bound CLI claim' : claim.reason})` })
+            return
+          }
+          const newline = rawBody.indexOf(0x0a)
+          let meta: { to?: unknown; name?: unknown; task_id?: unknown }
+          try { meta = JSON.parse(rawBody.subarray(0, newline < 0 ? 0 : newline).toString('utf8')) as typeof meta } catch { meta = {} }
+          if (newline < 0 || newline > 4096 || typeof meta.to !== 'string' || meta.to === '' || (meta.name !== undefined && typeof meta.name !== 'string') || (meta.task_id !== undefined && typeof meta.task_id !== 'string')) {
+            json(res, 400, { ok: false, code: 'bad-request', error: 'the body starts with one JSON line { to, name, task_id? } and a newline' })
+            return
+          }
+          const staged = blobStore.stage(rawBody.subarray(newline + 1), { name: meta.name ?? 'file', to: meta.to, by: claim.caller, ...(meta.task_id !== undefined ? { taskId: meta.task_id } : {}) })
+          recordActivity('in', 'blob-stage', claim.caller, staged.ok)
+          const from = d.ownOrigin?.() ?? ''
+          json(res, staged.ok ? 200 : staged.code === 'too-large' ? 413 : staged.code === 'full' ? 507 : 400, { ...staged, ...(staged.ok && from !== '' ? { ref: formatFileRef({ sha256: staged.sha256, size: staged.size, name: staged.name, from }) } : {}) })
+        })().catch(error => { json(res, 500, { ok: false, error: String(error) }) })
+      })
+    },
+  }), 'a2a: file-channel signed stage face')
 
   ctx.effect(() => webServer.register({
     kind: 'exact',
