@@ -16,16 +16,16 @@
 <text x="1220" y="62" font-size="19" fill="#345c80" font-weight="600">OPT-IN 0.8 PREVIEW</text>
 <text x="77" y="150" font-size="48" fill="#172f49" font-weight="650">谁在做、在等什么，一眼看清</text>
 <text x="80" y="195" font-size="22" fill="#678095" font-weight="400">Assigned work, waiting input and reviewable deliverables</text>
-<text x="80" y="923" font-size="20" fill="#617489" font-weight="400">原创手绘功能示意 · 虚构案例 · 非实际产品界面</text>
-<text x="80" y="955" font-size="17" fill="#8292a0" font-weight="400">Original illustration · Fictional example · Not a product UI capture</text>
+<text x="80" y="923" font-size="20" fill="#617489" font-weight="400">原创手绘功能示意 · 模拟案例 · 非实际产品界面</text>
+<text x="80" y="955" font-size="17" fill="#8292a0" font-weight="400">Original illustration · Simulated example · Not a product UI capture</text>
 <text x="1460" y="948" font-size="26" fill="#647e96" font-weight="500">02</text>
 </g>
 <g transform="rotate(0.1 799 537.5)">
 <path d="M88,273 Q799,270 1511,275 Q1522,276 1519,288 L1517,792 Q1519,805 1506,802 L91,803 Q77,802 79,790 L81,284 Q79,271 88,273Z" fill="#ffffff" stroke="#31455a" stroke-width="2.7"/>
 <path d="M91,278 Q799,274 1507,280" fill="none" stroke="#31455a" opacity=".2" stroke-width="1.2"/>
 </g>
-<text x="110" y="319" font-size="25" fill="#314b62" font-weight="650">虚构协作案例：产品调研简报</text>
-<text x="110" y="353" font-size="16" fill="#8999a8" font-weight="600">FICTIONAL EXAMPLE  /  PRODUCT RESEARCH BRIEF</text>
+<text x="110" y="319" font-size="25" fill="#314b62" font-weight="650">模拟协作案例：产品调研简报</text>
+<text x="110" y="353" font-size="16" fill="#8999a8" font-weight="600">SIMULATED EXAMPLE  /  PRODUCT RESEARCH BRIEF</text>
 <path d="M484,405 Q518.5,405 553,405" fill="none" stroke="#375f88" stroke-width="3.5" stroke-linecap="round"  marker-end="url(#arrow)"/>
 <path d="M1032,405 Q1066,405 1100,405" fill="none" stroke="#375f88" stroke-width="3.5" stroke-linecap="round"  marker-end="url(#arrow)"/>
 <g transform="rotate(-0.4 295.5 553)">

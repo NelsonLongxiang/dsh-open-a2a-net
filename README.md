@@ -58,13 +58,13 @@ See the [released preview Superagent guide](https://github.com/NelsonLongxiang/d
 
 ## Superagent, illustrated
 
-The following artwork is **original hand-drawn-style functional illustration with a fictional example—not a product UI capture, interface layout or evidence of completed work**. The illustrations explain the opt-in preview workflow.
+The following artwork is **original hand-drawn-style functional illustration with a simulated example—not a product UI capture, interface layout or evidence of completed work**. The illustrations explain the opt-in preview workflow.
 
-![Original Superagent workflow illustration; fictional example, not a product UI](images/market/01-superagent-flow.png)
+![Original Superagent workflow illustration; simulated example, not a product UI](images/market/01-superagent-flow.png)
 
-![Original ticket-progress illustration; fictional example, not a product UI](images/market/02-ticket-progress.png)
+![Original ticket-progress illustration; simulated example, not a product UI](images/market/02-ticket-progress.png)
 
-![Original owner-decision illustration; fictional example, not a product UI](images/market/03-owner-decisions.png)
+![Original owner-decision illustration; simulated example, not a product UI](images/market/03-owner-decisions.png)
 
 ## Install and try one request
 

@@ -58,13 +58,13 @@
 
 ## 用原创手绘看懂 Superagent
 
-以下均为**原创手绘风格功能示意，采用虚构案例，不是实际产品界面、布局承诺或已完成工作的证据**。插画说明主动选择的预览版工作流，不使用内部会话或主机信息。
+以下均为**原创手绘风格功能示意，采用模拟案例，不是实际产品界面、布局承诺或已完成工作的证据**。插画说明主动选择的预览版工作流，不使用内部会话或主机信息。
 
-![Superagent 需求协作流程原创示意图；虚构案例，非实际界面](images/market/01-superagent-flow.png)
+![Superagent 需求协作流程原创示意图；模拟案例，非实际界面](images/market/01-superagent-flow.png)
 
-![工单进展原创示意图；虚构案例，非实际界面](images/market/02-ticket-progress.png)
+![工单进展原创示意图；模拟案例，非实际界面](images/market/02-ticket-progress.png)
 
-![属主决策原创示意图；虚构案例，非实际界面](images/market/03-owner-decisions.png)
+![属主决策原创示意图；模拟案例，非实际界面](images/market/03-owner-decisions.png)
 
 ## 安装与首次使用
 

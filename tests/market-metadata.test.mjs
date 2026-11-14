@@ -27,10 +27,13 @@ test('curated artwork manifest uses unique package-local PNG paths', () => {
     assert.equal(bytes.readUInt32BE(20), 1000)
   }
 })
-test('original editable sources disclose fictional examples rather than product screenshots', () => {
+test('original editable sources disclose simulated examples rather than product screenshots', () => {
   for (const path of manifest) {
     const svg = readFileSync(resolve(root,path.replace(/\.png$/,'.svg')), 'utf8')
     assert.ok(svg.includes('原创手绘功能示意'))
+    assert.ok(svg.includes('模拟案例'))
+    assert.ok(svg.includes('Simulated example'))
+    assert.ok(!/虚构|fictional/i.test(svg))
     assert.ok(svg.includes('非实际产品界面'))
     assert.ok(svg.includes('Not a product UI capture'))
     assert.ok(svg.includes('OPT-IN 0.8 PREVIEW'))
@@ -41,6 +44,8 @@ test('original editable sources disclose fictional examples rather than product 
 test('both locale readmes use only the curated original artwork and qualify Superagent preview', () => {
   for (const [file,note] of [['README.md','not a product UI'],['README_zh.md','非实际界面']]) {
     const text = readFileSync(resolve(root,file),'utf8')
+    assert.ok(!/虚构|fictional/i.test(text))
+    assert.ok(text.includes(file === 'README.md' ? 'simulated example' : '模拟案例'))
     const refs = [...text.matchAll(/!\[([^\]]*)\]\((images\/market\/[^)]+)\)/g)]
     assert.deepEqual(refs.map(m=>m[2]),manifest)
     for (const m of refs) assert.ok(m[1].toLowerCase().includes(note.toLowerCase()))
