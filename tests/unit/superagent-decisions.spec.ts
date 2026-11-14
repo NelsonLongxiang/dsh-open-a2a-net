@@ -6,7 +6,6 @@ import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { DECIDED_KEEP_MAX, DECIDED_KEEP_MS, DecisionBook, OPEN_CARDS_MAX, oneClick, parseDecision, type DecisionSpec } from '../../src/superagent/host/decisions.ts'
-import { ownerOrNoLogin } from '../../src/superagent/host/owner-proof.ts'
 
 const spec = (level: DecisionSpec['level'] = 'P2'): DecisionSpec => ({ level, options: ['甲', '乙'], recommended: '甲' })
 
@@ -161,17 +160,5 @@ describe('pruning', () => {
   })
 })
 
-describe('who may decide', () => {
-  const statuses = (none: number, withCookie: number) => async (_url: string, init: RequestInit) => ({ status: (init.headers as Record<string, string>).cookie !== undefined ? withCookie : none })
-  it('a login when the host has one', async () => {
-    expect(await ownerOrNoLogin('http://h', undefined, statuses(401, 200))).toBe(false)
-    expect(await ownerOrNoLogin('http://h', 'dsh-auth=bad', statuses(401, 401))).toBe(false)
-    expect(await ownerOrNoLogin('http://h', 'dsh-auth=ok', statuses(401, 200))).toBe(true)
-  })
-  it('the control route on a host with no login', async () => {
-    expect(await ownerOrNoLogin('http://h', undefined, statuses(404, 404))).toBe(true)
-  })
-  it('nobody before the host knows its own address', async () => {
-    expect(await ownerOrNoLogin(undefined, 'x', statuses(401, 200))).toBe(false)
-  })
-})
+// HTTP browser-owner admission (including domain/forwarded-port requests and the no-service refusal) is covered by
+// superagent-owner-proof.spec.ts and superagent-owner-auth.spec.ts, not status-only loopback probe stubs.

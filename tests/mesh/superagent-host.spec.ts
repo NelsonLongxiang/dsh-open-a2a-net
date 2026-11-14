@@ -19,7 +19,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, type Config } from '../../src/index.ts'
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { cliEnv, mockGuiLogin } from './harness.ts'
+import { cliEnv, MockGuiConnection, mockGuiLogin } from './harness.ts'
 
 class ManyAgents extends Service {
   map = new Map<string, Agent>()
@@ -54,6 +54,7 @@ async function mount(home: string, extra: Partial<Config> = {}) {
   await ctx.plugin(SystemPrompt); await ctx.plugin(ToolRuntime); await ctx.plugin(TimerService)
   await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   await ctx.plugin(ManyAgents)
+  await ctx.plugin(MockGuiConnection)
   const agents = ctx.get('agents') as unknown as ManyAgents
   const [R, M, O, X] = [[R_ID, 'router'], [M_ID, 'member'], [O_ID, 'outsider'], [X_ID, 'member-x']].map(([id, name]) => makeAgent(id!, name!))
   for (const a of [R!, M!, O!, X!]) { agents.map.set(String(a.id), a); a.host = ctx }

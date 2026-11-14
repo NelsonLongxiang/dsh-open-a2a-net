@@ -147,7 +147,6 @@ import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint }
 import { registerBuilderTools } from './superagent/host/builder-tools.ts'
 import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
-import { guiOwnerProven, ownerOrNoLogin, touchesRules } from './superagent/host/owner-proof.ts'
 import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
@@ -3441,7 +3440,7 @@ export function apply(ctx: Context, config: Config): void {
   if (superagentHost !== undefined && superagentTeams !== undefined) whenWebServerSettled((webServer) => {
     registerSuperagentFaces(webServer, {
       sidebarSends,
-      ctx, config, superagentHost, superagentTeams, homeUrl: () => superagentHomeUrl, controlRoute, readJsonBody, recordActivity, routeTrunk,
+      ctx, config, superagentHost, superagentTeams, controlRoute, readJsonBody, recordActivity, routeTrunk,
       sessionNodes, sessionPresetOf, sessionTeamOf, joinedSessions, archivedSessionFilter, verifyOriginClaim, fetchPeerCard, peerStore, cardCache,
       ownCanvasFingerprint, peerAdmissionLinkState, blobStore, ...(staffing !== undefined ? { staffing } : {}),
       linkRequester: (canvas: string, handle: string, home: unknown) => linkRootRequester({ store: canvasStore, deposited: h => cliDeposits.directoryRows().some(row => row.team === h), pinHome: cliHomeForAdd }, canvas, handle, home),

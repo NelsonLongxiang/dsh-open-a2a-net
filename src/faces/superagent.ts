@@ -20,7 +20,7 @@ import type { SuperagentHost } from '../superagent/host/index.ts'
 import type { SuperagentTeams } from '../superagent/host/teams.ts'
 import { verifyCard } from '../card.ts'
 import { claimCovers } from '../task-auth.ts'
-import { guiOwnerProven, ownerOrNoLogin, touchesRules } from '../superagent/host/owner-proof.ts'
+import { browserOwnerProof, touchesRules } from '../superagent/host/owner-proof.ts'
 import { canvasOwnerFingerprint, splitCanvasOwner } from '../canvas-id.ts'
 import type { StaffingExecutor, StaffingChange } from '../superagent/host/staffing.ts'
 import type { SidebarSends } from '../sidebar-sends.ts'
@@ -31,8 +31,6 @@ export interface SuperagentFaceDeps {
   readonly config: Config
   readonly superagentHost: SuperagentHost
   readonly superagentTeams: SuperagentTeams
-  /** This host's own base URL for the owner-proof probe; it is known only once the web server has settled. */
-  readonly homeUrl: () => string | undefined
   readonly controlRoute: (handler: (req: IncomingMessage, res: ServerResponse) => void) => (req: IncomingMessage, res: ServerResponse) => void
   readonly readJsonBody: (req: IncomingMessage, res: ServerResponse, use: (body: { readonly id?: unknown; readonly name?: unknown; readonly action?: unknown }) => void, maxBytes?: number) => void
   readonly recordActivity: (dir: 'in' | 'out' | 'fwd', team: string, peer: string, ok: boolean) => void
@@ -68,7 +66,14 @@ export interface SuperagentFaceDeps {
  * @param d - what the faces need from the host.
  */
 export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceDeps): void {
-  const { ctx, config, superagentHost, superagentTeams, homeUrl, controlRoute, readJsonBody, recordActivity, routeTrunk, sessionNodes, sessionPresetOf, sessionTeamOf, joinedSessions, archivedSessionFilter, verifyOriginClaim, fetchPeerCard, peerStore, cardCache, ownCanvasFingerprint, peerAdmissionLinkState, blobStore, sidebarSends } = d
+  const { ctx, config, superagentHost, superagentTeams, controlRoute, readJsonBody, recordActivity, routeTrunk, sessionNodes, sessionPresetOf, sessionTeamOf, joinedSessions, archivedSessionFilter, verifyOriginClaim, fetchPeerCard, peerStore, cardCache, ownCanvasFingerprint, peerAdmissionLinkState, blobStore, sidebarSends } = d
+  const requireBrowserOwner = (req: IncomingMessage, send: (status: number, value: unknown) => void): boolean => {
+    let connection: unknown
+    try { connection = ctx.get('connection') } catch { /* inactive provider: the unavailable proof below refuses */ }
+    const proof = browserOwnerProof(connection, req)
+    if (!proof.ok) { send(proof.status, proof); return false }
+    return true
+  }
   {
     // superagent design v4, PR-B: the owner's workbench face of the engine (owner control route only).
     // GET: the engine state; POST: settings (router, allowed senders, Sources, pause), request (the workbench Source),
@@ -97,15 +102,12 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
               const save = (): void => { send(200, sa.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf, 'owner')) }
               // A shell on this machine passes the control route; a rule change needs what only the owner's browser holds (design D10).
               if (!touchesRules(fields.settings)) { save(); return }
-              void guiOwnerProven(homeUrl(), req.headers.cookie).then(proven => {
-                if (proven) { save(); return }
-                send(403, { ok: false, code: 'owner-proof', error: '修改规则需要在已登录的 DSH 界面里操作，这个请求没有登录凭据。也可以直接在对话里让总工或成员修改。' })
-              }, (error: unknown) => { send(500, { ok: false, error: String(error) }) })
+              if (requireBrowserOwner(req, send)) save()
               return
             } else if (fields.action === 'sync-github-allowed') {
               // Design github-issues G6, G7: add the repositories' collaborators with push access to allowed.github; owner only.
-              void guiOwnerProven(homeUrl(), req.headers.cookie).then(async (proven) => {
-                if (!proven) { send(403, { ok: false, code: 'owner-proof', error: '同步 GitHub 名单需要在已登录的 DSH 界面里操作。' }); return }
+              if (!requireBrowserOwner(req, send)) return
+              void (async () => {
                 const found = await sa.githubCollaborators()
                 if (!found.ok) { send(200, found); return }
                 const before = sa.settings.allowed.github ?? []
@@ -113,7 +115,7 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
                 if (added.length === 0) { send(200, { ok: true, added: [], allowed: before }); return }
                 const saved = sa.saveSettings({ allowed: { github: [...before, ...added] } }, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf, 'owner')
                 send(200, saved.ok ? { ok: true, added, allowed: saved.settings.allowed.github } : saved)
-              }).catch((error: unknown) => { send(500, { ok: false, error: String(error) }) })
+              })().catch((error: unknown) => { send(500, { ok: false, error: String(error) }) })
               return
             } else if (fields.action === 'request') {
               send(200, sa.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined, fields.via === 'cli' ? 'cli' : undefined))
@@ -258,10 +260,8 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
           const team = superagentTeams.get(typeof fields.teamId === 'string' ? fields.teamId : undefined)
           if (team === undefined) { send(404, { ok: false, error: 'no such team on this instance' }); return }
           // A member's shell on this machine passes the control route; deciding is the owner's alone (C5).
-          void ownerOrNoLogin(homeUrl(), req.headers.cookie).then((allowed) => {
-            if (!allowed) { send(403, { ok: false, code: 'owner-proof', error: '决策需要在已登录的 DSH 界面里操作。' }); return }
-            send(200, team.decide(typeof fields.id === 'string' ? fields.id : '', fields.how, fields.option, fields.note, fields.files))
-          }, (error: unknown) => { send(500, { ok: false, error: String(error) }) })
+          if (!requireBrowserOwner(req, send)) return
+          send(200, team.decide(typeof fields.id === 'string' ? fields.id : '', fields.how, fields.option, fields.note, fields.files))
         })
       }),
     }), 'a2a: superagent decisions face')
@@ -270,22 +270,21 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
       kind: 'exact',
       path: '/__dsh_a2a/superagent/decisions/file',
       handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
-        const fail = (status: number, error: string): void => { const payload = JSON.stringify({ ok: false, error }); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
+        const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
+        const fail = (status: number, error: string): void => { send(status, { ok: false, error }) }
         if (req.method !== 'GET') { fail(405, 'GET only'); return }
         const query = new URL(req.url ?? '/', 'http://local').searchParams
         const team = superagentTeams.get(query.get('teamId') ?? undefined)
         const sha256 = query.get('sha256') ?? ''
         if (team === undefined || !/^[0-9a-f]{64}$/.test(sha256)) { fail(404, 'no such file on a card'); return }
-        void ownerOrNoLogin(homeUrl(), req.headers.cookie).then((allowed) => {
-          if (!allowed) { fail(403, '决策卡的文件需要在已登录的 DSH 界面里打开。'); return }
-          const file = team.decisionFile(query.get('card') ?? '', sha256)
-          if (file === undefined) { fail(404, 'no such file on a card'); return }
-          const grant = blobStore.list().find(g => g.sha256 === sha256)
-          const bytes = grant === undefined ? undefined : blobStore.read(grant)
-          if (bytes === undefined) { fail(410, '文件已过期：文件通道只保留 24 小时。'); return }
-          res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': bytes.byteLength, 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' })
-          res.end(bytes)
-        }, (error: unknown) => { fail(500, String(error)) })
+        if (!requireBrowserOwner(req, send)) return
+        const file = team.decisionFile(query.get('card') ?? '', sha256)
+        if (file === undefined) { fail(404, 'no such file on a card'); return }
+        const grant = blobStore.list().find(g => g.sha256 === sha256)
+        const bytes = grant === undefined ? undefined : blobStore.read(grant)
+        if (bytes === undefined) { fail(410, '文件已过期：文件通道只保留 24 小时。'); return }
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': bytes.byteLength, 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' })
+        res.end(bytes)
       }),
     }), 'a2a: superagent decision file face')
   }
@@ -316,8 +315,8 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
           if (req.method === 'GET') { send(200, { entries: staffing.list() }); return }
           readJsonBody(req, res, (body) => {
             const fields = body as { action?: unknown; change?: unknown; id?: unknown; agree?: unknown }
-            void guiOwnerProven(homeUrl(), req.headers.cookie).then(async (proven) => {
-              if (!proven) { send(403, { ok: false, code: 'owner-proof', error: '编制变更需要在已登录的 DSH 界面里操作，这个请求没有登录凭据。' }); return }
+            if (!requireBrowserOwner(req, send)) return
+            void (async () => {
               if (fields.action === 'submit') {
                 const change = (fields.change ?? {}) as Partial<StaffingChange>
                 // This route speaks only for the owner: the market's entry (S1b) comes with its own signature.
@@ -327,7 +326,7 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
                 send(200, out)
               } else if (fields.action === 'agree') send(200, await staffing.agree(typeof fields.id === 'string' ? fields.id : '', 'owner-route'))
               else send(200, { ok: false, error: 'action must be submit or agree' })
-            }, (error: unknown) => { send(500, { ok: false, error: String(error) }) })
+            })().catch((error: unknown) => { send(500, { ok: false, error: String(error) }) })
           })
         }),
       }), 'a2a: superagent staffing face')
