@@ -699,12 +699,15 @@ async function cmdReceipt() {
  */
 async function cmdAdmission() {
   const [caller] = positionals()
-  if (caller === undefined || caller === '') usage('usage: a2a admission <caller> [--local] [--json]')
+  if (caller === undefined || caller === '') usage('usage: a2a admission <caller> [--local] [--task ID] [--json]')
   const id = identity()
   const ingress = has('--local') ? 'local' : 'wire'
   const ts = Date.now()
-  const sig = edSign(null, Buffer.from(JSON.stringify(['a2a-admission', id.handle, caller, ingress, ts])), createPrivateKey(id.privateKeyPem)).toString('base64')
-  const out = await control({ action: 'admission', handle: id.handle, caller, ingress, ts, sig })
+  // --task: the question is about that one task (#697 review R1); the task is signed too, in the domain-separated form.
+  const task = taskFlag()
+  const payload = task === undefined ? ['a2a-admission', id.handle, caller, ingress, ts] : ['a2a-admission/2', id.handle, caller, ingress, ts, task]
+  const sig = edSign(null, Buffer.from(JSON.stringify(payload)), createPrivateKey(id.privateKeyPem)).toString('base64')
+  const out = await control({ action: 'admission', handle: id.handle, caller, ingress, ts, sig, ...(task !== undefined ? { task } : {}) })
   if (out.ok !== true) die(`[admission] the host did not answer for ${id.handle} (refused, or a host before p1-mail-admission)`)
   const row = { caller, admitted: out.admitted === true, ...(typeof out.rule === 'string' ? { rule: out.rule } : {}) }
   if (has('--json')) { console.log(JSON.stringify(row)); return }
@@ -1628,6 +1631,9 @@ async function main() {
   if (cmd === 'report') {
     const text = positionals().join(' ')
     if (text === '') usage('usage: a2a report <message…> — one-way report into the host process-team mailbox')
+    // A report is a fresh task into the home mailbox, wrapped in a prefix, so a receipt
+    // sent this way never reads as one: the caller's row stays owed. Point at `receipt`.
+    if (/^\s*\[A2A receipt\]/.test(text)) usage('report: this text is a receipt — a report wraps it so it never settles the task; send it with: a2a receipt <task_id> [--outcome O] <one line…>')
     await sendDirect('report', { team: await homeZone(), message: `[a2a-net cli report] ${text}`, caller_session: identity().handle, wait: false, task_id: taskFlag() ?? newTaskId() })
     return
   }

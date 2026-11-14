@@ -170,6 +170,17 @@ describe('a2a-net CLI: route / report talk to the right host with the right mess
     expect(host.seen[0]?.headers.cookie).toBe('dsh_pocket_token=T1')
   })
 
+  it('report refuses receipt text and names the receipt command, sending nothing', async () => {
+    const host = await stubHost(() => delivered)
+    servers.push(host.server)
+    const HOME = tmpHomeDir()
+    await runCli(['init', 'scout'], { HOME, A2A_CLI_HOME: HOME })
+    const out = await runCli(['report', '[A2A', 'receipt]', 'task', 'direct-111122223333', 'PASS'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })
+    expect(out.code).toBe(2)
+    expect(out.stderr).toContain('a2a receipt <task_id>')
+    expect(host.seen.some(s => s.path === '/a2a/direct')).toBe(false)
+  })
+
   it('report goes to the zone the home names, and to dsh when it names none (#503)', async () => {
     const host = await stubHost(path => path.startsWith('/__dsh_a2a/state') ? { status: 200, body: { zone: 'alpha' } } : delivered)
     servers.push(host.server)

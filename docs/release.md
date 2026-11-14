@@ -5,6 +5,26 @@
 
 > 2026-11-10（#569）：预览版从 npm 回读、核对通过后，立即单独提交一次「记录已发布」：把该版本一节的标题改成「已发布到 npm 的 preview 标签」，并写上状态行（标签指向的提交、npm 发布时间、shasum、integrity、回读结果）。不要等到下一版发版时才顺手改。
 
+## 0.8.1-preview.25（预览版候选，待发布）
+
+- 本版按属主 2026-11-14「继续合并发布新的预览版，我安排远程进行测试」指令准备。只发布到 npm 的 `preview` 标签，`latest` 保持 0.7.0；发版与节点安装/激活是两回事，本席不部署生产实例。
+- 基线：master `e470262e6f97fd06eee7889a3f95ea6c26713865` 合入 next/0.8 `53463095d2f4a78e0283ceba982516b8340f4ab9`；后者已合入 owner-proof PR #691。发布合并提交、原始 tgz 和完整性信息在发版 PR 中钉定。
+- 升级、回退及远程验收照 [0.8.1 升级检查](ops/0.8.1-upgrade-check.md)。真实远程浏览器验收由属主另行安排，不能把以下本机夹具检查当成远程通过。
+
+### 修复与改进
+
+- **域名／转发端口下浏览器主人误拒（#691）**：把原始请求交给 DSH Host Connection `admit`，只接受宿主浏览器主人 Peer；不再把 Cookie 重放到 loopback。Host/Origin 与 Cookie 验签仍由宿主负责；匿名、伪造、过期、错端口与 API 身份不替代浏览器主人。缺少该宿主能力时明确以 503 / `owner-auth-unavailable` 拒绝，不回退无登录放行。决策、决策附件、规则保存、GitHub 名单同步和编制操作共用这个门。
+- **全量目录含不可达缓存行时的输出校验（#700）**：`a2a_teams` 声明 `unreachable` 字段，只投影已声明的公开字段，并显示 `[unreachable: last card]`。对端恢复后一次列表成功不能替代失联缓存行回归。
+- **按任务冻结 intake 来源（#697）**：来源首次按任务保存 caller、团队、主机和 key；后续同句柄主机不能复活旧任务准入。Source 的 admission 查询携带并签入 task id，无任务、未知任务或出生链接已撤销时拒绝该 intake 复核。
+- **CLI report 不接收回执正文（#701）**：拒绝把 `[A2A receipt]` 误发到 report 包装通道，提示使用正式 `receipt` 入口。本改动不清理或伪造已存在的旧账本行。
+
+### 检查与已披露限制
+
+- #691 集成头 `6b403aefb8aa44f356ad81a28b7dd827ff52d751`：类型/文档/构建/架构检查 rc=0；95 项专项通过；真实 DSH 0.2.2-rc.1 Host Connection 的本机 HTTP/HTTPS 两场景通过（证书校验开启，仅内存合成凭据），不是生产域名验收。
+- 完整 Windows 工程门禁仍 rc=1（2534 通过 / 23 失败 / 8 跳过）；原失败集串行复跑后 230 通过 / 1 失败 / 1 跳过，另有 shadow 清理 EPERM。Windows 文件模式 0666 与 0600 断言、旧 Vitest ygl 临时残留未豁免；构建布局 3 项通过、nexus 410 项通过。发布树的构建及包检查另在发版 PR 留证，不能沿用源头数字冒称全量绿。
+- 原高档非作者增量复核单 `direct-2bffca4c` 尚在队列；#691 按属主本次明确合并发布指令推进，不伪称新头非作者 PASS，也不伪称 RC/spec-validator 或运维验收通过。
+- 生产团队配置下的热重载初始化异常尚未由此修复；远程激活前先安排一致性备份及可恢复方式。建议先用已确认不存在的 `diagnostic-nonexistent-<uuid>` 决策 ID 验证：原生域名登录有效后，决策接口返回 HTTP 200 / `stale` 表示通过鉴权且未确认真实卡片；无效凭据、外来来源仍须拒绝。
+
 ## 0.8.1-preview.24（预览版，已发布到 npm 的 preview 标签）
 
 - 状态（2026-11-14）：标签 `v0.8.1-preview.24` 指向 0b3b922（发版 PR #695）。2026-11-14T06:44:26Z 发布到 npmjs，dist-tag 为 `preview`，`latest` 仍是 0.7.0。shasum `f89f50fce4ac476435f5380f92ecaa589dcdbd14`，integrity `sha512-PJb5aeo9synSjWjj9vT+5cZH03NnIqs8fosvIFOXh8sQMyfumKf7XfhnEN+/wgnkmh/VNzfZQh9Xkd3iLaofiA==`。从 npmjs 回读的包与审计过的包逐字节相同。GitHub Release 为 prerelease。未发布到 Gitea。

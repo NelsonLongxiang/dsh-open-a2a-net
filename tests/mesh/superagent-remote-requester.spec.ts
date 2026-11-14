@@ -7,7 +7,7 @@
  * from A's process face on the canvas's behalf: C's own ledger settles its owed row as host-face.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { bootNode, mockGuiLogin, postJson, reservePort, runContext, tmpHome, type MeshNode } from './harness.ts'
+import { bootNode, MockGuiConnection, mockGuiLogin, postJson, reservePort, runContext, tmpHome, type MeshNode } from './harness.ts'
 
 beforeEach(() => { vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('no socket') }) })
 afterEach(() => { vi.unstubAllGlobals() })
@@ -26,6 +26,7 @@ describe('superagent v5-B2: a requester on another host', () => {
     const A = await bootNode({ name: 'A', session: 'hostA', team: 'alpha', agentId: R_ID, port: pA, peers: [url(pC)], home: tmpHome(), sessionNodes: true, superagent: true } as never)
     const C = await bootNode({ name: 'C', session: 'hostC', team: 'charlie', agentId: C_ID, port: pC, peers: [url(pA)], home: tmpHome(), silent: true, sessionNodes: true, superagent: true } as never)
     try {
+      await A.ctx.plugin(MockGuiConnection)
       for (const [n, id] of [[A, R_ID], [C, C_ID]] as const) expect((await postJson(n.baseUrl, '/__dsh_a2a/join', { id })).status).toBe(200)
       const requester = 'charlie/cccccccc'
       // A: the team is the canvas team `team` (its router), taking agents' requests on the rule `deps`.
