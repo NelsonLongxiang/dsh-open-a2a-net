@@ -1,6 +1,6 @@
 ---
 name: a2a-network
-description: Use when a task needs cross-session or cross-node collaboration over the DSH A2A network — setting it up (install, config, apiKey, peers, canvas links for one host, two peers, or hosts that cannot reach each other), joining and teaming, routing work to remote teams and agents, reconciling receipts and the task ledger, and reading the A2A workbench (/__dsh_a2a_nexus/). Covers admission rules, the receipt contract, and the failure shapes that look like bugs but are contract semantics.
+description: Use when a task needs cross-session or cross-node collaboration over the DSH A2A network — setting it up (install, config, apiKey, peers, canvas links for one host, two peers, or hosts that cannot reach each other), joining and teaming, routing work to remote teams and agents, reconciling receipts and the task ledger, and reading the A2A workbench (/__dsh_a2a_nexus/). Covers admission rules, the receipt contract, superagent router communication (same-team remote members, controlled outbound requests and registered child teams), and the failure shapes that look like bugs but are contract semantics.
 ---
 
 # DSH A2A Network
@@ -9,6 +9,10 @@ Drive the decentralized A2A network: sessions publish agent cards, join a
 membership layer, form canvas teams, and route work to each other through
 `a2a_route`. One plugin (`@nelsonlongxiang/dsh-open-a2a-net`) owns the whole
 surface on every node.
+
+## Choose the communication path first
+
+The generic coordination router in `references/router.md` is not the `superagent-router` role preset. For the superagent router, distinguish external A2A requesters, same-team remote members, approved outbound requests and registered child teams. The router persona includes the core rules without needing `read` or `skill`; [the communication guide](references/superagent-communication.md) has the details and maintenance boundary.
 
 ## Objects
 
@@ -123,5 +127,6 @@ renders the same data for humans.
 - [cli.md](references/cli.md) — the `a2a-net` CLI: deposit, mailbox, inbox hooks, limits
 - [collaboration.md](references/collaboration.md) — collaboration norm (Chinese): single-seat first, decide-then-report with no pre-authorization (a high-tier change needs one non-self node's review PASS on the same SHA), release tiers, stuck gates, credentials, receipts
 - [intake.md](references/intake.md) — intake node (Chinese): handling `workbench-event` deliveries from workbench-market — accept/decline/ask with a reason, open a GitHub issue on accept, write the decision back with the reply token
-- [router.md](references/router.md) — the chief's system prompt (Chinese), self-contained: route workbench events and owner requests to the right project's dev, order cross-project resource conflicts (it authorizes nothing since collaboration v1.18); immutable layer + self-kept mutable layer
+- [router.md](references/router.md) — generic cross-project coordination router, not the `superagent-router` preset; owner-controlled immutable layer
+- [superagent-communication.md](references/superagent-communication.md) — router communication decision guide: external requesters, signed remote-member work, approved outbound requests and registered child teams
 - [superagent.md](references/superagent.md) — the superagent team (design v4, on by default): workbench Source, gate, the router's superagent_* tools and its A2A isolation, the owner control route

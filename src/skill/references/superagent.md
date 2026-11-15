@@ -1,5 +1,7 @@
 # superagent team (design v4)
 
+For router communication, start with [the channel decision guide](superagent-communication.md). Same-team remote members are not external requesters or child teams. The router persona carries the core rules inline: its default role does not include `read` or `skill`, and the actual host tool schema/guard takes precedence over old tool-count summaries below.
+
 Unless the plugin config says `superagent: false`, this host runs superagent's own domain engine, idle until a team is bound. Sessions outside a team are not offered the team's tools. The engine is upstream `src/core`, vendored unchanged under `src/superagent/upstream/dsh-superagent`.
 
 The flow follows upstream's model:
