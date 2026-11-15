@@ -10,6 +10,9 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { TRUSTED_PROOFS } from '../a2a-watch.ts'
+import {recoveryDigest,verifyRecoveryProposal,type RecoveryProposal,type RecoveryBinding} from '../../request-recovery.ts'
+import {holdsRow,parseReceipt} from '../../receipt.ts'
+import {writeTaskLedger} from '../../task-ledger-persistence.ts'
 import type { Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
 
 /** Another team's address: a session handle `<zone>/<id8>` or a canvas team `<zone>/canvas/<name>`, either with `@<fp8>`. */
@@ -29,10 +32,21 @@ export interface OutboundRecord {
   /** Immutable original approval envelope and every transport attempt, never cleared by recovery. */
   approval?: { readonly at: string; readonly team: string; readonly message: string }
   attempts?: OutboundAttempt[]
+  /** Separate continuation; original legacy task/state/error remain unchanged. */
+  narrowRecovery?: NarrowRecoveryRecord
   task?: string
   error?: string
   answer?: { readonly text: string; readonly at: string }
 }
+
+export interface NarrowRecoveryRecord {
+  proposal:RecoveryProposal
+  phase:'prepared'|'dispatching'|'accepted'|'unknown'|'answered'
+  answer?:{text:string;at:string;triggerId:string}
+  noted?:true
+  digest:string
+}
+export function narrowRecoveryDigest(r:Omit<NarrowRecoveryRecord,'digest'>):string {return recoveryDigest([r.proposal,r.phase,r.answer??null,r.noted===true])}
 
 export interface OutboundAttempt {
   readonly task: string
@@ -59,6 +73,8 @@ export interface OutboundDeps {
   readonly approval?: (record: Readonly<OutboundRecord>) => OutboundApproval
   /** A local host query tied to this attempt sender, task and exact approved wire payload. Missing means unknown. */
   readonly query?: (record: Readonly<OutboundRecord>, attempt: Readonly<OutboundAttempt>) => Promise<{ readonly delivery: OutboundAttempt['delivery'] }>
+  readonly narrowReceipt?: (binding:RecoveryBinding,caller:string,message:string)=>boolean
+  readonly narrowNote?: (ticketId:string,text:string)=>boolean
   readonly note: (ticketId: string, text: string) => void
   readonly logger: { warn(format: string, ...args: unknown[]): void }
   readonly now: () => string
@@ -140,6 +156,9 @@ export class OutboundRequests {
   }
 
   list(): readonly OutboundRecord[] { return Object.values(this.records).map(record => structuredClone(record)) }
+  recoveryRecords():readonly OutboundRecord[] {
+    const text=readFileSync(this.d.path,'utf8');if(Buffer.byteLength(text)>4*1024*1024)throw Error('outbound journal exceeds recovery bound');const raw:unknown=JSON.parse(text);if(!raw||typeof raw!=='object'||Array.isArray(raw))throw Error('outbound journal corrupt');this.records=raw as Record<string,OutboundRecord>;return this.list()
+  }
 
   /**
    * Owner ruling 2026-11-12: an approved card authorizes the sender scope for its exact address, while that approved
@@ -166,6 +185,7 @@ export class OutboundRequests {
     if (ctx.role !== 'router' && ctx.ticket.holder !== session) return { ok: false, code: 'not-yours', error: 'a member asks only on a ticket it holds' }
     if (!OUTBOUND_ADDRESS.test(address)) return { ok: false, code: 'address', error: 'address is another team\'s: <zone>/<id8> or <zone>/canvas/<name>, optionally @<fp8>' }
     if (ctx.own.some(own => address === own || address.split('@')[0] === own.split('@')[0])) return { ok: false, code: 'own', error: 'that is this team or one of its sessions; ask your team through its ticket instead' }
+    if(this.list().some(r=>r.narrowRecovery&&r.ticketId===ticketId&&r.address===address&&r.text===text))return {ok:false,code:'outbound-recovery-fenced',error:'该原业务已有窄恢复链，不能另建外发卡或重派；请按原恢复 task 对账。'}
     if (text === '' || text.length > OUTBOUND_TEXT_MAX) return { ok: false, code: 'text', error: `text is required, at most ${String(OUTBOUND_TEXT_MAX)} characters` }
     if (this.list().filter(r => r.ticketId === ticketId && (r.state === 'waiting' || r.state === 'sending' || r.state === 'unknown' || r.state === 'sent')).length >= OUTBOUND_PER_TICKET) return { ok: false, code: 'too-many', error: `a ticket has at most ${String(OUTBOUND_PER_TICKET)} outbound requests waiting or unanswered` }
     const question = `以本团队名义向 ${address} 发出请求吗？（工单「${clip(ctx.ticket.title, 80)}」）\n发出的原文：\n${text}`
@@ -185,6 +205,7 @@ export class OutboundRequests {
   async decided(card: string, approved: boolean, team: string, titleOf: (ticketId: string) => string | undefined): Promise<string | undefined> {
     const record = this.records[card]
     if (record === undefined || record.state !== 'waiting' || this.busy.has(card)) return undefined
+    if(this.list().some(r=>r.narrowRecovery&&r.ticketId===record.ticketId&&r.address===record.address&&r.text===record.text))return undefined
     this.busy.add(card)
     try {
       if (!approved) {
@@ -205,6 +226,7 @@ export class OutboundRequests {
     const refuse = (code: string, error: string): OutboundRecovery => ({ ok: false, code, error })
     let record = this.records[card]
     if (record === undefined || record.task !== expectedTask || expectedTask === '') return refuse('outbound-changed', '外发记录已变化，请刷新后按原 task 对账。')
+    if(record.narrowRecovery)return refuse('outbound-narrow-recovery','该原请求已有固定窄恢复链，只能按该恢复 task 对账，不可普通重试。')
     if (this.busy.has(card)) return refuse('outbound-busy', '该外发正在处理，请勿重复提交。')
     if (record.state !== 'failed' && record.state !== 'unknown' && record.state !== 'sending') return refuse('outbound-state', '该记录不需要恢复；已发送的请求只等原回执。')
     const approval = this.d.approval?.(record)
@@ -310,10 +332,65 @@ export class OutboundRequests {
     return sent
   }
 
+  /** CAS all original same-request records before continuation; legacy results stay unchanged. */
+  bindNarrowRecovery(records:readonly OutboundRecord[],proposal:RecoveryProposal):void {
+    if(!verifyRecoveryProposal(proposal)||records.length===0)throw Error('invalid narrow recovery proposal')
+    const state={proposal,phase:'prepared' as const}
+    this.putRecovery(records.map(r=>({...r,narrowRecovery:{...state,digest:narrowRecoveryDigest(state)}})),records)
+  }
+  narrowPhase(records:readonly OutboundRecord[],phase:'dispatching'|'accepted'|'unknown'):void {
+    this.putRecovery(records.map(r=>{const old=r.narrowRecovery;if(!old||old.digest!==narrowRecoveryDigest(old))throw Error('missing or damaged recovery proposal');if(old.phase==='answered')return r;if(phase==='dispatching'&&old.phase!=='prepared'||phase==='unknown'&&old.phase==='accepted')throw Error('recovery transition would reopen a completed attempt');const next={...old,phase};return {...r,narrowRecovery:{...next,digest:narrowRecoveryDigest(next)}}}),records)
+  }
+  private putRecovery(nextRecords:readonly OutboundRecord[],expected:readonly OutboundRecord[]):void {
+    mkdirSync(dirname(this.d.path),{recursive:true});const lock=this.d.path+'.lock',token=randomUUID()
+    writeFileSync(lock,token,{flag:'wx',mode:0o600})
+    try{
+      const raw:unknown=JSON.parse(readFileSync(this.d.path,'utf8'))
+      if(!raw||typeof raw!=='object'||Array.isArray(raw))throw Error('outbound storage corrupt')
+      const fresh=raw as Record<string,OutboundRecord>
+      const first=expected[0];if(!first)throw Error('empty original chain')
+      const same=Object.values(fresh).filter(r=>r.ticketId===first.ticketId&&r.address===first.address&&r.text===first.text).map(r=>r.card).sort()
+      if(JSON.stringify(same)!==JSON.stringify(expected.map(r=>r.card).sort())){this.records=fresh;throw Error('original same-request group changed; refresh')}
+      for(const r of expected)if(JSON.stringify(fresh[r.card])!==JSON.stringify(r)){this.records=fresh;throw Error('original outbound chain changed; refresh')}
+      const next={...fresh};for(const r of nextRecords)next[r.card]=r
+      writeTaskLedger(this.d.path,JSON.stringify(next));this.records=next
+    }finally{if(readFileSync(lock,'utf8')===token)rmSync(lock)}
+  }
+
+  /** Keep an authenticated result once for the original ticket; ACK/progress do not complete business. */
+  private receivedNarrow(trigger:Trigger,task:string):boolean {
+    const records=Object.values(this.records).filter(r=>r.narrowRecovery?.proposal.binding.taskId===task)
+    if(records.length===0)return false
+    const first=records[0]!.narrowRecovery!,b=first.proposal.binding
+    if(records.length!==b.originalCards.length||records.some(r=>!r.narrowRecovery||r.narrowRecovery.digest!==narrowRecoveryDigest(r.narrowRecovery)||recoveryDigest(r.narrowRecovery.proposal)!==recoveryDigest(first.proposal)||!b.originalCards.includes(r.card)))return true
+    if(first.phase==='prepared'||typeof trigger.meta.proof!=='string'||!TRUSTED_PROOFS.has(trigger.meta.proof)||trigger.actor.id!==b.target)return true
+    const at=trigger.text.indexOf('[A2A receipt] task '),parsed=at<0?null:parseReceipt(trigger.text.slice(at))
+    if(parsed?.taskId!==task||holdsRow(parsed.envelope)||this.d.narrowReceipt?.(b,trigger.actor.id,trigger.text)!==true)return true
+    if(records.some(r=>r.narrowRecovery!.answer)) {this.flushNarrowNotes();return true}
+    const answer={text:clip(trigger.text,2000),at:trigger.at,triggerId:trigger.id}
+    this.putRecovery(records.map(r=>{const state={...r.narrowRecovery!,phase:'answered' as const,answer};return {...r,narrowRecovery:{...state,digest:narrowRecoveryDigest(state)}}}),records)
+    this.flushNarrowNotes();return true
+  }
+  /** Called by the existing team pass. A note checkpoint failure retries the same idempotent original-ticket note. */
+  flushNarrowNotes():void {
+    if(!this.d.narrowNote)return
+    const seen=new Set<string>()
+    for(const row of Object.values(this.records)){
+      const n=row.narrowRecovery;if(!n||!n.answer||n.phase!=='answered'||n.noted||seen.has(n.proposal.binding.requestId))continue
+      seen.add(n.proposal.binding.requestId)
+      if(n.digest!==narrowRecoveryDigest(n))throw Error('recovery answer integrity mismatch')
+      const text='原外发窄恢复（'+n.proposal.binding.target+'，task '+n.proposal.binding.taskId+'）的回执：'+n.answer.text
+      if(!this.d.narrowNote(row.ticketId,text))continue
+      const records=Object.values(this.records).filter(r=>r.narrowRecovery?.proposal.binding.requestId===n.proposal.binding.requestId)
+      this.putRecovery(records.map(r=>{const state={...r.narrowRecovery!,noted:true as const};return {...r,narrowRecovery:{...state,digest:narrowRecoveryDigest(state)}}}),records)
+    }
+  }
+
   /** A mailbox row: the other team's formal receipt on a sent request's task is its answer (O5). */
   received(trigger: Trigger): void {
     const receiptFor = trigger.meta.receiptFor
     if (typeof receiptFor !== 'string') return
+    if(this.receivedNarrow(trigger,receiptFor))return
     const record = Object.values(this.records).find(r => r.task === receiptFor && (r.state === 'sent' || r.state === 'sending' || r.state === 'unknown' || (r.state === 'failed' && r.attempts?.at(-1)?.phase === 'dispatching' && r.attempts.at(-1)?.delivery === 'not-sent')))
     if (record === undefined) return
     if (typeof trigger.meta.proof !== 'string' || !TRUSTED_PROOFS.has(trigger.meta.proof)) return

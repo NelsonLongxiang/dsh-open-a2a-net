@@ -159,6 +159,9 @@ import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerFileFaces } from './faces/files.ts'
 import { registerSuperagentFaces } from './faces/superagent.ts'
+import {RequestRecoveryStore} from './request-recovery.ts'
+import {RequestRecoveryRuntime} from './request-recovery-runtime.ts'
+import {registerRequestRecoveryFace} from './faces/request-recovery.ts'
 import { SidebarSends } from './sidebar-sends.ts'
 import { PI_PLATFORM, piDeliverable, piSeatAdmission } from './superagent/platforms/pi.ts'
 import { cancelAgentTurn, memberTurnFrom, personMessageFrom, selectSessionModel, stageCardFiles } from './superagent/session-reads.ts'
@@ -882,6 +885,16 @@ export function apply(ctx: Context, config: Config): void {
   // executes at most once inside the 24h window — same-key replays answer
   // refused-but-idempotent, same-key different-payload answers conflict.
   const idempotencyStore = new IdempotencyStore(join(home, 'a2a', 'idempotency.json'))
+  const requestRecovery=new RequestRecoveryRuntime({key:nodePrivateKey,home:()=>originOf(ownCardUrl),ledger:taskLedger,idempotency:idempotencyStore,
+    store:new RequestRecoveryStore(join(home,'a2a','request-recovery.json')),
+    peer:async url=>{const card=await fetchPeerCard(url);if(card)cardCache.set(url,{at:Date.now(),card});return card},linked:(url,key)=>intakeHostLinked(url,key),
+    cli:(url,caller)=>client.fetchCard(url+'/a2a/cli/'+encodeURIComponent(caller)),
+    localCli:caller=>{const row=cliDeposits.get(caller);if(!row)return undefined;try{const v=verifyCard(JSON.parse(row.cardJson),Date.now());return v.ok?v.card:undefined}catch{return undefined}},
+    target:team=>resolveAgentForTeam(team),
+    targetValid:(agent,team)=>sessionTeamOf(agent)===team&&joinedSessions.has(String(agent.id))&&archivedSessionFilter()?.(String(agent.id))!==true&&superagentRouterRefusal(undefined,String(agent.id))===undefined,
+    post:async(url,path,body)=>{const target=url+path,text=JSON.stringify(body),key=outboundKeyFor(url,linkKeyMap,config.apiKey);const res=await peerFetch(target,{method:'POST',headers:{'Content-Type':'application/json',...(key?{'X-API-Key':key}:{}),...originClaimHeaders({url:target,method:'POST',body:text})},body:text,signal:AbortSignal.timeout(15000)});if(!res.ok){void res.body?.cancel().catch(()=>{});throw Error('recovery peer refused HTTP '+res.status)}return await res.json() as Record<string,unknown>},
+  })
+
   // Requests a person sent from a session's team tab to another instance, and their receipts (kept for the tab).
   const sidebarSends = new SidebarSends(join(home, 'a2a', 'sidebar-sends.json'))
   const refuseIfFlooded = createFloodGuard(idempotencyStore, recordActivity)
@@ -2170,6 +2183,7 @@ export function apply(ctx: Context, config: Config): void {
     stageFiles: (id, paths, canvas) => stageCardFiles({ blobStore, from: originOf(ownCardUrl), cwd: (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd, team: `${config.team}/canvas/${canvas}`, by: id }, paths),
     memberTurn: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : memberTurnFrom(id, sessionEventsOf(agent), ctx.get('jobs' as never)) },
     teamSend: args => teamCanvasSend(args),
+    narrowRecovery:{identity:caller=>requestRecovery.identity(caller),proposal:binding=>requestRecovery.proposal(binding),transport:(permit,mode,current)=>requestRecovery.transport(permit,mode,current),receipt:(binding,caller,message)=>requestRecovery.receipt(binding,caller,message)},
     outboundOutcome: ({ sender, task, address, message }) => {
       const verdict = idempotencyStore.query(task, peerPayloadFingerprint({ caller: sender, team: homeCanvasTeam(address, ownCanvasFingerprint), message, noWait: true }))
       if (!verdict.found) return { delivery: 'unknown' }
@@ -3222,7 +3236,7 @@ export function apply(ctx: Context, config: Config): void {
       cause,
       rows: () => taskLedger.list(),
       // A local-candidate record (#139) is judged as the local candidate admits; every other one by the wire face.
-      judge: (caller, target, ingress, auth, taskId) => auth.admission_rule === 'remote-ref-cli' ? recheckRemoteCliAuthorization(admissionRecords, auth) : auth.admission_rule === 'superagent-intake' ? recheckSuperagentIntake(target, caller, auth, taskId) : (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
+      judge: (caller, target, ingress, auth, taskId) => auth.admission_rule === 'request-recovery' ? (requestRecovery.authority(auth.basis[0]??'',caller,target,taskId)?{ok:true,via:'peer-org',rule:'request-recovery',basis:auth.basis}:{ok:false,refusal:'original one-request authority revoked or corrupt'}) : auth.admission_rule === 'remote-ref-cli' ? recheckRemoteCliAuthorization(admissionRecords, auth) : auth.admission_rule === 'superagent-intake' ? recheckSuperagentIntake(target, caller, auth, taskId) : (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
     })
     if (entry === undefined) return
     const revoke = entry.tasks.filter(task => task.verdict === 'would-revoke').length
@@ -3312,6 +3326,7 @@ export function apply(ctx: Context, config: Config): void {
       config,
       cliDeposits,
       keepTaskBody,
+      requestRecovery,
       canvasStore, canvasMemberForWrite,
       teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
       teamCanvasBound: (canvas: string) => superagentTeams?.ofCanvas(canvas) !== undefined,
@@ -3590,6 +3605,7 @@ export function apply(ctx: Context, config: Config): void {
       linkRequester: (canvas: string, handle: string, home: unknown) => linkRootRequester({ store: canvasStore, deposited: h => cliDeposits.directoryRows().some(row => row.team === h), pinHome: cliHomeForAdd }, canvas, handle, home),
     })
   })
+  whenWebServerSettled(webServer=>registerRequestRecoveryFace(webServer,{ctx,controlRoute,readJsonBody,recovery:requestRecovery}))
   const cardCacheInFlight = new Map<string, Promise<A2aPeerCard | undefined>>()
   // #114 S6: the change hooks and the boot observation start only once every
   // record admission reads exists (the peer-org basis reads cardCache above).

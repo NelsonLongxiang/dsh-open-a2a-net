@@ -33,6 +33,8 @@ import { isRootOriginUrl, type OriginClaimVerdict } from '../origin-claim.ts'
 import { hasOriginClaimFields, completeInboundVerification, verifiedInboundAdmission, WIRE_ERROR_INBOUND_VERIFICATION } from '../inbound-verification.ts'
 import type { Config } from '../index.ts'
 import { withResponseFields } from '../response-fields.ts'
+import type {RequestRecoveryRuntime} from '../request-recovery-runtime.ts'
+import type {RecoveryBinding,RecoveryClaim} from '../request-recovery.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from '../transport-caps.ts'
 
 /**
@@ -73,6 +75,7 @@ function sameOrigin(a: string, b: string): boolean {
 
 /** The closure captures the wire faces read (grows with each extracted face). */
 export interface WireDeps {
+  readonly requestRecovery?:RequestRecoveryRuntime
   /** superagent design v4: the refusal when `team` is the superagent router (it takes no A2A work), else undefined. */
   readonly superagentInbound: (team: string) => string | undefined
   /** superagent design v4: whether `team` is the team's A2A address (its requests take no target queue slot). */
@@ -537,6 +540,20 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
         const verdict = taskId === '' || fingerprint === ''
           ? { found: false as const, reason: 'unknown-task' as const }
           : idempotencyStore.query(taskId, fingerprint)
+        if(d.requestRecovery){
+          try{
+            const result=d.requestRecovery.outcome(taskId,fingerprint)
+            if(result!==undefined){
+              if(result==='accepted'&&verdict.found&&verdict.status!=='pending')withResponseFields(res,{recovery_delivery:'accepted'})
+              else {
+                const value={found:true,status:'pending',task_id:taskId,...(result==='accepted'?{recovery_delivery:'accepted'}:{})}
+                const payload=JSON.stringify(value);res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
+              }
+            }
+          }catch{
+            const payload=JSON.stringify({found:false,reason:'unknown-task',task_id:taskId});res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
+          }
+        }
         const payload = JSON.stringify(
           verdict.found
             ? verdict.status === 'pending'
@@ -621,6 +638,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             readonly wait?: unknown
             readonly task_id?: unknown
             readonly cancel_task_id?: unknown
+            readonly request_recovery?:unknown
           }
           try {
             body = JSON.parse(rawBody.toString('utf8')) as typeof body; if (body === null || typeof body !== 'object' || Array.isArray(body)) throw new TypeError('direct body must be a JSON object') // #168: `null` read body.team in this async 'end' callback → unhandled rejection → host exit
@@ -702,14 +720,24 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const payload=JSON.stringify({error:'untrusted-origin: OriginClaim verification failed ('+gate.reason+')',code:WIRE_ERROR_INBOUND_VERIFICATION,reason:gate.reason,team,task_status:'TASK_STATE_FAILED',delivered:false})
             res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
           }
+          let narrow:{binding:RecoveryBinding;claim:RecoveryClaim}|undefined
+          if(body.request_recovery!==undefined){
+            try{
+              if(!d.requestRecovery||!earlyClaim.ok||!earlyClaim.bound||earlyClaim.bodyBound!==true||!isRootOriginUrl(earlyClaim.callerUrl)||earlyClaim.cli===true||!noWait||body.cancel_task_id!==undefined||parseReceipt(message)!==null)throw Error('verified original host and request required')
+              narrow=await d.requestRecovery.inspect(body.request_recovery,{caller,hostKey:earlyClaim.card.publicKey,home:originOf(earlyClaim.callerUrl),team,message,taskId,contextId,noWait,callback})
+            }catch{const payload=JSON.stringify({error:'one-request recovery consent unavailable or mismatched; no delivery',task_id:taskId,task_status:'TASK_STATE_FAILED',delivered:false,code:-32000});res.writeHead(403,{'Content-Type':'application/json'});res.end(payload);return}
+          }else if(d.requestRecovery){
+            try{if(d.requestRecovery.fences(caller,team,message,taskId))throw Error('original request is fenced')}
+            catch{res.writeHead(409,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'original request has a recovery fence or corrupt recovery journal; reconcile without replay',task_id:taskId,task_status:'TASK_STATE_FAILED',delivered:false,code:-32000}));return}
+          }
           const priorFingerprint=peerPayloadFingerprint({caller,message,noWait,team})
           const priorTransport=idempotencyStore.query(taskId,priorFingerprint)
           if(earlyClaim.ok&&priorTransport.found&&priorTransport.status==='completed'&&d.receiptReplayAllowed(message,caller,team,earlyClaim)) {
             const payload=JSON.stringify({routed:true,delivered:true,receipt:'none',team,task_id:taskId,task_status:'TASK_STATE_COMPLETED',note:'receipt delivery already confirmed'})
             res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
           }
-          const cliProof = foreignCli && earlyClaim?.ok ? await remoteCliProof(caller, earlyClaim).catch(() => undefined) : undefined
-          let admission = foreignCli ? a2aCallerAdmission(caller, mailTeam, cliProof, earlyClaim?.ok ? earlyClaim.card.publicKey : undefined) : gate.admission
+          const cliProof = !narrow && foreignCli && earlyClaim?.ok ? await remoteCliProof(caller, earlyClaim).catch(() => undefined) : undefined
+          let admission:Admission = narrow?{ok:true,via:'peer-org',rule:'request-recovery',basis:[narrow.binding.requestId]}:foreignCli ? a2aCallerAdmission(caller, mailTeam, cliProof, earlyClaim?.ok ? earlyClaim.card.publicKey : undefined) : gate.admission
           // #282 S3 (same team authorizes): a receipt for this host's own forward, to the CLI that sent it, from a
           // receiver frozen at birth on the selected peer's key — the owner's signed canvas is the return path.
           const echoed = !admission.ok && cliDeposits.get(team) !== undefined ? parseReceipt(message) : null
@@ -777,7 +805,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // A verified claim proves the caller only when its signed zone covers it (review of PR #134 P1),
           // and the host face only when it was signed from this very host (round 2: a zone name is not an origin).
           const callerProof: AuthProof = !claim.ok ? 'legacy-window'
-            : admission.rule === 'remote-ref-cli' ? 'origin-claim'
+            : admission.rule === 'remote-ref-cli'||admission.rule==='request-recovery' ? 'origin-claim'
               : claim.cli === true ? (claimCovers(caller, claim.caller) ? 'cli-identity' : 'claim-mismatch')
               : claim.bound !== true ? 'unbound'
                 : !isRootOriginUrl(claim.callerUrl) ? 'claim-mismatch'
@@ -964,7 +992,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             // member, whoever the caller is.
             const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
             const wake = agent !== undefined ? undefined : wakeColdTeam(team)
-            const deliver = (target: Agent): void => {
+            const deliver = async (target: Agent):Promise<void> => {
               const from = caller === '' ? 'an unknown node' : caller
               // The receipt target: the caller's callback address when it
               // supplied one (a session node team — wake-on-route covers a
@@ -992,6 +1020,16 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 const deliveredReceipt = parseReceipt(message) !== null
                 // gh#141: a receipt is answered by nobody — its steer asks for no receipt back.
                 const receiptRequest = deliveredReceipt ? '' : `\n\n(When done, route your outcome back with one call — a2a_route { team: "${receiptTarget}", message: "[A2A receipt] task ${taskId} <one-line outcome>" }.)`
+                if(narrow){
+                  if(!d.requestRecovery)throw Error('recovery unavailable')
+                  const fresh=await d.requestRecovery.inspect(body.request_recovery,{caller,hostKey:claim.ok?claim.card.publicKey:'',home:claim.ok?originOf(claim.callerUrl):'',team,message,taskId,contextId,noWait,callback})
+                  if(fresh.binding.requestId!==narrow.binding.requestId||String(target.id)!==fresh.binding.receiverSession)throw Error('fixed recovery receiver changed')
+                  if(refuseIfQueueFull(caller,message,team,taskId,false,res))return
+                  const auth=buildAuthorization(admission,{caller,proof:'origin-claim',claim:{caller:claim.ok?claim.caller:'',origin:fresh.binding.senderHome},carrierUrl:fresh.binding.senderHome,ingress:'wire',allowlistVersion:admittedAt.version,target:team,receiptTarget,receivedAt:admittedAt.at})
+                  // Receiver debt is reliable before consuming consent or calling Agent.followup.
+                  taskLedger.trackInbound(taskId,team,receiptTarget,contextId,true,briefOf(message),auth,undefined,String(target.id),false)
+                  d.requestRecovery.consume(body.request_recovery,fresh.claim,target)
+                }
                 d.keepTaskBody?.(taskId, target, from, message)
                 const acceptance=followupRelay(target, `${directHeader(from)}\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from, undefined, taskId, claim.ok?claim.card.publicKey:undefined, !deliveredReceipt)
                 steered = true
@@ -1029,7 +1067,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                   caller,
                   proof: callerProof,
                   ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}),
-                  ...(admission.rule === 'remote-ref-cli' && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}),
+                  ...((admission.rule === 'remote-ref-cli'||admission.rule==='request-recovery') && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}),
                   ingress: 'wire',
                   allowlistVersion: admittedAt.version,
                   target: team,
@@ -1048,7 +1086,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                   if(acceptance!=='inserted')armReceiptAutosend(target, taskId, receiptTarget, message, steerFloor)
                   if(acceptance!=='inserted')armAsyncNudge(target, team, taskId, config.asyncNudgeDelayMs)
                 }
+                if(narrow){
+                  const delivery=taskLedger.deliveryFor(taskId)
+                  if(acceptance==='inserted'||!delivery||!['enqueued','claimed'].includes(delivery.state))throw new FollowupAcceptanceUnknown()
+                  d.requestRecovery!.confirm(narrow.binding)
+                }
                 const payload = JSON.stringify({
+                  ...(narrow?{recovery_delivery:'accepted'}:{}),
                   routed: true,
                   delivered: true,
                   team,
@@ -1080,7 +1124,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 }
               }
             }
-            if (agent !== undefined) { deliver(agent); return }
+            if (agent !== undefined) { await deliver(agent); return }
             if (wake?.kind === 'flight') {
               void wake.flight.then(deliver, (error: unknown) => {
                 refuseNoWait(`waking the session for team "${team}" failed: ${String(error)}`)
@@ -1115,7 +1159,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           const syncSteered = req.headers['x-a2a-guard'] === undefined || parseReceipt(message) !== null ? undefined : (target: Agent, floor: number,acceptance?:'inserted'|void): void => {
             syncTarget = sessionTeamOf(target)
             const receiptTarget = callback !== '' ? callback : caller
-            const auth = buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ...(admission.rule === 'remote-ref-cli' && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget, receivedAt: admittedAt.at })
+            const auth = buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ...((admission.rule === 'remote-ref-cli'||admission.rule==='request-recovery') && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget, receivedAt: admittedAt.at })
             try{taskLedger.trackInbound(taskId, team, receiptTarget, contextId, receiptExpectationOf(receiptTarget) !== 'process-label', briefOf(message), auth, syncTarget === team ? undefined : syncTarget, String(target.id), acceptance==='inserted'?false:taskLedger.deliveryFor(taskId)?.state==='claimed')}catch(error){taskLedger.noteAdmittedBookkeepingFailure(error);throw new AdmittedBookkeepingError(error)}
             if(acceptance!=='inserted')armReceiptAutosend(target, taskId, receiptTarget, message, floor)
           }

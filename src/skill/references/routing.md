@@ -83,6 +83,10 @@ submitting the same fingerprint inside the idempotency window returns the
 original verdict (-32002/-32003 shapes) instead of executing twice. Never
 work around a duplicate verdict by mutating the message — reconcile instead.
 
+## Legacy approved request recovery
+
+A failed old business request is not a receipt-return exception or permission to join a team. Owner-reconciled one-request continuation requires both existing browser-owner gates, exact retained original decisions/card-task group, signed fixed sender/receiver principals and one receiver permit; missing evidence stays UNKNOWN. It creates no standing membership or new business approval, and restart/lost response only query the fixed continuation task. See [the original outbound contract](../../../docs/design/superagent-outbound-requests.md#one-request-continuation-for-reconciled-legacy-failures) for the strict owner sequence and operational limits. Model tools cannot prepare, grant or send this recovery. Do not edit failed to waiting, erase idempotency, reapprove, create a replacement card or use ticket retry instead.
+
 ## -32005 (DELIVERED-UNSETTLED) procedure
 
 1. Note the task id from the result.

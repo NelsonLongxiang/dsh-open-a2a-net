@@ -117,6 +117,17 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
                 send(200, saved.ok ? { ok: true, added, allowed: saved.settings.allowed.github } : saved)
               })().catch((error: unknown) => { send(500, { ok: false, error: String(error) }) })
               return
+            } else if (fields.action === 'outbound-narrow-prepare' || fields.action === 'outbound-narrow-reconcile' || fields.action === 'outbound-narrow-send') {
+              if (!requireBrowserOwner(req, send)) return
+              const preparing=fields.action==='outbound-narrow-prepare'
+              const allowed=new Set(['action','teamId','card_id','task_id',...(preparing?['receiver','reconciliation','checked_original_chain']:['permit'])])
+              if(Object.keys(fields).some(k=>!allowed.has(k))||typeof fields.card_id!=='string'||typeof fields.task_id!=='string'||fields.card_id.length>100||fields.task_id.length>80){send(400,{ok:false,code:'narrow-recovery-input'});return}
+              if(preparing){
+                const r=fields.receiver as {home?:unknown;key?:unknown;session?:unknown}|undefined
+                if(fields.checked_original_chain!==true||typeof fields.reconciliation!=='string'||!r||typeof r.home!=='string'||typeof r.key!=='string'||typeof r.session!=='string'||Object.keys(r).some(k=>!['home','key','session'].includes(k))){send(400,{ok:false,code:'narrow-recovery-receiver'});return}
+                void sa.prepareNarrowOutbound(fields.card_id,fields.task_id,{home:r.home,key:r.key,session:r.session},fields.reconciliation as string).then(r=>send(200,r)).catch(()=>send(503,{ok:false,code:'narrow-recovery-unavailable'}))
+              }else void sa.runNarrowOutbound(fields.card_id,fields.task_id,fields.permit,fields.action==='outbound-narrow-send').then(r=>send(200,r)).catch(()=>send(503,{ok:false,code:'narrow-recovery-unavailable'}))
+              return
             } else if (fields.action === 'outbound-reconcile' || fields.action === 'outbound-retry') {
               if (!requireBrowserOwner(req, send)) return
               const allowed = new Set(['action', 'teamId', 'card_id', 'task_id'])

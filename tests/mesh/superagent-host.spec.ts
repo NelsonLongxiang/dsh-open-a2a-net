@@ -19,8 +19,10 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, type Config } from '../../src/index.ts'
 import { canvasOwnerFingerprint } from '../../src/canvas-id.ts'
 import { spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { cliEnv, MockGuiConnection, mockGuiLogin, bootNode, postJson, reservePort } from './harness.ts'
+import {A2aSource} from '../../src/superagent/host/a2a-source.ts'
+import {pollMailbox} from '../../src/superagent/a2a-watch.ts'
 
 class ManyAgents extends Service {
   map = new Map<string, Agent>()
@@ -86,6 +88,63 @@ beforeEach(() => { vi.stubGlobal('WebSocket', function throwOnSocket() { throw n
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('superagent engine in the a2a host', () => {
+  it.each([false,true])('single-request legacy owner recovery completes original ticket; lost response=%s',async lost=>{
+    let source:A2aSource|undefined
+    const start=A2aSource.prototype.start,sourceSpy=vi.spyOn(A2aSource.prototype,'start').mockImplementation(function(this:A2aSource){source=this;return start.call(this)})
+    const home=mkdtempSync(join(tmpdir(),'sa-legacy-narrow-')),pa=await reservePort(),pb=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb
+    const receiverId='session-bbbbbbbb11112222',receiver='beta/bbbbbbbb'
+    const b=await bootNode({name:'legacy-receiver',session:'legacy-receiver',team:'beta',agentId:receiverId,port:pb,peers:[au],originClaimUrl:bu,sessionNodes:true,teamScopeRouting:true,silent:true,asyncNudgeDelayMs:86400000})
+    await b.ctx.plugin(MockGuiConnection)
+    let m=await mount(home,{teamScopeRouting:true,forwardDirect:false,peers:[bu],originClaimUrl:au,asyncNudgeDelayMs:86400000},pa)
+    let spy:ReturnType<typeof vi.spyOn>|undefined
+    try{
+      expect(await postJson(b.baseUrl,'/__dsh_a2a/join',{id:receiverId}).then(r=>r.json())).toMatchObject({id:receiverId,team:receiver})
+      expect(await m.team(R_ID,[M_ID],{sources:{a2a:true}})).toMatchObject({ok:true})
+      await vi.waitFor(async()=>{const s=await m.state();expect(s.a2a.address).toBeTruthy();const card=await fetch(au+'/a2a/cli/'+encodeURIComponent(s.a2a.address)+'/.well-known/agent-card.json');expect(card.status).toBe(200)},{timeout:8000})
+      const request=await m.sa({action:'request',text:'one retained original business request'})
+      await vi.waitFor(()=>expect(m.R.steered.some(x=>x.includes(request.triggerId))).toBe(true),{timeout:8000})
+      const accepted=await m.tool('superagent_route',m.R,{items:[{trigger_id:request.triggerId,kind:'accept',title:'retained original ticket',scope:'fixture original only',reason:'owner fixture',member:M_ID}]})
+      const ticket=accepted.results[0].ticket_id
+      await vi.waitFor(async()=>expect((await m.state()).executor.bindings.some((r:any)=>r.ticketId===ticket)).toBe(true),{timeout:8000})
+      const raised=await m.tool('a2a_outbound_request',m.M,{ticket_id:ticket,address:receiver,text:'one exact original request body',why:'fixture'})
+      expect(raised.ok).toBe(true)
+      expect(await m.post('/__dsh_a2a/superagent/decisions',{id:raised.card_id,how:'choose',option:'批准：以团队名义发出'})).toMatchObject({ok:true,approved:true})
+      await vi.waitFor(async()=>expect((await m.state()).outbound.find((r:any)=>r.card===raised.card_id)?.state).toBe('failed'),{timeout:8000})
+      const stateDir=join(home,'a2a','superagent'),outFile=join(stateDir,'outbound.json'),decisionFile=join(stateDir,'decisions.json')
+      await m.dispose()
+      const original=JSON.parse(readFileSync(outFile,'utf8'))[raised.card_id];delete original.approval;delete original.attempts
+      const second={...original,card:'d-legacy-second',task:'direct-legacy-second',error:'retained receiver admission refusal'}
+      writeFileSync(outFile,JSON.stringify({[original.card]:original,[second.card]:second}))
+      const decisions=JSON.parse(readFileSync(decisionFile,'utf8')),first=decisions.find((r:any)=>r.id===raised.card_id);delete first.outbound;decisions.push({...first,id:second.card})
+      writeFileSync(decisionFile,JSON.stringify(decisions))
+      m=await mount(home,{teamScopeRouting:true,forwardDirect:false,peers:[bu],originClaimUrl:au,asyncNudgeDelayMs:86400000},pa)
+      await vi.waitFor(async()=>{const s=await m.state();expect(s.a2a.address).toBeTruthy();const card=await fetch(au+'/a2a/cli/'+encodeURIComponent(s.a2a.address)+'/.well-known/agent-card.json');expect(card.status).toBe(200)},{timeout:8000})
+      const key=await fetch(bu+'/.well-known/agent-card.json').then(r=>r.json()) as any
+      const prepare={action:'outbound-narrow-prepare',card_id:original.card,task_id:original.task,reconciliation:'sender owner verified original failures, unchanged identity and no other active dispatch',checked_original_chain:true,receiver:{home:bu,key:key.publicKey,session:receiverId}}
+      const noOwner=await fetch(au+'/__dsh_a2a/superagent',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(prepare)});expect(noOwner.status).toBe(401)
+      const prepared=await m.sa(prepare);expect(prepared,JSON.stringify(prepared)).toMatchObject({ok:true})
+      const grant=await fetch(bu+'/__dsh_a2a/request-recovery',{method:'POST',headers:{'Content-Type':'application/json',...mockGuiLogin()},body:JSON.stringify({action:'grant',proposal:prepared.proposal,reconciliation:'Receiver owner checked both original failures and stopped their old dispatch chain.',checked_not_admitted:true})}).then(r=>r.json()) as any
+      expect(grant,JSON.stringify(grant)).toMatchObject({ok:true})
+      let posts=0;const native=globalThis.fetch.bind(globalThis)
+      spy=vi.spyOn(globalThis,'fetch').mockImplementation(async(url,init)=>{const isRequest=String(url)===bu+'/a2a/direct'&&init?.method==='POST'&&String(init.body).includes('request_recovery');if(isRequest)posts++;const r=await native(url,init);if(lost&&isRequest&&r.ok)throw new TypeError('lost response after receiver accepted');return r})
+      const send={action:'outbound-narrow-send',card_id:original.card,task_id:original.task,permit:grant.permit}
+      const sent=await m.sa(send);expect(sent).toMatchObject({ok:!lost,state:lost?'unknown':'accepted',task:prepared.proposal.binding.taskId})
+      const reconciled=await m.sa({...send,action:'outbound-narrow-reconcile'});expect(reconciled).toMatchObject({ok:true,state:'accepted',task:sent.task})
+      expect(await m.sa({...send,card_id:second.card,task_id:second.task})).toMatchObject({ok:true,state:'accepted',task:sent.task});expect(posts).toBe(1)
+      await vi.waitFor(()=>expect(b.steered).toHaveLength(1))
+      const sa=await m.state(),sender=sa.a2a.address
+      const replied=await b.ctx.tools.get('a2a_route')!.execute({team:sender,message:'[A2A receipt] task '+sent.task+' exact original outcome\n'+JSON.stringify({outcome:'completed',disposition:'result'}),async:true},{agent:b.agents.agent,signal:new AbortController().signal} as never) as any
+      expect(replied.ok,JSON.stringify(replied)).toBe(true)
+      expect(source).toBeDefined()
+      // Exercise the real mailbox read once, rather than waiting on the production 15-second watch cadence.
+      await pollMailbox(source!.context,new AbortController().signal)
+      await vi.waitFor(async()=>{const data=await m.state();expect(data.outbound.filter((r:any)=>r.ticketId===ticket).every((r:any)=>r.narrowRecovery?.phase==='answered'&&r.narrowRecovery.noted===true)).toBe(true);expect(data.tickets.find((t:any)=>t.id===ticket).inputs.filter((x:any)=>x.kind==='note'&&x.text.includes('原外发窄恢复')).length).toBe(1)},{timeout:8000})
+      const final=await m.state();for(const r of final.outbound.filter((r:any)=>r.ticketId===ticket))expect(r).toMatchObject({state:'failed',task:r.card===original.card?original.task:second.task})
+      expect(posts).toBe(1);expect(b.steered).toHaveLength(1)
+    }finally{spy?.mockRestore();sourceSpy.mockRestore();await m.dispose();await b.dispose()}
+  },25000)
+
+
   it.each(['source-off', 'paused'] as const)('R1: %s refuses before consuming the outbound decision; the same card survives restart and sends once', async blocked => {
     const home = mkdtempSync(join(tmpdir(), 'sa-approval-guard-'))
     let port = await reservePort()

@@ -29,6 +29,8 @@ import { MemberExecutor, runOf, transientError, type MemberTurn, type PrepareRun
 import { PiEvents } from './pi-events.ts'
 import { ReviewRequests } from './review-requests.ts'
 import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, type OutboundAsk, type OutboundRecord, type OutboundApproval } from './outbound.ts'
+import {legacyOutboundApproval} from './legacy-outbound-approval.ts'
+import {NarrowOutboundRecovery} from './narrow-outbound.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { SettingsHistory } from './settings-history.ts'
 import { HealthReminders, HEALTH_TICK_MS, type HealthProblem } from './health-reminders.ts'
@@ -97,6 +99,7 @@ export class SuperagentHost {
   /** GitHub issues as a source of requests (design github-issues). */
   private readonly issues: IssueSource
   private readonly reviews: ReviewRequests
+  private readonly narrowOutbound: NarrowOutboundRecovery
   private readonly outbound: OutboundRequests
   /** Proposals to change a rule set, each set's revision and last change (design D8–D10b). */
   readonly ruleChanges: RuleChanges
@@ -221,7 +224,14 @@ export class SuperagentHost {
     )
     this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), ask: (address, text, task, sender) => this.a2a.askApproved(address, text, task!, sender!),
       sender: create => create ? this.a2a.ensureIdentity() : Promise.resolve(this.a2a.address ?? ''), approval: record => this.outboundApproval(record),
+      narrowReceipt:(binding,caller,message)=>this.d.narrowRecovery?.receipt(binding,caller,message)===true,
+      narrowNote:(ticketId,text)=>{try{const ticket=this.store.tickets.get(ticketId);if(!ticket||ticket.ended)return false;if(!ticket.inputs.some(input=>input.kind==='note'&&input.text===text))this.engine.note(ticketId,text);return true}catch{return false}},
       query: async (record, attempt) => d.outboundOutcome?.({ sender: attempt.sender, task: attempt.task, address: record.address, message: record.approval!.message }) ?? { delivery: 'unknown' }, logger: d.logger, now: () => this.now(), note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: outbound note on %s lost: %s', ticketId, String(error)) } } })
+    this.narrowOutbound=new NarrowOutboundRecovery({outbound:this.outbound,now:()=>Date.parse(this.now()),
+      approval:record=>{if(!this.settingsValue.sources.a2a||this.settingsValue.paused)return undefined;const t=this.store.tickets.get(record.ticketId);return t&&!t.ended?legacyOutboundApproval(record,this.decisions.retainedForRecovery(record.card),this.settingsValue.canvas??'',Date.parse(this.now())):undefined},
+      identity:()=>this.d.narrowRecovery?.identity(this.a2a.address??''),
+      proposal:binding=>{if(!this.d.narrowRecovery)throw Error('narrow recovery unavailable');return this.d.narrowRecovery.proposal(binding)},
+      transport:(permit,mode,current)=>{if(!this.d.narrowRecovery)throw Error('narrow recovery unavailable');return this.d.narrowRecovery.transport(permit,mode,current)}})
     this.reviews = new ReviewRequests({
       path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
       ask: (address, text) => this.a2a.askReview(address, text),
@@ -1003,6 +1013,9 @@ export class SuperagentHost {
       message: '[来自 superagent 团队 ' + payload.team + ' 的请求 · 工单「' + title + '」]\n' + payload.text }
   }
 
+  async prepareNarrowOutbound(card:string,task:string,receiver:{home:string;key:string;session:string},reconciliation:string):Promise<Record<string,unknown>> {try{return {ok:true,proposal:await this.narrowOutbound.prepare(card,task,receiver,reconciliation)}}catch{return {ok:false,code:'narrow-recovery-refused',error:'原批准、尝试链或精确接收身份无法可靠核验，未发送。'}}}
+  async runNarrowOutbound(card:string,task:string,permit:unknown,send:boolean):Promise<Record<string,unknown>> {try{return {...await this.narrowOutbound.run(card,task,permit,send)}}catch{return {ok:false,code:'narrow-recovery-refused',error:'窄恢复许可或原请求状态不匹配，未发送。'}}}
+
   /** Only invoked by the browser-owner face; this does not expand any model role's tools. */
   async recoverOutbound(card: string, task: string, retry: boolean): Promise<Record<string, unknown>> {
     try { return { ...await this.outbound.recover(card, task, retry) } }
@@ -1446,6 +1459,7 @@ export class SuperagentHost {
 
   pass(): void {
     if (this.store.loadError !== undefined) return
+    try{this.outbound.flushNarrowNotes()}catch{this.d.logger.warn('superagent: original recovery result note remains pending')}
     try { this.readMcpTools() } catch (error) { this.d.logger.warn('superagent: team MCP check failed: %s', String(error)) }
     try { this.engine.evaluateDue() } catch (error) { this.d.logger.warn('superagent: evaluation pass failed: %s', String(error)) }
     this.flushCandidates()

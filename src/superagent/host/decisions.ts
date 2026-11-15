@@ -108,6 +108,10 @@ export class DecisionBook {
   }
 
   get(id: string): StoredCard | undefined { return this.cards.find(card => card.id === id) }
+  /** Recovery reads the actual retained decision, never a stale process copy or a host note. */
+  retainedForRecovery(id:string):StoredCard|undefined {
+    try{const raw=readFileSync(this.path,'utf8');if(Buffer.byteLength(raw)>4*1024*1024)return undefined;const cards:unknown=JSON.parse(raw);if(!Array.isArray(cards))return undefined;const matches=cards.filter(c=>c&&typeof c==='object'&&c.id===id);return matches.length===1?structuredClone(matches[0] as StoredCard):undefined}catch{return undefined}
+  }
 
   /** A file on a card, put there by its proposer or with the owner's decision: what the owner may download (C8). */
   fileOf(id: string, sha256: string): DecisionFile | undefined {

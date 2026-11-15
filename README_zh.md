@@ -176,6 +176,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | `/__dsh_a2a/groups` | 手工会话分组——自 0.6.6 起弃用（被画布队伍取代），为旧面板保留。 |
 | `POST /__dsh_a2a/dispatch` | 工作台快速派单到一个团队。 |
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | 从调用方一侧结清一个欠账任务（cancel 还会尽力向目标转达停止通知：本机目标直接 steer，远端目标经 wire 投递，卡片声明 `queuedTaskCancellation` 时另带 `cancel_task_id` 撤回队列中的原任务；回复里带 `steered`、`removed`）；该行落入 `archived[]`。 |
+| `POST /__dsh_a2a/request-recovery` | 仅登录的浏览器属主可为一份已核账的旧请求签发／撤销精确许可；绑定原尝试、原文、发送身份和接收会话，不建立长期成员关系。见[单请求恢复契约](docs/design/superagent-outbound-requests.md#one-request-continuation-for-reconciled-legacy-failures)。 |
 | `GET`/`POST /__dsh_a2a/superagent` | 未配 `superagent: false` 时：引擎状态（线程、决定、回复、带阶段的工单、绑定的画布及绑定问题），以及属主操作 `settings`（绑定 `canvas` 与 `router`） · `sync-github-allowed`（把仓库有推送权限的协作者加入 `allowed.github`，需要界面登录；`settings` 里的 `sources.github` 与 `github: { repos, intake }` 让 GitHub Issue 成为需求来源，同样需要界面登录）· `request`（工作台 Source）· `serve`（按画布 id 为其他主机的团队服务）· `stop` · `retry`。 |
 | `GET`/`POST /__dsh_a2a/superagent/decisions` | 未配 `superagent: false` 时：本实例各团队等属主决定的决策卡；POST `{ id, how: 'approve' \| 'choose', option?, note?, files?, teamId? }` 作出决定；`files` 是为该卡团队暂存好的 `[A2A file] v1` 引用行。主机有登录时需要界面登录。 |
 | `GET /__dsh_a2a/superagent/models` | 未配 `superagent: false` 时：团队设置用的 DSH 模型目录（读不到时页面允许手填） |
