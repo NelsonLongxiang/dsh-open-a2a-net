@@ -849,12 +849,13 @@ describe('ops loop: members work in repositories; a ticket accepted for one runs
 
 describe('ops team ledger: every A2A message to the team address gets a formal outcome', () => {
   it('a message the team does not take is told so (rejected, with the reason)', async () => {
-    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { SuperagentHost, SENDER_DECLINE } = await import('../../src/superagent/host/index.ts')
     const { routeItem } = await import('../../src/superagent/host/tools.ts')
     const calls: string[][] = []
     const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']),
       home: mkdtempSync(join(tmpdir(), 'sa-outcome-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
-      homeUrl: () => 'http://127.0.0.1:1',
+      // Keep the receipt horizon tied to the frozen trigger dates, not the machine clock.
+      homeUrl: () => 'http://127.0.0.1:1', now: () => '2026-11-07T00:05:00.000Z',
       runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' },
     })
     const bot = 'reporter/0123456789abcdef', stranger = 'stranger/0123456789abcdef'
@@ -871,13 +872,18 @@ describe('ops team ledger: every A2A message to the team address gets a formal o
     // Observe mode: the router's accept is recorded as would-accept; the requester learns nothing was taken.
     const observed = receive('1', bot)
     expect(routeItem(h, { trigger_id: '1', kind: 'accept', title: 't', scope: 's', reason: 'matches deps', rules: ['deps'] })).toMatchObject({ ok: true, decision: 'ignore' })
-    // A sender not on the list is refused at the gate.
+    // An unlisted sender is gated and held for the owner (M12), not rejected automatically.
     const refused = receive('2', stranger)
     await settle()
     expect(outcome(receiptFor(observed))).toBe('rejected')
     expect(receiptFor(observed)!.at(-1)).toContain('观察模式')
+    expect(receiptFor(refused)).toBeUndefined()
+    const senderCard = h.decisionCards().find(card => card.source === 'sender' && card.by === '2')!
+    expect(senderCard).toBeDefined()
+    expect(h.decide(senderCard.id, 'choose', SENDER_DECLINE)).toMatchObject({ ok: true, taken: false })
+    await settle()
     expect(outcome(receiptFor(refused))).toBe('rejected')
-    expect(receiptFor(refused)!.at(-1)).toContain('名单')
+    expect(receiptFor(refused)!.at(-1)).toContain('主人没有接')
     // Auto: a ticket, whose own request keeps the acknowledgement-and-result path (no outcome receipt now).
     expect(h.saveSettings({ acceptMode: 'auto' }, () => true)).toMatchObject({ ok: true })
     const request = receive('3', bot, 'ctx-3')
@@ -892,7 +898,7 @@ describe('ops team ledger: every A2A message to the team address gets a formal o
     expect(receiptFor(stop)!.at(-1)).toContain('不能停止工单')
     // Each message is answered once.
     await settle()
-    expect(calls.filter(a => a[0] === 'receipt' && [observed, refused, stop].includes(a[1]!)).length).toBe(3)
+    expect(calls.filter(a => a[0] === 'receipt' && !a.includes('--acknowledged') && [observed, refused, stop].includes(a[1]!)).length).toBe(3)
   })
 })
 
