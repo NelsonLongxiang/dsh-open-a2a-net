@@ -7,6 +7,7 @@ import {signCard} from '../../src/card.ts'
 import {signOriginClaim} from '../../src/origin-claim.ts'
 import {signRecoveryProposal,recoveryFingerprint,type RecoveryBinding} from '../../src/request-recovery.ts'
 import {RequestRecoveryRuntime} from '../../src/request-recovery-runtime.ts'
+import {A2aClient} from '../../src/a2a-client.ts'
 import {bootNode,reservePort,MockGuiConnection,mockGuiLogin,type MeshNode} from './harness.ts'
 const nativeFetch=globalThis.fetch.bind(globalThis),caller='superagent-team/0123456789abcdef',target='beta/bbbbbbbb',receiverId='session-bbbbbbbb11112222'
 afterEach(()=>vi.restoreAllMocks())
@@ -59,4 +60,30 @@ it('only original browser owner can consent; API-like credentials cannot grant o
   expect((await f.post(f.b,'/__dsh_a2a/request-recovery',{action:'revoke',request_id:f.binding.requestId},true)).data.ok).toBe(true)
   expect((await f.raw({},grant.data.permit)).data.delivered).not.toBe(true);expect(f.b.steered).toHaveLength(0)
  }finally{await f.dispose()}
+})
+
+it.each([false,true])('a receiver grant fences an in-flight ordinary request: same payload with new id=%s',async changedId=>{
+ const f=await fixture();let release:(()=>void)|undefined
+ try{
+  // This synthetic standing link admits the ordinary old path. The recovery must still fence it.
+  expect((await f.post(f.b,'/__dsh_a2a/canvas',{action:'add-member',name:'existing-link',id:caller,home:f.a.baseUrl})).data.ok).toBe(true)
+  expect((await f.post(f.b,'/__dsh_a2a/canvas',{action:'add-member',name:'existing-link',id:receiverId})).data.ok).toBe(true)
+  let reached:(()=>void)|undefined,held=false
+  const waiting=new Promise<void>(r=>{reached=r}),gate=new Promise<void>(r=>{release=r}),fetchCard=A2aClient.prototype.fetchCardDetail
+  vi.spyOn(A2aClient.prototype,'fetchCardDetail').mockImplementation(async function(this:A2aClient,url:string){
+   if(url===f.a.baseUrl&&!held){held=true;reached!();await gate}
+   return fetchCard.call(this,url)
+  })
+  const old=f.raw({task_id:changedId?'ordinary-new-id':f.binding.originalTasks[0]})
+  await waiting
+  const grant=await f.grant();expect(grant.data.ok,JSON.stringify(grant)).toBe(true)
+  release!()
+  const refused=await old
+  expect(refused.data.delivered,JSON.stringify(refused)).not.toBe(true)
+  expect(refused.data.routed).not.toBe(true)
+  expect(f.b.steered).toHaveLength(0)
+  const recovery=await f.raw({},grant.data.permit)
+  expect(recovery.data).toMatchObject({routed:true,delivered:true,recovery_delivery:'accepted'})
+  expect(f.b.steered).toHaveLength(1)
+ }finally{release?.();await f.dispose()}
 })

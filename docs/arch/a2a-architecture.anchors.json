@@ -19,7 +19,7 @@
     "nexus-stage/src/planning-overlap.ts": "f4e7ecf5af229f6107191f35be2b5a10ebab921b175ba0950f577458dacc5019",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "b4f92c9ce3237019ab3c7ab71f0624c3306e8c316cb15d119d4e7c57f65e604f",
-    "src/faces/wire.ts": "3abc1f4f905092b1b565889ba3d54b3ecf134a983d44cb77013e48411cea5505",
+    "src/faces/wire.ts": "40be2b3ddada3b4f59ab95a6c7a38b462269842ba3e008082bf82f90b60e9209",
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
     "src/task-auth.ts": "c15a3b6480600bf17f95c9256e9de60b3c005eefb1d0e39d06560eea1e1749d6",
     "src/origin-claim.ts": "54079e01ec324ea1054bc892ef403ba813fa52c480bd99ecb9cf8b73190c376a",
@@ -333,7 +333,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/faces/wire.ts:869",
+      "ref": "src/faces/wire.ts:876",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {

@@ -819,6 +819,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // the window. Same key + same payload ⇒ replay; different payload
           // ⇒ hard conflict (both 409). A replay must never re-enter the
           // target session, no matter how it settles.
+          // A receiver consent may be issued while ordinary CLI proof awaits. Check again in the
+          // same synchronous turn as claiming the original task: either its claim vetoes a grant,
+          // or the existing grant fences this old request before any correspondence/effect.
+          if(!narrow&&d.requestRecovery){
+            try{if(d.requestRecovery.fences(caller,team,message,taskId))throw Error('original request is fenced')}
+            catch{res.writeHead(409,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'original request acquired a recovery fence during verification; reconcile without replay',task_id:taskId,task_status:'TASK_STATE_FAILED',delivered:false,code:-32000}));return}
+          }
           const idemFingerprint = peerPayloadFingerprint({ caller, message, noWait, team })
           const priorDelivery=taskLedger.deliveryFor(taskId)
           if(taskLedger.orphanDelivery(taskId)&&priorDelivery?.callerKey===(claim.ok?claim.card.publicKey:undefined)&&idempotencyStore.query(taskId,idemFingerprint).found){
