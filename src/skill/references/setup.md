@@ -33,7 +33,9 @@ The owner can open the workbench header ⚙, select a local session under “会
 2. Leave the config at its defaults. `sessionNodes: true` exposes main
    sessions as joinable nodes; no `apiKey` is needed while the listener is
    bound to loopback.
-3. Join each session that should collaborate: sidebar → A2A 网络 → toggle.
+3. Join each session that should collaborate: workbench `/__dsh_a2a_nexus/` →
+   the session row's network join action (the panel-slim move took join/leave
+   out of the sidebar).
    An unjoined session is invisible and refused (see
    [membership.md](membership.md)).
 4. Give the sessions a shared team (`teamScopeRouting` is on by default, so a
