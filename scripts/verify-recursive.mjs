@@ -10,13 +10,15 @@
  *   L·判定  `verify run`——冻结 spec 在当前快照上的 15 单元判定（本层不重跑
  *           门禁，读探针刚冻结的快照；探针是命令证据的采集面）
  *
- * 用法：node scripts/verify-recursive.mjs [--fresh]（--fresh 先跑 verify-probe 再判定）
- * 退出码：0 = 三层全绿；1 = 任一层失败（含 skip 不算失败，但单独点名）。
+ * 用法：node scripts/verify-recursive.mjs --fresh [--candidate-root <导出> --candidate-sha <完整SHA> --source-repo <对象仓>] [--base ... | --runtime-unavailable]
+ *    或 node scripts/verify-recursive.mjs --summary <本轮>/probe-summary.json --snapshot <本轮>/snapshot.sqlite [--candidate-sha <完整SHA>]
+ *    非 --fresh 调用必须显式指定本轮产物；旧 verify/snapshot.sqlite 默认已移除，陈旧固定文件不会被隐式选中。
+ * 退出码：0 = 三层全绿；1 = 任一层失败（含 skip 不算失败，但单独点名）；2 = 调用契约错误（未执行任何引擎/判定）。
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { submissionFromProbe } from "./verify-submission.mjs";
+import { resolveRunSelection, submissionFromProbe } from "./verify-submission.mjs";
 
 const REPO = resolve(import.meta.dirname, "..");
 const YGL_BIN = process.env.YGL_BIN ?? resolve(REPO, "..", "ygl-trees", "dist/apps/cli/src/bin.js");
@@ -26,10 +28,18 @@ const CORPUS = process.env.YGL_VERIFY_CORPUS ?? resolve(REPO, "..", "ygl-trees",
 const ARCHIVES = resolve(YGL_HOME, "verify/archives");
 
 const argv = process.argv.slice(2);
+
+/* ── 调用契约：在任何引擎工作之前确定本轮证据，隐式默认一律拒绝 ── */
+let selection;
+try { selection = resolveRunSelection(argv); } catch (error) { console.error(String(error.message ?? error)); process.exit(2); }
+let summaryFile = null, snapshotFile = null, explicitCandidate = undefined;
+if (selection.mode === "explicit") {
+  summaryFile = resolve(REPO, selection.summary);
+  snapshotFile = resolve(REPO, selection.snapshot);
+  explicitCandidate = selection.candidateSha;
+}
 const value = (name, fallback) => { const i = argv.indexOf("--" + name); return i < 0 ? fallback : argv[i + 1]; };
-let summaryFile = resolve(REPO, value("summary", "verify/probe-summary.json"));
-let snapshotFile = resolve(REPO, value("snapshot", "verify/snapshot.sqlite"));
-let explicitCandidate = value("candidate-sha", undefined);
+
 const runJson = (args, opts = {}) => {
   const res = spawnSync(process.execPath, [YGL_BIN, ...args], {
     encoding: "utf8", timeout: 300_000, maxBuffer: 64 << 20,
@@ -85,7 +95,7 @@ if (argv.includes("--fresh")) {
   const head = explicitCandidate ?? spawnSync("git", ["rev-parse", "HEAD"], { cwd: REPO, encoding: "utf8" }).stdout?.trim() ?? "";
   const submission = submissionFromProbe(summaryFile, snapshot, head);
   if (!existsSync(snapshot)) {
-    layers.push({ layer: "spec-run", ok: false, detail: "verify/snapshot.sqlite missing — run scripts/verify-probe.mjs first" });
+    layers.push({ layer: "spec-run", ok: false, detail: snapshot + " missing — run scripts/verify-probe.mjs and pass that run's --summary/--snapshot explicitly" });
   } else if (!submission.ok) {
     layers.push({ layer: "spec-run", ok: false, detail: submission.error });
   } else {
@@ -123,8 +133,7 @@ const ok = layers.every(l => l.ok);
 const summary = { ok, spec_id: SPEC_ID, layers };
 const summaryPath = resolve(snapshotFile, "..", "recursive-summary-" + String(Date.now()) + "-" + String(process.pid) + ".json");
 try {
-  const fs = await import("node:fs");
-  fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+  writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + "\n", { flag: "wx", mode: 0o600 });
 } catch { /* 摘要写不进不阻断回报 */ }
 console.log(JSON.stringify(summary, null, 2));
 process.exit(ok ? 0 : 1);

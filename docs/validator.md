@@ -55,20 +55,20 @@ severity：V1–V6、V15=S1（闸门面）V7–V10=S2（运行时）V11–V14=S3
 
 ```bash
 # 1. 采集证据（≈3–6 分钟：五道门禁全真跑 + 3081 探针 + 提交树导出）
-node scripts/verify-probe.mjs
+node scripts/verify-temp-clean.mjs -- node scripts/verify-probe.mjs [--candidate-root <导出> --candidate-sha <完整SHA> --source-repo <对象仓>] [--base http://127.0.0.1:3081 | --runtime-unavailable]
 
 # 2. 判定（YGL_HOME 指向仓库内自包含工作区；路径按本机替换，下例为开发席 Windows 机）
 export YGL_HOME=D:/workspace/dsh-open-a2a-net/tmp/ygl-verify
 YGL=D:/workspace/ygl-trees/dist/apps/cli/src/bin.js
-# 现行隔离候选版 RC spec：spec_bdf9df9d3851；--submission 必须取本轮 probe 输出的唯一目录
-ygl-trees verify run spec_bdf9df9d3851 --db verify/snapshot.sqlite --submission "<本轮 probe 的 submission exported 路径>" --json
-# （submission 路径以本轮 probe-summary.json.submission 为准；缺失或与 snapshot/HEAD 不匹配即拒绝）
+# 现行隔离候选版 RC spec：spec_bdf9df9d3851；--db/--submission 必须取本轮 probe 摘要打印的唯一路径
+ygl-trees verify run spec_bdf9df9d3851 --db "<本轮 snapshot.sqlite>" --submission "<本轮 submission 路径>" --json
+# （递归入口：--fresh 或显式 --summary/--snapshot/--candidate-sha；新摘要模式准入时只读核对快照与逐文件提交物）
 # overall 在报告 JSON 里；rc=0 只表示「跑完出报告」，FAIL 也是有效结论
 ```
 
 新环境没有 `spec_bdf9df9d3851` 时，不得借用旧 spec 的 PASS：先由 CLI 按 `verify/material-isolated.md`、`verify/candidates-isolated.json`、`verify/reviews-isolated.json` 提交/准备，file 检查器必须以本轮仓库真实 nexusDist bundle、`docs/release-gate.md` 和一份已跟踪的 `tests/**/*.spec.ts` 作为 `--attach` 样本。引擎治理 meta 指向实际验证器源码根（本机 `D:/workspace/ygl-trees`）；本插件仓 `verify meta` 当前 R3 因已存在的插件运行时代码报 FAIL，不能冒称本仓 meta PASS。冻结后记新 spec id 与材料 hash，正式判定只认 `verify run` 的报告和归档。
 
-`scripts/verify-probe.mjs` 直连 npmjs **候选精确版本**：404 才记未发布，200 记已发布，网络错误/其他状态记未核且 V6 FAIL；不以 `latest` 标签或项目 `.npmrc` 证明精确版本不存在。3081 state 在 isolated 模式可保留持久化 peer 列表，V9 看显式 `isolated=true` 而不要求 peer 数为 0；V10 必须 state HTTP 200 且死信计数非空、处于 0–30。probe 的提交物目录每轮新建，写进摘要并打印路径；递归层只接受同一 snapshot/HEAD 下的该目录，缺摘要、路径异常、旧固定 TEMP 目录都 FAIL，不回落旧目录。
+`scripts/verify-probe.mjs` 直连 npmjs **候选精确版本**：404 才记未发布，200 记已发布，网络错误/其他状态记未核且 V6 FAIL；不以 `latest` 标签或项目 `.npmrc` 证明精确版本不存在。3081 state 在 isolated 模式可保留持久化 peer 列表，V9 看显式 `isolated=true` 而不要求 peer 数为 0；V10 必须 state HTTP 200 且死信计数非空、处于 0–30。probe 的提交物目录每轮新建，写进摘要并打印路径。递归层只接受同一 snapshot/HEAD 下的该目录：非 `--fresh` 调用必须显式传 `--summary <本轮>/probe-summary.json --snapshot <本轮>/snapshot.sqlite`（建议配 `--candidate-sha`），旧 `verify/snapshot.sqlite` 默认已移除——目录里存在陈旧固定文件也不会被隐式选中，缺参直接以退出码 2 拒绝且不启动引擎。新摘要模式在准入时只读打开快照，核对 `git_head/candidate_tree/source_manifest_sha256` 与请求候选及 `source-manifest.json` 一致，再按清单逐文件校验提交物字节数/SHA256/执行位（Windows 无法核执行位时如实标注）；摘要、快照、提交物任一被替换、含链接重定向或与清单不符即拒绝，不以「摘要里重复同一个 SHA」为凭。
 
 **本机正式CLI运行（2026-11-03，非发布PASS）**：现行 `spec_bdf9df9d3851` 的 `run_b67ca23c44bee3a7` 判 `FAIL`（9 PASS、6 FAIL，V15 文档漂移闸 PASS），红项 V2/V5/V6/V7/V9/V10：仓库仍是已发布的 0.6.31、Windows unit 红、工作树在途且 3081 state 返回 401，不能宣称候选通过。该报告归档 `archive verify` **169 项通过**；把现行规格跑在旧四门禁快照得到 `run_c3de2aebeb915040`，V15 明确 FAIL，缺门禁不会空洞通过。历史 14 单元 `run_b927977dbea7a8b9` 在 3081 v0.6.32 `isolated=true` 且 state 报 9 个持久化 peer 时，V8/V9/V10 PASS，但其快照仍使用旧 latest 探针，不证明精确版本的 V6；整体仍 FAIL。两份报告均不对应 90c7d4c 的完整正式候选 PASS。
 
