@@ -12,9 +12,18 @@ export interface TeamFieldValues {
   readonly rules?: readonly TeamRule[]
   readonly bots?: { readonly a2a?: readonly string[] }
   readonly allowed?: { readonly github?: readonly string[] }
+  /** GitHub issues as requests (design github-issues). */
+  readonly github?: { readonly repos: readonly string[]; readonly intake: 'mention' | 'all' }
+  readonly sources?: { readonly workbench?: boolean; readonly a2a?: boolean; readonly github?: boolean }
+  /** Tools the owner granted beyond each role's list (design tool-requests). */
+  readonly extraTools?: { readonly router?: readonly string[]; readonly member?: readonly string[] }
+  readonly blockedTools?: readonly string[]
+  readonly approvers?: readonly string[]
   readonly reviewer?: string
   readonly repos?: Readonly<Record<string, string>>
   readonly profiles?: Readonly<Record<string, { readonly role?: string; readonly rules: readonly TeamRule[] }>>
+  readonly prepare?: { readonly command: string; readonly timeoutMs: number }
+  readonly maxConcurrent?: number
   readonly dispatch?: string
   readonly members: readonly string[]
   readonly remoteMembers: ReadonlyArray<{ readonly ref: string }>
@@ -41,7 +50,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
 const linesOf = (text: string): string[] => [...new Set(text.split(/[\s,，]+/).filter(item => item !== ''))]
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
 
-export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => string, mark: () => void): TeamFields {
+export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => string, mark: () => void, syncGithub?: () => void): TeamFields {
   const section = (title: string, hint: string): HTMLElement => {
     const box = el('div', 'wb-sa-section')
     box.append(el('div', 'wb-sa-section-title', title), el('div', 'wb-sa-hint', hint))
@@ -140,9 +149,35 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
     return { id, role, rules }
   })
 
-  const githubBox = section('PR 上算人的 GitHub 账号', '工单跟随的 PR 上，这些账号的评论算人写的，其他账号只作参考。一行一个。')
-  const github = area('PR 上算人的 GitHub 账号', (s.allowed?.github ?? []).join('\n'), 2)
-  githubBox.appendChild(github)
+  const githubBox = section('GitHub', '下面这些账号算人：工单跟随的 PR 上他们的评论、列出的仓库里他们开的 Issue。打开 Issue 接收后，点名 @superagent 或打 superagent 标签的新 Issue 会作为需求交给总工，回复写回 Issue。这一块的修改需要在已登录的界面里保存。')
+  const issuesOn = el('input', '') as HTMLInputElement; issuesOn.type = 'checkbox'; issuesOn.checked = s.sources?.github === true
+  issuesOn.setAttribute('aria-label', '接收 GitHub Issue 作为需求'); issuesOn.addEventListener('change', mark)
+  const onRow = el('label', 'wb-sa-hint'); onRow.append(issuesOn, document.createTextNode(' 接收 GitHub Issue 作为需求'))
+  const issueRepos = area('接收 Issue 的仓库', (s.github?.repos ?? []).join('\n'), 2, '一行一个 owner/name，最多 10 个')
+  const intake = el('select', 'wb-sa-input') as HTMLSelectElement; intake.setAttribute('aria-label', '哪些 Issue 算需求')
+  for (const [value, text] of [['mention', '只收点名 @superagent 或打 superagent 标签的'], ['all', '仓库里所有新 Issue']] as const) { const option = el('option', '', text); option.value = value; intake.appendChild(option) }
+  intake.value = s.github?.intake ?? 'mention'; intake.addEventListener('change', mark)
+  const github = area('算人的 GitHub 账号', (s.allowed?.github ?? []).join('\n'), 2)
+  githubBox.append(onRow, issueRepos, intake, github)
+  if (syncGithub !== undefined) {
+    const sync = el('button', 'wb-btn', '从仓库协作者同步账号'); sync.type = 'button'
+    sync.addEventListener('click', syncGithub)
+    githubBox.append(sync, el('div', 'wb-sa-hint', '把上面仓库里有推送权限的协作者加进账号名单，只加不删。先保存仓库再同步。'))
+  }
+
+  const execBox = section('执行', '准备命令在成员拿到工单前，在成员的工作区里用 sh 跑一次，可用变量 $SUPERAGENT_TICKET_ID、$SUPERAGENT_TICKET_NAME、$SUPERAGENT_REPO、$SUPERAGENT_MEMBER。它以本机用户身份运行，不在沙箱里，保存需要界面登录。上限为 0 表示不限，每个成员同时只接一张。')
+  const prepareBox = area('准备命令', s.prepare?.command ?? '', 3, '例如：git worktree add .worktrees/$SUPERAGENT_TICKET_NAME')
+  const capBox = input('同时进行的工单上限', String(s.maxConcurrent ?? 0), '0')
+  execBox.append(prepareBox, capBox)
+
+  const toolsBox = section('工具', '成员和观察者默认可以用这台主机上的全部工具（包括你接入的 MCP 服务），只拦跨出团队的那几类：开会话和子代理、改插件、对外发 A2A、在界面里等人回答。想再收紧，就在「禁用的工具」里写上工具名。总工只用它自己的那组工具；它用到别的工具时会给你提一张 P0 决策卡，批准后出现在「总工额外放行的工具」里。这一块的修改需要在已登录的界面里保存。')
+  const routerTools = area('总工额外放行的工具', (s.extraTools?.router ?? []).join('\n'), 2, '一行一个工具名')
+  const blockedTools = area('成员和观察者禁用的工具', (s.blockedTools ?? []).join('\n'), 2, '一行一个工具名，例如 mcp__market__publish')
+  toolsBox.append(routerTools, blockedTools)
+
+  const approverBox = section('审批人', '团队想请别的团队做事时，会提一张「对外请求」P0 决策卡。除了你，这里列出的成员或观察者也能代为审批（必须写理由，不能批自己提的卡）。填会话 id，一行一个；总工不能当审批人。这一块的修改需要在已登录的界面里保存。')
+  const approvers = area('审批人', (s.approvers ?? []).join('\n'), 2, '一行一个会话 id，例如 session-0123abcd-…')
+  approverBox.appendChild(approvers)
 
   const reviewBox = section('送审地址', '填了之后，工单开的 PR 会在每个新提交上发一次评审请求，结论只供合并的人参考。必须是已建链的 A2A 地址，留空表示不送审。')
   const reviewer = input('送审地址', s.reviewer ?? '', 'dsh/xxxxxxxx')
@@ -169,6 +204,12 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
     const sorted = (value: Readonly<Record<string, unknown>>): unknown => Object.fromEntries(Object.entries(value).sort(([x], [y]) => x.localeCompare(y)))
     if (!same(sorted(nextProfiles), sorted(s.profiles ?? {}))) out.profiles = nextProfiles
 
+    const command = prepareBox.value.trim()
+    if (command !== (s.prepare?.command ?? '')) out.prepare = command === '' ? null : { command, timeoutMinutes: Math.round((s.prepare?.timeoutMs ?? 600_000) / 60_000) }
+    const cap = capBox.value.trim() === '' ? 0 : Number(capBox.value.trim())
+    if (!Number.isInteger(cap) || cap < 0 || cap > 64) return { error: '同时进行的工单上限要是 0–64 的整数' }
+    if (cap !== (s.maxConcurrent ?? 0)) out.maxConcurrent = cap
+
     const botList = linesOf(bots.value)
     if (!same(botList, s.bots?.a2a ?? [])) out.bots = { a2a: botList }
 
@@ -185,10 +226,26 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
 
     const githubList = linesOf(github.value)
     if (!same(githubList, s.allowed?.github ?? [])) out.allowed = { github: githubList }
+    // Only what changed goes out: an untouched GitHub part keeps the save free of the owner-login check (design github-issues G7).
+    if (issuesOn.checked !== (s.sources?.github === true)) out.sources = { github: issuesOn.checked }
+    const repoList = linesOf(issueRepos.value)
+    if (repoList.length > 10 || repoList.some(repo => !REPO.test(repo))) return { error: '接收 Issue 的仓库要写成 owner/name，最多 10 个' }
+    if (!same(repoList, s.github?.repos ?? []) || intake.value !== (s.github?.intake ?? 'mention')) out.github = repoList.length === 0 && intake.value === 'mention' ? null : { repos: repoList, intake: intake.value }
 
+    // Granted tools go out only when a list changed: an untouched save stays clear of the owner-login check (T5).
+    const routerList = linesOf(routerTools.value)
+    if (!same(routerList, s.extraTools?.router ?? [])) out.extraTools = { router: routerList }
+    // Blocked tools go out only when the list changed (tool-requests T6: owner-only).
+    const blockedList = linesOf(blockedTools.value)
+    if (blockedList.length > 40 || blockedList.some(name => !/^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(name))) return { error: '禁用的工具要写工具名，最多 40 个' }
+    if (!same(blockedList, s.blockedTools ?? [])) out.blockedTools = blockedList
+    // Approvers go out only when the list changed, like granted tools (outbound-requests O3: owner-only).
+    const approverList = linesOf(approvers.value)
+    if (approverList.length > 10 || approverList.some(id => !/^session-[A-Za-z0-9-]{1,64}$/.test(id))) return { error: '审批人要写会话 id（session-…），最多 10 个' }
+    if (!same(approverList, s.approvers ?? [])) out.approvers = approverList
     const address = reviewer.value.trim()
     if (address !== (s.reviewer ?? '')) out.reviewer = address === '' ? null : address
     return { patch: out }
   }
-  return { nodes: [rulesBox, dispatchBox, profilesBox, botsBox, repoBox, githubBox, reviewBox], patch }
+  return { nodes: [rulesBox, dispatchBox, profilesBox, execBox, botsBox, repoBox, githubBox, toolsBox, approverBox, reviewBox], patch }
 }

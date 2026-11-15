@@ -10,6 +10,27 @@ export function splitQualifiedMember(ref: string): QualifiedMember | undefined {
   const match = /^([^/\s@]+\/[0-9a-f]{8})@([0-9a-f]{8})$/.exec(ref)
   return match ? { handle: match[1]!, fingerprint: match[2]! } : undefined
 }
+/**
+ * docs/design/superagent-root-team.md R7: a root team's child is another team, named by its canvas address and the
+ * fingerprint of the key of the host that owns it: `<zone>/canvas/<name>@<fp8>`.
+ */
+export interface TeamRef { zone: string; name: string; team: string; fingerprint: string }
+export function splitTeamRef(ref: string): TeamRef | undefined {
+  const match = /^([^/\s@]+)\/canvas\/([^/\s@]{1,40})@([0-9a-f]{8})$/.exec(ref)
+  return match ? { zone: match[1]!, name: match[2]!, team: `${match[1]!}/canvas/${match[2]!}`, fingerprint: match[3]! } : undefined
+}
+/** Whether `key` is a well-formed ed25519 key whose fingerprint the ref names. */
+export function validKeyFor(fingerprint: string, key: string): boolean {
+  if (!key || canvasOwnerFingerprint(key) !== fingerprint) return false
+  try {
+    const bytes = Buffer.from(key, 'base64'), publicKey = createPublicKey({ key: bytes, format: 'der', type: 'spki' })
+    return publicKey.asymmetricKeyType === 'ed25519' && publicKey.export({ format: 'der', type: 'spki' }).equals(bytes) && bytes.toString('base64') === key
+  } catch { return false }
+}
+export function validTeamOwner(ref: string, key: string): boolean {
+  const team = splitTeamRef(ref)
+  return team !== undefined && validKeyFor(team.fingerprint, key)
+}
 export function validMemberOwner(ref: string, key: string): boolean {
   const member = splitQualifiedMember(ref)
   if (!member || !key || canvasOwnerFingerprint(key) !== member.fingerprint) return false
@@ -32,4 +53,18 @@ export function memberProvenance(ref: string, ownerKey: string | undefined, ownK
   if (!validMemberOwner(ref, ownerKey)) return 'conflict'
   if (qualified.fingerprint === canvasOwnerFingerprint(ownKey) && ownerKey !== ownKey) return 'conflict'
   return ownerKey === ownKey ? 'confirmed-local' : 'confirmed-remote'
+}
+
+/**
+ * Whether a caller declares a capability on its verified card (superagent-market-progress-roster P1/P3): the caller is a
+ * canvas remote member whose full key this host pinned (exactly one key across the canvases), and a cached verified card
+ * with that key carries `capabilities[name] === true`. A CLI identity, an unpinned caller or a card not fetched yet
+ * declares nothing.
+ */
+export function pinnedCallerDeclares(caller: string, name: string, members: readonly string[], ownerKeyOf: (ref: string) => string | undefined, cards: Iterable<{ publicKey?: unknown; capabilities?: unknown } | undefined>): boolean {
+  const keys = new Set(members.filter(ref => splitQualifiedMember(ref)?.handle === caller).map(ownerKeyOf).filter((key): key is string => typeof key === 'string' && key !== ''))
+  if (keys.size !== 1) return false
+  const [key] = [...keys]
+  for (const card of cards) if (card?.publicKey === key && (card?.capabilities as Record<string, unknown> | undefined)?.[name] === true) return true
+  return false
 }

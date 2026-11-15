@@ -18,12 +18,15 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/executor
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { execFile } from 'node:child_process'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { waitsForPerson, type Assignment, type Engine, type Executor, type PolicyEffect, type Ticket, type TicketInput } from '../upstream/dsh-superagent/src/core/index.ts'
 
 export interface MemberExecutorDeps {
   readonly path: string
+  /** A ticket no member takes: a split parent, which only coordinates its children (docs/design/superagent-split.md). */
+  readonly held?: (ticketId: string) => boolean
   /** The members the owner named, in order (the order is the launch preference). */
   readonly members: () => readonly string[]
   /** The repository a member works in (`owner/name`), if the owner named one. */
@@ -34,7 +37,8 @@ export interface MemberExecutorDeps {
    * Put text into a member's session: a local one by host relay, a remote one by a signed request to its host (PR-C2).
    * `kind` says what it carries. False (or a rejected promise) when it did not arrive.
    */
-  readonly deliver: (member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string) => boolean | Promise<boolean>
+  /** `run`: the binding's run id the work belongs to (#688 R2), for a member whose turn facts name it (a Pi seat). */
+  readonly deliver: (member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string, run?: string) => boolean | Promise<boolean>
   readonly engine: () => Engine
   /** The owner paused the team (upstream: evaluation, dispatch and outbound delivery hold). */
   readonly paused?: () => boolean
@@ -47,13 +51,44 @@ export interface MemberExecutorDeps {
   /** Text of a stored Trigger, for Inputs. */
   readonly trigger: (id: string) => { text: string; actor: { source: string; id: string }; at: string } | undefined
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
+  /** The team's prepare command (design reliability R1), if it has one. */
+  readonly prepare?: () => { readonly command: string; readonly timeoutMs: number } | undefined
+  /** A local member session's workspace directory. */
+  readonly workspaceOf?: (member: string) => string | undefined
+  /** Run a prepare command; tests replace it. */
+  readonly runPrepare?: PrepareRunner
+  /** How many tickets may run at once; 0 is no cap (design reliability R5). */
+  readonly maxConcurrent?: () => number
+  /** superagent-root-team S2: how many tickets a member holds at once (a child team: its slots); 1 when unset. */
+  readonly capacity?: (member: string) => number
+  /** superagent-root-team: a member whose work goes on through this host's restart (a child team on its own host). */
+  readonly outlivesRestart?: (member: string) => boolean
 }
+
+/** Runs a prepare command: whether it exited 0, and the end of what it printed. */
+export type PrepareRunner = (command: string, cwd: string, env: Readonly<Record<string, string>>, timeoutMs: number) => Promise<{ ok: boolean; output: string }>
+const PREPARE_OUTPUT_TAIL = 2_000
+
+/** `sh -c` in the workspace, with the ticket's variables added to this process's environment. */
+export const defaultPrepare: PrepareRunner = (command, cwd, env, timeoutMs) => new Promise((resolve) => {
+  execFile('sh', ['-c', command], { cwd, env: { ...process.env, ...env }, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+    const output = `${String(stdout)}${String(stderr)}`.slice(-PREPARE_OUTPUT_TAIL)
+    if (error === null) { resolve({ ok: true, output }); return }
+    const why = (error as { killed?: boolean }).killed === true ? `timed out after ${String(Math.round(timeoutMs / 1000))} s` : `exit ${String((error as { code?: unknown }).code ?? '?')}`
+    resolve({ ok: false, output: `${why}\n${output}`.slice(-PREPARE_OUTPUT_TAIL) })
+  })
+})
 
 /** What a member's turn left when it ended: whether nothing of it still runs (shell jobs), and its last words. */
 export interface MemberTurn { readonly quiet: boolean; readonly text: string; /** The turn answered the owner talking to this session directly. */ readonly person?: boolean }
 
 /** One binding: which member runs which ticket's Assignment. */
-interface Binding { readonly member: string; readonly ticketId: string; readonly assignmentId: string; readonly at: string }
+/** `run`: this binding's own id (#688 R2) — a new one each time a ticket is bound, so a fact from an earlier run is told apart. */
+interface Binding { readonly member: string; readonly ticketId: string; readonly assignmentId: string; readonly at: string; readonly run?: string }
+
+/** A binding's run id; bindings stored before runs had ids use their start time. */
+export function runOf(binding: { readonly at: string; readonly run?: string }): string { return binding.run ?? binding.at }
+const newRun = (): string => randomBytes(9).toString('base64url')
 
 /** How often a launch or delivery a failure left behind is tried again. */
 const RETRY_MS = 30_000
@@ -72,6 +107,9 @@ export function transientError(error: unknown): boolean {
   return PASSING.test(error instanceof Error ? `${error.name} ${error.message} ${String((error as { code?: unknown }).code ?? '')}` : String(error))
 }
 
+/** How many tickets' last members the executor keeps (market N1c: who did an ended ticket's work). */
+const LAST_MEMBERS_CAP = 500
+
 export class MemberExecutor implements Executor {
   private bindings: Binding[]
   /** Assignments whose member handed off: still running for the engine, holding no slot until an Input brings them back. */
@@ -87,6 +125,11 @@ export class MemberExecutor implements Executor {
   private ticketRepos: Record<string, string>
   /** The member a ticket stays with. `named`: the router chose it, so the ticket waits for it (design D5); otherwise it is where the ticket last ran (D7). */
   private ticketMembers: Record<string, { member: string; named: boolean }>
+  /**
+   * market N1c: the member each ticket last ran on, kept after the ticket ends (ticketMembers is not), so the ending
+   * receipt can name who did the work. Pruned to tickets the store still keeps, newest LAST_MEMBERS_CAP.
+   */
+  private lastMembers: Record<string, string>
   /** Members leaving the team right now (design v5: removed from the canvas): their stop notice says why. */
   private readonly leaving = new Set<string>()
   /** Assignments waiting for a free member, oldest first. */
@@ -107,23 +150,30 @@ export class MemberExecutor implements Executor {
     this.parked = stored.parked
     this.ticketRepos = stored.repos
     this.ticketMembers = stored.ticketMembers ?? {}
+    this.lastMembers = stored.lastMembers ?? {}
+    this.prepared = stored.prepared ?? {}
   }
+  /** Tickets whose directory the prepare command has made (R1: once per ticket). */
+  private prepared: Record<string, true>
 
-  private load(): { bindings: Binding[]; parked: Binding[]; repos: Record<string, string>; ticketMembers?: Record<string, { member: string; named: boolean }> } {
+  private load(): { bindings: Binding[]; parked: Binding[]; repos: Record<string, string>; ticketMembers?: Record<string, { member: string; named: boolean }>; lastMembers?: Record<string, string>; prepared?: Record<string, true> } {
     try {
       if (!existsSync(this.d.path)) return { bindings: [], parked: [], repos: {} }
-      const raw = JSON.parse(readFileSync(this.d.path, 'utf8')) as { bindings?: Binding[]; parked?: Binding[]; repos?: Record<string, unknown> }
+      const raw = JSON.parse(readFileSync(this.d.path, 'utf8')) as { bindings?: Binding[]; parked?: Binding[]; repos?: Record<string, unknown>; ticketMembers?: Record<string, { member: string; named: boolean }>; lastMembers?: Record<string, unknown>; prepared?: Record<string, true> }
+      const lastMembers = Object.fromEntries(Object.entries(raw.lastMembers ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
       const repos = Object.fromEntries(Object.entries(raw.repos ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
-      return { bindings: raw.bindings ?? [], parked: raw.parked ?? [], repos }
+      return { bindings: raw.bindings ?? [], parked: raw.parked ?? [], repos, ...(raw.ticketMembers !== undefined ? { ticketMembers: raw.ticketMembers } : {}), lastMembers, ...(raw.prepared !== undefined ? { prepared: raw.prepared } : {}) }
     } catch { return { bindings: [], parked: [], repos: {} } }
   }
   private save(): void {
     // An ended ticket's repository is no longer needed.
     this.ticketRepos = Object.fromEntries(Object.entries(this.ticketRepos).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended }))
     this.ticketMembers = Object.fromEntries(Object.entries(this.ticketMembers).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended }))
+    this.prepared = Object.fromEntries(Object.entries(this.prepared).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended })) as Record<string, true>
+    this.lastMembers = Object.fromEntries(Object.entries(this.lastMembers).filter(([id]) => this.d.ticket(id) !== undefined).slice(-LAST_MEMBERS_CAP))
     mkdirSync(dirname(this.d.path), { recursive: true })
     const temporary = `${this.d.path}.tmp-${randomUUID()}`
-    try { writeFileSync(temporary, JSON.stringify({ bindings: this.bindings, parked: this.parked, repos: this.ticketRepos, ticketMembers: this.ticketMembers }), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.d.path) } finally { rmSync(temporary, { force: true }) }
+    try { writeFileSync(temporary, JSON.stringify({ bindings: this.bindings, parked: this.parked, repos: this.ticketRepos, ticketMembers: this.ticketMembers, lastMembers: this.lastMembers }), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.d.path) } finally { rmSync(temporary, { force: true }) }
   }
 
   /** A member is leaving the team (removed from the canvas): the stop its Assignment gets next says so. */
@@ -145,7 +195,8 @@ export class MemberExecutor implements Executor {
   private available(member: string): boolean {
     const stopping = this.stopping.get(member)
     if (stopping !== undefined && Date.now() - stopping >= STOPPING_MS) this.stopping.delete(member)
-    return !this.bindings.some(b => b.member === member) && !this.stopping.has(member) && !this.background.has(member)
+    const held = this.bindings.filter(b => b.member === member).length
+    return held < (this.d.capacity?.(member) ?? 1) && !this.stopping.has(member) && !this.background.has(member)
   }
 
   /** The repository a ticket was accepted for. */
@@ -168,7 +219,38 @@ export class MemberExecutor implements Executor {
     queueMicrotask(() => this.launch())
   }
 
+  /** Put back the member a ticket was named for before a refused reassignment (absent: none). */
+  restoreMember(ticketId: string, before: { member: string; named: boolean } | undefined): void {
+    if (before === undefined) Reflect.deleteProperty(this.ticketMembers, ticketId)
+    else this.ticketMembers[ticketId] = { ...before }
+    this.save()
+  }
+
+  /** Named dispatch N4: the ticket is no longer kept for a member (the requester chose another one). */
+  clearMember(ticketId: string): void {
+    if (this.ticketMembers[ticketId] === undefined) return
+    Reflect.deleteProperty(this.ticketMembers, ticketId)
+    this.save()
+  }
+
   memberOfTicket(ticketId: string): { member: string; named: boolean } | undefined { return this.ticketMembers[ticketId] }
+  /**
+   * A member's load for the roster report (superagent-market-progress-roster P3): the tickets it holds (running or
+   * parked), the tickets waiting that stay with it, and when its latest hold began.
+   */
+  loadOf(member: string): { active: number; queued: number; since?: string } {
+    const held = [...this.bindings, ...this.parked].filter(b => b.member === member)
+    const queued = new Set(this.waiting.filter(w => this.ticketMembers[w.ticketId]?.member === member).map(w => w.ticketId)).size
+    const since = held.map(b => b.at).sort().at(-1)
+    return { active: new Set(held.map(b => b.ticketId)).size, queued, ...(since !== undefined ? { since } : {}) }
+  }
+  /** How many tickets wait for a member ahead of this one; undefined when it is not waiting (superagent-market-progress-roster P1). */
+  queueAhead(ticketId: string): number | undefined {
+    const at = this.waiting.findIndex(w => w.ticketId === ticketId)
+    return at < 0 ? undefined : new Set(this.waiting.slice(0, at).map(w => w.ticketId)).size
+  }
+  /** The member a ticket last ran on, also after it ended (market N1c). */
+  lastMemberOf(ticketId: string): string | undefined { return this.lastMembers[ticketId] }
 
   /**
    * The team's members changed. A ticket that merely last ran on a member who left is free to go anywhere; one the router
@@ -222,8 +304,8 @@ export class MemberExecutor implements Executor {
     }
   }
 
-  private async tryDeliver(member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string): Promise<boolean> {
-    try { return await this.d.deliver(member, text, kind, ticketId) } catch (error) { this.d.logger.warn('superagent: delivery to %s failed: %s', member, String(error)); return false }
+  private async tryDeliver(member: string, text: string, kind: 'assign' | 'input' | 'stop', ticketId: string, run?: string): Promise<boolean> {
+    try { return await this.d.deliver(member, text, kind, ticketId, run) } catch (error) { this.d.logger.warn('superagent: delivery to %s failed: %s', member, String(error)); return false }
   }
 
   private async launchLoop(): Promise<void> {
@@ -237,7 +319,7 @@ export class MemberExecutor implements Executor {
         if (ticket === undefined || ticket.ended || assignment?.state !== 'running') { this.parked = this.parked.filter(b => b !== held); this.save(); continue }
         if (ticket.undelivered.length === 0 || !this.available(held.member)) continue
         this.parked = this.parked.filter(b => b !== held)
-        this.bindings.push({ ...held, at: new Date().toISOString() })
+        this.bindings.push({ ...held, at: new Date().toISOString(), run: newRun() })
         this.save()
         this.d.logger.info('superagent: ticket %s back on %s', ticket.id, held.member)
         this.deliver(ticket, assignment)
@@ -248,20 +330,64 @@ export class MemberExecutor implements Executor {
         const ticket = this.d.ticket(next.ticketId)
         const assignment = ticket?.assignments.find(a => a.id === next.assignmentId)
         if (ticket === undefined || ticket.ended || assignment === undefined || assignment.state !== 'pending') { this.waiting = this.waiting.filter(w => w !== next); continue }
+        if (this.d.held?.(ticket.id) === true) { this.waiting = this.waiting.filter(w => w !== next); continue }
+        // R5: at the cap a new ticket waits; a parked ticket coming back for a person's message (above) is not held.
+        const cap = this.d.maxConcurrent?.() ?? 0
+        if (cap > 0 && this.bindings.length >= cap) break
         let member: string | undefined
+        const run = newRun()
+        let preparing: { command: string; timeoutMs: number; cwd: string } | 'no-workspace' | undefined
         for (const candidate of this.free(ticket.id)) {
-          if (await this.tryDeliver(candidate, assignmentCard(ticket, this.d.trigger, this.ticketRepos[ticket.id], this.d.memberNotes?.(candidate, ticket) ?? []), 'assign', ticket.id)) { member = candidate; break }
+          preparing = this.preparationFor(ticket.id, candidate)
+          if (preparing !== undefined) { member = candidate; break }
+          if (await this.tryDeliver(candidate, assignmentCard(ticket, this.d.trigger, this.ticketRepos[ticket.id], this.d.memberNotes?.(candidate, ticket) ?? []), 'assign', ticket.id, run)) { member = candidate; break }
         }
         if (member === undefined) continue
         this.waiting = this.waiting.filter(w => w !== next)
-        this.bindings.push({ member, ticketId: ticket.id, assignmentId: assignment.id, at: new Date().toISOString() })
+        this.bindings.push({ member, ticketId: ticket.id, assignmentId: assignment.id, at: new Date().toISOString(), run })
         if (this.ticketMembers[ticket.id] === undefined) this.ticketMembers[ticket.id] = { member, named: false }
+        delete this.lastMembers[ticket.id]
+        this.lastMembers[ticket.id] = member
         this.save()
         this.d.logger.info('superagent: ticket %s assigned to %s', ticket.id, member)
         try { engine.assignmentStarted(ticket.id, assignment.id) } catch (error) { this.d.logger.warn('superagent: assignment %s not recorded started: %s', assignment.id, String(error)) }
+        if (preparing !== undefined) void this.prepareThenAssign(ticket.id, assignment.id, member, preparing)
         progressed = true
       }
     }
+  }
+
+  /** What preparing a ticket for this member needs, or undefined when nothing is to be prepared (R1, R4). */
+  private preparationFor(ticketId: string, member: string): { command: string; timeoutMs: number; cwd: string } | 'no-workspace' | undefined {
+    const prepare = this.d.prepare?.()
+    if (prepare === undefined || this.prepared[ticketId] === true || !member.startsWith('session-')) return undefined
+    const cwd = this.d.workspaceOf?.(member)
+    return cwd === undefined || cwd === '' ? 'no-workspace' : { ...prepare, cwd }
+  }
+
+  /** R1–R3: run the prepare command for a bound ticket, then hand the member its card; a failure frees the member. */
+  private async prepareThenAssign(ticketId: string, assignmentId: string, member: string, preparing: { command: string; timeoutMs: number; cwd: string } | 'no-workspace'): Promise<void> {
+    const ticket = this.d.ticket(ticketId)
+    const fail = (why: string): void => {
+      try { this.d.engine().deliveryFailed(ticketId, assignmentId, why) } catch (error) { this.d.logger.warn('superagent: prepare failure of %s not recorded: %s', ticketId, String(error)) }
+      this.bindings = this.bindings.filter(b => b.assignmentId !== assignmentId)
+      this.save()
+      this.d.logger.warn('superagent: ticket %s not prepared: %s', ticketId, why.slice(0, 200))
+      queueMicrotask(() => this.launch())
+    }
+    if (ticket === undefined) return
+    if (preparing === 'no-workspace') { fail(`prepare command not run: member ${member} has no workspace directory`); return }
+    const name = ticket.execution?.name ?? ticket.id
+    const env = { SUPERAGENT_TICKET_ID: ticket.id, SUPERAGENT_TICKET_NAME: name, SUPERAGENT_REPO: this.ticketRepos[ticket.id] ?? '', SUPERAGENT_MEMBER: member }
+    const result = await (this.d.runPrepare ?? defaultPrepare)(preparing.command, preparing.cwd, env, preparing.timeoutMs)
+    const now = this.d.ticket(ticketId)
+    if (now === undefined || now.ended || !this.bindings.some(b => b.assignmentId === assignmentId)) return
+    if (!result.ok) { fail(`prepare command failed: ${result.output}`); return }
+    this.prepared[ticketId] = true
+    this.save()
+    const notes = [...(this.d.memberNotes?.(member, now) ?? []), `prepared: the team's prepare command ran in your workspace for this ticket (directory name ${name}); work in what it made`]
+    const bound = this.bindings.find(b => b.assignmentId === assignmentId)
+    if (!(await this.tryDeliver(member, assignmentCard(now, this.d.trigger, this.ticketRepos[now.id], notes), 'assign', now.id, bound !== undefined ? runOf(bound) : undefined))) fail(`member ${member} did not receive the assignment`)
   }
 
   deliver(ticket: Ticket, assignment: Assignment): void {
@@ -289,7 +415,7 @@ export class MemberExecutor implements Executor {
     // The Triggers the ticket was accepted from are already in its assignment card: recorded delivered, not sent twice.
     const fresh = inputs.filter(input => !(input.kind === 'trigger' && current.origin.triggerIds.includes(input.triggerId)))
     const sentAt = Date.now()
-    if (fresh.length > 0 && !(await this.tryDeliver(binding.member, inputsCard(current, fresh, this.d.trigger), 'input', ticket.id))) {
+    if (fresh.length > 0 && !(await this.tryDeliver(binding.member, inputsCard(current, fresh, this.d.trigger), 'input', ticket.id, runOf(binding)))) {
       try { engine.deliveryFailed(ticket.id, assignment.id, `member ${binding.member} did not receive the input`) } catch { /* the ticket ended meanwhile */ }
       return
     }
@@ -307,7 +433,7 @@ export class MemberExecutor implements Executor {
       // It holds no turn and may be on another ticket by now: nothing to stop. A member removed from the team is told.
       this.parked = this.parked.filter(b => b !== parked)
       this.save()
-      if (this.leaving.delete(parked.member)) void this.tryDeliver(parked.member, `[superagent] ticket ${ticket.id} «${ticket.title}» is no longer yours (you were removed from the team). Do not report on it again.`, 'stop', ticket.id)
+      if (this.leaving.delete(parked.member)) void this.tryDeliver(parked.member, `[superagent] ticket ${ticket.id} «${ticket.title}» is no longer yours (you were removed from the team). Do not report on it again.`, 'stop', ticket.id, runOf(parked))
     }
     if (binding !== undefined) {
       this.bindings = this.bindings.filter(b => b !== binding)
@@ -318,7 +444,7 @@ export class MemberExecutor implements Executor {
       const why = this.leaving.delete(binding.member) ? 'you were removed from the team' : reason
       // Upstream cancels the worker's turn; here the member stays out of the pool until that turn has ended.
       if (!ownEnd && this.d.cancelTurn?.(binding.member) === true) this.stopping.set(binding.member, Date.now())
-      if (!ownEnd) void this.tryDeliver(binding.member, `[superagent] ticket ${ticket.id} «${ticket.title}» is no longer yours (${why}). Stop working on it; do not report on it again.`, 'stop', ticket.id)
+      if (!ownEnd) void this.tryDeliver(binding.member, `[superagent] ticket ${ticket.id} «${ticket.title}» is no longer yours (${why}). Stop working on it; do not report on it again.`, 'stop', ticket.id, runOf(binding))
     }
     queueMicrotask(() => this.launch())
   }
@@ -344,7 +470,7 @@ export class MemberExecutor implements Executor {
     // The owner talked to this session directly: that turn says nothing about the ticket, and the ticket goes on after it.
     if (turn.person === true && turn.quiet && !this.resuming.has(binding.assignmentId)) {
       this.background.delete(member)
-      void this.tryDeliver(member, `[superagent] ticket ${binding.ticketId}: your conversation with the owner is separate from this ticket. Go on with the assignment where it stopped, and report on it as usual.`, 'input', binding.ticketId)
+      void this.tryDeliver(member, `[superagent] ticket ${binding.ticketId}: your conversation with the owner is separate from this ticket. Go on with the assignment where it stopped, and report on it as usual.`, 'input', binding.ticketId, runOf(binding))
       return
     }
     try { this.d.engine().turnEnded(binding.ticketId, binding.assignmentId) } catch (error) { this.d.logger.warn('superagent: turn end of %s not recorded: %s', binding.ticketId, String(error)) }
@@ -385,8 +511,8 @@ export class MemberExecutor implements Executor {
       this.resuming.add(assignmentId)
       const timer = setTimeout(() => {
         this.resuming.delete(assignmentId)
-        const still = this.bindings.some(b => b.assignmentId === assignmentId)
-        if (still) void this.tryDeliver(member, `[superagent] ticket ${ticketId}: your last turn failed for a passing reason (${String(error).slice(0, 200)}). Continue the assignment where it stopped.`, 'input', ticketId)
+        const still = this.bindings.find(b => b.assignmentId === assignmentId)
+        if (still !== undefined) void this.tryDeliver(member, `[superagent] ticket ${ticketId}: your last turn failed for a passing reason (${String(error).slice(0, 200)}). Continue the assignment where it stopped.`, 'input', ticketId, runOf(still))
       }, TRANSIENT_BACKOFF_MS * 2 ** tries)
       timer.unref?.()
       return
@@ -408,6 +534,8 @@ export class MemberExecutor implements Executor {
         this.bindings = this.bindings.filter(b => b !== binding)
         continue
       }
+      // A child team keeps working on its own host: nothing was interrupted, and a new Assignment would send it the ticket again.
+      if (this.d.outlivesRestart?.(binding.member) === true) continue
       if (assignment.state === 'running') {
         try { engine.assignmentInterrupted(ticket.id, assignment.id) } catch (error) { this.d.logger.warn('superagent: interrupted %s not recorded: %s', assignment.id, String(error)) }
       }

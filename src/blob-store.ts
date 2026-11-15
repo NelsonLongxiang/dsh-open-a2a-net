@@ -6,13 +6,22 @@
  * the wire face (admission, OriginClaim) and the tools sit on top of it.
  *
  * - Blobs live at `<root>/blobs/<sha256>`, written tmp + rename; identical bytes are stored once.
- * - Grants live in `<root>/blob-grants.json`, one per (sha256, to): re-sending the same blob to
- *   the same target only extends its expiry.
+ * - Grants live in `<root>/blob-grants.json`, one per (sha256, to, by): each sender's grant is its own (#692
+ *   review F1), so another sender staging the same bytes for the same target never takes it over. The same
+ *   sender re-sending only extends the expiry and keeps the grant's task and fetch record.
+ * - Every change is written before it takes effect here (#692 review F3): a failed write leaves the store
+ *   as it was, so a retry finds the same state and a restart never revives a revoked grant. Bytes no grant
+ *   names are deleted after the change is written; a delete that did not happen is retried at the next start.
  * - Capacity: one file ≤ {@link BLOB_FILE_MAX}; the store ≤ {@link BLOB_TOTAL_MAX} bytes and
  *   ≤ {@link BLOB_COUNT_MAX} blobs. A full store first drops expired grants and the blobs no
  *   live grant names, then refuses visibly — a live grant is never pushed out.
  * - A grants file that does not parse is set aside and read as EMPTY (fail-closed: references
  *   already sent stop resolving, nothing is served by mistake).
+ * - Grant management (market request 2026-11-14): a sender lists its own live grants with the store's
+ *   occupancy ({@link BlobStore.grantsBy}, {@link BlobStore.usage}) and revokes one of its own by
+ *   (sha256, to) ({@link BlobStore.revoke}); a blob no grant names any more is deleted at once. Another
+ *   sender's grant is never touched, and a refusal does not say whether it exists. A grant records
+ *   the task its send went out in, and whether (and when first) it was fetched.
  * @module @nelsonlongxiang/dsh-open-a2a-net/blob-store
  */
 import { createHash } from 'node:crypto'
@@ -31,6 +40,8 @@ export const BLOB_GRANT_TTL_MS = 24 * 60 * 60 * 1000
 export const BLOB_NAME_MAX = 120
 
 const SHA256_RE = /^[0-9a-f]{64}$/
+/** A task id a grant may carry. */
+export const BLOB_TASK_RE = /^[A-Za-z0-9._:-]{1,80}$/
 
 /** One grant: `to` may pull `sha256` until `expiresAt`. */
 export interface BlobGrant {
@@ -43,7 +54,19 @@ export interface BlobGrant {
   readonly by: string
   readonly grantedAt: number
   readonly expiresAt: number
+  /** The task the send went out in, when known. */
+  readonly taskId?: string
+  /** How many times the target pulled it, and when first (absent: never). */
+  readonly fetches?: number
+  readonly firstFetchedAt?: number
 }
+
+/** The store's occupancy and ceilings (live grants only). */
+export interface BlobUsage { readonly files: number; readonly bytes: number; readonly maxFiles: number; readonly maxBytes: number; readonly fileMax: number; readonly ttlMs: number }
+
+export type RevokeResult =
+  | { readonly ok: true; readonly sha256: string; readonly to: string; readonly reclaimed: boolean; readonly bytes: number }
+  | { readonly ok: false; readonly code: 'bad-request' | 'not-found'; readonly error: string }
 
 export type StageResult =
   | { readonly ok: true; readonly sha256: string; readonly size: number; readonly name: string; readonly expiresAt: number }
@@ -90,14 +113,17 @@ export class BlobStore {
    */
   constructor(private readonly root: string, private readonly now: () => number = () => Date.now()) {
     this.restore()
+    // Bytes a revoke could not delete (or a crash left between the written change and the delete) go now.
+    try { this.sweep() } catch { /* the next stage sweeps again */ }
   }
 
   private get grantsFile(): string { return join(this.root, 'blob-grants.json') }
   private blobPath(sha256: string): string { return join(this.root, 'blobs', sha256) }
 
   /** Stage bytes for `to`; a repeat of the same (sha256, to) only extends the grant. */
-  stage(bytes: Uint8Array, meta: { name: string; to: string; by: string }): StageResult {
+  stage(bytes: Uint8Array, meta: { name: string; to: string; by: string; taskId?: string }): StageResult {
     if (typeof meta.to !== 'string' || meta.to === '' || typeof meta.by !== 'string' || meta.by === '') return { ok: false, code: 'bad-request', error: 'to and by are required' }
+    if (meta.taskId !== undefined && !BLOB_TASK_RE.test(meta.taskId)) return { ok: false, code: 'bad-request', error: 'task_id is 1–80 of A-Z a-z 0-9 . _ : -' }
     if (bytes.byteLength > BLOB_FILE_MAX) return { ok: false, code: 'too-large', error: `file is ${String(bytes.byteLength)} bytes; the file channel takes at most ${String(BLOB_FILE_MAX)}` }
     const sha256 = createHash('sha256').update(bytes).digest('hex')
     const name = sanitizeBlobName(meta.name)
@@ -118,9 +144,13 @@ export class BlobStore {
         renameSync(tmp, this.blobPath(sha256))
       }
     }
-    const grant: BlobGrant = { sha256, size: bytes.byteLength, name, to: meta.to, by: meta.by, grantedAt: at, expiresAt }
-    this.grants = [grant, ...this.grants.filter(g => !(g.sha256 === sha256 && g.to === meta.to))]
-    this.persist()
+    // The same sender re-sending: extend, keeping its task and fetch record; anyone else's grant is left as it is.
+    const mine = (g: BlobGrant): boolean => g.sha256 === sha256 && g.to === meta.to && g.by === meta.by
+    const before = this.grants.find(mine)
+    const grant: BlobGrant = before !== undefined
+      ? { ...before, expiresAt, ...(before.taskId === undefined && meta.taskId !== undefined ? { taskId: meta.taskId } : {}) }
+      : { sha256, size: bytes.byteLength, name, to: meta.to, by: meta.by, grantedAt: at, expiresAt, ...(meta.taskId !== undefined ? { taskId: meta.taskId } : {}) }
+    this.commit([grant, ...this.grants.filter(g => !mine(g))])
     return { ok: true, sha256, size: bytes.byteLength, name, expiresAt }
   }
 
@@ -146,6 +176,46 @@ export class BlobStore {
   list(): readonly BlobGrant[] {
     const at = this.now()
     return this.grants.filter(g => g.expiresAt > at)
+  }
+
+  /** The live grants `by` made, newest first. */
+  grantsBy(by: string): readonly BlobGrant[] { return by === '' ? [] : this.list().filter(g => g.by === by) }
+
+  /** The store's occupancy (blobs live grants name) and its ceilings. */
+  usage(): BlobUsage {
+    const blobs = this.liveBlobs()
+    return { files: blobs.length, bytes: blobs.reduce((sum, b) => sum + b.size, 0), maxFiles: BLOB_COUNT_MAX, maxBytes: BLOB_TOTAL_MAX, fileMax: BLOB_FILE_MAX, ttlMs: BLOB_GRANT_TTL_MS }
+  }
+
+  /** Record the task a send went out in on the grants it staged (only `by`'s, only where none is recorded). */
+  tagTask(sha256: string, to: string, by: string, taskId: string): void {
+    if (!BLOB_TASK_RE.test(taskId)) return
+    let changed = false
+    const next = this.grants.map(g => g.sha256 === sha256 && g.to === to && g.by === by && g.taskId === undefined ? (changed = true, { ...g, taskId }) : g)
+    if (changed) this.commit(next)
+  }
+
+  /** The target pulled this grant's blob: count it, and keep when it first did (that sender's grant only). */
+  noteFetch(grant: BlobGrant): void {
+    const at = this.now()
+    this.commit(this.grants.map(g => g.sha256 === grant.sha256 && g.to === grant.to && g.by === grant.by ? { ...g, fetches: (g.fetches ?? 0) + 1, firstFetchedAt: g.firstFetchedAt ?? at } : g))
+  }
+
+  /**
+   * Revoke `by`'s grant of `sha256` to `to`. Only the sender that made the grant revokes it; for anyone
+   * else the answer is the one a missing grant gets (no existence oracle). A blob no grant names any
+   * more is deleted, and its bytes are free at once.
+   */
+  revoke(sha256: string, to: string, by: string): RevokeResult {
+    if (!SHA256_RE.test(sha256) || typeof to !== 'string' || to === '' || by === '') return { ok: false, code: 'bad-request', error: 'sha256 (64 hex) and to are required' }
+    const grant = this.grants.find(g => g.sha256 === sha256 && g.to === to && g.by === by)
+    if (grant === undefined) return { ok: false, code: 'not-found', error: 'you have no grant of that file to that target' }
+    const next = this.grants.filter(g => g !== grant)
+    // Written first: a failed write throws and nothing changed (the retry revokes it then).
+    this.commit(next)
+    const reclaimed = !next.some(g => g.sha256 === sha256)
+    if (reclaimed && this.root !== '') { try { rmSync(this.blobPath(sha256), { force: true }) } catch { /* no grant names it: the next start's sweep deletes it */ } }
+    return { ok: true, sha256, to, reclaimed, bytes: reclaimed ? grant.size : 0 }
   }
 
   private hasBlob(sha256: string): boolean {
@@ -176,12 +246,25 @@ export class BlobStore {
     if (this.grants.length !== before) this.persist()
   }
 
-  private persist(): void {
+  /** Write `next` and only then make it the store's state: a failed write throws with the state unchanged. */
+  private commit(next: BlobGrant[]): void {
+    this.write(next)
+    this.grants = next
+  }
+
+  private persist(): void { this.write(this.grants) }
+
+  private write(grants: readonly BlobGrant[]): void {
     if (this.root === '') return
     mkdirSync(this.root, { recursive: true })
     const tmp = `${this.grantsFile}.tmp-${String(process.pid)}`
-    writeFileSync(tmp, JSON.stringify({ grants: this.grants }), { mode: 0o600 })
-    renameSync(tmp, this.grantsFile)
+    try {
+      writeFileSync(tmp, JSON.stringify({ grants }), { mode: 0o600 })
+      renameSync(tmp, this.grantsFile)
+    } catch (error) {
+      try { rmSync(tmp, { force: true }) } catch { /* the tmp path itself may be what failed */ }
+      throw error
+    }
   }
 
   private restore(): void {
@@ -195,6 +278,9 @@ export class BlobStore {
         && Number.isSafeInteger(r.size) && (r.size as number) >= 0 && (r.size as number) <= BLOB_FILE_MAX
         && typeof r.name === 'string' && typeof r.to === 'string' && r.to !== '' && typeof r.by === 'string'
         && Number.isSafeInteger(r.grantedAt) && Number.isSafeInteger(r.expiresAt)
+        && (r.taskId === undefined || (typeof r.taskId === 'string' && BLOB_TASK_RE.test(r.taskId)))
+        && (r.fetches === undefined || (Number.isSafeInteger(r.fetches) && (r.fetches as number) >= 0))
+        && (r.firstFetchedAt === undefined || Number.isSafeInteger(r.firstFetchedAt))
     }
     if (!Array.isArray(list) || !list.every(valid)) {
       // Fail-closed: set the file aside and serve nothing from it.

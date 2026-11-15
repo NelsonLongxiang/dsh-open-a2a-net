@@ -87,3 +87,19 @@ describe('several teams', () => {
     expect(after.teams.get(id)?.settings.canvas).toBe('docs')
   })
 })
+
+describe('a new team\'s roles reach the tool lists (remote router report 2026-11-10)', () => {
+  it('the last role change after adding a team sees the team, so its router is shown the superagent tools', () => {
+    const roles: Array<string | undefined> = []
+    let teams!: SuperagentTeams
+    teams = new SuperagentTeams({
+      canvasTeam: (name: string) => canvases[name] !== undefined ? { local: canvases[name]!, remote: [] } : undefined, home: mkdtempSync(join(tmpdir(), 'sa-teams-')), logger: { info: () => {}, warn: () => {} },
+      deliverToSession: () => true, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id,
+      // What the plugin's syncRoleTools asks: the router's role, through the registry.
+      onRolesChanged: () => { roles.push(teams.ofSession('session-r2')?.roleOf('session-r2')) },
+    } as never)
+    const added = teams.add({ canvas: 'docs', router: 'session-r2' }, yes, noPreset)
+    expect(added.ok).toBe(true)
+    expect(roles.at(-1)).toBe('router')
+  })
+})

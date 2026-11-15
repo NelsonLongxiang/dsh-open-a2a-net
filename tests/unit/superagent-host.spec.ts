@@ -159,7 +159,7 @@ describe('candidate card', () => {
     expect(card).toContain('superagent_route')
     expect(card).toContain('do not add an implementation plan')
     // The team's one-request-one-ticket rule outranks generic router guidance loaded from elsewhere (agent-atelier allows splitting).
-    expect(card).toContain('never split it into several')
+    expect(card).toContain('unless the request itself explicitly asks for separate parts'); expect(card).toContain('superagent_split'); expect(card).toContain('Never split on your own judgement')
     expect(card).toContain('does not change them')
   })
 
@@ -224,6 +224,12 @@ describe('PR-B2a: bots, accept modes and rules (upstream docs/002)', () => {
     expect(with_({ acceptMode: 'auto' }).gate(unaddressed, thread(), [])).toEqual({ admissible: false, reason: 'notAddressed' })
     // A bot listed under a2a is no workbench person, and an A2A handle is never human (a2a-watch D7).
     expect(with_({ acceptMode: 'auto' }).gate(bot({ source: 'workbench' }), thread(), [])).toEqual({ admissible: false, reason: 'botNotListed' })
+    // Design M12: one message the owner took from an unlisted sender passes as an explicit request, and stays valid.
+    const granted = teamPolicy(settings({ acceptMode: 'off' }), { taken: id => id === 'taken-1' })
+    const out = granted.gate(bot({ id: 'taken-1', actor: { source: 'a2a', id: 'other/0123456789abcdef' } }), thread(), [])
+    expect(out).toMatchObject({ admissible: true, strength: 'explicit', basis: { via: 'listed', authority: 'owner-once', sender: 'other/0123456789abcdef' } })
+    expect(granted.gate(bot({ id: 'other-2', actor: { source: 'a2a', id: 'other/0123456789abcdef' } }), thread(), [])).toEqual({ admissible: false, reason: 'botNotListed' })
+    if (out.admissible) expect(granted.revalidate({ strength: 'explicit', basis: out.basis, actor: { source: 'a2a', id: 'other/0123456789abcdef' } } as never)).toBe(true)
   })
   it('an unlisted person\'s follow-up is inferred outside off', () => {
     const p = teamPolicy(settings({ acceptMode: 'observe' }))
@@ -378,6 +384,18 @@ describe('PR-B2b: the a2a Channel through the hosted a2a-watch', () => {
     const doneReceipts = endings().filter(a => a[1] === done.task)
     expect(doneReceipts).toHaveLength(1)
     expect(doneReceipts[0]!.at(-1)).toContain('ticket/t7 0123abc')
+    // market N1c: the ending receipt names the member that did the work, even though the ticket has ended; the
+    // acknowledgement, sent before any member held it, names the router.
+    expect(doneReceipts[0]!.slice(doneReceipts[0]!.indexOf('--by'), doneReceipts[0]!.indexOf('--by') + 2)).toEqual(['--by', 'session-m'])
+    const ack = calls.find(a => a[0] === 'receipt' && a[1] === done.task && a.includes('--acknowledged'))!
+    expect(ack.slice(ack.indexOf('--by'), ack.indexOf('--by') + 2)).toEqual(['--by', 'session-r'])
+    expect(host.seatOf(done.ticketId)).toEqual({ seat: 'session-m', seatId: expect.stringMatching(/^seat-/), role: 'member' })
+    // The role says which seat this is: the acknowledgement's is the router's, the ending receipt's the member's.
+    expect(ack.slice(ack.indexOf('--by-role'), ack.indexOf('--by-role') + 2)).toEqual(['--by-role', 'router'])
+    // The seat's stable id rides along (named dispatch N2): the market keys its records on it, not the handle.
+    expect(ack[ack.indexOf('--by-seat-id') + 1]).toMatch(/^seat-[0-9a-f]{8}$/)
+    expect(doneReceipts[0]![doneReceipts[0]!.indexOf('--by-seat-id') + 1]).toMatch(/^seat-[0-9a-f]{8}$/)
+    expect(doneReceipts[0]!.slice(doneReceipts[0]!.indexOf('--by-role'), doneReceipts[0]!.indexOf('--by-role') + 2)).toEqual(['--by-role', 'member'])
   })
   it('a caller no longer linked makes the message gone (dropped), never sent', async () => {
     const h = await hostWith(args => args[0] === 'admission' ? JSON.stringify({ admitted: false }) : '{}')
@@ -878,6 +896,130 @@ describe('ops team ledger: every A2A message to the team address gets a formal o
   })
 })
 
+describe('a message the team could not judge still gets its outcome', () => {
+  it('after the router times out for good, the sender is told (failed) once the grace has passed, and not before', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { UNAVAILABLE_RECEIPT_GRACE_MS } = await import('../../src/superagent/host/receipts.ts')
+    const calls: string[][] = []
+    let clock = Date.parse('2026-11-07T00:00:30.000Z')
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r']), home: mkdtempSync(join(tmpdir(), 'sa-unavailable-')), logger: { info: () => {}, warn: () => {} },
+      deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1', now: () => new Date(clock).toISOString(),
+      runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' } })
+    const bot = 'reporter/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const task = 'direct-000000000001'
+    h.engine.receive({ ...wb('1', 'ctx-1'), at: new Date(clock).toISOString(), source: 'a2a', threads: [{ source: 'a2a', id: 'ctx-1' }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: 'a2a:ctx-1', address: { caller: bot, task, context: 'ctx-1' } }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } })
+    const receiptFor = () => calls.find(a => a[0] === 'receipt' && a[1] === task && !a.includes('--acknowledged'))
+    const outcome = (args: string[] | undefined) => args?.[args.indexOf('--outcome') + 1]
+    // The router never answers: each Eval expires; the third expiry records the message unavailable.
+    for (let i = 0; i < 4; i++) { await settle(); clock += 11 * 60_000 }
+    await settle()
+    const decided = h.store.decisions.byThread('a2a:ctx-1').map(d => d.kind)
+    expect(decided.at(-1)).toBe('unavailable')
+    // Within the grace the owner may still ask for a fresh judgement: nothing is sent yet.
+    expect(receiptFor()).toBeUndefined()
+    clock += UNAVAILABLE_RECEIPT_GRACE_MS
+    await settle()
+    expect(outcome(receiptFor())).toBe('failed')
+    expect(receiptFor()!.at(-1)).toContain('没能判断')
+    // Once.
+    await settle()
+    expect(calls.filter(a => a[0] === 'receipt' && a[1] === task && !a.includes('--acknowledged'))).toHaveLength(1)
+  })
+
+  it('an Eval ended unavailable only to be judged again (a policy change) sends nothing', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { UNAVAILABLE_RECEIPT_GRACE_MS } = await import('../../src/superagent/host/receipts.ts')
+    const calls: string[][] = []
+    let clock = Date.parse('2026-11-07T00:00:30.000Z')
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r']), home: mkdtempSync(join(tmpdir(), 'sa-unavailable2-')), logger: { info: () => {}, warn: () => {} },
+      deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1', now: () => new Date(clock).toISOString(),
+      runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' } })
+    const bot = 'reporter/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const task = 'direct-000000000002'
+    h.engine.receive({ ...wb('2', 'ctx-2'), at: new Date(clock).toISOString(), source: 'a2a', threads: [{ source: 'a2a', id: 'ctx-2' }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: 'a2a:ctx-2', address: { caller: bot, task, context: 'ctx-2' } }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } })
+    await settle()
+    // A rules change re-assesses the Eval in progress: an `unavailable` decision whose message is queued again.
+    expect(h.saveSettings({ rules: [{ name: 'deps', text: 'Upgrade a pinned dependency, any.' }] }, () => true)).toMatchObject({ ok: true })
+    await settle()
+    expect(h.store.decisions.byThread('a2a:ctx-2').some(d => d.kind === 'unavailable')).toBe(true)
+    clock += UNAVAILABLE_RECEIPT_GRACE_MS + 60_000
+    await settle()
+    expect(calls.find(a => a[0] === 'receipt' && a[1] === task && !a.includes('--acknowledged'))).toBeUndefined()
+  })
+})
+
+describe('design M12: a request from an unlisted sender waits on the owner', () => {
+  it('holds it on a sender card, tells the sender, and acts on the owner\'s choice', async () => {
+    const { SuperagentHost, SENDER_TAKE_LIST, SENDER_DECLINE } = await import('../../src/superagent/host/index.ts')
+    const calls: string[][] = []
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']),
+      home: mkdtempSync(join(tmpdir(), 'sa-sender-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1', now: () => '2026-11-07T00:05:00.000Z',
+      runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' },
+    })
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'observe' }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const receive = (n: string, from: string, ctx = `ctx-${n}`) => {
+      const task = `direct-${n.padStart(12, '0')}`
+      h.engine.receive({ ...wb(n, ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: from }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: from, task, context: ctx } }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } })
+      h.pass()
+      return task
+    }
+    const receiptFor = (task: string) => calls.find(a => a[0] === 'receipt' && a[1] === task && !a.includes('--acknowledged'))
+    const ackFor = (task: string) => calls.find(a => a[0] === 'receipt' && a[1] === task && a.includes('--acknowledged'))
+    const cardOf = (trigger: string) => h.decisionCards().find(c => c.source === 'sender' && c.by === trigger)
+    const a = 'dsh/aaaaaaaa', b = 'dsh/bbbbbbbb'
+
+    // Held: a card for the owner, an acknowledgement for the sender, no refusal.
+    const first = receive('1', a)
+    await settle()
+    expect(cardOf('1')).toMatchObject({ level: 'P1', options: ['接这一单', SENDER_TAKE_LIST, SENDER_DECLINE] })
+    expect(cardOf('1')!.reason).toContain('request 1')
+    expect(ackFor(first)!.at(-1)).toContain('团队主人决定')
+    expect(receiptFor(first)).toBeUndefined()
+    // One waiting card per sender: the same sender's next message is refused as before.
+    const second = receive('2', a)
+    await settle()
+    expect(cardOf('2')).toBeUndefined()
+    expect(receiptFor(second)!.at(-1)).toContain('名单')
+    // The owner must choose; declining tells the sender so.
+    expect(h.decide(cardOf('1')!.id, 'choose', undefined, '再说吧')).toMatchObject({ ok: false, code: 'choice' })
+    expect(h.decide(cardOf('1')!.id, 'choose', SENDER_DECLINE)).toMatchObject({ ok: true, taken: false })
+    await settle()
+    expect(receiptFor(first)!.at(-1)).toContain('主人没有接')
+    expect(h.senderChoice('1')).toBe('declined')
+
+    // Taken, and the sender listed: the gate now admits that message as the owner's explicit request, judged again.
+    const third = receive('3', b)
+    await settle()
+    expect(h.decide(cardOf('3')!.id, 'choose', SENDER_TAKE_LIST)).toMatchObject({ ok: true, taken: true })
+    expect(h.settings.bots.a2a).toContain(b)
+    expect(h.senderChoice('3')).toBe('taken')
+    await settle()
+    expect(receiptFor(third)).toBeUndefined()
+    expect(h.engine.candidate('3')).toMatchObject({ strength: 'explicit' })
+  })
+
+  it('does not hold an old message, and at most ten wait at a time', async () => {
+    const { SuperagentHost, SENDER_CARDS_MAX } = await import('../../src/superagent/host/index.ts')
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r']), home: mkdtempSync(join(tmpdir(), 'sa-sender-cap-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1', now: () => '2026-11-08T12:00:00.000Z',
+      runCli: async args => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' })
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true } }, () => true)).toMatchObject({ ok: true })
+    const put = (n: string, from: string, at: string) => {
+      h.engine.receive({ ...wb(n, `c${n}`), at, source: 'a2a', threads: [{ source: 'a2a', id: `c${n}` }], actor: { source: 'a2a', id: from }, human: false, channel: { source: 'a2a', thread: `a2a:c${n}`, address: { caller: from, task: `direct-${n.padStart(12, '0')}`, context: `c${n}` } }, meta: {} })
+      return h.senderHold(n)
+    }
+    expect(put('1', 'dsh/00000001', '2026-11-07T00:00:00.000Z')).toBeUndefined()
+    for (let i = 0; i < SENDER_CARDS_MAX; i++) expect(put(String(10 + i), `dsh/1000000${String(i)}`, '2026-11-08T11:00:00.000Z')).toBe('hold')
+    expect(put('99', 'dsh/99999999', '2026-11-08T11:00:00.000Z')).toBeUndefined()
+  })
+})
+
 describe('spec audit: follow-ups, the owner answering, the terminal', () => {
   it('a follow-up delivered to a member is acknowledged, and gets its formal outcome when the ticket ends', async () => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
@@ -903,6 +1045,62 @@ describe('spec audit: follow-ups, the owner answering, the terminal', () => {
     expect(final, JSON.stringify(receipts(followUp))).toBeDefined()
     expect(final![final!.indexOf('--outcome') + 1]).toBe('abandoned')
     expect(receipts(first).some(a => !a.includes('--acknowledged'))).toBe(true)
+    await h.stop()
+  })
+
+  it('a requester\'s answer that reaches the ticket and is also judged and ignored by the router keeps its formal receipt for the ticket\'s end (field run, 2026-11-11)', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const calls: string[][] = []
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home: mkdtempSync(join(tmpdir(), 'sa-answer-ignore-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1',
+      runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' } })
+    const bot = 'market/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const receive = (n: string, ctx: string) => { const task = `direct-${n.padStart(12, '0')}`; h.engine.receive({ ...wb(n, ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: bot, task, context: ctx } }, addressed: 'direct', meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } } as never); h.pass(); return task }
+    const receipts = (task: string): string[][] => calls.filter(a => a[0] === 'receipt' && a[1] === task)
+    receive('1', 'ctx-1')
+    const accepted = routeItem(h, { trigger_id: '1', kind: 'accept', title: 'bump', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    await settle()
+    // The requester answers on a new task in the same context; the engine fans it out into the ticket.
+    const answer = receive('2', 'ctx-1')
+    await settle()
+    expect(h.store.triggers.disposition('2')?.fanout ?? []).toContain(accepted.ticket_id)
+    // The router also judges it, as on the field run, and ignores it (an answer, not new work).
+    h.store.decisions.save({ id: 'dec-2', threadKey: 'a2a:ctx-1', evalId: 'ev-2', kind: 'ignore', triggerIds: ['2'], reason: [{ triggerId: '2', code: 'said', values: { text: '对在办工单问题的回答' } }], at: new Date().toISOString() } as never)
+    await settle(); await settle()
+    // No "not taken" receipt: the member has it, and its outcome comes when the ticket ends.
+    expect(receipts(answer).filter(a => !a.includes('--acknowledged')), JSON.stringify(receipts(answer))).toHaveLength(0)
+    h.engine.stopTicket(accepted.ticket_id, 'done')
+    await settle()
+    const final = receipts(answer).find(a => !a.includes('--acknowledged'))
+    expect(final, JSON.stringify(receipts(answer))).toBeDefined()
+    expect(final![final!.indexOf('--outcome') + 1]).not.toBe('rejected')
+    await h.stop()
+  })
+
+  it('light path (superagent-market-progress-roster P2): the caller a ticket serves talks to its member without the router; another caller in the same conversation still goes to the router', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home: mkdtempSync(join(tmpdir(), 'sa-light-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1',
+      runCli: async args => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' })
+    const market = 'market/0123456789abcdef', other = 'other/0123456789abcdef'
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [market, other] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const receive = (n: string, ctx: string, bot: string) => { const task = `direct-${n.padStart(12, '0')}`; h.engine.receive({ ...wb(n, ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: bot }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: bot, task, context: ctx } }, addressed: 'direct', meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } } as never); h.pass() }
+    receive('1', 'ctx-1', market)
+    const accepted = routeItem(h, { trigger_id: '1', kind: 'accept', title: 'chat', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    await settle()
+    receive('2', 'ctx-1', market)
+    receive('3', 'ctx-1', other)
+    await settle()
+    // The router's queue: the served caller's message is not in it, the other caller's is.
+    const thread = h.store.threads.get('a2a:ctx-1')!
+    const queued = [...thread.pending, ...(thread.evaluating?.triggerIds ?? [])]
+    expect(queued).not.toContain('2')
+    expect(queued).toContain('3')
+    // Both reach the member as inputs.
+    expect(h.store.tickets.get(accepted.ticket_id)!.inputs.filter(i => i.kind === 'trigger').map(i => (i as { triggerId: string }).triggerId)).toEqual(expect.arrayContaining(['2', '3']))
     await h.stop()
   })
 
@@ -998,6 +1196,31 @@ describe('design v5: the team is a canvas team', () => {
       h.poolChanged()
       expect(h.executor.list()).toEqual([])
       expect(sent.find(([id, t]) => id === 'session-a' && t.includes('is no longer yours'))?.[1]).toContain('(you were removed from the team)')
+    } finally { void h.stop() }
+  })
+
+  it('#690 F1: a refused reassignment of a running ticket changes nothing — the running member keeps it and its name', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const h = new SuperagentHost({
+      home: mkdtempSync(join(tmpdir(), 'sa-690-assign-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      canvasTeam: name => name === 'ops' ? { local: ['session-r', 'session-a', 'session-b'], remote: [] } : undefined,
+    })
+    expect(h.saveSettings({ canvas: 'ops', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    h.start()
+    try {
+      const asked = h.request('核对一节文档') as { triggerId: string }
+      expect(routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: 'doc', scope: 's', reason: 'r' })).toMatchObject({ ok: true })
+      await vi.waitFor(() => { expect(h.executor.list()).toHaveLength(1) })
+      const running = h.executor.list()[0]!
+      const ticketId = running.ticketId
+      const before = h.executor.memberOfTicket(ticketId)
+      const other = running.member === 'session-a' ? 'session-b' : 'session-a'
+      h.engine.retryTicket = () => { throw new Error('notRetryable') }
+      expect(h.assignTicket(ticketId, other)).toMatchObject({ ok: false })
+      expect(h.executor.memberOfTicket(ticketId)).toEqual(before)
+      expect(h.executor.bindingOf(running.member)?.ticketId).toBe(ticketId)
+      expect(h.seatOf(ticketId)?.seat).toBe(running.member)
     } finally { void h.stop() }
   })
 
@@ -1143,5 +1366,66 @@ describe('router acceptance follow-up: what a settings change means to each open
     expect(lines.join('\n')).toContain('accept mode is not auto')
     expect(lines.join('\n')).toContain('a2a:ops/x, who asked for this ticket, may no longer start work')
     expect(lines.join('\n')).not.toContain('{')
+  })
+})
+
+describe('a remote member listed as a bot is a caller, not a worker (market on the canvas)', () => {
+  it('the worker pool, the member list and the executor leave it out; other remote members stay workers', async () => {
+    const { SuperagentHost, workerRemotes } = await import('../../src/superagent/host/index.ts')
+    const market = { ref: 'market/fd417315@88679599', key: 'K1', url: 'http://127.0.0.1:1' }, peer = { ref: 'dsh/bbbb2222@89abcdef', key: 'K2', url: 'http://127.0.0.1:2' }
+    expect(workerRemotes({ remoteMembers: [market, peer], bots: { a2a: ['market/fd417315'] } })).toEqual(['dsh/bbbb2222@89abcdef'])
+    expect(workerRemotes({ remoteMembers: [market, peer], bots: { a2a: [] } })).toEqual(['market/fd417315@88679599', 'dsh/bbbb2222@89abcdef'])
+    const h = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m'], [market, peer]), home: mkdtempSync(join(tmpdir(), 'sa-botworker-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, sessionName: (id: string) => id } as never)
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r', bots: { a2a: ['market/fd417315'] } }, () => true)).toMatchObject({ ok: true })
+    expect(h.memberListLine()).toBe("The team's members: session-m; dsh/bbbb2222@89abcdef.")
+    await h.stop()
+  })
+})
+
+describe('market N1d: a member\'s question carries its answers to the requester', () => {
+  it('choicesOf gives the options and the recommendation of the card the question report raised', async () => {
+    const caller = { caller: 'market/0123456789abcdef' }
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const host = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']), home: mkdtempSync(join(tmpdir(), 'sa-choices-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1', runCli: async args => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' })
+    expect(host.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [caller.caller] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { host.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const channel = { source: 'a2a', thread: 'a2a:ctx-q', address: { caller: caller.caller, task: 'direct-000000000009', context: 'ctx-q' } }
+    host.engine.receive({ ...wb('9', 'ctx-q'), source: 'a2a', threads: [{ source: 'a2a', id: 'ctx-q' }], actor: { source: 'a2a', id: caller.caller }, human: false, channel, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: channel.address.task } })
+    host.pass()
+    const routed = routeItem(host, { trigger_id: '9', kind: 'accept', title: 'greet', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    await settle()
+    expect(host.choicesOf(routed.ticket_id)).toBeUndefined()
+    expect(host.report('session-m', { state: 'waiting', summary: '等发起方选风格', question: '问候语用哪种风格？', decision: { level: 'P1', options: ['正式', '口语', '俏皮'], recommended: '口语' } })).toMatchObject({ ok: true })
+    await settle()
+    expect(host.choicesOf(routed.ticket_id)).toEqual({ options: ['正式', '口语', '俏皮'], recommended: '口语' })
+    await host.stop()
+  })
+})
+
+describe('seatOf at boot reads no canvas (regression of #611 on the test host)', () => {
+  it('the seat and its role come from the executor and the preset, even when reading the canvas throws', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    let booting = false
+    const team = canvasOf(['session-r', 'session-o'])
+    const bot = 'market/0123456789abcdef'
+    const host = new SuperagentHost({ canvasTeam: (name: string) => { if (booting) throw new ReferenceError("Cannot access 'cardCache' before initialization"); return team(name) },
+      home: mkdtempSync(join(tmpdir(), 'sa-seatboot-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1',
+      presetOf: (id: string) => id === 'session-o' ? 'superagent-observer' : 'superagent-router', sessionName: (id: string) => id,
+      runCli: async (args: string[]) => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' } as never)
+    expect(host.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
+    const channel = { source: 'a2a', thread: 'a2a:ctx-b', address: { caller: bot, task: 'direct-00000000000b', context: 'ctx-b' } }
+    host.engine.receive({ ...wb('b', 'ctx-b'), source: 'a2a', threads: [{ source: 'a2a', id: 'ctx-b' }], actor: { source: 'a2a', id: bot }, human: false, channel, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: channel.address.task } } as never)
+    host.pass()
+    const routed = routeItem(host, { trigger_id: 'b', kind: 'accept', title: 'boot', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
+    for (let i = 0; i < 20; i++) { host.pass(); await new Promise(r => setTimeout(r, 5)) }
+    expect(host.seatOf(routed.ticket_id)).toEqual({ seat: 'session-o', seatId: expect.stringMatching(/^seat-/), role: 'observer' })
+    booting = true
+    // Before the fix the observer check read the canvas settings and threw here (the plugin's start failed with it).
+    expect(host.seatOf(routed.ticket_id)).toEqual({ seat: 'session-o', seatId: expect.stringMatching(/^seat-/), role: 'observer' })
+    booting = false
+    await host.stop()
   })
 })

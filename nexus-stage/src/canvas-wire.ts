@@ -45,6 +45,9 @@ export interface CanvasWire {
   /** Pre-computed remove/add roster ops (from canvas-ops.reorderOps). */
   runRosterOps(team: string, ops: ReadonlyArray<{ op: 'remove' | 'add'; id: string }>): Promise<boolean>
   removeTeam(name: string): Promise<boolean>
+  /** superagent-root-team S3: the owner's root actions on the canvas route. */
+  setRoot(name: string, root: boolean): Promise<boolean>
+  setTeamSlots(name: string, team: string, slots: number): Promise<boolean>
   hasPending(): boolean
 }
 
@@ -156,6 +159,12 @@ export function createCanvasWire(deps: CanvasWireDeps): CanvasWire {
     },
     removeTeam(name) {
       return enqueue(name, () => raw({ action: 'remove', name }))
+    },
+    setRoot(name, root) {
+      return enqueue(name, () => raw({ action: 'set-root', name, root }))
+    },
+    setTeamSlots(name, team, slots) {
+      return enqueue(name, () => raw({ action: 'set-team-slots', name, team, slots }))
     },
     hasPending() {
       return pending > 0

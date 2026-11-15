@@ -16,7 +16,7 @@ export const KV = { rows: 'a2a-rows', pages: 'a2a-pages', healthLog: 'a2a-health
 export const CAPS = { rows: 1000, pages: 1000, health: 200 }
 const OUTCOMES = new Set(['stored', 'duplicate', 'filtered:unverified', 'filtered:unlinked', 'filtered:loop', 'filtered:receipt', 'duplicateCopy', 'unreadable'])
 /** p3 (S36): the host admission rules that are an operator's link; src/superagent/a2a-watch.ts LINK_RULES (the unit test pins them). */
-export const LINK_RULES = ['canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'cli-deposit']
+export const LINK_RULES = ['canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'cli-deposit', 'superagent-intake']
 /** p3 (S27 L1): the Source's own task ids start with this. */
 export const LOOP_PREFIX = 'a2a-'
 

@@ -10,6 +10,11 @@
  *   reference names this host, else over the pull face with this host's OriginClaim envelope — checks
  *   sha256 and size, and lands it at `<workspace>/a2a-inbox/<sha12>-<name>`, never following a link.
  *   Its result always counts as content from outside this host (N4).
+ * - `a2a_file_grants {}` lists the grants THIS session made that are still live (sha256, size, name,
+ *   to, granted/expiry times, task id, whether the target fetched it) and the store's occupancy and
+ *   ceilings; `a2a_file_revoke { sha256, to }` revokes one of them (market request 2026-11-14). A
+ *   session revokes only its own grants: another sender's is answered as missing. A blob no grant
+ *   names any more is deleted, so its bytes are free at once.
  * @module @nelsonlongxiang/dsh-open-a2a-net/tools/files
  */
 import { createHash } from 'node:crypto'
@@ -19,8 +24,8 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Config } from '../index.ts'
-import { BLOB_FILE_MAX, formatFileRef, parseFileRef, sanitizeBlobName, type BlobStore } from '../blob-store.ts'
-import { grantAdmits } from '../faces/files.ts'
+import { BLOB_FILE_MAX, BLOB_TASK_RE, formatFileRef, parseFileRef, sanitizeBlobName, type BlobStore } from '../blob-store.ts'
+import { grantAdmits, grantView } from '../faces/files.ts'
 import { LOCAL_ROUTE } from '../node-self.ts'
 import { originOf, type OriginClaimTarget } from '../origin-claim.ts'
 import { normalizeLinkKeys, outboundKeyFor } from '../link-keys.ts'
@@ -52,7 +57,7 @@ const workspaceOf = (agent: Agent | undefined): string => {
   return typeof cwd === 'string' ? cwd : ''
 }
 
-export function createFileTools(d: FileToolsDeps): { registerFileSend: () => void; registerFileFetch: () => void } {
+export function createFileTools(d: FileToolsDeps): { registerFileSend: () => void; registerFileFetch: () => void; registerFileGrants: () => void; registerFileRevoke: () => void } {
   const { ctx, config, blobStore } = d
 
   function registerFileSend(): void {
@@ -67,18 +72,21 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
         paths: { type: 'array', items: { type: 'string' }, required: true, description: 'Files to send (1–16).' },
         team: { type: 'string', required: true, description: 'Target team, as for a2a_route.' },
         note: { type: 'string', description: 'Optional text to put above the references.' },
+        task_id: { type: 'string', description: 'Optional task id to record on the grants (default: the task this send goes out in).' },
       },
       output: {
         schema: { type: 'object', additionalProperties: true },
         render: (_args, value) => [{ type: 'text', text: value.ok === true ? `Sent ${String((value.files as unknown[]).length)} file(s) to ${String(value.team)} (task ${String(value.task_id)}).` : `File send refused: ${String(value.error)}` }],
       },
       presentCall: args => ({ card: 'generic', title: `A2A file send → ${String(args.team)}`, kind: 'other', rawInput: args }),
-      execute: async (args: { paths: string[]; team: string; note?: string }, exec): Promise<Record<string, JsonValue>> => {
+      execute: async (args: { paths: string[]; team: string; note?: string; task_id?: string }, exec): Promise<Record<string, JsonValue>> => {
         const agent = exec.agent as Agent | undefined
         const team = String(args.team ?? '').trim()
         const paths = Array.isArray(args.paths) ? args.paths.map(p => String(p)) : []
         if (team === '') return { ok: false, error: 'team is required', peer_content: false }
         if (paths.length === 0 || paths.length > FILE_SEND_MAX) return { ok: false, error: `paths must name 1–${String(FILE_SEND_MAX)} files`, peer_content: false }
+        const taskId = typeof args.task_id === 'string' && args.task_id.trim() !== '' ? args.task_id.trim() : undefined
+        if (taskId !== undefined && !BLOB_TASK_RE.test(taskId)) return { ok: false, error: 'task_id is 1–80 of A-Z a-z 0-9 . _ : -', peer_content: false }
         const from = originOf(d.ownCardUrl())
         if (from === '') return { ok: false, error: 'this host publishes no card URL yet (announce is off or the web server has not settled): a receiver could not pull from it', peer_content: false }
         const cwd = workspaceOf(agent)
@@ -96,7 +104,7 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
           } catch (error) {
             return { ok: false, error: `cannot read ${p}: ${error instanceof Error ? error.message : String(error)}`, peer_content: false }
           }
-          const out = blobStore.stage(bytes, { name: abs.split(/[\\/]/).pop() ?? p, to: team, by })
+          const out = blobStore.stage(bytes, { name: abs.split(/[\\/]/).pop() ?? p, to: team, by, ...(taskId !== undefined ? { taskId } : {}) })
           if (!out.ok) return { ok: false, error: `${p}: ${out.error}`, code: out.code, peer_content: false }
           staged.push({ sha256: out.sha256, size: out.size, name: out.name, expiresAt: out.expiresAt })
         }
@@ -104,6 +112,8 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
         const message = [...(note !== '' ? [note] : []), ...staged.map(f => formatFileRef({ ...f, from }))].join('\n')
         // The route's own trunk: join gate, admission, ledger and receipts are a2a_route's.
         const { [LOCAL_ROUTE]: local, ...routed } = await d.routeTrunk({ team, message, async: true }, agent, exec.signal) as Record<string, JsonValue> & { [LOCAL_ROUTE]?: true }
+        // The grants remember the task they went out in (unless the caller named one).
+        if (taskId === undefined && typeof routed.task_id === 'string') for (const f of staged) blobStore.tagTask(f.sha256, team, by, routed.task_id)
         return { ...routed, ok: routed.ok === true, team, files: staged, peer_content: local !== true }
       },
     }))
@@ -138,7 +148,8 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
           // member of) — the session is its own signer here, never the whole host zone.
           const grant = blobStore.list().find(g => g.sha256 === ref.sha256 && grantAdmits(g.to, caller, caller, config.team, d.canvasMembersOf))
           const local = grant === undefined ? undefined : blobStore.read(grant)
-          if (local === undefined) return { ok: false, code: 'not-granted', error: 'no live grant lets this session pull that file' }
+          if (local === undefined || grant === undefined) return { ok: false, code: 'not-granted', error: 'no live grant lets this session pull that file' }
+          blobStore.noteFetch(grant)
           bytes = local
         } else {
           const target = `${ref.from}/a2a/blob`
@@ -194,5 +205,50 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
     }))
   }
 
-  return { registerFileSend, registerFileFetch }
+  function registerFileGrants(): void {
+    ctx.tools.register(defineTool({
+      name: 'a2a_file_grants',
+      description:
+        'List the file-channel grants YOU made that are still live: per file its sha256, size, name, target (to), when it was '
+        + 'granted and expires, the task it went out in, and whether the target has fetched it; plus the store\'s occupancy '
+        + 'and ceilings (files, bytes). Use it to see what still holds space, then a2a_file_revoke what is no longer needed.',
+      parameters: {},
+      output: {
+        schema: { type: 'object', additionalProperties: true },
+        render: (_args, value) => [{ type: 'text', text: value.ok === true ? `${String((value.grants as unknown[]).length)} live grant(s) of yours; store ${JSON.stringify(value.usage)}.` : `Grants unavailable: ${String(value.error)}` }],
+      },
+      presentCall: () => ({ card: 'generic', title: 'A2A file grants', kind: 'other', rawInput: null }),
+      execute: async (_args: Record<string, never>, exec): Promise<Record<string, JsonValue>> => {
+        const agent = exec.agent as Agent | undefined
+        if (agent === undefined) return { ok: false, error: 'only a session lists its grants' }
+        return { ok: true, grants: blobStore.grantsBy(String(agent.id)).map(grantView), usage: { ...blobStore.usage() } }
+      },
+    }))
+  }
+
+  function registerFileRevoke(): void {
+    ctx.tools.register(defineTool({
+      name: 'a2a_file_revoke',
+      description:
+        'Revoke one file-channel grant YOU made: the file (sha256) for one target (to), exactly as a2a_file_grants lists it. '
+        + 'The target can no longer pull it; when no grant names the file any more its bytes are deleted and the space is free. '
+        + 'You can revoke only your own grants.',
+      parameters: {
+        sha256: { type: 'string', required: true, description: 'The file\'s sha256 (64 hex).' },
+        to: { type: 'string', required: true, description: 'The grant\'s target, as listed.' },
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: true },
+        render: (_args, value) => [{ type: 'text', text: value.ok === true ? `Revoked ${String(value.sha256).slice(0, 12)}… for ${String(value.to)}${value.reclaimed === true ? ` (${String(value.bytes)} bytes freed)` : ''}.` : `Revoke refused: ${String(value.error)}` }],
+      },
+      presentCall: args => ({ card: 'generic', title: `A2A file revoke → ${String(args.to)}`, kind: 'other', rawInput: args }),
+      execute: async (args: { sha256: string; to: string }, exec): Promise<Record<string, JsonValue>> => {
+        const agent = exec.agent as Agent | undefined
+        if (agent === undefined) return { ok: false, code: 'bad-request', error: 'only a session revokes its grants' }
+        return { ...blobStore.revoke(String(args.sha256 ?? ''), String(args.to ?? ''), String(agent.id)) }
+      },
+    }))
+  }
+
+  return { registerFileSend, registerFileFetch, registerFileGrants, registerFileRevoke }
 }

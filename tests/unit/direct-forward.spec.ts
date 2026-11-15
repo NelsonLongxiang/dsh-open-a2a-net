@@ -169,6 +169,9 @@ describe('one-hop CLI forwarding', () => {
       expect(out.ok).toBe(false); expect(x.sent).toHaveLength(0); expect(!out.ok && out.next).toContain(next)
     }
     for (const over of [{ guarded: true }, { localCliProof: false }]) { const x = fixture(); expect((await createDirectForward(x.deps)({ ...request, ...over })).ok).toBe(false); expect(x.sent).toHaveLength(0) }
+    // An unbound signature and a lapsed deposit are told apart: only the deposit is a matter for `a2a-net publish`.
+    { const x = fixture(); const out = await createDirectForward(x.deps)({ ...request, localCliProof: false }); expect(!out.ok && out.error).toContain('no bound CLI signature'); expect(!out.ok && out.next).toContain('originClaimAudiences'); expect(!out.ok && out.next).not.toContain('publish') }
+    { const x = fixture(); x.deps.deposited = () => false; const out = await createDirectForward(x.deps)(request); expect(!out.ok && out.error).toContain('not an online local CLI deposit'); expect(!out.ok && out.error).not.toContain('audience') }
     // A protocol refusal (already forwarded) has nothing for the caller to do.
     { const x = fixture(); const out = await createDirectForward(x.deps)({ ...request, guarded: true }); expect(!out.ok && out.next).toBeUndefined() }
   })

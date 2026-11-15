@@ -207,7 +207,7 @@ describe('workbench merged stage (canvas mode)', () => {
     expect(panel('plan').hidden).toBe(false)
     expect(panel('directory').hidden).toBe(true)
     expect(panel('plan').querySelector('.wb-pane')).not.toBeNull()
-    // Roving tabindex + arrows: → from 规划 wraps to 目录, ← goes back.
+    // Roving tabindex + arrows: → from 待办 wraps to 目录, ← goes back.
     expect(tab('plan').tabIndex).toBe(0)
     expect(tab('directory').tabIndex).toBe(-1)
     tab('plan').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))

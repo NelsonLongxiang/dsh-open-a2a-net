@@ -170,6 +170,17 @@ describe('a2a-net CLI: route / report talk to the right host with the right mess
     expect(host.seen[0]?.headers.cookie).toBe('dsh_pocket_token=T1')
   })
 
+  it('report refuses receipt text and names the receipt command, sending nothing', async () => {
+    const host = await stubHost(() => delivered)
+    servers.push(host.server)
+    const HOME = tmpHomeDir()
+    await runCli(['init', 'scout'], { HOME, A2A_CLI_HOME: HOME })
+    const out = await runCli(['report', '[A2A', 'receipt]', 'task', 'direct-111122223333', 'PASS'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })
+    expect(out.code).toBe(2)
+    expect(out.stderr).toContain('a2a receipt <task_id>')
+    expect(host.seen.some(s => s.path === '/a2a/direct')).toBe(false)
+  })
+
   it('report goes to the zone the home names, and to dsh when it names none (#503)', async () => {
     const host = await stubHost(path => path.startsWith('/__dsh_a2a/state') ? { status: 200, body: { zone: 'alpha' } } : delivered)
     servers.push(host.server)
@@ -250,6 +261,8 @@ describe('a2a-net CLI: a host behind dsh-pocket', () => {
     const out = await runCli(['whoami', '--home', host.url], { HOME, A2A_CLI_HOME: HOME })
     expect(out.stdout).toMatch(/deposit\s+UNKNOWN — deposit face unreadable: HTTP 405/)
     expect(out.stdout).not.toContain('OFFLINE')
+    // The card is read at <base>/.well-known/agent-card.json; the bare base answers 404, so whoami prints the document URL.
+    expect(out.stdout).toMatch(/card url\s+\S+\/a2a\/cli\/scout%2F[0-9a-f]{16}\/\.well-known\/agent-card\.json/)
   })
 })
 
@@ -599,6 +612,27 @@ describe('a2a-net CLI: inbox --wait', () => {
     host.deposits.push({ handle: 'scout/0123456789abcdef', expiresAt: Date.now() + 3 * 3_600_000 })
     await runCli(['inbox', '--wait', '--renew', '--interval', '100ms', '--timeout', '200ms'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })
     expect(host.actions).not.toContain('publish')
+  })
+
+  it('#688 F4: a renewal signs what the last explicit publish declared (piSeat stays); only an explicit publish withdraws it', async () => {
+    if (!existsSync(join(process.cwd(), 'lib', 'card.js'))) return
+    const host = await mailHost()
+    const HOME = await scoutHome()
+    const env = { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url }
+    const caps = () => host.seen.filter(r => r.body.action === 'publish').map(r => (JSON.parse(String(r.body.card)) as { capabilities: Record<string, unknown> }).capabilities)
+    expect((await runCli(['publish', '--pi-seat'], env)).code).toBe(0)
+    expect(caps().at(-1)).toMatchObject({ piSeat: true })
+    // The documented renewal path (inbox --wait --renew) with no deposit listed: it re-publishes, still a seat.
+    await runCli(['inbox', '--wait', '--renew', '--interval', '100ms', '--timeout', '200ms'], env)
+    expect(caps().length).toBeGreaterThanOrEqual(2)
+    for (const renewed of caps().slice(1)) expect(renewed).toMatchObject({ piSeat: true })
+    expect((await runCli(['publish', '--renew'], env)).code).toBe(0)
+    expect(caps().at(-1)).toMatchObject({ piSeat: true })
+    // An explicit publish without the flag withdraws it, and later renewals keep that.
+    expect((await runCli(['publish'], env)).code).toBe(0)
+    expect(caps().at(-1)?.piSeat).toBeUndefined()
+    expect((await runCli(['publish', '--renew'], env)).code).toBe(0)
+    expect(caps().at(-1)?.piSeat).toBeUndefined()
   })
 
   it('a bad duration is a usage error', async () => {

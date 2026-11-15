@@ -68,7 +68,7 @@ describe('P3-5 · the first message is the one formal receipt; later ones are ne
     f.tickets.set('tk-1', { id: 'tk-1', ended: { at: 'x', by: 'executor', outcome: 'dropped' } })
     expect(await sendReply(f.ctx, f.commands, message({ ticketId: 'tk-1' }), at(T0))).toBe('sent')
     expect(f.runs).toEqual([
-      ['a2a-net', 'admission', 'dsh/aaaa1111', '--json'],
+      ['a2a-net', 'admission', 'dsh/aaaa1111', '--task', 'task-1', '--json'],
       ['a2a-net', 'receipt', 'task-1', '--to', 'dsh/aaaa1111', '--outcome', 'rejected', '--json', '--exit-class', '--', 'the PR is ready'],
     ])
     expect(f.state.get(KV.answered)).toEqual({ 'task-1': new Date(T0).toISOString() })
@@ -79,12 +79,23 @@ describe('P3-5 · the first message is the one formal receipt; later ones are ne
     expect(f.reports).toEqual([])
   })
 
-  it('an attention reply is an attention receipt; no ticket is completed; a task without a context uses the task', async () => {
+  it('an attention reply is an attention receipt with its question on its own task id, leaving the formal receipt for the result (market N2c); a task without a context uses the task', async () => {
     const f = fake(cli())
     // The engine's id for a reply to the ticket's open question (upstream Replies: key('attention-reply', attention.id)).
     f.tickets.set('tk-1', { id: 'tk-1', attention: { id: 'a1' } })
-    await sendReply(f.ctx, f.commands, message({ id: key('attention-reply', 'a1'), ticketId: 'tk-1', text: 'which branch?' }), at(T0))
-    expect(f.runs.at(-1)).toEqual(['a2a-net', 'receipt', 'task-1', '--to', 'dsh/aaaa1111', '--attention', '--json', '--exit-class', '--', 'which branch?'])
+    await sendReply(f.ctx, f.commands, message({ id: key('attention-reply', 'a1'), ticketId: 'tk-1', text: 'which branch?' }), at(T0), { by: { seat: 'dsh/bbbb2222', name: '后端' } })
+    expect(f.runs.at(-1)).toEqual(['a2a-net', 'receipt', 'task-1', '--to', 'dsh/aaaa1111', '--attention', '--question-id', 'a1', '--by', 'dsh/bbbb2222', '--by-name', '后端', '--json', '--exit-class', '--', 'which branch?'])
+    // The question is not the task's formal receipt: the result that follows still is.
+    expect((f.state.get(KV.answered) as Record<string, string> | undefined)?.['task-1']).toBeUndefined()
+    f.tickets.set('tk-1', { id: 'tk-1' })
+    await sendReply(f.ctx, f.commands, message({ id: 'result:1', ticketId: 'tk-1', text: 'main' }), at(T0))
+    expect(f.runs.at(-1)!.slice(1, 7)).toEqual(['receipt', 'task-1', '--to', 'dsh/aaaa1111', '--outcome', 'completed'])
+    // A task id with no room for a question id under 80 characters sends the question the older way.
+    const long = fake(cli())
+    const longTask = 'x'.repeat(70)
+    long.tickets.set('tk-1', { id: 'tk-1', attention: { id: 'a1' } })
+    await sendReply(long.ctx, long.commands, message({ id: key('attention-reply', 'a1'), ticketId: 'tk-1', text: 'q' }, { caller: 'dsh/aaaa1111', task: longTask }), at(T0))
+    expect(long.runs.at(-1)).toEqual(['a2a-net', 'receipt', longTask, '--to', 'dsh/aaaa1111', '--attention', '--json', '--exit-class', '--', 'q'])
     // An id that only looks like one (the old prefix check) is not an attention reply.
     const p = fake(cli())
     p.tickets.set('tk-1', { id: 'tk-1', attention: { id: 'a1' } })
@@ -97,10 +108,25 @@ describe('P3-5 · the first message is the one formal receipt; later ones are ne
     expect(g.runs.at(-1)!.slice(0, 7)).toEqual(['a2a-net', 'route', 'dsh/aaaa1111', '--task', `a2a-${key('reply:9')}`, '--context', 'task-2'])
   })
 
+  it('market N1d: the question carries its answers and the recommended one as --options / --default', async () => {
+    const f = fake(cli())
+    f.tickets.set('tk-1', { id: 'tk-1', attention: { id: 'a1' } })
+    await sendReply(f.ctx, f.commands, message({ id: key('attention-reply', 'a1'), ticketId: 'tk-1', text: '问候语用哪种风格？' }), at(T0), { choices: { options: ['正式', '口语', '俏皮'], recommended: '口语' } })
+    const run = f.runs.at(-1)!
+    expect(run.slice(run.indexOf('--options'), run.indexOf('--options') + 4)).toEqual(['--options', '正式|口语|俏皮', '--default', '口语'])
+    // An answer with | cannot ride the switch; a recommendation that is not among the answers is not sent.
+    const g = fake(cli())
+    g.tickets.set('tk-1', { id: 'tk-1', attention: { id: 'a1' } })
+    await sendReply(g.ctx, g.commands, message({ id: key('attention-reply', 'a1'), ticketId: 'tk-1', text: 'q' }), at(T0), { choices: { options: ['a|b', 'c'], recommended: 'z' } })
+    const r2 = g.runs.at(-1)!
+    expect(r2.slice(r2.indexOf('--options'), r2.indexOf('--options') + 2)).toEqual(['--options', 'c'])
+    expect(r2).not.toContain('--default')
+  })
+
   it('a caller from this host session is rechecked on the local face', async () => {
     const f = fake(cli())
     await sendReply(f.ctx, f.commands, message({}, { caller: 'dsh/01234567', task: 'task-1', ingress: 'local' }), at(T0))
-    expect(f.runs[0]).toEqual(['a2a-net', 'admission', 'dsh/01234567', '--local', '--json'])
+    expect(f.runs[0]).toEqual(['a2a-net', 'admission', 'dsh/01234567', '--local', '--task', 'task-1', '--json'])
   })
 
   it('no link, no message (O1): the recheck refuses and nothing is sent', async () => {

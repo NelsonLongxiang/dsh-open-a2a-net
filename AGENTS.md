@@ -14,7 +14,7 @@
 ## 本仓验证器家族
 - RC 验证器（发布候选闸门）：scripts/verify-probe.mjs + ygl-trees verify run —— docs/validator.md
 - 递归验证器（引擎自证）：scripts/verify-recursive.mjs —— docs/validator.md
-- 监督域 S 层（台账诚实）：scripts/supervisor-snapshot.mjs（探针）+ mat_05acb018396d 材料 —— verify/candidates-supervision.json
+- 监督域 S 层（台账诚实）：scripts/supervisor-snapshot.mjs（探针）+ mat_06b52a3559b3 材料（v24，verify/material-s-layer-v24.md；spec_4577e93cd8e7）—— verify/candidates-supervision.json
 
 ## 一句话总纲
 CLI 是唯一执行面，数据包和通知是唯一产品，即时生产是唯一交付方式，验证器采集的数据是唯一原料，证据链是唯一裁判。

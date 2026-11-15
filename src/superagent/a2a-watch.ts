@@ -23,9 +23,10 @@ export const PROGRAM = 'a2a-net'
 export const TRUSTED_PROOFS: ReadonlySet<string> = new Set(['origin-claim', 'in-process', 'cli-identity'])
 /**
  * The host admission rules that are an operator's link (S36; p3 design Q1): a canvas both share, a pinned remote ref, or a
- * CLI identity deposited through this host's control route. roster-shared is not one — members join a roster themselves.
+ * CLI identity deposited through this host's control route, or a session of a host the operator linked asking a superagent
+ * team (superagent-intake, owner ruling 2026-11-14). roster-shared is not one — members join a roster themselves.
  */
-export const LINK_RULES: ReadonlySet<string> = new Set(['canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'cli-deposit'])
+export const LINK_RULES: ReadonlySet<string> = new Set(['canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'cli-deposit', 'superagent-intake'])
 /** S27 L1: task ids this Source sends start with this; a row carrying one is never taken in (filtered as loop). */
 export const LOOP_PREFIX = 'a2a-'
 export const HEALTH = { read: 'a2a', deposit: 'a2a-deposit', reply: 'a2a-reply' } as const
@@ -50,7 +51,7 @@ export const KV_TTL_DAYS = 7
 /** S25 O5: a message still unsent this long after its first failure is gone. */
 export const GONE_AFTER_MS = 24 * 3_600_000
 /** The host's admission vocabulary (src/cli-deposit.ts MAIL_ADMISSIONS): a row record keeps an admission only from this set. */
-export const ADMISSION_VALUES: ReadonlySet<string> = new Set(['scope-off', 'host-face', 'local-exempt', 'roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org', 'node-fact', 'cli-deposit'])
+export const ADMISSION_VALUES: ReadonlySet<string> = new Set(['scope-off', 'host-face', 'local-exempt', 'roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org', 'node-fact', 'cli-deposit', 'superagent-intake'])
 /** The host's proof vocabulary (src/task-auth.ts AuthProof): a row record keeps a proof only from this closed set. */
 const PROOF_VALUES: ReadonlySet<string> = new Set(['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound', 'cli-identity', 'in-process', 'none'])
 /** The structured health values a health record may keep; free text (such as a CLI error) stays in the live report only. */
@@ -421,6 +422,35 @@ export interface SendOptions {
   readonly holdReceipt?: boolean
   /** The outcome the receipt states, when the host knows it better than a ticket can (a request the team did not take). */
   readonly outcome?: ReceiptOutcome
+  /** market N1c: the seat that took the work up, carried on the formal receipt as `--by`. */
+  readonly by?: ReceiptSeat
+  /** superagent-split S4: a split request's parts, carried on its formal receipt as `--tickets`. */
+  readonly tickets?: readonly unknown[]
+  /** market N1d: the answers a ticket's question offers and the recommended one, carried as `--options` / `--default`. */
+  readonly choices?: { readonly options: readonly string[]; readonly recommended?: string }
+}
+
+/** The receipt switches that carry a question's answers (an answer with `|` cannot ride the switch and is left out). */
+export const choiceArgs = (choices: SendOptions['choices']): string[] => {
+  const options = (choices?.options ?? []).map(o => o.replace(/\s+/g, ' ').trim()).filter(o => o !== '' && !o.includes('|') && o.length <= 200).slice(0, 6)
+  if (options.length === 0) return []
+  const fallback = choices?.recommended !== undefined && options.includes(choices.recommended.trim()) ? choices.recommended.trim() : undefined
+  return ['--options', options.join('|'), ...(fallback !== undefined ? ['--default', fallback] : [])]
+}
+
+/** market N1c: who took the work up (a seat id, its name), as a receipt's `by`. */
+export interface ReceiptSeat { readonly seat: string; readonly seatId?: string; readonly name?: string; readonly role?: 'router' | 'member' | 'observer' }
+
+/** The receipt switches that carry a seat. */
+export const seatArgs = (by: ReceiptSeat | undefined): string[] => by === undefined ? [] : ['--by', by.seat, ...(by.name !== undefined && by.name !== by.seat ? ['--by-name', by.name] : []), ...(by.role !== undefined ? ['--by-role', by.role] : []), ...(by.seatId !== undefined ? ['--by-seat-id', by.seatId] : [])]
+
+/**
+ * market N2c: the question id an attention receipt rides (`attention-<task>-<id>`), cut from the ticket's attention id;
+ * undefined when the task id leaves no room under the 80-character task id, and then the question goes the older way.
+ */
+export function questionIdFor(task: string, attentionId: string): string | undefined {
+  const id = attentionId.replace(/[^A-Za-z0-9]/g, '').slice(0, 12)
+  return id !== '' && `attention-${task}-${id}`.length <= 80 ? id : undefined
 }
 
 /**
@@ -441,20 +471,27 @@ export async function sendReply(ctx: SourceContext, commands: Commands, message:
   if (caller === undefined || task === undefined || !replyAllowed(message.channel.address, { mode: 'reply' })) return gone('The reply has no caller to go to')
   try {
     if (ctx.config<A2aConfig>(KIND)?.mode !== 'reply') throw new Error('The a2a Source is not in reply mode')
-    const check = JSON.parse(await commands.run(PROGRAM, ['admission', caller, ...(ingress === 'local' ? ['--local'] : []), '--json'])) as unknown
+    // #697 review R1: the question names the task, so a link judged at its birth answers for it alone.
+    const check = JSON.parse(await commands.run(PROGRAM, ['admission', caller, ...(ingress === 'local' ? ['--local'] : []), '--task', task, '--json'])) as unknown
     const rule = isRecord(check) && check.admitted === true && typeof check.rule === 'string' ? check.rule : undefined
     if (rule === undefined || !LINK_RULES.has(rule)) return gone(`${caller} is no longer linked to this identity; the reply was not sent`)
     // A held receipt (the host's call: an acknowledged request whose ticket has no result yet) leaves the task's one
     // formal receipt for the result; this message goes out as a follow-up in the same context.
-    const first = options.holdReceipt !== true && stamps(ctx, KV.answered)[task] === undefined
     const text = message.text.trim() === '' ? '(no text)' : message.text
-    if (first && !receiptable(task)) return gone(`Task ${task} cannot carry a receipt (its id is not a CLI task id); the reply was not sent`)
     // The engine's reply to a ticket's question carries the id key('attention-reply', <attention id>) — hashed, so
     // it is recognised by recomputing that id from the ticket's open question, never by a prefix.
     const ticket = message.ticketId !== undefined ? ctx.tickets.get(message.ticketId) : undefined
     const attention = ticket?.attention !== undefined && message.id === key('attention-reply', ticket.attention.id)
-    const args = first
-      ? ['receipt', task, '--to', caller, ...(attention ? ['--attention'] : ['--outcome', options.outcome ?? receiptOutcome(ticket)]), '--json', '--exit-class', '--', text]
+    // market N2c: a ticket's question goes out as an attention receipt with a structured question on its own task id
+    // (attention-<task>-<id>). It marks the requester's row and settles nothing, so the task's one formal receipt stays
+    // for the result. Not when a formal receipt already went out (the question then follows it as a follow-up).
+    const questionId = attention && receiptable(task) && stamps(ctx, KV.answered)[task] === undefined ? questionIdFor(task, ticket!.attention!.id) : undefined
+    const first = questionId === undefined && options.holdReceipt !== true && stamps(ctx, KV.answered)[task] === undefined
+    if (first && !receiptable(task)) return gone(`Task ${task} cannot carry a receipt (its id is not a CLI task id); the reply was not sent`)
+    const args = questionId !== undefined
+      ? ['receipt', task, '--to', caller, '--attention', '--question-id', questionId, ...choiceArgs(options.choices), ...seatArgs(options.by), '--json', '--exit-class', '--', text.replace(/\s+/g, ' ').trim().slice(0, 2000)]
+      : first
+      ? ['receipt', task, '--to', caller, ...(attention ? ['--attention'] : ['--outcome', options.outcome ?? receiptOutcome(ticket)]), ...seatArgs(options.by), ...(!attention && options.tickets !== undefined && options.tickets.length > 0 ? ['--tickets', JSON.stringify(options.tickets.slice(0, 16))] : []), '--json', '--exit-class', '--', text]
       : ['route', caller, '--task', `${LOOP_PREFIX}${key(message.id)}`, '--context', context ?? task, '--json', '--exit-class', '--', text]
     try {
       await commands.run(PROGRAM, args)
@@ -462,7 +499,7 @@ export async function sendReply(ctx: SourceContext, commands: Commands, message:
       const code = exitCodeOf(error)
       if (code === EXIT_GONE) return gone(`The host says ${caller} can no longer receive task ${task}'s reply`)
       // The receipt is already there (a crash after the CLI succeeded, before the record): it counts as sent.
-      if (!(first && code === EXIT_RECEIPT_CONFLICT)) throw error
+      if (!((first || questionId !== undefined) && code === EXIT_RECEIPT_CONFLICT)) throw error
     }
     if (first) setStamp(ctx, KV.answered, task, at.toISOString(), ANSWERED_RECORD_CAP, nowMs)
     setStamp(ctx, KV.sendFailed, message.id, undefined, SEND_FAILED_RECORD_CAP, nowMs)

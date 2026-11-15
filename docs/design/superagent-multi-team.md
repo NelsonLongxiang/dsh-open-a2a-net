@@ -2,6 +2,8 @@
 
 Status: agreed with the owner on 2026-11-09, not built yet.
 
+> Update (2026-11-13): built — several teams on one instance landed in PR #536 (`9ede749`, 2026-11-09), code in `src/superagent/host/teams.ts` (M1–M6). The "not built yet" line above is the state when this design was agreed.
+
 ## Context
 
 The owner wants to send a request to a team without leaving the conversation, from a view in DSH's right bar, and to choose which team gets it. Teams can be on the same DSH instance or on another instance or host.
@@ -26,12 +28,34 @@ Today one DSH instance runs one team. `SuperagentHost` holds one settings file, 
 
 ### Sending to another instance
 
-- **M9 No new trust.** A request to another instance goes over A2A to that team's canvas address, sent as the session the tab is open in. The receiving team treats it as it treats any A2A message: an agent's, admitted only if the sender is on its bot list, and opened as a ticket only under `auto` with a matching rule. The view says so, and names the sender to add. The receipt comes back to that session.
+- **M9 No new trust.** A request to another instance goes over A2A to that team's canvas address, sent as the session the tab is open in. The receiving team treats it as it treats any A2A message: an agent's, admitted only if the sender is on its bot list, and opened as a ticket only under `auto` with a matching rule. The view says so, and names the sender to add. The receipt comes back to the tab, not into the session (owner ruling 2026-11-13: it had landed as a new message that woke the session's model). It settles the ledger like any receipt, then the host keeps it for the tab (`src/sidebar-sends.ts`, `GET …/superagent/teams?session=<id>` → `sent`), and the tab lists each request with what came back. A receipt this host's settlement judge refused is still kept, marked unverified. Anything else the team sends that session still reaches it.
 - **M10 A team's own sessions cannot send.** A router or member has no A2A route today, and the view does not give it one.
+- **M12 An unlisted sender waits for the owner (owner ruling 2026-11-13, option C).** A request from another instance that the team's bot list does not hold is no longer refused outright. Instead it waits on a decision card for the receiving team's owner (source `sender`, keyed by the message's trigger). The card offers three choices:
+  - 「接这一单」: the gate admits that one message as an explicit request (basis `listed`, authority `owner-once`), and the engine judges it again.
+  - 「接这一单，并把发送方加进名单」: the same, and the sender also goes on `bots.a2a`. Later messages then pass through the bot path: `auto` plus a matching rule.
+  - 「不接」: the sender gets the refusal receipt, saying the owner declined.
+
+  While the card waits, the sender gets an `acknowledged` receipt, so its row leaves the queue count, and the tab shows it as waiting. No new trust is added: the decision is the receiving owner's, typed by them (D10). Limits keep a stranger from filling the decision list:
+  - one waiting card per sender, and at most ten at a time;
+  - a message older than a day is not held;
+  - every other unlisted message is refused as before.
+
+- **M13 A linked host's session reaches a superagent team (owner ruling 2026-11-14, option B).** Two instances that use the same zone (the default `dsh`) could not ask each other's superagent teams: the host gate's target-level rule (F5) wanted the caller to share a team with the team itself, and a team session joins no other team. Now a request — never a receipt — reaches a superagent team's canvas address when:
+  - it carries a bound OriginClaim from a root card, not this host's own key and not a CLI identity;
+  - the host at exactly that origin is linked under exactly that key: a bilateral seed, or a key-pinned canvas remote reference confirmed for that key. A bare legacy reference's zone match does not count (#697 review F1);
+  - that host's card, read fresh for this request, lists the caller as one of its sessions — never an earlier cached listing (#697 review F2) — and the caller is not a handle of this host's own sessions.
+
+  The host records it under rule `superagent-intake`, an operator link (the operator linked the host), which the team's A2A Source listens to. Whether the team takes the request stays the owner's decision: an unlisted sender waits on a sender card (M12), with its limits. Only superagent canvas addresses are opened; any other team keeps the old rule. Each intake task's birth — caller, canvas team, and the origin and key of the host it was admitted from — is kept per task and written once (`<a2a home>/superagent-intake.json`; a replay of the task id under another key is refused). The team Source's signed admission query names the task (`a2a-net admission <caller> --task <id>`, the task signed too), and the recheck judges exactly that task's birth host under that key; a taskless query, an unknown or pushed-out task, and an unlinked birth host all fail closed. Another host with the same caller handle neither replaces a task's birth nor revives it (#697 review R1).
 
 ## Not doing
 
 Treating a request from another instance as the owner's own. That needs the receiving host to trust another host's login, which is a new authority and a separate decision.
+
+### M11 Each role its own model (2026-11-10, owner: 对照上游)
+
+- The team's settings name a model for the router and one for the members (an observer runs the member's): `models: { router?, member? }`, each what DSH's `session/selectModel` takes (provider, model, optional reasoningEffort).
+- The host applies the choice to its local team sessions when the settings save, when the pool changes (a member joins), and after it starts (it just woke the sessions). A failure is logged and never blocks the save; a session not loaded yet is skipped and caught by the next trigger. Unset leaves a session's own choice alone. Remote members are the other host's business.
+- The team page's 设置 lists both, picked from DSH's own catalog (the control face proxies `session/modelCatalog`; unreadable: free text `provider/model`). The settings history (PR#561) records every change.
 
 ## Order
 

@@ -71,11 +71,22 @@ describe('cross-instance join through the fleet relay', () => {
       expect((await post(`${a.baseUrl}/__dsh_a2a/canvas`, { action: 'create', name: '挂起队' })).ok).toBe(true)
       // Warm the link and B's card cache for A with one landed relay op first.
       expect((await post(`${b.baseUrl}/__dsh_a2a/fleet-canvas-op`, { peer: a.baseUrl, op: 'add-member', name: '挂起队', id: ids.b })).ok).toBe(true)
-      // Now hang ONLY A's card face: every other route (the op face, the ping
-      // face, the test's own post()) still goes through the real network.
+      // Outlast the harness's 60ms signed-discovery cache so A's op face ALWAYS
+      // re-reads B's discovery card (and B verifies A's envelope) under the stub
+      // below. Without this gap the case hinged on load: a fast run hit the cache,
+      // a loaded run missed it and met the over-broad stub (2026-11-11 flake).
+      await new Promise(resolve => setTimeout(resolve, 150))
+      // Now hang ONLY the relay's card refresh: B's SIGNED read of A's card
+      // (the peer client stamps the OriginClaim envelope). Both nodes share this
+      // process's fetch, so hanging every GET of that URL also hung B's PLAIN
+      // verifier read of A's card (origin-claim sends no envelope) while B
+      // answered A's discovery read — A then refused the op as "not linked"
+      // after 5s. That verifier read is admission, not the refresh pinned here.
+      // Every other route (the op face, the ping face, the test's own post())
+      // still goes through the real network.
       const real = globalThis.fetch
       vi.stubGlobal('fetch', ((input: RequestInfo | URL, init?: RequestInit) => {
-        if (String(input) === `${a.baseUrl}/.well-known/agent-card.json` && (init?.method ?? 'GET') === 'GET') {
+        if (String(input) === `${a.baseUrl}/.well-known/agent-card.json` && (init?.method ?? 'GET') === 'GET' && new Headers(init?.headers).has('x-a2a-caller')) {
           return new Promise<Response>(() => { /* never settles: the card face hangs */ })
         }
         return real(input, init)

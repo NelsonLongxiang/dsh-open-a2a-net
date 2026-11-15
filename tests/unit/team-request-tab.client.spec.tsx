@@ -78,6 +78,77 @@ describe('the request view', () => {
   })
 })
 
+describe('one view for requests and decisions', () => {
+  it('shows the waiting decisions above the request box, and nothing of them when none waits', async () => {
+    const decisions = [{ id: 'd-1', teamId: '', team: 'ops', question: '要不要升级？', level: 'P2', options: ['升级', '不升'], recommended: '升级', source: 'router' }]
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, status: 200, json: async () => url.startsWith('/__dsh_a2a/superagent/decisions') ? { decisions, health: [] } : bound }) as Response))
+    render(<TeamRequestTab t={t} />)
+    expect(await screen.findByText('要不要升级？')).toBeTruthy()
+    expect(screen.getByText('Waiting for your decision (1)')).toBeTruthy()
+    expect(screen.getByRole('button', { name: en['team.approve'] })).toBeTruthy()
+    expect(box()).toBeTruthy()
+    cleanup()
+    serve(bound)
+    render(<TeamRequestTab t={t} />)
+    await waitFor(box)
+    expect(screen.queryByText(/Waiting for your decision/)).toBeNull()
+  })
+})
+
+describe('decisions are never hidden by the request box (feedback 2026-11-12)', () => {
+  const decisions = [{ id: 'd-1', teamId: '', team: 'ops', question: '要不要升级？', level: 'P2', options: ['升级', '不升'], recommended: '升级', source: 'router' }]
+  const split = (teams: { status: number; body: unknown }, cards: () => { status: number; body: unknown }) => vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const reply = url.startsWith('/__dsh_a2a/superagent/decisions') ? cards() : url.startsWith('/__dsh_a2a/superagent/teams') ? teams : { status: 200, body: { health: [] } }
+    return { ok: reply.status < 300, status: reply.status, json: async () => reply.body } as Response
+  }))
+
+  it.each([
+    ['the team list is refused', { status: 401, body: {} }, en['team.denied']],
+    ['the team list fails', { status: 500, body: {} }, en['team.unreadable']],
+    ['no team can take a request', { status: 200, body: { teams: [] } }, en['team.none']],
+  ])('shows the waiting card when %s', async (_name, teams, hint) => {
+    split(teams, () => ({ status: 200, body: { decisions } }))
+    render(<TeamRequestTab t={t} />)
+    expect(await screen.findByText('要不要升级？')).toBeTruthy()
+    expect(screen.getByText(hint)).toBeTruthy()
+    expect(screen.queryByRole('textbox', { name: en['team.request'] })).toBeNull()
+  })
+
+  it.each([
+    ['refused', 403, en['team.decisionsDenied']],
+    ['failing', 500, en['team.decisionsUnreadable']],
+  ])('says a %s read of the decisions failed instead of showing nothing', async (_name, status, text) => {
+    split({ status: 200, body: bound }, () => ({ status, body: {} }))
+    render(<TeamRequestTab t={t} />)
+    expect((await screen.findByRole('alert')).textContent).toBe(text)
+    expect(screen.queryByText(/Waiting for your decision/)).toBeNull()
+  })
+
+  it('a reply without a decisions array is a failure, not an empty list', async () => {
+    split({ status: 200, body: bound }, () => ({ status: 200, body: { error: 'x' } }))
+    render(<TeamRequestTab t={t} />)
+    expect((await screen.findByRole('alert')).textContent).toBe(en['team.decisionsUnreadable'])
+  })
+
+  it('a failed poll keeps the last cards, marked as possibly out of date, and the next good read clears the mark', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let reply: { status: number; body: unknown } = { status: 200, body: { decisions } }
+      split({ status: 200, body: bound }, () => reply)
+      render(<TeamRequestTab t={t} />)
+      expect(await screen.findByText('要不要升级？')).toBeTruthy()
+      reply = { status: 500, body: {} }
+      await vi.advanceTimersByTimeAsync(8_000)
+      expect((await screen.findByRole('alert')).textContent).toBe(`${en['team.decisionsUnreadable']} ${en['team.decisionsStale']}`)
+      expect(screen.getByText('要不要升级？')).toBeTruthy()
+      reply = { status: 200, body: { decisions: [] } }
+      await vi.advanceTimersByTimeAsync(8_000)
+      await waitFor(() => { expect(screen.queryByText('要不要升级？')).toBeNull() })
+      expect(screen.queryByRole('alert')).toBeNull()
+    } finally { vi.useRealTimers() }
+  })
+})
+
 describe('several teams', () => {
   it('lists those that can take a request, and sends to the one chosen', async () => {
     const f = serve({ teams: [row('', 'ops'), row('aaaaaaaa', 'docs'), row('bbbbbbbb', 'idle', false)] })
@@ -116,6 +187,23 @@ describe('a team on another instance', () => {
     await waitFor(() => { expect(screen.getByRole('status').textContent).toContain('dsh/aaaaaaaa') })
     expect(posts(f)).toEqual([{ action: 'send', address: remote.address, session: 'session-aaaaaaaa', text: '远端的活' }])
     expect(f.mock.calls.find(([, init]) => init?.method === 'POST')![0]).toBe('/__dsh_a2a/superagent/teams')
+  })
+  it('shows what came back for its own sends, in the tab: waiting, the result, an unverified receipt, a question', async () => {
+    const sent = [
+      { taskId: 't-1', address: 'z/canvas/far@abcd1234', brief: '第一件', at: '2026-11-13T00:00:00Z', returns: [] },
+      { taskId: 't-2', address: 'z/canvas/far@abcd1234', brief: '第二件', at: '2026-11-13T00:00:00Z', ended: true, returns: [{ at: '', disposition: 'result', summary: '做完了', settled: true }] },
+      { taskId: 't-3', address: 'z/canvas/far@abcd1234', brief: '第三件', at: '2026-11-13T00:00:00Z', returns: [{ at: '', disposition: 'result', summary: '冒充的', settled: false }] },
+      { taskId: 't-4', address: 'z/canvas/far@abcd1234', brief: '第四件', at: '2026-11-13T00:00:00Z', returns: [{ at: '', disposition: 'attention', summary: '要你选', question: 'A 还是 B', settled: true }] },
+    ]
+    const f = serve({ teams: [remote], sent })
+    render(<TeamRequestTab t={t} sessionId="session-aaaaaaaa" />)
+    await waitFor(() => { expect(screen.getByText(en['team.sentList'], { selector: 'span' })).toBeTruthy() })
+    expect(screen.getByText('far · 第一件')).toBeTruthy()
+    expect(screen.getByText(en['team.sentWaiting'])).toBeTruthy()
+    expect(screen.getByText('做完了')).toBeTruthy()
+    expect(screen.getByText(/冒充的/).textContent).toContain(en['team.sentUnverified'])
+    expect(screen.getByText(/要你选/).textContent).toContain('A 还是 B')
+    expect(f.mock.calls.some(([url]) => url === '/__dsh_a2a/superagent/teams?session=session-aaaaaaaa')).toBe(true)
   })
   it('keeps the text and shows why when the route is refused', async () => {
     serve({ teams: [remote] }, 200, () => ({ status: 200, body: { ok: false, error: 'join this session first' } }))
@@ -248,7 +336,9 @@ describe('registration', () => {
     const c = client()
     registerTeamRequest(c.ctx, 'a2aNet')
     await waitFor(() => { expect(c.types).toHaveLength(2) })
-    expect(c.types[1]).toMatchObject({ kind: 'a2a-team-decisions', guide: [{ id: 'new' }] })
+    expect(c.types[1]).toMatchObject({ kind: 'a2a-team-decisions' })
+    // One view: only the team view has a guide card; an old decisions tab shows the same view.
+    expect(c.types[1]).not.toHaveProperty('guide')
     expect(c.slots[1]).toMatchObject({ name: 'sidebar.right.pane.tab', key: c.types[1]!.id })
     expect(c.types[0]).toMatchObject({ kind: TEAM_REQUEST_KIND, guide: [{ id: 'new' }] })
     expect(c.slots[0]).toMatchObject({ name: 'sidebar.right.pane.tab', key: c.types[0]!.id })

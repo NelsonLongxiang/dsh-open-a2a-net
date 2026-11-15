@@ -25,7 +25,7 @@ import { writeTaskLedger } from './task-ledger-persistence.ts'
 import { safeObservationCode } from './nudge-observability.ts'
 import { parseTaskDelivery, TASK_DELIVERY_CAP, TASK_DELIVERY_RETENTION_MS, type TaskDelivery } from './task-delivery.ts'
 import { parseReminder, REMINDER_LONG_MS, type ReminderState } from './reconciliation-state.ts'
-import { parseReceipt, RECEIPT_DISPOSITIONS, RECEIPT_OUTCOMES, type ReceiptDisposition, type ReceiptOutcomeV2 } from './receipt.ts'
+import { holdsRow, parseReceipt, RECEIPT_DISPOSITIONS, RECEIPT_OUTCOMES, type ReceiptDisposition, type ReceiptOutcomeV2 } from './receipt.ts'
 import { classifyConservationBlock, ConservationCounters, type ConservationVerdict } from './ledger-conservation.ts'
 import { CALLER_ENDED_PREFIX, TASK_CAP, ARCHIVE_CAP, SUMMARY_CAP, TASK_STALE_TTL_MS, TASK_ACKNOWLEDGED_TTL_MS, ARCHIVE_ENDS, ECHO_SUMMARY, ROUTING_FACT_CAP, SETTLEMENT_ID_CAP, SETTLEMENT_REFUSAL_CAP, withSender, withAuth, routingOf, birthFacts, withRouting, withSettledBy, parseRefusal, archivedEndedBy, WITHDRAWAL_RESULTS, isWithdrawalResult } from './task-ledger-rows.ts'
 import type { TaskRecord, ArchivedRecord, Sender, OutboundBirth, TaskLedgerOptions, ReceiptResolvedInfo, TaskLedgerSnapshot, SettlementRefusalRecord, SettlementJudge, AbandonResult, CancelledResult, ArchiveEnd } from './task-ledger-rows.ts'
@@ -464,9 +464,9 @@ export class TaskLedger {
     this.sweep(this.now())
     const record = this.tasks.find(entry => entry.taskId === taskId)
     if (only !== undefined && (record === undefined || !only(record))) return undefined
-    if (disposition === 'acknowledged') {
-      // An acknowledgement marks the owed row and settles nothing: the result receipt settles it. A settled row is never
-      // rewritten by one, and an unknown id correlates nothing.
+    if (holdsRow(parsed.envelope)) {
+      // An acknowledgement, or an attention carrying a question (market N2c), marks the owed row and settles nothing: the
+      // result receipt settles it. A settled row is never rewritten by one, and an unknown id correlates nothing.
       if (record === undefined) return undefined
       const verdict = judge?.check(record, false)
       if (verdict !== undefined && !verdict.ok) {

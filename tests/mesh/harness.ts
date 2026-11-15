@@ -8,7 +8,7 @@
  * docs/testing-layers.md.
  */
 import { mkdtempSync, cleanupBeforeTempDirs } from '../temp-dirs.ts'
-import { createServer, type Server } from 'node:http'
+import { createServer, type IncomingMessage, type Server } from 'node:http'
 import { generateKeyPairSync, createPrivateKey, createPublicKey } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -346,14 +346,24 @@ export function craftCard(core: {
 }
 
 /**
- * A DSH login for tests that write rules through the control route (design D10): the host's own auth route answers 401
- * without the cookie, and anything else with it. Returns the header to send.
+ * Explicit fake of Host Connection's admission contract. It is not a cookie implementation or real DSH login: callers
+ * install it only in owned test contexts. No global fetch replacement or status-only authentication probe is used.
  */
-export function mockGuiLogin(): { Cookie: string } {
-  const real = globalThis.fetch.bind(globalThis)
-  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-    if (String(input).endsWith('/api/session/a2a-owner-proof')) return new Response('', { status: new Headers(init?.headers).has('cookie') ? 404 : 401 })
-    return await real(input, init)
-  }) as typeof fetch
-  return { Cookie: 'dsh-auth-test=1' }
+export class MockGuiConnection extends Service {
+  readonly browserPeer = { id: 'fixture-browser-owner' }
+  readonly requests: Array<Pick<IncomingMessage, 'headers'>> = []
+  constructor(ctx: Context, private readonly options: { origin?: string } = {}) { super(ctx, 'connection') }
+  admit(request: Pick<IncomingMessage, 'headers'>): { peer: { id: string } } | { rejection: 401 | 403 } {
+    this.requests.push(request)
+    if (this.options.origin !== undefined) {
+      const origin = new URL(this.options.origin)
+      if (request.headers.host !== origin.host || (request.headers.origin !== undefined && request.headers.origin !== origin.origin)) return { rejection: 403 }
+    }
+    if (request.headers.cookie === 'dsh-auth-test=1') return { peer: this.browserPeer }
+    if (request.headers.cookie === 'fixture-api-operator=1') return { peer: { id: 'fixture-api-operator' } }
+    return { rejection: 401 }
+  }
 }
+
+/** The credential sentinel understood only by an explicitly installed MockGuiConnection. Never a real browser cookie. */
+export function mockGuiLogin(): { Cookie: string } { return { Cookie: 'dsh-auth-test=1' } }

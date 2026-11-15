@@ -3,7 +3,7 @@
  * superagent design v4, PR-E: the 团队 tab. What needs a person comes first; the request box is the workbench Source;
  * tickets, the team (pinned keys included) and the settings follow. Records are data: textContent only.
  */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { createSuperagentPane, personTickets, problemsOf, stageLabel, type SaState, type SaTicket } from '../src/wb-superagent.ts'
 import { createWorkbench } from '../src/workbench.ts'
 
@@ -68,6 +68,9 @@ describe('team tab helpers', () => {
     // Design v5: unbound, or bound to a canvas that cannot run as the team.
     const { canvas: _bound, ...unbound } = state().settings
     expect(problemsOf(state({ settings: unbound }), NOW)[0]).toMatchObject({ tone: 'danger', text: expect.stringContaining('还没有绑定画布团队') })
+    const sick = problemsOf(state({ health: [{ code: 'member-not-loaded', session: 'session-x' }, { code: 'ticket-quiet', title: '写文档', minutes: 90 }] }), NOW)
+    expect(sick.map(p => p.tone)).toEqual(['danger', 'warn'])
+    expect(sick[1]!.text).toContain('90 分钟没有动静')
     expect(problemsOf(state({ canvasProblem: 'the bound canvas team ops does not exist on this host' }), NOW)[0]).toMatchObject({ tone: 'danger', text: expect.stringContaining('画布团队「ops」不能作为团队运行') })
   })
 })
@@ -190,6 +193,20 @@ describe('team tab', () => {
     expect(text(pane.root)).toContain('alpha/canvas/team@0123abcd')
   })
 
+  it('remembers the sub-tab across a reload', () => {
+    // jsdom here has no localStorage (opaque origin): give this test one, and take it away after.
+    const data = new Map<string, string>()
+    const storage = { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => { data.set(k, String(v)) }, removeItem: (k: string) => { data.delete(k) } }
+    Object.defineProperty(window, 'localStorage', { value: storage, configurable: true })
+    onTestFinished(() => { Object.defineProperty(window, 'localStorage', { value: undefined, configurable: true }) })
+    const first = mount()
+    first.pane.select('tickets')
+    const again = mount()
+    expect(again.pane.root.querySelector('[role=tab][aria-selected="true"]')!.textContent).toBe('工单')
+    window.localStorage.setItem('dsh-a2a.superagent.view', 'nonsense')
+    expect(mount().pane.root.querySelector('[role=tab][aria-selected="true"]')!.textContent).toBe('待你处理')
+  })
+
   describe('several teams', () => {
     const teams = [{ id: '', canvas: 'ops' }, { id: 'aaaaaaaa', canvas: 'docs' }]
     const open = () => {
@@ -259,6 +276,23 @@ describe('team tab', () => {
       expect(pane.root.querySelector('select[aria-label="接单模式"]')).toBeNull()
     })
 
+    it('builds no view from the old team while the switch is out, whichever sub-tab is picked', () => {
+      const { pane, picker } = open()
+      toPrimary(picker)
+      button(pane.root, '工单').click()
+      expect(pane.root.querySelector('.wb-sa-body')!.textContent).toBe('正在读取团队状态…')
+      pane.select('settings')
+      expect(pane.root.querySelector('select[aria-label="接单模式"]')).toBeNull()
+      pane.update({ ...state(), teams, selectedTeam: '', canvases: [] }, sessions, NOW)
+      expect(pane.root.querySelector('select[aria-label="接单模式"]')).not.toBeNull()
+    })
+
+    it('says in the picker how many tickets wait on a person in each other team', () => {
+      const { pane, picker } = open()
+      pane.update({ ...state(), teams: [{ id: '', canvas: 'ops', waiting: 2 }, { id: 'aaaaaaaa', canvas: 'docs' }], selectedTeam: 'aaaaaaaa', canvases: [] }, sessions, NOW)
+      expect(Array.from(picker.options).map(o => o.text)).toEqual(['ops（2 待你处理）', 'docs'])
+    })
+
     it('asks for both, and shows a refusal', async () => {
       const { pane, addTeam } = open()
       button(pane.root, '新增团队').click()
@@ -313,7 +347,7 @@ describe('team tab', () => {
       expect(q<HTMLTextAreaElement>(pane.root, '规则内容').value).toBe('核对文档')
       expect(q<HTMLInputElement>(pane.root, '启用规则').checked).toBe(false)
       expect(q<HTMLTextAreaElement>(pane.root, '允许发需求的机器').value).toBe('bot/1')
-      expect(q<HTMLTextAreaElement>(pane.root, 'PR 上算人的 GitHub 账号').value).toBe('Owner')
+      expect(q<HTMLTextAreaElement>(pane.root, '算人的 GitHub 账号').value).toBe('Owner')
       expect(q<HTMLInputElement>(pane.root, '送审地址').value).toBe('dsh/aaaaaaaa')
       button(pane.root, '保存').click()
       await flush()
@@ -326,7 +360,7 @@ describe('team tab', () => {
       button(pane.root, '添加规则').click()
       type(q<HTMLTextAreaElement>(pane.root, '规则内容'), '  以 [ops] 开头的文档核对  ')
       type(q<HTMLTextAreaElement>(pane.root, '允许发需求的机器'), 'bot/1\nbot/2, bot/1')
-      type(q<HTMLTextAreaElement>(pane.root, 'PR 上算人的 GitHub 账号'), 'Owner')
+      type(q<HTMLTextAreaElement>(pane.root, '算人的 GitHub 账号'), 'Owner')
       type(pane.root.querySelector<HTMLInputElement>(`[aria-label$="的仓库"]`)!, 'o/net')
       type(q<HTMLInputElement>(pane.root, '送审地址'), 'dsh/aaaaaaaa')
       button(pane.root, '保存').click()
@@ -481,5 +515,62 @@ describe('ops loop: the team view shows each member\'s repository', () => {
     expect(text(pane.root)).toContain('仓库NelsonLongxiang/agent-atelier')
     pane.update(s, sessions, NOW + 1_000)
     expect(text(pane.root)).not.toContain('仓库')
+  })
+})
+
+describe('team tab across reloads and teams (nexus sidebar report 2026-11-13)', () => {
+  function memoryStorage(): Storage {
+    const m = new Map<string, string>()
+    return {
+      get length() { return m.size }, clear: () => { m.clear() }, getItem: (k) => m.get(k) ?? null,
+      key: (i) => [...m.keys()][i] ?? null, removeItem: (k) => { m.delete(k) }, setItem: (k, v) => { m.set(k, String(v)) },
+    }
+  }
+  const withStorage = (): void => {
+    Object.defineProperty(window, 'localStorage', { value: memoryStorage(), configurable: true })
+    onTestFinished(() => { Object.defineProperty(window, 'localStorage', { value: undefined, configurable: true }) })
+  }
+
+  it('the rail badge counts every team\'s waiting tickets, not only the shown team\'s', () => {
+    const { pane } = mount()
+    const teams = [{ id: '', canvas: 'ops' }, { id: 'aaaa1111', canvas: 'market', waiting: 1 }, { id: 'bbbb2222', canvas: 'p7', waiting: 2 }]
+    expect(pane.update(state({ teams, selectedTeam: '' }), sessions, NOW)).toEqual({ badge: '5', tone: 'warn' })
+    expect(pane.update(state({ teams: [{ id: '', canvas: 'ops' }], selectedTeam: '' }), sessions, NOW)).toEqual({ badge: '2', tone: 'warn' })
+  })
+
+  it('an unsent answer or request survives a reload, per team, and is gone once sent', async () => {
+    withStorage()
+    const teams = [{ id: '', canvas: 'ops' }, { id: 'aaaa1111', canvas: 'market' }]
+    const first = mount()
+    first.pane.update(state({ teams, selectedTeam: '' }), sessions, NOW)
+    const box = first.pane.root.querySelector<HTMLElement>('[data-ticket="t-ask"]')!.querySelector('textarea')!
+    box.value = '拼音先不做'
+    box.dispatchEvent(new Event('input'))
+    first.pane.select('request')
+    const request = first.pane.root.querySelector<HTMLTextAreaElement>('textarea[aria-label="需求内容"]')!
+    request.value = '加一个导出按钮'
+    request.dispatchEvent(new Event('input'))
+
+    const second = mount() // a reload
+    second.pane.update(state({ teams, selectedTeam: '' }), sessions, NOW)
+    expect(second.pane.root.querySelector<HTMLTextAreaElement>('textarea[aria-label="需求内容"]')!.value).toBe('加一个导出按钮')
+    second.pane.select('person')
+    const again = second.pane.root.querySelector<HTMLElement>('[data-ticket="t-ask"]')!.querySelector('textarea')!
+    expect(again.value).toBe('拼音先不做')
+    button(second.pane.root.querySelector('[data-ticket="t-ask"]')!, '回答').click()
+    await flush()
+    expect(second.act).toHaveBeenCalledWith({ action: 'request', text: '拼音先不做', thread: 'th-ask' })
+
+    const other = mount() // another team shows none of this team's drafts
+    other.pane.update(state({ teams, selectedTeam: 'aaaa1111' }), sessions, NOW)
+    other.pane.select('request')
+    expect(other.pane.root.querySelector<HTMLTextAreaElement>('textarea[aria-label="需求内容"]')!.value).toBe('')
+
+    const third = mount() // after the send, the answer draft is gone; the request draft stays
+    third.pane.update(state({ teams, selectedTeam: '' }), sessions, NOW)
+    third.pane.select('person')
+    expect(third.pane.root.querySelector<HTMLElement>('[data-ticket="t-ask"]')!.querySelector('textarea')!.value).toBe('')
+    third.pane.select('request')
+    expect(third.pane.root.querySelector<HTMLTextAreaElement>('textarea[aria-label="需求内容"]')!.value).toBe('加一个导出按钮')
   })
 })

@@ -2,6 +2,8 @@
 
 状态：**review-337-r1 修订，待最终确认，仅设计，不含实现授权**。依据 ruling-334-335 与 review-337-r1；② v2/完整key/备份回滚、③ 第三方无验证事实拒新写已确认。①改为默认兼容窗口 + 持久暂停，先#335安全清理，再#334确认/投影/路由迁移。档位：中高，持久化/身份边界须非自我评审。
 
+> 补记（2026-11-13）：已于 2026-11-05 经 PR#350（`f636331`，#334）合入 master；名片能力 `canvasMemberProvenance` 与按 owner key 路由已实现。上面的「仅设计」是合入前的状态。
+
 ## 上下文
 
 当前成员是有序字符串。缓存里缺少peer的sessionTeams时，localHandleResolver把同zone/id8裸句柄读成本机；leave、local remove、archive prune再用这一可变读法删存储。单边seed/minimal/冷缓存可使对端成员位被误删，不能依靠2^-32概率或强取对端完整卡规避。

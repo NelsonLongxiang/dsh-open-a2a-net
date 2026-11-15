@@ -2,6 +2,8 @@
 
 Status: proposed on next/0.8 (owner 2026-11-08: the spec audit's ticket-follows-PR and review-channel items go into one design). It builds on the v5 canvas team and on the executor's parked Assignments. The vendored engine is unchanged.
 
+> Update (2026-11-13): implemented on next/0.8 — a ticket follows its pull request (#516, `0c95ba3`, 2026-11-08), asking the owner's reviewer (#517) and members taking up PR comments (#519); code in `src/superagent/host/pr-follow.ts` and `review-requests.ts`.
+
 ## Context
 
 Upstream's definition: a ticket that opens a pull request follows it. `ready` hands the result to a person; the ticket ends when the pull request merges or closes, and review comments reach the worker in between. In a2a a member's `ready` ends the ticket at once, so:

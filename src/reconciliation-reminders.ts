@@ -10,6 +10,11 @@ export interface ReminderDeps {
   resolve: (row: TaskRecord) => ReminderAgent | undefined
   sender: (row: TaskRecord) => ReminderAgent | undefined
   followup: (agent: ReminderAgent, text: string) => void
+  /**
+   * Redeliver an unconsumed task's original text to its idle receiver, once (src/task-bodies.ts; market request
+   * 2026-11-14). True when it went out; the host sends it as the original sender's content, never as this host's.
+   */
+  redeliver?: (agent: ReminderAgent, row: TaskRecord) => boolean
   now?: () => number
   warn: (code: string) => void
 }
@@ -58,6 +63,12 @@ export class ReconciliationReminders {
   private remind(agent:ReminderAgent,rows:TaskRecord[]):void {
     const id=String(agent.id),now=this.now()
     if(!this.idle(agent)||this.throttled(id,now))return
+    // A task whose delivery was never consumed (the busy-session steer was lost) gets its original text back first, once;
+    // the reminder waits for the next idle window, so the session is not handed two things at once.
+    if(this.d.redeliver!==undefined)for(const row of rows){
+      if(row.consumed!==false||row.direction!=='inbound'||taskIdRefusal(row.taskId)!==undefined)continue
+      if(this.d.redeliver(agent,row)){this.noteNudge(id);return}
+    }
     const due=rows.filter(row=>{
       if(taskIdRefusal(row.taskId)!==undefined)return false
       const r=this.d.ledger.reminderState(row.taskId)

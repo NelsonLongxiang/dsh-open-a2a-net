@@ -17,6 +17,21 @@ const frame = (name: string): HTMLElement => {
 }
 
 describe('planning view: the superagent team canvas and its roles', () => {
+  it('marks every team on the instance, each with its own roles', () => {
+    const d = createTeamRoleDecorator()
+    const frames = new Map([['ops', frame('ops')], ['docs', frame('docs')], ['plain', frame('plain')]])
+    const cards = new Map([R, M, O].map(id => { const el = document.createElement('div'); return [id, el] as const }))
+    d.decorate(frames, cards)
+    d.update([state({ canvas: 'ops', router: R, members: [M] }), state({ canvas: 'docs', members: [O], observers: [O] })])
+    expect(['ops', 'docs', 'plain'].map(n => frames.get(n)!.classList.contains('is-superagent-team'))).toEqual([true, true, false])
+    expect(cards.get(R)!.querySelector('.sa-role')!.textContent).toBe('总工')
+    expect(cards.get(M)!.querySelector('.sa-role')!.textContent).toBe('成员')
+    expect(cards.get(O)!.querySelector('.sa-role')!.textContent).toBe('观察者')
+    d.update(null)
+    expect(frames.get('docs')!.classList.contains('is-superagent-team')).toBe(false)
+    expect(cards.get(O)!.querySelector('.sa-role')).toBeNull()
+  })
+
   it('reads the roles from the team state', () => {
     expect(teamRolesOf(null)).toBeUndefined()
     expect(teamRolesOf(state({ router: R, members: [M] }))).toBeUndefined() // unbound

@@ -17,6 +17,7 @@
  *   frames are never moved or resized by this step. Members are never moved
  *   off their own frame; a member merely outside its frame (PR#85: a frame
  *   moves only itself) is left where it is.
+ * - Card vs card (2026-11-13): no two cards overlap; see separateCards().
  * Callers run it after a frame drag or resize, after 整理成员 / 一键重排,
  * and once when the board first has content — never on every poll (a poll
  * does not reposition what the user arranged).
@@ -124,11 +125,84 @@ export function evictStrangers(model: WorldModel): boolean {
   return changed
 }
 
-/** Both rules, frames first (moving a frame can uncover or cover cards). */
+/** Clearance kept between two cards once separated (the tidy grid's gaps). */
+export const CARD_GAP_X = GAP_X
+export const CARD_GAP_Y = GAP_Y
+/** Rings searched around a card before the far-right column fallback. */
+const CARD_RINGS = 40
+
+/**
+ * Card vs card (owner, 2026-11-13: 节点卡片存在覆盖现象…需要避免覆盖现象存在，做物理碰撞):
+ * no two cards overlap. Of an overlapping pair, the card the user just put
+ * down (`pinned`) stays and the other yields; with neither or both pinned,
+ * the later card in board order yields (both pinned: a dragged group keeps
+ * its own shape, so the pair is left alone). Only a real overlap moves a
+ * card; cards that sit close but clear stay where the user put them. The yielding card moves to the
+ * nearest free spot on a half-pitch grid around where it was: free = no other
+ * card within the gaps and no frame it is not a member of. A spot inside its
+ * own frame wins over one outside it, so a member does not leave its team's
+ * box just to make room. Deterministic: same board, same result.
+ */
+export function separateCards(model: WorldModel, pinned: ReadonlySet<string> = new Set()): boolean {
+  let changed = false
+  const pad = (r: Rect): Rect => ({ x: r.x - CARD_GAP_X / 2, y: r.y - CARD_GAP_Y / 2, w: r.w + CARD_GAP_X, h: r.h + CARD_GAP_Y })
+  const clash = (a: { x: number; y: number }, b: { x: number; y: number }): boolean => hit(pad(nodeRect(a)), pad(nodeRect(b)))
+  for (let pass = 0; pass < MAX_PASSES; pass++) {
+    const nodes = model.allNodes()
+    let mover: (typeof nodes)[number] | undefined
+    for (let i = 0; i < nodes.length && mover === undefined; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i]!, b = nodes[j]!
+        if (!hit(nodeRect(a), nodeRect(b))) continue // only a real overlap moves a card; close-but-clear is the user's
+        if (pinned.has(a.id) && pinned.has(b.id)) continue
+        mover = pinned.has(b.id) ? a : b
+        break
+      }
+    }
+    if (mover === undefined) return changed
+    const n = mover
+    const frames = model.allFrames()
+    const own = new Set(n.memberships.map(m => m.team))
+    const homes = frames.filter(([name]) => own.has(name)).map(([, f]) => f)
+    const inside = (r: Rect, f: Rect): boolean => r.x >= f.x && r.y >= f.y && r.x + r.w <= f.x + f.w && r.y + r.h <= f.y + f.h
+    const free = (p: { x: number; y: number }): boolean => {
+      const r = nodeRect(p)
+      return frames.every(([name, g]) => own.has(name) || !hit(r, g)) && model.allNodes().every(o => o.id === n.id || !clash(p, o))
+    }
+    const sx = (NODE_W + CARD_GAP_X) / 2, sy = (NODE_H + CARD_GAP_Y) / 2
+    const ring: Array<{ x: number; y: number; d: number }> = []
+    for (let k = 1; k <= CARD_RINGS; k++) {
+      for (let i = -k; i <= k; i++) for (let j = -k; j <= k; j++) {
+        if (Math.max(Math.abs(i), Math.abs(j)) !== k) continue
+        const x = n.x + i * sx, y = n.y + j * sy
+        ring.push({ x, y, d: Math.hypot(x - n.x, y - n.y) })
+      }
+    }
+    // Tight spots the half-pitch grid can miss: flush against each other card, and the 整理成员 seats of its own frames.
+    const near = (x: number, y: number) => ({ x, y, d: Math.hypot(x - n.x, y - n.y) })
+    for (const o of model.allNodes()) {
+      if (o.id === n.id) continue
+      ring.push(near(o.x + NODE_W + CARD_GAP_X, o.y), near(o.x - NODE_W - CARD_GAP_X, o.y), near(o.x, o.y + NODE_H + CARD_GAP_Y), near(o.x, o.y - NODE_H - CARD_GAP_Y))
+    }
+    for (const f of homes) for (const p of seatsIn(f)) ring.push(near(p.x, p.y))
+    // Nearest first; ties keep insertion order (stable sort), so the result is deterministic.
+    ring.sort((p, q) => p.d - q.d)
+    const spot = (homes.length > 0 ? ring.find(p => free(p) && homes.some(f => inside(nodeRect(p), f))) : undefined) ?? ring.find(free)
+    const farX = Math.max(n.x, ...model.allNodes().map(o => o.x), ...frames.map(([, g]) => g.x + g.w - NODE_W / 2)) + NODE_W + CARD_GAP_X
+    const column = Array.from({ length: 2 * model.allNodes().length + 1 }, (_, i) => ({ x: farX, y: n.y + i * (NODE_H + CARD_GAP_Y) }))
+    const to = spot ?? column.find(free) ?? column[column.length - 1]!
+    model.dragNodes([n.id], to.x - n.x, to.y - n.y)
+    changed = true
+  }
+  return changed
+}
+
+/** All three rules: frames first (moving a frame can uncover or cover cards), then strangers, then card vs card. */
 export function settleBoard(model: WorldModel, remote: ReadonlySet<string>, touched?: string): boolean {
   const framesMoved = separateFrames(model, remote, touched)
   const cardsMoved = evictStrangers(model)
-  return framesMoved || cardsMoved
+  const cardsSeparated = separateCards(model)
+  return framesMoved || cardsMoved || cardsSeparated
 }
 
 /**

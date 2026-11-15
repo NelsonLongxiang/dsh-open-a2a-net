@@ -6,9 +6,10 @@
  * the honesty surface).
  * @module nexus-stage/main
  */
+import { createScopeHintsChip, parseScopeHints, type ScopeHintsChip } from './scope-hints-chip'
 import { createFaultReporter } from './fault'
 import { createWorkbench, type StateBody } from './workbench'
-import type { SaState } from './wb-superagent'
+import { personTickets, type SaState } from './wb-superagent'
 import { createTeamRoleDecorator } from './planning-team-roles'
 import { createPlanningView } from './planning-view'
 import { rosterFrames, rosterNameOf } from './planning-roster'
@@ -217,10 +218,26 @@ function runCanvasAction(a: CanvasAction): Promise<boolean> {
     case 'add-member': return canvasWire.addMembers(a.team, a.ids)
     case 'remove-member': return canvasWire.removeMembers(a.team, a.ids)
     case 'remove-team': return canvasWire.removeTeam(a.name)
+    case 'set-root': return canvasWire.setRoot(a.name, a.root)
+    case 'set-team-slots': return canvasWire.setTeamSlots(a.name, a.team, a.slots)
     case 'reorder': return canvasWire.runRosterOps(a.team, a.ops)
     case 'join-network':
     case 'leave-network': return postNetworkJoin(a.type === 'join-network' ? 'join' : 'leave', a.id)
   }
+}
+
+/** Production feedback 2026-11-14: the 协作提示 chip rides the toolbar right after 未入网 (mounted once, on first poll). */
+let scopeHintsChip: ScopeHintsChip | undefined
+function mountScopeHints(): ScopeHintsChip {
+  if (scopeHintsChip !== undefined) return scopeHintsChip
+  scopeHintsChip = createScopeHintsChip({
+    addMember: (canvas, ref) => canvasWire.addMembers(canvas, [ref]),
+    joinNetwork: id => postNetworkJoin('join', id),
+    notice: (kind, text) => planning.notice(kind, text),
+  })
+  const net = document.querySelector('#dsh-plan .p-netbtn')
+  if (net !== null) net.after(scopeHintsChip.el)
+  return scopeHintsChip
 }
 
 /** Network join/leave for one session (the panel-slim migration: this
@@ -253,8 +270,13 @@ async function fetchLayout(): Promise<unknown> {
   return ((await res.json()) as { layout?: unknown }).layout ?? null
 }
 
-/** The team the 团队 tab shows; '' is the instance's primary team. */
-let selectedTeam = ''
+/** The team the 团队 tab shows; '' is the instance's primary team. Kept across reloads per viewer (guarded). */
+const TEAM_KEY = 'dsh-a2a.superagent.team'
+let selectedTeam = (() => { try { return window.localStorage.getItem(TEAM_KEY) ?? '' } catch { return '' } })()
+function rememberTeam(id: string): void {
+  selectedTeam = id
+  try { if (id === '') window.localStorage.removeItem(TEAM_KEY); else window.localStorage.setItem(TEAM_KEY, id) } catch { /* convenience only */ }
+}
 
 // ─── The workbench ───
 const bench = createWorkbench({
@@ -266,7 +288,15 @@ const bench = createWorkbench({
       try { return await res.json() as Record<string, unknown> } catch { return { ok: false, error: `HTTP ${res.status}` } }
     },
     refresh() { void pollSuperagent() },
-    selectTeam(id) { selectedTeam = id; void pollSuperagent() },
+    async search(query) {
+      const res = await controlFetch(`/__dsh_a2a/superagent?search=${encodeURIComponent(query)}${selectedTeam !== '' ? `&teamId=${encodeURIComponent(selectedTeam)}` : ''}`, { cache: 'no-store' })
+      try { return await res.json() as Record<string, unknown> } catch { return { ok: false, error: `HTTP ${res.status}` } }
+    },
+    async models() {
+      const res = await controlFetch('/__dsh_a2a/superagent/models', { cache: 'no-store' })
+      try { return await res.json() as Record<string, unknown> } catch { return { ok: false } }
+    },
+    selectTeam(id) { rememberTeam(id); void pollSuperagent() },
     async addTeam(canvas, router) {
       const res = await controlFetch('/__dsh_a2a/superagent/teams', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ canvas, router }) })
       try { return await res.json() as Record<string, unknown> } catch { return { ok: false, error: `HTTP ${res.status}` } }
@@ -460,9 +490,22 @@ async function pollSuperagent(): Promise<void> {
     ])
     const { teams = [] } = list.ok ? await list.json() as { teams?: SaState['teams'] } : {}
     if (asked !== selectedTeam) return
-    const state = res.ok ? { ...await res.json() as SaState, teams, selectedTeam: asked } : null
+    // A remembered team that is gone (unbound, another host's list): back to the primary team, not a hidden tab.
+    if (asked !== '' && list.ok && !(teams ?? []).some(row => row.id === asked)) { rememberTeam(''); return }
+    const own = res.ok ? await res.json() as SaState : null
+    // The planning view marks every team's canvas and roles, not only the one the 团队 tab shows; the picker counts
+    // each other team's tickets waiting on a person.
+    const read = await Promise.all((teams ?? []).filter(row => row.id !== asked && row.canvas !== undefined).map(async (row) => {
+      const r = await controlFetch(`/__dsh_a2a/superagent?teamId=${encodeURIComponent(row.id)}`, { cache: 'no-store' }).catch(() => undefined)
+      return [row.id, r?.ok === true ? await r.json() as SaState : undefined] as const
+    }))
+    if (asked !== selectedTeam) return
+    const others = read.flatMap(([, other]) => other !== undefined ? [other] : [])
+    const waiting = new Map(read.flatMap(([id, other]) => other !== undefined ? [[id, personTickets(other).length] as const] : []))
+    const rows = (teams ?? []).map(row => waiting.has(row.id) ? { ...row, waiting: waiting.get(row.id) } : row)
+    const state = own === null ? null : { ...own, teams: rows, selectedTeam: asked }
     bench.updateSuperagent(state)
-    teamRoles.update(state)
+    teamRoles.update(state === null ? null : [state, ...others])
   } catch { bench.updateSuperagent(null); teamRoles.update(null) } finally {
     superagentBusy = false
     if (asked !== selectedTeam) void pollSuperagent()
@@ -559,6 +602,7 @@ async function poll(): Promise<void> {
           .map(e => ({ name: typeof e.name === 'string' ? e.name : '', team: e.team as string, members: Array.isArray(e.members) ? e.members.filter((m): m is string => typeof m === 'string') : [] })),
       }))
     planning.reconcile({ sessions: allSessions, teams, peerCount: peers.length, peers, inFlight, remoteTeams, peerOrg })
+    mountScopeHints().update(parseScopeHints(body.scopeHints))
   } catch (err) {
     fault(`state 轮询失败：${String(err)}`)
   }

@@ -433,7 +433,7 @@ export interface ReceiptResolvedInfo {
   readonly summary?: string
   /** True when the receipt answered a dead-lettered or abandoned row. */
   readonly late?: boolean
-  /** An `acknowledged` receipt: the row was marked, not settled. */
+  /** An `acknowledged` receipt, or an `attention` one carrying a question: the row was marked, not settled. */
   readonly acknowledged?: true
 }
 

@@ -19,12 +19,21 @@ export type A2aNetKey =
   | 'team.fileTooBig'
   | 'team.tooManyFiles'
   | 'team.dropHint'
+  | 'team.cardFiles'
+  | 'team.noFileTarget'
   | 'team.noFolders'
   | 'team.sentRemote'
+  | 'team.sentList'
+  | 'team.sentWaiting'
+  | 'team.sentUnverified'
+  | 'team.sentQuestion'
   | 'team.remoteHint'
   | 'team.decisions'
   | 'team.decisionsGuide'
   | 'team.noDecisions'
+  | 'team.decisionsDenied'
+  | 'team.decisionsUnreadable'
+  | 'team.decisionsStale'
   | 'team.recommended'
   | 'team.approve'
   | 'team.confirmChoice'
@@ -33,6 +42,19 @@ export type A2aNetKey =
   | 'team.fromRouter'
   | 'team.fromObserver'
   | 'team.fromMember'
+  | 'team.fromHealth'
+  | 'team.fromTool'
+  | 'team.fromOutbound'
+  | 'team.fromSender'
+  | 'team.fromStaffing'
+  | 'team.healthTitle'
+  | 'team.healthRouter'
+  | 'team.healthRouterFailed'
+  | 'team.healthMcpNoSeat'
+  | 'team.healthMcpUnavailable'
+  | 'team.healthMember'
+  | 'team.healthQuiet'
+  | 'team.decisionsCount'
   | 'team.tab'
   | 'team.guide'
   | 'team.pick'
@@ -55,12 +77,21 @@ export const zh: Record<A2aNetKey, string> = {
   'team.fileTooBig': '{name} 超过 64 MB，发不了',
   'team.tooManyFiles': '一次最多 {max} 个文件',
   'team.dropHint': '也可以把多个文件一起拖到这里',
+  'team.cardFiles': '卡上的文件',
+  'team.noFileTarget': '这张卡的团队没有画布地址，不能附文件',
   'team.noFolders': '不能拖入文件夹，请选择里面的文件',
-  'team.sentRemote': '已发给 {team}，由对方团队按自己的规则决定。发送者是 {sender}，回执会回到这个会话',
+  'team.sentRemote': '已发给 {team}，由对方团队按自己的规则决定。发送者是 {sender}；回执显示在下面，不进入会话',
+  'team.sentList': '发往其他实例的需求',
+  'team.sentWaiting': '等待对方回执',
+  'team.sentUnverified': '未核实：发回这条的不是这项任务的对方',
+  'team.sentQuestion': '对方提问：{question}',
   'team.remoteHint': '这支团队在其他实例上：这条消息算当前会话发的，不算你本人。对方要把这个会话列入名单，并开 auto 和对应规则，才会开单。',
   'team.decisions': '待决策',
   'team.decisionsGuide': '各团队等你拍板的事，附推荐选项',
   'team.noDecisions': '现在没有等你决定的事。',
+  'team.decisionsDenied': '这个页面没有权限读取待决策（这台 DSH 设了控制密钥）。待决策没有消失，请到 A2A 工作台的「团队」页处理。',
+  'team.decisionsUnreadable': '暂时读不到待决策，这不代表没有等你决定的事；稍后会自动重试。',
+  'team.decisionsStale': '下面是上次读到的内容，可能已过期。',
   'team.recommended': '推荐',
   'team.approve': '批准推荐',
   'team.confirmChoice': '确认选择',
@@ -69,8 +100,21 @@ export const zh: Record<A2aNetKey, string> = {
   'team.fromRouter': '总工提出',
   'team.fromObserver': '观察者提出',
   'team.fromMember': '成员提问',
-  'team.tab': '提需求',
-  'team.guide': '把需求交给 superagent 团队，不用离开当前对话',
+  'team.fromHealth': '健康自检',
+  'team.fromTool': '工具申请',
+  'team.fromOutbound': '对外请求',
+  'team.fromSender': '名单外的需求',
+  'team.fromStaffing': '编制变更',
+  'team.healthTitle': '团队有 {count} 个问题',
+  'team.healthRouter': '总工会话 {session} 没有加载，需求送不到它，打开这个会话即可',
+  'team.healthRouterFailed': '总工会话 {session} 上一回合失败（{detail}），需求在等它判断；常见原因是模型额度用完或服务中断',
+  'team.healthMcpNoSeat': '团队 MCP 服务器 {server} 还用不了：团队里还没有带席位 id 的成员，市场只给名册里的席位发令牌',
+  'team.healthMcpUnavailable': '团队 MCP 服务器 {server} 换不到席位令牌，成员对它的调用会失败（详情见团队页健康）',
+  'team.healthMember': '成员会话 {session} 没有加载，工单派不给它，打开这个会话即可',
+  'team.healthQuiet': '工单「{title}」已经 {minutes} 分钟没有动静',
+  'team.decisionsCount': '待你决定（{count}）',
+  'team.tab': '团队',
+  'team.guide': '处理团队等你决定的事，或给团队提需求，不用离开当前对话',
   'team.pick': '团队',
   'team.request': '需求',
   'team.placeholder': '写清要做什么、为什么。Ctrl/⌘ + Enter 发送',
@@ -104,12 +148,21 @@ export const en: Record<A2aNetKey, string> = {
   'team.fileTooBig': '{name} is over 64 MB and cannot be sent',
   'team.tooManyFiles': 'At most {max} files at a time',
   'team.dropHint': 'Or drag several files here at once',
+  'team.cardFiles': 'Files on this card',
+  'team.noFileTarget': 'this card\'s team has no canvas address to send files to',
   'team.noFolders': 'Folders cannot be added. Choose the files inside',
-  'team.sentRemote': 'Sent to {team}, whose own rules decide. The sender is {sender}; the receipt comes back to this session',
+  'team.sentRemote': 'Sent to {team}, whose own rules decide. The sender is {sender}; receipts show below, not in the conversation',
+  'team.sentList': 'Requests to other instances',
+  'team.sentWaiting': 'Waiting for the team\'s receipt',
+  'team.sentUnverified': 'Unverified: this came from someone other than the task\'s team',
+  'team.sentQuestion': 'The team asks: {question}',
   'team.remoteHint': 'This team is on another instance. The message counts as this session\'s, not yours. That team opens a ticket only if it lists this session and runs auto with a matching rule.',
   'team.decisions': 'Decisions',
   'team.decisionsGuide': 'What your teams need you to decide, each with a recommendation',
   'team.noDecisions': 'Nothing is waiting for your decision.',
+  'team.decisionsDenied': 'This page cannot read the decisions (this DSH has a control key). They are still waiting: open the Team page of the A2A workbench.',
+  'team.decisionsUnreadable': 'The decisions cannot be read right now. That does not mean none is waiting; this tries again shortly.',
+  'team.decisionsStale': 'Below is what was read last; it may be out of date.',
   'team.recommended': 'Recommended',
   'team.approve': 'Approve recommendation',
   'team.confirmChoice': 'Confirm choice',
@@ -118,8 +171,21 @@ export const en: Record<A2aNetKey, string> = {
   'team.fromRouter': 'From the router',
   'team.fromObserver': 'From an observer',
   'team.fromMember': 'From a member',
-  'team.tab': 'Request',
-  'team.guide': 'Send a superagent team a request without leaving this conversation',
+  'team.fromHealth': 'Health check',
+  'team.fromTool': 'Tool request',
+  'team.fromOutbound': 'Outbound request',
+  'team.fromSender': 'Request from an unlisted sender',
+  'team.fromStaffing': 'Staffing change',
+  'team.healthTitle': 'The team has {count} problem(s)',
+  'team.healthRouter': 'Router session {session} is not loaded, so requests cannot reach it. Open that session',
+  'team.healthRouterFailed': 'Router session {session}\'s last turn failed ({detail}); requests wait for its judgement. A used-up model quota or an outage is the usual cause',
+  'team.healthMcpNoSeat': 'Team MCP server {server} is not usable yet: no team member has a seat id, and the market issues tokens only to seats in the roster',
+  'team.healthMcpUnavailable': 'Team MCP server {server}: no seat token can be had, so members\' calls to it fail (details in the team health)',
+  'team.healthMember': 'Member session {session} is not loaded, so tickets cannot reach it. Open that session',
+  'team.healthQuiet': 'Ticket “{title}” has had no activity for {minutes} minutes',
+  'team.decisionsCount': 'Waiting for your decision ({count})',
+  'team.tab': 'Team',
+  'team.guide': 'Decide what your teams wait for, or send them a request, without leaving this conversation',
   'team.pick': 'Team',
   'team.request': 'Request',
   'team.placeholder': 'What needs doing, and why. Ctrl/⌘ + Enter to send',

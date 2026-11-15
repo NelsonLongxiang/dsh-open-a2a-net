@@ -3,24 +3,32 @@
  */
 import { describe, expect, it } from 'vitest'
 import { Config } from '../../src/config.ts'
-import { MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, TEAM_TOOLS, roleToolRefusal, type Role, type RoleAgent } from '../../src/superagent/host/role-tools.ts'
+import { MEMBER_DENY, MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, TEAM_TOOLS, memberBoundary, roleToolRefusal, type Role, type RoleAgent } from '../../src/superagent/host/role-tools.ts'
 
 describe('role tool lists', () => {
-  it('the team\'s own tools are the router\'s and the member\'s ticket tools', () => {
-    expect(TEAM_TOOLS).toEqual([...ROUTER_TOOLS, 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose'])
+  it('the team\'s own tools are the router\'s, the member\'s ticket tools and the builder\'s inventory', () => {
+    expect(TEAM_TOOLS).toEqual([...ROUTER_TOOLS.filter(name => !name.startsWith('schedule_') && name !== 'a2a_whoami' && !name.startsWith('mcp__ygl__')), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw'])
     for (const name of ['a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback']) expect(MEMBER_TOOLS).toContain(name)
   })
 
   it('pins what the router and a member may call', () => {
-    expect(ROUTER_TOOLS).toEqual(['superagent_route', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
+    expect(ROUTER_TOOLS).toEqual(['schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view', 'schedule_update', 'schedule_delete', 'a2a_whoami', 'mcp__ygl__read', 'a2a_tool_request', 'a2a_outbound_request', 'superagent_route', 'superagent_split', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
     expect(MEMBER_TOOLS).toEqual(['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list', 'job_kill',
-      'web_search', 'web_fetch', 'skill', 'todo_write', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch'])
+      'web_search', 'web_fetch', 'skill', 'todo_write', 'schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view', 'schedule_update', 'schedule_delete', 'a2a_whoami', 'mcp__ygl__read', 'mcp__ygl__write', 'mcp__ygl__verify', 'mcp__ygl__doctor', 'a2a_tool_request', 'a2a_outbound_request', 'a2a_decision_decide', 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch'])
   })
 
   it('no role may open or reach sessions, or route or report over A2A', () => {
     const sideChannels = ['subagent', 'list_subagent_models', 'send_message', 'list_agents', 'interrupt_agent', 'a2a_route', 'a2a_report', 'a2a_teams',
       'a2a_tasks', 'a2a_file_send', 'a2a_team_join', 'a2a_exposure', 'ask_user', 'schedule']
-    for (const role of ['router', 'member'] as const) for (const name of sideChannels) expect(roleToolRefusal(role, name), `${role} ${name}`).toContain('[superagent-role-tools]')
+    for (const name of sideChannels) expect(roleToolRefusal('router', name), `router ${name}`).toContain('[superagent-role-tools]')
+    // T6: a member keeps every tool but the boundary; read-only network views and the host's other tools are its own.
+    for (const role of ['member', 'observer'] as const) {
+      for (const name of ['subagent', 'subagent_fork', 'list_subagent_models', 'send_message', 'list_agents', 'interrupt_agent', 'workflow', 'plugin_manager', 'ask_user_question', 'a2a_route', 'a2a_report', 'a2a_file_send', 'a2a_team_join', 'a2a_team_leave', 'a2a_exposure', 'superagent_route', 'session_new', 'task'])
+        expect(roleToolRefusal(role, name), `${role} ${name}`).toContain('[superagent-role-tools]')
+      for (const name of ['a2a_teams', 'a2a_tasks', 'gitbash', 'mcp__workbench-market__publish', 'create_goal', 'present'])
+        expect(roleToolRefusal(role, name), `${role} ${name}`).toBeUndefined()
+      expect(roleToolRefusal(role, 'gitbash', {}, [], ['gitbash'])).toContain('blocked')
+    }
     expect(roleToolRefusal('router', 'bash')).toBeDefined()
     expect(roleToolRefusal('router', 'a2a_ticket_report')).toBeDefined()
     expect(roleToolRefusal('member', 'superagent_route')).toBeDefined()
@@ -64,16 +72,24 @@ describe('RoleTools', () => {
   it('restricts a role session to the tools its scope has, re-applies on a role change, lifts when the role goes', () => {
     const roles: Record<string, Role> = { r: 'router' }
     const { log, scoped, tools } = setup(roles)
-    const r = scoped('r', ['superagent_route', 'superagent_status', 'bash', 'a2a_route'])
+    // The plugin registers every team tool, so a real scope has them all; the work tools come from the preset.
+    const team = TEAM_TOOLS
+    const r = scoped('r', [...team, 'bash', 'a2a_route'])
+    const routerAllow = ROUTER_TOOLS.filter(name => team.includes(name)).join(',')
+    // T6: a member is restricted by what leaves the team, not to a list: here a2a_route and the router's and observer's team tools.
+    const memberDeny = [...new Set([...MEMBER_DENY, ...team])].filter(name => memberBoundary('member', name) && [...team, 'bash', 'a2a_route'].includes(name)).join(',')
     tools.sync(r)
     tools.sync(r)
-    expect(log).toEqual(['r restrict superagent_route,superagent_status'])
+    expect(log).toEqual([`r restrict ${routerAllow}`])
     roles.r = 'member'
     tools.sync(r)
-    expect(log.slice(1)).toEqual(['r lift', 'r restrict bash'])
+    expect(log.slice(1)).toEqual(['r lift', `r deny ${memberDeny}`])
+    expect(memberDeny).toContain('a2a_route')
+    expect(memberDeny).not.toContain('bash')
+    expect(memberDeny).not.toContain('a2a_ticket_report')
     delete roles.r
     tools.sync(r)
-    expect(log.slice(3)).toEqual(['r lift', 'r deny superagent_route,superagent_status'])
+    expect(log.slice(3)).toEqual(['r lift', `r deny ${team.join(',')}`])
     expect(tools.list()).toEqual({})
   })
 
@@ -87,8 +103,28 @@ describe('RoleTools', () => {
     expect(tools.list()).toEqual({})
     roles.p = 'router'
     tools.sync(plain)
-    expect(log.slice(1)).toEqual(['p lift', `p restrict ${ROUTER_TOOLS.join(',')}`])
+    // The fake registry has no schedule tools, no a2a_whoami and no MCP tools, and a restriction names only the tools the scope has.
+    expect(log.slice(1)).toEqual(['p lift', `p restrict ${ROUTER_TOOLS.filter(name => !name.startsWith('schedule_') && name !== 'a2a_whoami' && !name.startsWith('mcp__')).join(',')}`])
     expect(tools.list()).toEqual({ p: 'router' })
+  })
+
+  it('a restriction made before the plugin\'s own tools were visible is made again on the next sync (router after a restart, 2026-11-11)', () => {
+    const { log, tools } = setup({ r: 'router' })
+    const known = ['bash', 'schedule_list']
+    const r: RoleAgent = { id: 'r', ctx: { [Symbol('dsh.scope')]: {}, tools: { get: name => (known.includes(name) ? {} : undefined), restrict: f => { log.push(`restrict ${f.allow!.join(',')}`); return () => { log.push('lift') } } } } } as never
+    tools.sync(r)
+    expect(log).toEqual(['restrict schedule_list'])
+    known.push('superagent_route', 'superagent_status')
+    tools.sync(r)
+    expect(log.slice(1)).toEqual(['lift', 'restrict schedule_list,superagent_route,superagent_status'])
+  })
+
+  it('a complete restriction is not made again on every sync', () => {
+    const roles: Record<string, Role> = { m: 'member' }
+    const { log, scoped, tools } = setup(roles)
+    const m = scoped('m', [...MEMBER_TOOLS, 'a2a_route'])
+    tools.sync(m); tools.sync(m); tools.sync(m)
+    expect(log).toEqual(['m deny a2a_route'])
   })
 
   it('a context without the tools service does not throw into the session\'s creation', () => {

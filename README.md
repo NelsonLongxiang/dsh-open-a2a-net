@@ -1,29 +1,92 @@
-# @nelsonlongxiang/dsh-open-a2a-net
+# Open A2A Net · Superagent teams and A2A collaboration
 
 English | [中文](README_zh.md)
 
 [![npm](https://img.shields.io/npm/v/@nelsonlongxiang/dsh-open-a2a-net?label=npm)](https://www.npmjs.com/package/@nelsonlongxiang/dsh-open-a2a-net)
 
-Open A2A network plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH): turns a DSH
-deployment into one node of a decentralized agent network — no central server, no registry.
+**New in the preview: Superagent turns requests into team tickets—a router accepts work, fixed members execute it, progress stays visible, and owner decisions arrive as option-based cards.**
 
-Each node publishes a **signed, expiring agent card** at `/.well-known/agent-card.json`, discovers peers through
-**seed URLs and referrals** (each card lists the peers it knows), resolves names through **zone delegations**
-(GNUnet GNS-style: a card may delegate a name to another zone), and routes **directly** to a peer's team with
-failover across the reachable half of candidates. Every main session can additionally be exposed as a **session
-node** other hosts can discover and join from the web sidebar.
+> **Version boundary: Superagent teams belong to the opt-in 0.8 preview.** On 2026-11-14 npm `latest` was still 0.7.0 and `preview` was 0.8.1-preview.25. The default install does not imply the new capabilities below.
 
-| The sidebar network panel | Context message display |
+An open-source plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). The A2A foundation handles discovery, addressing, routing and receipts between sessions and hosts. **Superagent** adds requests, scoped tickets, fixed members and human decisions on top—not just messages between multiple chats.
+
+## Preview highlight: Superagent turns routing into a visible workflow
+
+### Follow one request through the team
+
+```text
+Your request (scope, deliverable, completion criteria)
+                      ↓
+Router assesses and accepts → scoped ticket → assigned member
+                      ↑                           ↓
+        Your input and decisions ← progress / waiting / reviewable result
+```
+
+This is a workflow illustration, not a completed case study or a promise to accept every request.
+
+| What matters to you | How Superagent helps |
 | --- | --- |
-| ![Sidebar network panel](images/image-01.png) | ![Context message display](images/image-02.png) |
+| Submit a request instead of relaying it to every chat | Use the workbench or right-bar request view. The router checks source admission and team rules, then creates a scoped ticket for accepted work. |
+| See who is working and what is waiting | Tickets expose the assignee, stage and latest report. Members report progress, waiting, blocked, failed or ready-for-review work. Busy fixed members queue work; the executor does not open new sessions. |
+| Keep follow-ups and reviews with the work | Input on the same ticket thread reaches its member. When a PR is attached, review comments return to the ticket and merge/close state continues to be followed. |
+| Receive actionable choices when a person must decide | Decision cards carry a question, 2–6 options and a recommendation. The owner decides in the pending-decisions view and the answer returns to the ticket. |
+| Use fixed members across hosts | Linked-host members are supported with explicit consent and identity pins on both sides—not remote takeover of arbitrary sessions. |
 
-## Install
+### People control rules, sources and significant decisions
+
+- **Form a team before taking work.** The operator names the router, fixed members, roles/rules and permitted sources, then binds the team. The engine stays idle until it is bound. Each member executes one ticket at a time; other tickets wait.
+- **Observe does not mean auto-accept.** `off / observe / auto` governs work inferred from agent messages. The default `observe` records “would accept” without taking the work. Explicit human requests still require admitted sources.
+- **Ready is not independently accepted.** A `ready` report means reviewable work; an attached PR remains followed until merge or close. Project tests, independent acceptance and release authority remain separate.
+- **External intake is opt-in.** A2A intake is controlled by the bot list and accept mode. GitHub Issue intake is off by default and requires owner-configured repositories and allowed users; this is not automatic monitoring of every issue.
+- **No silent expansion of authority.** Rule changes need human confirmation. Members cannot widen tickets, open sessions or directly dispatch to other teams; outbound team requests follow the configured approval flow.
+
+See the [released preview Superagent guide](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/6ca847560f9bc90c17be64e9558f830a4abf5113/src/skill/references/superagent.md). Root teams are still marked in progress and are not represented here as a mature capability.
+
+### How is this different from an ordinary canvas team?
+
+| Ordinary A2A collaboration | Superagent team (0.8 preview) |
+| --- | --- |
+| Which sessions are reachable, where does this message go, and has a receipt arrived? | Is this request accepted, who owns the ticket, where does it stand, and what needs a person’s decision? |
+| Discover routable teams; the caller organizes the work | The router accepts and assigns work, fixed members execute it, and reports and follow-ups remain attached to tickets |
+
+## The A2A foundation still matters
+
+- Session discovery, direct routing and visual canvas teams on one host or across linked hosts.
+- Signed agent cards, seeds and referrals without a central registry service.
+- Async tasks followed by task id through pending receipts, dead letters and the archive. **Delivered is not completed.**
+- Model tools for ordinary session collaboration; a CLI with its own identity, home and mailbox for callers outside a session.
+
+## Superagent, illustrated
+
+The following artwork is **original hand-drawn-style functional illustration with a simulated example—not a product UI capture, interface layout or evidence of completed work**. The illustrations explain the opt-in preview workflow.
+
+![Original Superagent workflow illustration; simulated example, not a product UI](images/market/01-superagent-flow.png)
+
+![Original ticket-progress illustration; simulated example, not a product UI](images/market/02-ticket-progress.png)
+
+![Original owner-decision illustration; simulated example, not a product UI](images/market/03-owner-decisions.png)
+
+## Install and try one request
+
+**For the Superagent preview highlight described here, explicitly opt in:**
+
+```sh
+dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net@preview
+```
+
+For the 0.7.0 default release’s ordinary A2A network capabilities first:
 
 ```sh
 dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 ```
 
-Restart `dsh web`, then open the sidebar network panel (footer action).
+Tags move. Record the actual plugin and DSH versions when reporting issues. These commands target the `web` profile of regular `dsh web`; replace it for a custom profile and use the application’s plugin manager on Desktop. Restart and open the workbench as documented for your chosen release.
+
+1. Bind a test team: choose the router, members, permitted sources and rules. Cross-host members require links and consent on both sides.
+2. Submit one bounded request, for example: “Investigate this failing test and propose a fix PR. Do not deploy. Explain the result with test evidence.”
+3. Follow the ticket’s member, stage and reports. Decide cards that need your judgement, then review the deliverable under your project’s acceptance process rather than treating self-reported `ready` as done.
+
+**Trust boundaries:** cross-host operation requires setup; `announce` is off by default. Configure authentication before exposing a listener beyond loopback. Listing is not a security audit or a promise of universal A2A interoperability.
 
 (As a package name, a local path, or a Git URL; the argument is handed to pnpm unchanged. The package's `prepare`
 script is `pnpm build`, but only a Git URL install triggers it, and pnpm 11 blocks a Git package's build script:
@@ -38,7 +101,7 @@ tool runtime; the card route `/.well-known/agent-card.json` is registered only w
 
 ## What you get
 
-- **Model tools** (twelve, see the table below) — `a2a_teams` lists the teams this node can see (its own rows
+- **Model tools** (see the table below) — `a2a_teams` lists the teams this node can see (its own rows
   plus peer teams inside the joined-team scope); `a2a_route`
   sends one message to a team, reuses `context_id` to continue a remote conversation, and fails over across
   candidates when a peer is unreachable. `a2a_tasks` reconciles the receipt contract across three tiers: every route that leaves a
@@ -84,7 +147,7 @@ tool runtime; the card route `/.well-known/agent-card.json` is registered only w
 
 ## Model tools at a glance
 
-Twelve tools. With `teamScopeInfo` on (the default), `a2a_teams`, `a2a_status` and `a2a_probe` answer from
+With `teamScopeInfo` on (the default), `a2a_teams`, `a2a_status` and `a2a_probe` answer from
 this host's joined-team scope: `[this host]` rows plus peers serving a team this host's nodes declared.
 `a2a_tasks` (this host's own dispatch ledger) stays unscoped.
 
@@ -93,6 +156,7 @@ this host's joined-team scope: `[this host]` rows plus peers serving a team this
 | `a2a_whoami` | Who am I on this network? | The calling session's node id, joined/live state, routable handle, roster + canvas memberships, the owner's `teamJoinAllowlist`, the `teamScopeRouting` switch, and recent refused join/leave attempts. |
 | `a2a_teams` | Which teams can I route to? | `[this host]` rows plus in-scope peer teams, with activity excerpts. |
 | `a2a_route` | Send a message to a team. | `context_id` continues a conversation; `async: true` delivers without waiting; fails over across candidates. |
+| `a2a_task_read` | What did that task actually say? | Returns the full original text of an A2A task delivered to THIS session, by task id — for a task `a2a_tasks` shows (brief only, `delivered-unconsumed`) whose message reached the session while it was busy and never entered its conversation. Only the receiving session reads it (anyone else is answered as for a missing task); texts are kept 72 hours (64 KiB of UTF-8 each, clipped beyond). Reading consumes the delivery; the result is peer content. A delivery whose text was lost outright (a steer the host never tracked) is also redelivered when the session is idle, as a queued delivery of the original task, so its claim, withdrawal or unknown outcome is reconciled like any queued task and never resent blindly. |
 | `a2a_tasks` | Which async tasks still owe a receipt? | Three tiers: owed rows keep the follow-up `context_id`; past-TTL rows auto-dead-letter (still settleable); outcomes land in the bounded archive; persisted across restarts. |
 | `a2a_probe` | Is the fleet healthy? | One verified-card fetch per in-scope peer (or one given url); `N reachable, M down`; misses classified `unreachable` vs `rejected`. |
 | `a2a_team_join` | Declare one joined node a member of a team. | Allowlist-gated: only an **exact** name in `teamJoinAllowlist` authorizes a join (empty list denies every join). A wildcard/prefix entry is shown by `a2a_whoami` but authorizes nothing (`[PATTERN_NO_MINT]`); canvas teams are assigned in the workbench, never here (`[CANVAS_TEAM]`). Attempts land in the state face's `registry.teamAudit`. A model tool may only declare membership for the calling session's own node (else `[NOT_SELF]`), and that node must already be joined (else `[NOT_JOINED]`). |
@@ -101,6 +165,8 @@ this host's joined-team scope: `[this host]` rows plus peers serving a team this
 | `a2a_report` | Tell this host's supervision something while off the network. | The one write-ingress to this host that works while unjoined (the read-only `a2a_whoami` is exempt from the join gate too): one-way, lands in the state face's reports ring (newest 64 kept), grants no presence or routing. One report per 30s per session, ≤4000 chars; once the same session has reported the same text 3 times within 10 min, the 4th is refused as a loop. |
 | `a2a_status` | What is this node doing right now? | In-scope tracked peers with quality scores, in-flight routes, recent routing activity, and the idempotency window aggregate (occupancy + claim/replay/conflict counters). |
 | `a2a_file_send` | Hand files to a team without putting them in a message. | Stages each file (≤16 per call, ≤64 MiB each) on this host, granted to that team for 24 hours, and routes ONE message of `[A2A file]` reference lines; the bytes never ride the message (#91). Needs this host to have published a card URL (`announce`), otherwise it refuses to send. |
+| `a2a_file_grants` | See your file grants and the store's space. | Lists the file-channel grants this session made that are still live — sha256, size, name, target, granted/expiry times, the task it went out in, and whether the target fetched it — plus the store's occupancy and ceilings (256 files, 1 GiB). |
+| `a2a_file_revoke` | Take back a file grant. | Revokes one grant this session made, by `sha256` and `to`; when no grant names the file any more its bytes are deleted, so the space is free at once. Another sender's grant is answered as missing. CLI: `a2a-net file grants` / `a2a-net file revoke <sha256> <to>`. |
 | `a2a_file_fetch` | Pull a file someone referenced. | Pulls one `[A2A file]` reference from the host that staged it, carrying this session as `caller_session` and this host node's OriginClaim envelope (a reference naming this host reads the local store directly); checks size and sha256 before saving it under `<cwd>/a2a-inbox/`. A grant names one session (or a whole host, or a canvas team's members); the fetch always marks the session as having read peer content. |
 
 ## a2a-net CLI (callers outside a session)
@@ -121,6 +187,26 @@ a2a-net inbox --new                                      # unread mail; --wait b
 From 0.6.38, `forwardDirect` defaults to `true`: after a local miss the home can forward an authenticated online CLI one hop to a linked peer target. Both operators must link: A links the receiving B member; B links the CLI handle and explicitly pins A as its home. For canvas targets A links only the owner host (#282 S3, same team authorizes; the owner host must run 0.6.37 or later): receipts are admitted and settle only from receivers frozen from the owner's signed card, on that owner's key. With scope and settlement enforcement on, the member-host auto-receipt settles A’s forwarded row and lands in the CLI inbox; `--sync` returns B’s reply, but on the forwarded path a synchronous wait has only a ~15s transport window and times out with `-32005` (delivered, not settled): the target still auto-receipts when it finishes, so reconcile by task id / `inbox` and do not resend blindly; for long work use the default async `route`, then `inbox --wait --renew`. Commands, flags, environment
 variables and exit codes: [`src/skill/references/cli.md`](src/skill/references/cli.md).
 
+
+### Pi seats (a Pi agent as a superagent team member)
+
+A Pi coding agent can work as a member of a superagent team. Its seat is an `a2a-net` identity deposited on the team host
+whose own signed card declares `piSeat` ([docs/design/superagent-pi-platform.md](docs/design/superagent-pi-platform.md)):
+
+```sh
+a2a-net init fleet-pi --home <team host URL>   # the seat's identity, home = the team host
+a2a-net publish --pi-seat                     # deposit with capabilities.piSeat; renewals keep it (publish --renew)
+a2a-net pi install                            # copies the a2a-seat extension into ~/.pi/agent/extensions/ (--dir, --force)
+```
+
+Installing joins no team: the team's owner adds the handle to the team canvas, which pins the seat's key. A renewal
+(`publish --renew`, `inbox --wait --renew`) signs what the last explicit publish declared, so `piSeat` stays; an explicit
+`publish` without `--pi-seat` withdraws it. The extension renews the deposit every hour, keeps its cursor per seat (one
+Pi process consumes a seat at a time), keeps a turn end owed until the host takes it, and polls the seat's mailbox, hands each piece of work to the Pi session, and reports read and turn end. The model answers with
+`a2a-net ticket report|ack|handback|idle|read|error` (signed, body-bound requests to the team host). A seat may not change
+rules or speak for the owner, and a seat whose home is another host is not supported. A question is a decision card:
+`ticket report --question Q --options A|B --recommended A`. A seat's turn end carries no text, so report what changed
+with `ticket report`.
 
 ### Standalone network node (no DSH instance)
 
@@ -150,7 +236,7 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `announce` | `false` | Publish this node's agent card for peer discovery. |
 | `isolated` | `false` | Send nothing to any peer: card reads, directory sweeps, routes, remote log reads, canvas pings and fleet canvas-op relays are all refused (gh#193). `a2a/peers.json` is left untouched and refused fetches do not score peers; inbound faces keep answering; the state face shows `isolated: true`. For test and acceptance hosts. |
 | `forwardDirect` | `true` | From 0.6.38, one-hop forwarding is enabled by default for an authenticated online local CLI after a local target miss; sender scope and the hop guard remain enforced. Link B receiving members at A, and link/pin the CLI home A at B; no second forwarding hop. Set `forwardDirect: false` to restore local-only CLI delivery. |
-| `superagent` | `true` | superagent (design v4, team model v5): run superagent's own domain engine (vendored upstream `src/core`) in this host. It stays idle until a team is bound; `false` turns it off. The team is a canvas team: the owner composes it on the canvas (router and members, local or on other hosts) and binds it at `/__dsh_a2a/superagent` with the router and the allowed senders; its A2A address is the canvas address `<zone>/canvas/<name>`. The router and members run the shipped `superagent-router` / `superagent-member` agent presets; see [`superagent.md`](src/skill/references/superagent.md). |
+| `superagent` | `true` | superagent (design v4, team model v5): run superagent's own domain engine (vendored upstream `src/core`) in this host. It stays idle until a team is bound; `false` turns it off. The team is a canvas team: the owner composes it on the canvas (router and members, local or on other hosts) and binds it at `/__dsh_a2a/superagent` with the router and the allowed senders; its A2A address is the canvas address `<zone>/canvas/<name>`. The router and members run the shipped `superagent-router` / `superagent-member` agent presets; see [`superagent.md`](src/skill/references/superagent.md). Host setup for the team's MCP tools (workbench market, ygl-trees outside the presets; Chinese): [docs/ops/superagent-mcp.md](docs/ops/superagent-mcp.md). |
 | `peers` | `[]` | Seed base URLs; referred peers are learned from their cards. |
 | `delegates` | `[]` | Zone delegations: `{ name, url, publicKey }` published on the card. |
 | `team` | `'dsh'` | Team name this node exposes for direct routing. |
@@ -220,9 +306,12 @@ Set an `apiKey` before exposing the listener beyond loopback.
 | `/__dsh_a2a/groups` | Manual session grouping — deprecated since 0.6.6 (canvas teams supersede it), kept for old panels. |
 | `POST /__dsh_a2a/dispatch` | Workbench quick dispatch into a team. |
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | Settle an owed task from the caller side (cancel also makes a best-effort stop notice to the target: a steered notice for a local one, a wire delivery for a remote one — which also carries `cancel_task_id` when the peer's card declares `queuedTaskCancellation`, withdrawing the original task if it is still queued; the reply carries `steered` and `removed`); the row lands in `archived[]`. |
-| `GET`/`POST /__dsh_a2a/superagent` | Unless `superagent: false`: the engine state (threads, decisions, replies, tickets with stage, the bound canvas and any binding problem), and the owner's actions `settings` (bind `canvas` and `router`) · `request` (the workbench Source) · `serve` (serve another host's team by its canvas id) · `stop` · `retry`. |
-| `GET`/`POST /__dsh_a2a/superagent/decisions` | Unless `superagent: false`: the decision cards waiting for the owner across this instance's teams; POST `{ id, how: 'approve' \| 'choose', option?, note?, teamId? }` decides one. Needs the GUI login on a host that has one. |
+| `GET`/`POST /__dsh_a2a/superagent` | Unless `superagent: false`: the engine state (threads, decisions, replies, tickets with stage, the bound canvas and any binding problem), and the owner's actions `settings` (bind `canvas` and `router`; `sources.github` and `github: { repos, intake }` take GitHub issues as requests, owner login required) · `sync-github-allowed` (add the repositories' push collaborators to `allowed.github`, owner login required) · `request` (the workbench Source) · `serve` (serve another host's team by its canvas id) · `stop` · `retry`. |
+| `GET`/`POST /__dsh_a2a/superagent/decisions` | Unless `superagent: false`: the decision cards waiting for the owner across this instance's teams; POST `{ id, how: 'approve' \| 'choose', option?, note?, files?, teamId? }` decides one; `files` are `[A2A file] v1` reference lines staged for the card's team. Needs the GUI login on a host that has one. |
+| `GET /__dsh_a2a/superagent/models` | Unless `superagent: false`: the DSH model catalog for the team's settings (the page falls back to free text) |
+| `GET /__dsh_a2a/superagent/decisions/file` | Unless `superagent: false`: `?card=&sha256=&teamId=` downloads a file a card names (its proposer's, or one sent with the decision) while the file channel still holds it (24 h). Needs the GUI login on a host that has one. |
 | `GET`/`POST /__dsh_a2a/superagent/teams` | Unless `superagent: false`: this instance's teams; POST `{ canvas, router }` adds one. The list also has the teams linked instances advertise; POST `{ action: 'send', address, session, text }` sends one a request as that session (design M9). `teamId` in a POST body or `?teamId=` on a GET of `/__dsh_a2a/superagent` picks a team by id (design M3). |
+| `GET`/`POST /__dsh_a2a/superagent/staffing` | Staffing changes (S1a): GET lists the ledger; POST `{ action: 'submit', change: { id, summary?, ops }, agree?: true }` or `{ action: 'agree', id }`, from the signed-in DSH interface only. Operations: `team.create`, `member.add` (with an optional profile), `team.rules.set` (scope team / dispatch / member:<seatId>); existing sessions only; a failure is undone in reverse. |
 | `/__dsh_a2a/session-log` · `/remote-session-log` | Session log reads for the workbench. |
 | `/__dsh_a2a/owner-settings` | The owner panel: read (GET) or write (POST) `teamJoinAllowlist`, `teamScopeInfo`, `seatNames` and `announce` into the home patch layer (all but `announce` apply immediately; `announce` needs a restart, and GET reports `announceRestartPending`). `seatNames` is a validated full map; omit a session id to clear its label. This owner-authenticated control face is not a model naming tool; local shell/config writers remain inside the existing operator trust boundary. |
 | `/__dsh_a2a/fleet-canvas-op` | Relay a canvas operation (`create`, `add-member`, `remove-member`, `remove`) to a peer's `/a2a/canvas-op`, stamped with this node's OriginClaim; the peer's link gate decides. |
@@ -327,16 +416,18 @@ its origin). A verified but unlinked caller still gets the minimal card. See
 the envelope details.
 
 **Which artifact to build against.** npm direct install already includes the
-four subpaths: releases from 0.6.25 (badge `latest`) carry them, so
+four subpaths: every npm release from 0.6.24 on carries them (there is no
+release between 0.5.15 and 0.6.24; `latest` is currently 0.7.0), so
 `npm install @nelsonlongxiang/dsh-open-a2a-net` works out of the box —
 see `examples/external-node/` for a runnable external-node example that
 exercises all four subpaths against an embedded mock peer. The subpath
-exports landed in commit `9cb3852`; versions before that (public 0.5.15
-included) predate the admission rules and the OriginClaim envelope above,
+exports landed in commit `9cb3852` (0.6.24 has them; the full-card link
+gate is from 0.6.25); versions before that (public 0.5.15 included) predate
+the admission rules and the OriginClaim envelope above,
 and importing the subpaths from them fails with
 `ERR_PACKAGE_PATH_NOT_EXPORTED` — the historical recipe (pin a commit,
 `pnpm build`, `npm pack`, depend on the tarball) survives below for
-pre-0.6.25 deployments only:
+pre-0.6.24 deployments only:
 
 ```bash
 # HISTORICAL (0.5.15 and earlier): build the package from a pinned commit

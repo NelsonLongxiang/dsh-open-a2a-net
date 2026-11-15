@@ -48,6 +48,10 @@ model tools.
   withdraws it — so only an identity that does answer every task (the
   superagent Source) should declare it. A host that predates it ignores the
   field and keeps the mailbox final.
+- `a2a-net publish --declare progressReceipts,directedSeats,reworkReturns,teamRoster` (or the same list in
+  `A2A_DECLARE`) declares what this identity takes as a requester (superagent-root-team S5): only these four names. A
+  team host on its bot list then sends it progress steps and believes its `[A2A dispatch]` lines. A superagent root
+  team's Source sets it while the team is a root. Like `--owes`, every publish states it afresh.
 - A handle stays pinned to the key it was published with, live or offline
   (gh#137): publishing it with a different key (e.g. after `init --force
   --uuid <same>`) is refused with "held by another key". Run `a2a-net revoke`
@@ -90,7 +94,15 @@ Files do not go through session messages: use the file channel below, never JPFI
   face, #332) — can be fetched; the alias lookup asks only the configured home,
   and old/denied/malformed/redirected metadata fails closed. For a file on any
   other host, ask the sender to send it through your home host.
-- Sessions use the `a2a_file_send` / `a2a_file_fetch` tools for the same thing.
+- `a2a-net file send … --task <id>` records that task id on each grant (default: the task the send goes out in). The CLI stages AS its identity (`POST /a2a/blob-stage`: one JSON line `{to, name, task_id}`, a newline, then the bytes, all under its signed, body-bound claim), so the grants are its own; an older home host without that face gets the control stage, whose grants belong to the operator (`control`) and are not revocable from the CLI. Each sender's grant is its own: another sender staging the same bytes for the same target never takes yours over, and re-sending only extends yours (task and fetch record kept).
+- `a2a-net file grants [--json]` lists the grants THIS identity made that are still live: sha256, size, name,
+  `to`, granted and expiry times, task id, and whether the target fetched it (`fetched`, `fetches`,
+  `firstFetchedAt`); plus the store's occupancy and ceilings (`usage`: files/bytes of 256/1 GiB).
+- `a2a-net file revoke <sha256> <to>` revokes one of this identity's own grants; when no grant names the file
+  any more its bytes are deleted and the space is free at once. Another identity's grant is answered
+  `not-found`, as a missing one is. Both commands sign a body-bound OriginClaim on the home host
+  (`POST /a2a/blob-grants`): the identity is what the signature proves, never a field of the request.
+- Sessions use the `a2a_file_send` / `a2a_file_fetch` / `a2a_file_grants` / `a2a_file_revoke` tools for the same thing.
 
 ## Sending
 
@@ -122,7 +134,11 @@ Files do not go through session messages: use the file channel below, never JPFI
   more than ±5 min (fix its NTP); the caller fields are the sender's own claim. Once the window is closed the route is refused as
   `wrong-audience`: stderr names the dialled origin and the fix — the host
   operator adds it to `originClaimAudiences`, or `--home` / `$A2A_HOME`
-  points at an address the host lists. A proxy that rewrites the path
+  points at an address the host lists. `$A2A_CLAIM_AUDIENCE` (an origin)
+  makes the bound form name that origin instead of the one dialled: a host
+  that runs the CLI against itself on loopback (the superagent team
+  identity) sets it to its own card URL's origin, which it always lists.
+  `a2a-net status` then prints `signed for <origin>`. A proxy that rewrites the path
   (`<home>` with a path prefix) fails the same way as `bad-sig`. These
   refusals are never resent unsigned. A redirect from the home is never
   followed either, on any command (the API key, pocket cookie and claim
@@ -306,11 +322,35 @@ Files do not go through session messages: use the file channel below, never JPFI
     debt is booked for it), so its receipt settles nothing there; the
     caller still gets it, with `disposition` on its mailbox row. A receipt
     settles a debt only where the caller tracked one.
+  - Added fields (market N1c/N1d, [receipt-envelope-fields](../../../docs/design/receipt-envelope-fields.md)):
+    `--by SEAT [--by-name N] [--by-team T] [--by-role router|member|observer] [--by-seat-id ID]`
+    says who took the work up (the router until a member holds the work; `--by-seat-id`
+    is the seat's stable id, the roster's `seatId`, which outlives its session), and
+    `--artifacts KIND:ID[,KIND:ID…]` names what it produced, as ids in the
+    caller's system (or a JSON array `[{"kind","id","title"}]`, where `title`
+    is display text for people, at most 200 characters). With `--attention`, `--question-id ID [--options 'A|B']
+    [--default X]` makes it a structured question, whose text is the one line.
+    Such a question rides task id `attention-<task_id>-<ID>` and marks the
+    caller's row the way `--acknowledged` does: it settles nothing, more
+    questions may follow, and the result receipt still comes on
+    `receipt-<task_id>`. A malformed switch exits 2 and sends nothing.
+  - `--progress N --state queued|working|waiting|blocked [--ahead K]
+    [--tickets JSON]` sends progress step N (the one line is its summary)
+    on task id `progress-<task_id>-<N>`, with the tickets the request
+    became. Like `--acknowledged`, it marks the caller's row and settles
+    nothing ([superagent-market-progress-roster](../../../docs/design/superagent-market-progress-roster.md)).
+    An older receiver settles the row on it, so send it only to a caller
+    that declares `progressReceipts`; a team's host face refuses others
+    (exit 4).
   - `--acknowledged` says the task is taken up and its result follows. It settles nothing: the caller's row stays owed until the result receipt, leaves the queue count, and expires 7 days after the acknowledgement instead of 24 hours after dispatch. It rides task id `ack-<task_id>`, so the later receipt is not refused.
-- `admission <caller> [--local] [--json]` asks the home host how `<caller>`
+- `admission <caller> [--local] [--task ID] [--json]` asks the home host how `<caller>`
   would be admitted delivering to this identity right now, recomputed from the
   host's current links: `{caller, admitted, rule}`. `--local` asks for the
-  same-host face (a session on the home host). The query is signed with this
+  same-host face (a session on the home host). `--task` asks about one task the
+  caller sent (signed too, in a domain-separated form): a superagent-intake task
+  is judged by its own birth — the host it was admitted from, under that key —
+  so another host with the same handle never answers for it; without `--task`
+  no intake link counts. The query is signed with this
   identity's key, and the host answers only the identity itself — a holder of
   the host key cannot ask about another identity's links — with the rule name
   and nothing more. Exit 0 once answered (admitted or not), 1 when the host
@@ -388,3 +428,20 @@ class instead: 0 sent, 4 gone, 5 the task already carries a different receipt
 - `node.json` holds plugin config keys (`team`, `session`, `agentName`, `apiKey`, `peers`, `originClaimUrl`, `originClaimAudiences`, `forwardDirect`, …; `dshHome` is the file form of `--home`, `host`/`port` the file form of the flags); flags win. `--host` is meant for `127.0.0.1` (default) or `0.0.0.0` — the value reaches the listener unvalidated (only `--port` is validated). The node also forces `sessionNodes: true` and `wakeJoinedOnBoot: false`, and defaults `announce: true` (an always-on node exists to be found; a file `announce` still overrides it). Defaults: `--host 127.0.0.1`, `--port 13090`, `--home ~/.a2a-net/node` (separate from the CLI's own `~/.a2a`). Bind beyond loopback only with an `apiKey`.
 - The runtime needs the tested DSH packages next to this one. In an empty folder: `npm i @nelsonlongxiang/dsh-open-a2a-net@<version>` plus the pinned set `serve` prints when one is missing (npm's `latest` tags of those packages are older and do not work), then `npx a2a-net serve --config node.json`.
 - Link it like any host: list the DSH hosts in its `peers` and add the node's URL to theirs; put CLIs and the DSH sessions they work with in a canvas team on the node (or rely on #282 S3 for canvases owned elsewhere).
+
+## Pi seats (`publish --pi-seat`, `ticket`, `pi install`)
+
+A Pi seat is a CLI identity that declares `piSeat` on its own signed card (`a2a-net publish --pi-seat`), deposited on
+the superagent team's host. Once the team's owner adds it to the team canvas (its key is pinned there), its work arrives
+in its mailbox with the ticket id as `task_id`, and it answers on the team host with signed, body-bound ops:
+
+- `a2a-net ticket read` · `ticket idle [--text T]` · `ticket error [--transient] -- <what failed>` — each with `--ticket <id> --run <id> --event <id>`: a Pi seat's turn facts name their ticket, the run of it (the work row's `context_id`; each binding of a ticket has its own) and an event id made once. The host records accepted events on disk and acknowledges a replay, even after a restart, without acting on it; a fact that is not for the seat's current run does nothing (`stale`). A stop arrives as a row whose `context_id` is `stop.<run>`: the end of that run, never new work. A fact that cannot be recorded is refused as `journal` (retryable) and has no effect until it can be
+- `a2a-net ticket ack|handback --trigger <trigger id> -- <text>`
+- `a2a-net ticket report --ticket <id> --state progress|waiting|ready|blocked|failed|dropped [--question Q --options A|B|… --recommended A [--level P0..P3]] [--answers <trigger id>] [--pull-request <url>] -- <summary>` — a question is a decision card for the owner: 2–6 options and the one the seat recommends, checked before it is sent
+
+A seat's turn end (`ticket idle`, sent by the extension) carries no text: report what changed with `ticket report`, as the work card asks.
+
+Refusals keep the host's code: `not-member` (not this team's seat under the pinned key), `op` (a seat has only these
+six ops: no rule changes), `untrusted-origin` (unsigned or not body-bound). `a2a-net pi install [--dir DIR] [--force]`
+copies the `a2a-seat` Pi extension (default `~/.pi/agent/extensions/`), which polls the mailbox with its own cursor and
+reports read and turn end. Installing never joins a team. Design: docs/design/superagent-pi-platform.md.

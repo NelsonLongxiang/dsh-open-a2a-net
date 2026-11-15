@@ -4,7 +4,7 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { guiOwnerProven, touchesRules } from '../../src/superagent/host/owner-proof.ts'
+import { touchesRules } from '../../src/superagent/host/owner-proof.ts'
 import { DEFAULT_SETTINGS, parseSettings } from '../../src/superagent/host/policy.ts'
 
 const canvasOf = (ids: string[]) => (name: string) => name === 'team' ? { local: ids, remote: [] } : undefined
@@ -216,16 +216,26 @@ describe('the owner asks in the session', () => {
 })
 
 describe('the owner\'s proof for a page edit', () => {
-  const host = (auth: boolean) => vi.fn(async (_url: string, init: RequestInit) => ({ status: !auth ? 404 : new Headers(init.headers).has('cookie') ? 404 : 401 }))
-  it('needs a cookie the host accepts and a host that refuses without one', async () => {
-    expect(await guiOwnerProven('http://h', 'c=1', host(true))).toBe(true)
-    expect(await guiOwnerProven('http://h', undefined, host(true))).toBe(false)
-    expect(await guiOwnerProven('http://h', 'c=1', vi.fn(async () => ({ status: 401 })))).toBe(false)
-    expect(await guiOwnerProven('http://h', 'c=1', host(false))).toBe(false)
-    expect(await guiOwnerProven(undefined, 'c=1', host(true))).toBe(false)
-  })
+  // Original-request browser-owner proof is exercised in superagent-owner-proof.spec.ts.
   it('asks only for writes that touch a rule', () => {
     for (const settings of [{ rules: [] }, { dispatch: '' }, { profiles: {} }]) expect(touchesRules(settings)).toBe(true)
     expect(touchesRules({ acceptMode: 'auto', bots: { a2a: [] } })).toBe(false)
+  })
+})
+
+describe('a staffing write moves a rule set\'s revision once (#671)', () => {
+  it('the executor\'s own history line is the only record; a page edit still counts as the owner\'s', async () => {
+    const m = await team()
+    const start = m.h.ruleChanges.revision('team')
+    // What the staffing adapter does for team.rules.set: save as 'staffing', then record the blueprint's line.
+    expect(m.h.saveSettings({ rules: [{ name: 'bp', text: '蓝图写的' }] }, () => true, undefined, 'staffing')).toMatchObject({ ok: true })
+    expect(m.h.ruleChanges.revision('team')).toBe(start)
+    m.h.ruleChanges.applied('team', { at: new Date().toISOString(), by: 'builder', reason: '由组队顾问蓝图 bp-1 起草' })
+    expect(m.h.ruleChanges.revision('team')).toBe(start + 1)
+    expect(m.h.ruleChanges.view().last.team).toMatchObject({ by: 'builder' })
+    expect(m.h.saveSettings({ rules: [{ name: 'page', text: '页面改的' }] }, () => true)).toMatchObject({ ok: true })
+    expect(m.h.ruleChanges.revision('team')).toBe(start + 2)
+    expect(m.h.ruleChanges.view().last.team).toMatchObject({ by: 'owner' })
+    await m.h.stop()
   })
 })

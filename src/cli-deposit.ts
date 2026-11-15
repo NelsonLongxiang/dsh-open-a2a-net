@@ -34,6 +34,13 @@ export const CLI_TOMBSTONE_CAP = 16
 /** Owner ruling ①: <agent-name>/<uuid·8B>. The name is [a-z0-9-]{1,32}. */
 export const CLI_HANDLE_RE = /^([a-z0-9-]{1,32})\/([0-9a-f]{16})$/
 
+/**
+ * superagent-root-team S5: whether `to` is a CLI identity deposited on another host. A team identity's receipt or follow-up
+ * to one goes out from the team identity (its CLI), not in-process: the in-process send speaks for this host, and the
+ * identity's home host has an operator link for the team identity only (a root team's requester link), not for this host.
+ */
+export const remoteCliTarget = (to: string, depositedHere: (handle: string) => boolean): boolean => CLI_HANDLE_RE.test(to) && !depositedHere(to)
+
 /** One deposited CLI identity. */
 export interface CliDeposit {
   readonly handle: string
@@ -101,7 +108,7 @@ const MAIL_PROOFS = ['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound
  * p1-mail-admission: the AdmissionRule names a restored row may carry (task-auth.ts); anything else is dropped. Kept
  * literal like MAIL_PROOFS (no runtime import back into task-auth); a unit test pins it to task-auth's full set.
  */
-export const MAIL_ADMISSIONS = ['scope-off', 'host-face', 'local-exempt', 'roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org', 'node-fact', 'cli-deposit'] as const satisfies readonly AdmissionRule[]
+export const MAIL_ADMISSIONS = ['scope-off', 'host-face', 'local-exempt', 'roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org', 'node-fact', 'cli-deposit', 'superagent-intake'] as const satisfies readonly AdmissionRule[]
 
 /**
  * Both lists cover their whole union: `satisfies` above keeps each entry a real value; these fail to compile when
@@ -177,8 +184,10 @@ const publicKeyOf = (cardJson: string): string => {
  * superagent p1-mail-admission (M-2): the bytes a CLI identity signs to ask its home host how a caller would be admitted
  * to it. The CLI builds the same array (cli/a2a.mjs); a unit test pins the two together.
  */
-export const admissionQueryPayload = (handle: string, caller: string, ingress: 'local' | 'wire', ts: number): string =>
-  JSON.stringify(['a2a-admission', handle, caller, ingress, ts])
+export const admissionQueryPayload = (handle: string, caller: string, ingress: 'local' | 'wire', ts: number, task?: string): string =>
+  // #697 review R1: a query about one task signs that task too (a domain-separated form), so a link judged for a task's
+  // birth is never borrowed by another task of the same caller.
+  task === undefined ? JSON.stringify(['a2a-admission', handle, caller, ingress, ts]) : JSON.stringify(['a2a-admission/2', handle, caller, ingress, ts, task])
 
 /** How far an admission query's timestamp may stray from this host's clock (the OriginClaim window). */
 export const ADMISSION_QUERY_WINDOW_MS = 300_000
@@ -188,13 +197,13 @@ export const ADMISSION_QUERY_WINDOW_MS = 300_000
  * with, fresh, over exactly these fields. Anything else is refused — so a holder of the control key cannot ask about
  * another identity's links (global review of the p1-mail-admission design).
  */
-export function verifyAdmissionQuery(cardJson: string | undefined, q: { handle: string; caller: string; ingress: 'local' | 'wire'; ts: number; sig: string }, now: number): boolean {
+export function verifyAdmissionQuery(cardJson: string | undefined, q: { handle: string; caller: string; ingress: 'local' | 'wire'; ts: number; sig: string; task?: string }, now: number): boolean {
   if (cardJson === undefined || !Number.isFinite(q.ts) || Math.abs(now - q.ts) > ADMISSION_QUERY_WINDOW_MS || q.sig === '') return false
   const key = publicKeyOf(cardJson)
   if (key === '') return false
   try {
     const publicKey = createPublicKey({ key: Buffer.from(key, 'base64'), format: 'der', type: 'spki' })
-    return verify(null, Buffer.from(admissionQueryPayload(q.handle, q.caller, q.ingress, q.ts)), publicKey, Buffer.from(q.sig, 'base64'))
+    return verify(null, Buffer.from(admissionQueryPayload(q.handle, q.caller, q.ingress, q.ts, q.task)), publicKey, Buffer.from(q.sig, 'base64'))
   } catch {
     return false
   }

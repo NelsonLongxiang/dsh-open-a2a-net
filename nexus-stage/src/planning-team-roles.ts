@@ -50,14 +50,19 @@ export function roleText(roles: TeamRoles | undefined, id: string): string | und
 }
 
 export interface TeamRoleDecorator {
-  /** The team's latest state (null: this host runs no team). */
-  update(state: SaState | null): void
+  /** The teams' latest states: every team on this instance (null: this host runs no team). */
+  update(states: SaState | null | readonly SaState[]): void
   /** The planning view rendered: mark its frames and cards. */
   decorate(frames: ReadonlyMap<string, HTMLElement>, nodes: ReadonlyMap<string, HTMLElement>): void
 }
 
 export function createTeamRoleDecorator(): TeamRoleDecorator {
-  let roles: TeamRoles | undefined
+  let teams: readonly TeamRoles[] = []
+  /** A card has one role across all teams (one session, one team role), so the first team that names it is the one. */
+  const roleOf = (id: string): { text: string; tip?: string } | undefined => {
+    for (const roles of teams) { const text = roleText(roles, id); if (text !== undefined) return { text, ...(roles.tips.has(id) ? { tip: roles.tips.get(id)! } : {}) } }
+    return undefined
+  }
   let frames: ReadonlyMap<string, HTMLElement> | undefined
   let nodes: ReadonlyMap<string, HTMLElement> | undefined
   const badge = (host: Element, cls: string, text: string | undefined, tip?: string): void => {
@@ -69,23 +74,27 @@ export function createTeamRoleDecorator(): TeamRoleDecorator {
   }
   const apply = (): void => {
     for (const [name, el] of frames ?? []) {
-      const team = roles?.canvas === name
+      const team = teams.some(roles => roles.canvas === name)
       el.classList.toggle('is-superagent-team', team)
       const head = el.querySelector('.p-frame-head')
       if (head !== null) badge(head, 'sa-team', team ? 'superagent 团队' : undefined)
     }
     for (const [id, el] of nodes ?? []) {
-      const text = roleText(roles, id)
+      const role = roleOf(id), text = role?.text
       el.classList.toggle('is-superagent-router', text === '总工')
       el.classList.toggle('is-superagent-member', text?.startsWith('成员') === true || text?.startsWith('观察者') === true)
       badge(el, 'sa-role', text === undefined ? undefined : roleLabel(text), text)
       // The card's own tooltip is written on each render, before this runs: add to it once.
-      const tip = roles?.tips.get(id)
+      const tip = role?.tip
       if (tip !== undefined && !el.title.endsWith(tip)) el.title = `${el.title}\n${tip}`
     }
   }
   return {
-    update(state) { roles = teamRolesOf(state); apply() },
+    update(states) {
+      const list = states === null ? [] : 'settings' in states ? [states as SaState] : [...states as readonly SaState[]]
+      teams = list.flatMap(state => { const roles = teamRolesOf(state); return roles === undefined ? [] : [roles] })
+      apply()
+    },
     decorate(f, n) { frames = f; nodes = n; apply() },
   }
 }

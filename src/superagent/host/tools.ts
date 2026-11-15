@@ -13,6 +13,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { UserError, type Outcome, type ReplyRequest } from '../upstream/dsh-superagent/src/core/index.ts'
 import type { SuperagentHost } from './index.ts'
 import { OBSERVER_OPEN_MAX, observerOfActor } from './policy.ts'
+import { grantableTool, memberBoundary, roleTools } from './role-tools.ts'
 import { parseDecision } from './decisions.ts'
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
@@ -43,6 +44,7 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
   const triggerId = str(item.trigger_id)
   const kind = str(item.kind)
   if (triggerId === undefined) return { ok: false, code: 'missing', error: 'trigger_id is required' }
+  host.routerDecided()
   try {
     if (kind === 'attach') {
       const ticketId = str(item.ticket_id)
@@ -56,7 +58,9 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
     const evalId = candidate?.evalId
     const rules = Array.isArray(item.rules) ? [...new Set(item.rules.filter((r): r is string => typeof r === 'string' && r !== ''))] : []
     const repo = str(item.repo)
-    const memberName = str(item.member)
+    // Named dispatch N3: a request that names a seat goes to that seat; the router's member is not asked for, nor used.
+    const named = kind === 'accept' ? host.named.namedIn(candidate?.triggers.map(t => t.id) ?? [triggerId]) : undefined
+    const memberName = named === undefined ? str(item.member) : undefined
     const member = memberName !== undefined ? host.resolveMember(memberName) : undefined
     let outcome: Outcome
     if (kind === 'accept' && candidate?.strength === 'inferred' && host.settings.acceptMode !== 'auto') {
@@ -72,7 +76,7 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
         return { ok: false, trigger_id: triggerId, code: 'repo', error: `no member works in ${repo}; the team's repositories: ${known.length > 0 ? known.join(', ') : '(none — accept without repo)'}` }
       }
       if (memberName !== undefined && member === undefined) return { ok: false, trigger_id: triggerId, code: 'member', error: `no such member: ${memberName}. ${host.memberListLine()}` }
-      if (memberName === undefined && host.membersProfiled()) return { ok: false, trigger_id: triggerId, code: 'member', error: `this team's members have roles and rules: name the one this work fits as member. ${host.memberListLine()}` }
+      if (memberName === undefined && named === undefined && host.membersProfiled()) return { ok: false, trigger_id: triggerId, code: 'member', error: `this team's members have roles and rules: name the one this work fits as member. ${host.memberListLine()}` }
       const acknowledgement = str(item.acknowledgement), name = str(item.name), note = str(item.note)
       outcome = { kind: 'accept', title, scope, reason, ...(acknowledgement !== undefined ? { acknowledgement } : {}), ...(name !== undefined ? { name } : {}), ...(note !== undefined ? { note } : {}), ...(rules.length > 0 ? { rules } : {}) }
     } else if (kind === 'ignore') outcome = candidate?.strength === 'inferred' && rules.length === 0 && item.rules !== undefined
@@ -90,8 +94,39 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
     const repoSet = decision.kind === 'accept' && decision.ticketId !== undefined && repo !== undefined
     if (repoSet) host.executor.setRepo(decision.ticketId!, repo!)
     if (decision.kind === 'accept' && decision.ticketId !== undefined && member !== undefined) host.executor.setMember(decision.ticketId, member)
+    if (decision.kind === 'accept' && decision.ticketId !== undefined && named !== undefined) host.named.accepted(decision.ticketId, named)
     return { ok: true, trigger_id: triggerId, kind, decision_id: decision.id, decision: decision.kind, ...(decision.ticketId !== undefined ? { ticket_id: decision.ticketId } : {}), ...(repoSet ? { repo: repo! } : {}), reason: json(decision.reason) }
   } catch (error) { return { trigger_id: triggerId, ...refusal(host, error, { trigger: triggerId, ...(str(item.ticket_id) !== undefined ? { ticket: str(item.ticket_id)! } : {}) }) } }
+}
+
+/**
+ * docs/design/superagent-split.md S1/S2: the router splits a request into parts, only when the request asks for them. The
+ * request is accepted as the parent (held from members, it only coordinates); each part becomes a child ticket. \`asked\`
+ * must be the request's own words that ask for parts, copied exactly.
+ */
+export function splitRequest(host: SuperagentHost, input: { trigger_id?: unknown; title?: unknown; scope?: unknown; reason?: unknown; rules?: unknown; asked?: unknown; parts?: unknown }): Record<string, JsonValue> {
+  const triggerId = str(input.trigger_id), asked = str(input.asked), reason = str(input.reason)
+  if (triggerId === undefined || asked === undefined || reason === undefined) return { ok: false, code: 'missing', error: 'split needs trigger_id, asked (the request\'s words that ask for parts, copied exactly) and reason' }
+  const raw = Array.isArray(input.parts) ? input.parts as Array<Record<string, unknown>> : []
+  if (raw.length < 2 || raw.length > 6) return { ok: false, code: 'parts', error: 'split takes 2 to 6 parts, each { title, scope, member? }' }
+  const parts: Array<{ title: string; scope: string; member?: string }> = []
+  for (const [index, part] of raw.entries()) {
+    const title = str(part?.title), scope = str(part?.scope), memberName = str(part?.member)
+    if (title === undefined || scope === undefined) return { ok: false, code: 'parts', error: `part ${String(index + 1)} needs a title and a scope` }
+    const member = memberName !== undefined ? host.resolveMember(memberName) : undefined
+    if (memberName !== undefined && member === undefined) return { ok: false, code: 'member', error: `part ${String(index + 1)}: no such member: ${memberName}. ${host.memberListLine()}` }
+    parts.push({ title, scope, ...(member !== undefined ? { member } : {}) })
+  }
+  if (!host.askedIn(triggerId, asked)) return { ok: false, code: 'not-asked', error: 'asked is not in the request: split only a request that asks for separate parts, and copy its words exactly. Otherwise accept it as one ticket.' }
+  host.splits.beginFor(triggerId)
+  try {
+    const accepted = routeItem(host, { trigger_id: triggerId, kind: 'accept', title: input.title, scope: input.scope, reason, ...(input.rules !== undefined ? { rules: input.rules } : {}) })
+    const parent = typeof accepted.ticket_id === 'string' ? accepted.ticket_id : undefined
+    if (accepted.ok !== true || parent === undefined) return accepted
+    const out = host.splitParent(parent, asked, parts, reason)
+    if (!out.ok) { host.releaseSplit(parent); return { ok: false, code: out.code, error: `${out.error}; the request was accepted as one ticket (${parent}) instead`, ticket_id: parent } }
+    return { ok: true, trigger_id: triggerId, ticket_id: parent, parts: out.children }
+  } finally { host.splits.endFor(triggerId) }
 }
 
 /**
@@ -124,6 +159,29 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     const shown = body.length > SAID_CAP ? `${body.slice(0, SAID_CAP)}… (clipped, ${String(body.length)} chars)` : body
     return [{ type: 'text' as const, text: `${title}${ok === true ? ': ok' : ' refused:'} ${shown}` }]
   }
+
+  ctx.tools.register(defineTool({
+    name: 'superagent_split',
+    description: 'Team router only, and only when a request explicitly asks for separate parts: accept it split into 2–6 parts. The request becomes the parent ticket, which only coordinates; each part is a ticket a member works on (member names one). asked is the request\'s own words that ask for parts, copied exactly — the host refuses a split it cannot find them in. The requester gets one result when every part has ended.',
+    parameters: {
+      trigger_id: { type: 'string', required: true, description: 'The candidate request.' },
+      title: { type: 'string', required: true, description: 'The parent ticket\'s title.' },
+      scope: { type: 'string', required: true, description: 'What the whole request asks for.' },
+      reason: { type: 'string', required: true, description: 'Why it is accepted and split.' },
+      asked: { type: 'string', required: true, description: 'The request\'s words that ask for separate parts, copied exactly.' },
+      rules: { type: 'array', items: { type: 'string' }, description: 'For an inferred candidate: the enabled rules it matches.' },
+      parts: { type: 'array', required: true, items: { type: 'object', additionalProperties: true }, description: 'The parts: { title, scope, member? }, 2 to 6.' },
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('superagent split', value) },
+    presentCall: args => ({ card: 'generic', title: `superagent split (${String(Array.isArray(args.parts) ? args.parts.length : 0)})`, kind: 'other', rawInput: args }),
+    execute: async (args: Record<string, unknown>, exec): Promise<Record<string, JsonValue>> => {
+      const h = asRouter(exec)
+      if (h === undefined) return { ...notRouter }
+      const out = splitRequest(h, args)
+      h.pass()
+      return out
+    },
+  }))
 
   ctx.tools.register(defineTool({
     name: 'superagent_route',
@@ -244,25 +302,38 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       level: { type: 'string', description: 'With a question: P0 irreversible or production, P1 significant, P2 routine and easy to undo, P3 trivial. Default P1.' },
       pull_request: { type: 'string', description: 'The URL of the pull request this ticket opened. The ticket then ends when that pull request merges or closes.' },
       answers: { type: 'string', description: 'The trigger id of the person\'s question this report answers.' },
+      files: { type: 'array', items: { type: 'string' }, description: 'With a question: up to 16 files from your workspace for the owner to look at (paths relative to it). They show on the card for the owner to download, and the team can pull them.' },
+      ygl: { type: 'array', items: { type: 'string' }, description: 'The ygl-trees ids you wrote for this ticket (evidence, claims, kb notes). Expected with ready when you have the ygl tools.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('ticket report', value) },
     presentCall: args => ({ card: 'generic', title: `ticket report: ${String(args.state)}`, kind: 'other', rawInput: args }),
-    execute: async (args: { ticket_id: string; state: string; summary: string; question?: string; answers?: string; pull_request?: string; options?: string[]; recommended?: string; level?: string }, exec): Promise<Record<string, JsonValue>> => {
+    execute: async (args: { ticket_id: string; state: string; summary: string; question?: string; answers?: string; pull_request?: string; options?: string[]; recommended?: string; level?: string; files?: string[]; ygl?: string[] }, exec): Promise<Record<string, JsonValue>> => {
       const h = host(exec)
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
       if (h === undefined || me === undefined || h.roleOf(me) !== 'member') return { ok: false, code: 'not-member', error: 'a2a_ticket_report serves only the superagent team members the owner named' }
       if (!['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(args.state)) return { ok: false, code: 'state', error: 'state must be progress, waiting, ready, blocked, failed or dropped' }
       const ticketId = str(args.ticket_id)
       if (ticketId === undefined) return { ok: false, code: 'missing', error: 'ticket_id is required: the id on the ticket\'s assignment card' }
-      const summary = str(args.summary)
-      if (summary === undefined) return { ok: false, code: 'missing', error: 'summary is required' }
+      const said = str(args.summary)
+      if (said === undefined) return { ok: false, code: 'missing', error: 'summary is required' }
+      const ygl = Array.isArray(args.ygl) ? args.ygl.map(id => String(id).trim()).filter(id => id !== '') : []
+      if (ygl.length > 40 || ygl.some(id => id.length > 120)) return { ok: false, code: 'ygl', error: 'ygl takes at most 40 ids of at most 120 characters' }
+      const remind = h.settings.serves?.members.includes(me) === true ? undefined : h.yglReadyRefusal(me, ticketId, args.state, ygl)
+      if (remind !== undefined) return json(remind) as Record<string, JsonValue>
+      // The ids ride in the summary, so the router and the owner see what the ticket left in the team's memory.
+      const summary = ygl.length > 0 ? `${said}\nygl: ${ygl.join(', ')}` : said
       const question = args.question === 'null' ? null : str(args.question)
       // A question reaches the owner as a decision card, so it must say what to decide between and what you would do (C1, C2).
       const decision = typeof question === 'string' ? parseDecision(args) : undefined
       if (typeof decision === 'string') return { ok: false, code: 'decision', error: `a question for the owner is a decision card: ${decision}` }
+      const serving = h.settings.serves?.members.includes(me) === true
+      const wantFiles = Array.isArray(args.files) && args.files.length > 0
+      if (wantFiles && (decision === undefined || serving)) return { ok: false, code: 'files', error: serving ? 'files on a question go only to a team on this host' : 'files go with a question for the owner' }
+      const staged = wantFiles ? h.stageCardFiles(me, args.files) : { ok: true as const, files: [] }
+      if (!staged.ok) return json(staged) as Record<string, JsonValue>
       const report = { state: args.state as 'progress', summary, ...(question !== undefined ? { question } : {}), ...(str(args.answers) !== undefined ? { answers: str(args.answers)! } : {}) }
       // PR-C2: a session serving another host's team reports there, signed by this host's key.
-      const out = h.settings.serves?.members.includes(me) === true ? await h.forwardReport(me, { ...report, ...(decision !== undefined ? { options: decision.options, recommended: decision.recommended, level: decision.level } : {}), ticket_id: ticketId, ...(str(args.pull_request) !== undefined ? { pull_request: str(args.pull_request)! } : {}) }) : h.report(me, { ...report, ...(decision !== undefined ? { decision } : {}) }, ticketId, str(args.pull_request))
+      const out = serving ? await h.forwardReport(me, { ...report, ...(decision !== undefined ? { options: decision.options, recommended: decision.recommended, level: decision.level } : {}), ticket_id: ticketId, ...(str(args.pull_request) !== undefined ? { pull_request: str(args.pull_request)! } : {}) }) : h.report(me, { ...report, ...(decision !== undefined ? { decision: { ...decision, ...(staged.files.length > 0 ? { files: staged.files } : {}) } } : {}) }, ticketId, str(args.pull_request))
       return json(out) as Record<string, JsonValue>
     },
   }))
@@ -379,13 +450,18 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     options: { type: 'array', required: true, items: { type: 'string' }, description: 'The 2 to 6 choices.' },
     recommended: { type: 'string', required: true, description: 'The option you recommend, copied exactly from options.' },
     level: { type: 'string', description: 'P0 irreversible or production, P1 significant, P2 routine and easy to undo, P3 trivial. Default P1.' },
-    reason: { type: 'string', description: 'Why you recommend it, in a sentence or two.' },
+    reason: { type: 'string', required: true, description: 'Why you recommend it, in a sentence or two (required: design owner-reporting R3).' },
+    files: { type: 'array', items: { type: 'string' }, description: 'Up to 16 files from your workspace the owner should look at to decide (paths relative to it). They show on the card for the owner to download.' },
   } as const
-  type CardArgs = { question?: string; options?: string[]; recommended?: string; level?: string; reason?: string }
+  type CardArgs = { question?: string; options?: string[]; recommended?: string; level?: string; reason?: string; files?: string[] }
   const raise = (h: SuperagentHost, source: 'router' | 'observer', by: string, args: CardArgs): Record<string, JsonValue> => {
     const spec = parseDecision(args)
     if (typeof spec === 'string') return { ok: false, code: 'decision', error: spec }
-    return json(h.proposeDecision(source, by, String(args.question ?? ''), spec, args.reason)) as Record<string, JsonValue>
+    // Design owner-reporting R3: a card the owner decides carries the reason for its recommendation.
+    if (typeof args.reason !== 'string' || args.reason.trim() === '') return { ok: false, code: 'reason', error: 'a decision card needs reason: why you recommend that option, in a sentence or two' }
+    const staged = h.stageCardFiles(by, args.files)
+    if (!staged.ok) return json(staged) as Record<string, JsonValue>
+    return json(h.proposeDecision(source, by, String(args.question ?? ''), spec, args.reason, staged.files)) as Record<string, JsonValue>
   }
   ctx.tools.register(defineTool({
     name: 'superagent_decision_propose',
@@ -423,6 +499,109 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
       if (h === undefined || me === undefined) return { ok: false, code: 'not-observer', error: 'a2a_ticket_request serves only the sessions on this team created under the observer preset' }
       return json(h.requestForObserver(me, String(args.text ?? ''))) as Record<string, JsonValue>
+    },
+  }))
+
+  // Design tool-requests T3: a tool the role's list hides can still be asked for by name; the owner decides on a P0 card.
+  ctx.tools.register(defineTool({
+    name: 'a2a_tool_request',
+    description: 'Team session only: ask the owner to let this team use a tool that is not on your role\'s list (for example a shell a plugin on this host provides). Name the tool exactly and say why you need it. The owner decides on a P0 decision card; once approved the tool appears in your list. Tools that leave the team (routes, sessions, subagents) are never granted.',
+    parameters: { name: { type: 'string', required: true, description: 'The exact tool name.' }, why: { type: 'string', required: true, description: 'What you need it for, in a sentence.' } },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_tool_request', value) },
+    presentCall: args => ({ card: 'generic', title: `a2a_tool_request ${String(args.name)}`, kind: 'other', rawInput: args }),
+    execute: async (args: { name?: string; why?: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host(exec)
+      const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
+      const role = me === undefined ? undefined : h?.toolRoleOf(me)
+      if (h === undefined || me === undefined || role === undefined) return { ok: false, code: 'not-team', error: 'a2a_tool_request serves only the sessions of a superagent team on this host' }
+      const name = String(args.name ?? '').trim()
+      if (h.grantedTools(me).includes(name) || roleTools(role).includes(name)) return { ok: true, granted: true, note: `${name} is already yours to use` }
+      // T6: a member or an observer already has every tool but the boundary and what the owner blocked.
+      if (role !== 'router' && !memberBoundary(role, name) && !(h.settings.blockedTools ?? []).includes(name)) return { ok: true, granted: true, note: `${name} is already yours to use: members have every tool of this host except those that leave the team` }
+      if (!grantableTool(role, name)) return { ok: false, code: 'not-grantable', error: `${name} is not something a team session may be granted (it would leave the team, or it belongs to another role)` }
+      return { ok: true, requested: true, note: h.requestTool(me, role, name, String(args.why ?? '')) }
+    },
+  }))
+
+  // Design outbound-requests O1, O2: asking another team on a ticket, through a P0 card the owner or an approver decides.
+  ctx.tools.register(defineTool({
+    name: 'a2a_outbound_request',
+    description: 'Team session only: ask another team for something this ticket needs. You do not message other teams yourself: this raises a P0 decision card with the address and your exact text, and the host sends it from the team\'s A2A identity once the owner, or an approver the owner named, approves. Their formal receipt comes back to the ticket as a note. The router may ask on any open ticket; a member or an observer only on the ticket it holds. address: another team\'s, <zone>/<id8> or <zone>/canvas/<name> (optionally @<fp8>).',
+    parameters: {
+      ticket_id: { type: 'string', required: true, description: 'The open ticket this is for.' },
+      address: { type: 'string', required: true, description: 'The other team\'s A2A address.' },
+      text: { type: 'string', required: true, description: 'Exactly what to send (at most 4000 characters); nothing else from the ticket goes with it.' },
+      why: { type: 'string', required: true, description: 'Why the ticket needs it, for whoever decides.' },
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_outbound_request', value) },
+    presentCall: args => ({ card: 'generic', title: `a2a_outbound_request → ${String(args.address)}`, kind: 'other', rawInput: args }),
+    execute: async (args: { ticket_id?: string; address?: string; text?: string; why?: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host(exec), me = callerOf(exec)
+      if (h === undefined || me === undefined) return { ok: false, code: 'not-team', error: 'a2a_outbound_request serves only the sessions of a superagent team on this host' }
+      return h.requestOutbound(me, args) as Record<string, JsonValue>
+    },
+  }))
+
+  // Design outbound-requests O3: an approver the owner named decides outbound cards it did not raise, with a reason.
+  ctx.tools.register(defineTool({
+    name: 'a2a_decision_decide',
+    description: 'Approvers only (a member or observer the owner named in the team settings): decide a waiting outbound card, a request to send something to another team. Read the card first (a2a_ticket_read kind decisions, or the card text you were shown). option: 批准：以团队名义发出, or 拒绝. Give the reason. You cannot decide a card you raised, nor any other kind of card.',
+    parameters: {
+      card_id: { type: 'string', required: true, description: 'The card\'s id.' },
+      option: { type: 'string', required: true, description: 'One of the card\'s options.' },
+      reason: { type: 'string', required: true, description: 'Why, in a sentence or two; it is recorded with the decision.' },
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_decision_decide', value) },
+    presentCall: args => ({ card: 'generic', title: `a2a_decision_decide ${String(args.card_id)}`, kind: 'other', rawInput: args }),
+    execute: async (args: { card_id?: string; option?: string; reason?: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host(exec), me = callerOf(exec)
+      if (h === undefined || me === undefined) return { ok: false, code: 'not-team', error: 'a2a_decision_decide serves only the sessions of a superagent team on this host' }
+      const out = h.approverDecide(me, String(args.card_id ?? ''), args.option, args.reason)
+      // Approving is not delivering (live check): the host sends it now, and the answer reaches the asking ticket as a note.
+      return (out.approved === true ? { ...out, note: 'Approved. The host sends the text from the team\'s A2A identity now; whether it went out, and the other team\'s receipt, reach the asking ticket as notes.' } : out) as Record<string, JsonValue>
+    },
+  }))
+
+  // A member reads its own tickets, an observer its team's tickets and decisions; nobody but the router reads candidates or
+  // acts on tickets through this (owner 2026-11-10: a scheduled turn reads where things stand before it acts).
+  ctx.tools.register(defineTool({
+    name: 'a2a_ticket_read',
+    description: 'Team member or observer only, read-only: where your work stands before you act on it. kind mine: your open tickets; kind ticket: one of them (ticket_id). An observer can also read kind team (the team\'s open and recent tickets) and kind decisions (the router\'s recent decisions). An approver the owner named reads kind outbound: the outbound cards waiting for a decision, with their ids. It changes nothing.',
+    parameters: {
+      kind: { type: 'string', required: true, description: 'mine | ticket | team | decisions | outbound' },
+      ticket_id: { type: 'string', description: 'For kind ticket.' },
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_ticket_read', value) },
+    presentCall: args => ({ card: 'generic', title: `a2a_ticket_read ${String(args.kind)}`, kind: 'read', rawInput: args }),
+    execute: async (args: { kind?: string; ticket_id?: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host(exec)
+      const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
+      if (h === undefined || me === undefined || h.roleOf(me) !== 'member' || !h.settings.members.includes(me)) return { ok: false, code: 'not-member', error: 'a2a_ticket_read serves only the members on this host of a superagent team' }
+      const observer = h.isObserver(me)
+      const summary = (ticketId: string): JsonValue => {
+        const t = h.store.tickets.get(ticketId)
+        if (t === undefined) return null
+        const report = t.assignments.at(-1)?.report
+        return json({ id: t.id, title: t.title, scope: t.mandate?.scope ?? null, stage: t.ended !== undefined ? { stage: 'ended', outcome: t.ended.outcome } : h.ticket(t.id)?.stage ?? null,
+          report: report === undefined ? null : { state: report.state, summary: report.summary, at: report.at }, question: t.attention?.question ?? null, updatedAt: t.updatedAt })
+      }
+      const mine = (): string[] => h.store.tickets.list().filter(t => t.ended === undefined && h.executor.memberOfTicket(t.id)?.member === me).map(t => t.id)
+      if (args.kind === 'mine') return { ok: true, tickets: mine().map(summary) }
+      if (args.kind === 'ticket') {
+        const id = String(args.ticket_id ?? '')
+        if (!observer && !mine().includes(id)) return { ok: false, code: 'not-yours', error: 'a member reads only the tickets it holds' }
+        const t = summary(id)
+        return t === null ? { ok: false, code: 'unknownTicket', error: 'no ticket has that id' } : { ok: true, ticket: t }
+      }
+      // Design outbound-requests O3: an approver finds the waiting outbound cards here (live check: a member approver could not list them).
+      if (args.kind === 'outbound') {
+        if (!(h.settings.approvers ?? []).includes(me)) return { ok: false, code: 'not-approver', error: 'kind outbound is for the approvers the owner named in the team settings' }
+        return { ok: true, cards: json(h.decisionCards().filter(card => card.source === 'outbound').map(card => ({ id: card.id, question: card.question, ...(card.reason !== undefined ? { reason: card.reason } : {}), by: card.by, at: card.at, options: card.options }))) }
+      }
+      if (!observer) return { ok: false, code: 'not-observer', error: 'kind team and kind decisions are for observers; a member reads kind mine or ticket' }
+      if (args.kind === 'team') return { ok: true, tickets: h.store.tickets.list().slice(0, 50).map(t => summary(t.id)) }
+      if (args.kind === 'decisions') return { ok: true, decisions: json(h.recentDecisions()) }
+      return { ok: false, code: 'kind', error: 'kind must be mine, ticket, team or decisions' }
     },
   }))
 

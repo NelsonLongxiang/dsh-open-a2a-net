@@ -1,30 +1,98 @@
-# @nelsonlongxiang/dsh-open-a2a-net
+# Open A2A Net · Superagent 团队与 A2A 协作网络
 
 [English](README.md) | 中文
 
 [![npm](https://img.shields.io/npm/v/@nelsonlongxiang/dsh-open-a2a-net?label=npm)](https://www.npmjs.com/package/@nelsonlongxiang/dsh-open-a2a-net)
 
-面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）的开放 A2A 网络插件：把一个 DSH 部署变成去中心化 agent 网络中的一个节点——没有中心服务器，没有注册中心。
+**新版重点：Superagent 把需求变成团队工单——总工受理、成员分工、进展可追踪，需要你拍板的事以决策卡呈现。**
 
-每个节点在 `/.well-known/agent-card.json` 发布**带签名、会过期**的 agent 卡片，通过**种子 URL 与相互引荐**发现 peers（每张卡片列出它认识的节点），通过**区域委托**解析名字（GNUnet GNS 风格：卡片可把一个名字委托给另一个 zone），并**直连**路由到 peer 的团队、在可达半数候选间故障切换。每个主会话还可以作为**会话节点**暴露，供其他宿主从 Web 侧栏发现并加入。
+> **版本说明：Superagent 团队能力属于主动选择的 0.8 预览版。** 2026-11-14 核对 npm：`latest` 仍为 0.7.0，`preview` 为 0.8.1-preview.25。不要用默认安装命令推断已获得下文的新版能力。
 
-| 侧栏网络面板 | 上下文消息展示 |
+面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的开源插件。A2A 底座负责会话和主机之间的发现、寻址、路由与回执；新版 **Superagent** 在这层网络之上组织需求、工单、固定成员和人的决策，而不只是让多个对话互发消息。
+
+## 新版重点：Superagent，把“发给谁”升级为“怎样推进一件事”
+
+### 一条可见的协作流程
+
+```text
+你提交需求（范围、交付物、完成条件）
+                 ↓
+总工判断受理 → 建立有授权范围的工单 → 指定成员执行
+                 ↑                         ↓
+       你的补充与决策 ← 进展 / 等待 / 问题 / 待审交付
+```
+
+这是功能流程示意，不是已经执行成功的案例，也不承诺任何需求都会被受理。
+
+| 你关心什么 | Superagent 如何支持 |
 | --- | --- |
-| ![侧栏网络面板](images/image-01.png) | ![上下文消息展示](images/image-02.png) |
+| 提一次需求，而不是手动逐个传话 | 从工作台或右栏「提需求」提交；总工按来源、接单规则和权限判断受理，形成带范围的工单。 |
+| 谁在做、在排队还是等你 | 工单展示成员、阶段和最近报告；成员可回报进展、等待、受阻、失败或待审结果。既定成员忙时排队，不随意创建新会话。 |
+| 追问和评审不要丢在其他对话里 | 同一工单线程的补充继续给成员；关联 PR 后，评审评论回到工单，合并或关闭状态继续被跟踪。 |
+| 需要我决定时，给我可选的方案 | 决策卡包含问题、2–6 个选项和推荐项；在「待决策」处理，决定回到对应工单，而不是把开放问题反复抛回来。 |
+| 既定成员可以分布在不同主机 | 支持已链接主机的成员，需团队端与成员端各自配置、同意并固定对方身份；不是对任意会话的远程接管。 |
 
-## 安装
+### 人掌握规则、来源与关键决策
+
+- **先组队，再接活。** 操作者指定总工、既定成员、角色/规则和接单来源，绑定团队；引擎在未绑定团队时保持空闲。每个成员同一时刻执行一个工单，其他工单排队。
+- **默认观察，不默认自主接新活。** `off / observe / auto` 控制从 Agent 消息推断的工作；默认 `observe` 只记录“本来会接受”，不实际承接。显式的人类请求同样要通过来源准入。
+- **待审不是验收通过。** `ready` 表示结果可查看或评审；关联 PR 后仍待合并/关闭。正式测试、独立复验和发布授权按项目自己的流程执行。
+- **外部入口需主动开启。** A2A 团队接单按 bot 列表与接单模式控制；GitHub Issue 作为需求来源需属主启用并配置仓库、允许用户，默认关闭。没有启用就不承诺自动监听所有 Issue。
+- **团队不自行扩大权限。** 规则变更要人确认；成员不能擅自增加工单范围、创建会话或直接跨团队派活。跨团队请求需按团队配置审批。
+
+完整机制见[已发布预览版 Superagent 指南](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/6ca847560f9bc90c17be64e9558f830a4abf5113/src/skill/references/superagent.md)；仍标为进行中的 Root teams 不作为本页成熟能力承诺。
+
+### 与普通画布组队有什么不同？
+
+| 普通 A2A 协作 | Superagent 团队（0.8 预览版） |
+| --- | --- |
+| 回答“网络里有哪些会话、消息发给谁、回执到了吗” | 在网络之上回答“需求是否受理、工单给谁、推进到哪、什么需要人决定” |
+| 发现可路由团队，调用方自行组织工作 | 总工受理和分派，既定成员执行，报告与后续输入挂在工单上 |
+
+## A2A 网络底座仍然重要
+
+- 本机与已链接主机间的会话发现、直连路由与画布组队。
+- 签名节点卡片、种子与引荐发现，不依赖中心注册服务。
+- 异步任务按 task id 追踪待回执、死信和归档；**已投递不等于已完成**。
+- 模型工具用于普通会话协作；CLI 通过自己的身份、home 与信箱接入会话外调用方。
+
+## 用原创手绘看懂 Superagent
+
+以下均为**原创手绘风格功能示意，采用模拟案例，不是实际产品界面、布局承诺或已完成工作的证据**。插画说明主动选择的预览版工作流，不使用内部会话或主机信息。
+
+![Superagent 需求协作流程原创示意图；模拟案例，非实际界面](images/market/01-superagent-flow.png)
+
+![工单进展原创示意图；模拟案例，非实际界面](images/market/02-ticket-progress.png)
+
+![属主决策原创示意图；模拟案例，非实际界面](images/market/03-owner-decisions.png)
+
+## 安装与首次使用
+
+**体验本文的 Superagent 新版重点，请主动选择预览版：**
+
+```sh
+dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net@preview
+```
+
+仅先体验 0.7.0 默认版的普通 A2A 网络能力：
 
 ```sh
 dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 ```
 
-重启 `dsh web`，打开侧栏网络面板（底部入口）。
+标签会变化，排障时记录实际插件及 DSH 版本。上面针对常规 `dsh web` 的 `web` profile；自定义 profile 请替换名称，Desktop 用应用自己的插件管理入口。安装后按所选版本文档重启并进入工作台。
+
+1. 用测试会话创建并绑定团队：指定总工、成员、允许来源和规则；跨主机先完成链接与双方同意。
+2. 提交一个范围清楚的需求，例如“调查这个测试失败并给出修复 PR；不要部署；用测试结果说明修复是否成立”。
+3. 查看工单的成员、阶段和报告；需要你裁决时处理决策卡；交付后按项目流程复验，不将自报 `ready` 当成正式 done。
+
+**信任边界：**跨主机不是零配置；`announce` 默认关闭；开放监听器到 loopback 之外前配置鉴权。收录不等于安全审计，也不保证任意第三方 A2A 互通。
 
 （支持包名、本地路径或 Git URL，参数原样交给 pnpm。包的 `prepare` 脚本是 `pnpm build`，但只有 Git URL 安装会在安装时触发它，而且 pnpm 11 会拦住 Git 包的构建脚本：`dsh plugin` 会报错并打印确切的键，须把它加到 profile 的 `pnpm-workspace.yaml` 的 `allowBuilds` 下再重跑。registry 安装的包已带构建产物，不再构建；本地路径安装不会构建，须先在该目录执行 `pnpm build`。构建需要 pnpm ≥11.24 且 <12（见 `package.json` 的 `engines`）。脱离 DSH profile 的独立 Git 安装现在可以构建（`@deepseek-ai/*` peers 取自 npm；0.7.0 实测通过），不再需要限定 registry 或 profile 安装。）插件组合在标准 webserver 行旁边：在共享监听器上注册状态与控制路由（`/__dsh_a2a/*`，`sessionNodes` 开启时，默认开启），在共享工具运行时上注册模型工具；卡片路由 `/.well-known/agent-card.json` 只在 `announce: true` 时注册（默认关闭）。
 
 ## 你能得到什么
 
-- **模型工具**（共十二个，见下表）—— `a2a_teams` 列出本节点可见的团队（本机行，加上已加入团队作用域内的 peer 团队）；`a2a_route` 向一个团队发送消息，用 `context_id` 继续远端会话，peer 不可达时在候选间故障切换。`a2a_tasks` 按三层对账回执契约：每个让任务欠回复的路由（异步投递、到 180s 期限被释放的同步等待；调用方自行中止的同步等待不入账，没有可路由回调地址的投递只登记为「无回执债」的可见行）都以 pending 留在欠账本里，直到其 `[A2A receipt] task <task_id>` 消息关联上——超过 stale TTL 的逾期行自动转死信（复活的目标仍可用迟到回执结清），每次结清都落入有界归档而不是被静默淘汰，每行保留续聊用的 `context_id`，跨重启持久化。`a2a_probe` 测量受跟踪舰队的可达性与往返延迟（每个 peer 一次验签取卡，可收窄到单个 url），供派单前健康检查，并标明每次失败的阶段——`unreachable`（传输/HTTP）或 `rejected`（卡片不可信）。
+- **模型工具**（见下表）—— `a2a_teams` 列出本节点可见的团队（本机行，加上已加入团队作用域内的 peer 团队）；`a2a_route` 向一个团队发送消息，用 `context_id` 继续远端会话，peer 不可达时在候选间故障切换。`a2a_tasks` 按三层对账回执契约：每个让任务欠回复的路由（异步投递、到 180s 期限被释放的同步等待；调用方自行中止的同步等待不入账，没有可路由回调地址的投递只登记为「无回执债」的可见行）都以 pending 留在欠账本里，直到其 `[A2A receipt] task <task_id>` 消息关联上——超过 stale TTL 的逾期行自动转死信（复活的目标仍可用迟到回执结清），每次结清都落入有界归档而不是被静默淘汰，每行保留续聊用的 `context_id`，跨重启持久化。`a2a_probe` 测量受跟踪舰队的可达性与往返延迟（每个 peer 一次验签取卡，可收窄到单个 url），供派单前健康检查，并标明每次失败的阶段——`unreachable`（传输/HTTP）或 `rejected`（卡片不可信）。
 - **侧栏面板** —— Web 侧栏底部的网络入口，已瘦身为本宿主的最近网络动态（`docs/design/panel-activity-feed.md`）：在途路由、欠回执（只列可结算的欠账，对话式已送达的陈旧尾巴只计数）与路由活动环并列，跨轮等待无需询问模型即可看见；同机会话的活动行点击可在 GUI 内跳转到该会话；入站未读徽标，标题带包版本徽标，并提供工作台入口。会话的入网/退网、画布队与成员编排不再在侧栏里做，已迁入下面的工作台规划板。会话团队名为 `<team>/<id8>`；Web 会话取 id 前 8 位（先去掉 `session-` 前缀），导入会话（`import-<uuid>`）保留 `import-` 前缀加 uuid 前 8 位十六进制，避免导入 id 塌缩成少数几个团队。
 - **归档即离网** —— 归档会话（workspace 注册表状态）会离开节点网络：卸载其节点、撤回其 roster 声明、从列表与卡片中隐藏，并永不被唤醒——发生在唤醒前的启动结算、每次状态读取（会话中归档在一个状态轮询周期内消失）、以及路由时守卫三处。**加入意图保留**在 `joined.json`（曾因瞬时读到归档态而抹掉入网姿态，导致冷会话再也唤不醒），剪除事件记入状态面 `registry.teamAudit` 的 `archive-prune`。
 - **诚实的等待** —— 目标始终不应答的同步路由：本机会话目标在 180s 回复等待期限后以已投递形态（`TASK_STATE_DELIVERED`）与回执契约释放调用方（目标按自己的节奏作答）；经直连的远端 peer 受 15s 传输预算约束，超时先经任务查询补偿（对端已完成则升级为真实结果），否则以 `-32005`「已投递未结清」失败返回，须按任务查询对账、不要盲目重发。`async: true` 完全跳过等待。网络面板对超过 120s 的在途行降亮度标记为过期等待而非暗示活跃进度。
@@ -40,6 +108,7 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 | `a2a_whoami` | 我在网络里是谁？ | 调用会话的节点 id、加入/在线状态、可路由句柄、roster + canvas 成员关系、属主的 `teamJoinAllowlist`、`teamScopeRouting` 开关，以及最近被拒的加入/退出尝试。 |
 | `a2a_teams` | 我能路由到哪些团队？ | `[this host]` 本机行加上作用域内的 peer 团队，带活动摘录。 |
 | `a2a_route` | 向一个团队发消息。 | `context_id` 续聊；`async: true` 投递不等待；在候选间故障切换。 |
+| `a2a_task_read` | 那条任务的正文到底写了什么？ | 按任务号返回投递给**本会话**的 A2A 任务原文。适用于 `a2a_tasks` 里只看得到标题（`delivered-unconsumed`）、送达时本会话正忙、正文没进对话的任务。只有当初接收的会话能读，别的会话一律按“不存在”答复；原文保留 72 小时，单条按 UTF-8 计 64 KiB，超出部分截断。读取即算已消费，结果算对端内容。对宿主从未登记过的插话投递（原文整个丢了的那种），会话空闲时还会以原任务的身份走排队补送一次；领取、撤回、状态未知都按普通排队任务对账，绝不盲目重发。 |
 | `a2a_tasks` | 哪些异步任务还欠回执？ | 三层：欠账行保留续聊 `context_id`；过 TTL 的行自动转死信（仍可结清）；结局落入有界归档；跨重启持久化。 |
 | `a2a_probe` | 舰队健康吗？ | 每个作用域内 peer 一次验签取卡（或指定一个 url）；`N reachable, M down`；失败分为 `unreachable` 与 `rejected`。 |
 | `a2a_team_join` | 把一个已加入节点声明为某团队成员。 | 白名单门禁：只有 `teamJoinAllowlist` 里的**精确名**才授权加入（空列表拒绝一切加入）。通配/前缀条目会在 `a2a_whoami` 里显示，但不授权任何加入（`[PATTERN_NO_MINT]`）；画布队伍在工作台分配，从不经此工具（`[CANVAS_TEAM]`）。尝试记录进状态面的 `registry.teamAudit`。模型工具只能为调用会话自己的节点声明（否则 `[NOT_SELF]`），且该节点须已入网（否则 `[NOT_JOINED]`）。 |
@@ -48,6 +117,8 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 | `a2a_report` | 不在网时向本宿主监督面报告。 | 唯一能在未入网时向本宿主写入的入口（只读的 `a2a_whoami` 同样不受加入门约束）：单向，落入状态面的 reports 环（保留最近 64 条），不授予在场或路由权。每会话 30s 一次、≤4000 字；同会话同文在 10 分钟内已上报 3 次后，第 4 次起按循环熔断拒绝。 |
 | `a2a_status` | 本节点此刻在做什么？ | 作用域内受跟踪 peers 及质量分、在途路由、近期路由活动，以及幂等窗口汇总（占用 + claim/replay/conflict 计数）。 |
 | `a2a_file_send` | 把文件交给一个团队，又不把文件塞进消息。 | 每个文件（每次 ≤16 个，单个 ≤64 MiB）暂存在本宿主、授权给该团队 24 小时，然后只路由**一条**带 `[A2A file]` 引用行的消息；字节从不随消息走（#91）。需本宿主已发布卡片地址（`announce`），否则拒绝发送。 |
+| `a2a_file_grants` | 查看自己的文件授权和暂存区占用。 | 列出本会话发出、仍有效的文件通道授权：sha256、大小、文件名、目标、授权与到期时间、所属任务、对方是否已取件；另给暂存区占用和上限（256 个文件、1 GiB）。 |
+| `a2a_file_revoke` | 撤回一条文件授权。 | 按 `sha256` 和 `to` 撤销本会话自己发出的一条授权；文件不再被任何授权引用时立即删除、腾出空间。别人的授权按“不存在”答复。CLI 对应 `a2a-net file grants` / `a2a-net file revoke <sha256> <to>`。 |
 | `a2a_file_fetch` | 拉取别人引用的文件。 | 带本会话身份（`caller_session`）并盖上本宿主节点的 OriginClaim 信封，从暂存它的宿主拉取一条 `[A2A file]` 引用（引用指向本宿主时直接读本机暂存）；先核对大小和 sha256，再存到 `<cwd>/a2a-inbox/`。授权只对一个会话（或整台宿主、或某画布队的成员）；拉取总会把本会话标为读过对端内容。 |
 
 ## a2a-net CLI（会话之外的调用方）
@@ -63,6 +134,22 @@ a2a-net inbox --new                                      # 未读来信；--wait
 
 从 0.6.38 起 `forwardDirect` 默认 `true`；本机目标未找到时，home 可替已验签且在线的 CLI 向已链接的对端目标转发一跳。两边运营者必须各自链接：A 链接 B 的接收成员，B 链接 CLI 句柄并将 home 钉为 A。画布目标只需 A 链接画布属主主机（#282 S3，同队即授权；属主主机须为 0.6.37 及以上）：接收成员在转发行出生时从属主签名名片冻结，回执只有来自这些成员、且由该属主公钥签名时才放行进 CLI 信箱并结算。作用域及结算 enforce 开启时，B 成员宿主的自动回执结清 A 的转发行并进入 CLI 信箱；`--sync` 返回 B 的回复，但转发路径上同步等待只有约 15 秒的传输窗口，超时返回 `-32005`（已投递未结清）：对端做完后仍会自动回执，请按 task id / `inbox` 对账，不要盲目重发；长任务用默认的异步 `route`，再 `inbox --wait --renew`。命令、参数、环境变量与退出码见 [`src/skill/references/cli.md`](src/skill/references/cli.md)。
 
+
+### Pi 席位（让 Pi 作为 superagent 团队成员）
+
+Pi coding agent 可以作为 superagent 团队的成员干活。席位就是一个寄存在团队宿主上的 `a2a-net` 身份，它自己签名的名片里声明了
+`piSeat`（[docs/design/superagent-pi-platform.md](docs/design/superagent-pi-platform.md)）：
+
+```sh
+a2a-net init fleet-pi --home <团队宿主地址>   # 席位身份，home 必须是团队宿主
+a2a-net publish --pi-seat                     # 带 capabilities.piSeat 寄存；续期会保留它（publish --renew）
+a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.pi/agent/extensions/（--dir、--force）
+```
+
+安装不等于入队：要由团队主人在团队画布上把这个 handle 加进来，加入时固定席位的密钥。续期（`publish --renew`、`inbox --wait --renew`）沿用上次显式 publish 的声明，`piSeat` 不会丢；不带 `--pi-seat` 的显式 `publish` 才会撤销它。扩展每小时续期一次，游标按席位分开保存（同一席位同时只由一个 Pi 进程消费），"本轮结束"在宿主收下之前会一直保留重发。扩展会轮询席位邮箱，把派来的活交给 Pi 会话，
+并回报"已读"和"本轮结束"；模型用 `a2a-net ticket report|ack|handback|idle|read|error` 回报（对团队宿主的签名且绑定内容的请求）。
+席位不能改团队规则、不能代主人说话；home 在其他主机上的席位本版不支持。提问就是一张决策卡：
+`ticket report --question Q --options A|B --recommended A`。席位的"本轮结束"不带文字，有变化要用 `ticket report` 主动回报。
 
 ### 独立网络节点（不依赖 DSH 实例）
 
@@ -157,9 +244,12 @@ a2a-net inbox --new                                      # 未读来信；--wait
 | `/__dsh_a2a/groups` | 手工会话分组——自 0.6.6 起弃用（被画布队伍取代），为旧面板保留。 |
 | `POST /__dsh_a2a/dispatch` | 工作台快速派单到一个团队。 |
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | 从调用方一侧结清一个欠账任务（cancel 还会尽力向目标转达停止通知：本机目标直接 steer，远端目标经 wire 投递，卡片声明 `queuedTaskCancellation` 时另带 `cancel_task_id` 撤回队列中的原任务；回复里带 `steered`、`removed`）；该行落入 `archived[]`。 |
-| `GET`/`POST /__dsh_a2a/superagent` | 未配 `superagent: false` 时：引擎状态（线程、决定、回复、带阶段的工单、绑定的画布及绑定问题），以及属主操作 `settings`（绑定 `canvas` 与 `router`）· `request`（工作台 Source）· `serve`（按画布 id 为其他主机的团队服务）· `stop` · `retry`。 |
-| `GET`/`POST /__dsh_a2a/superagent/decisions` | 未配 `superagent: false` 时：本实例各团队等属主决定的决策卡；POST `{ id, how: 'approve' \| 'choose', option?, note?, teamId? }` 作出决定。主机有登录时需要界面登录。 |
+| `GET`/`POST /__dsh_a2a/superagent` | 未配 `superagent: false` 时：引擎状态（线程、决定、回复、带阶段的工单、绑定的画布及绑定问题），以及属主操作 `settings`（绑定 `canvas` 与 `router`） · `sync-github-allowed`（把仓库有推送权限的协作者加入 `allowed.github`，需要界面登录；`settings` 里的 `sources.github` 与 `github: { repos, intake }` 让 GitHub Issue 成为需求来源，同样需要界面登录）· `request`（工作台 Source）· `serve`（按画布 id 为其他主机的团队服务）· `stop` · `retry`。 |
+| `GET`/`POST /__dsh_a2a/superagent/decisions` | 未配 `superagent: false` 时：本实例各团队等属主决定的决策卡；POST `{ id, how: 'approve' \| 'choose', option?, note?, files?, teamId? }` 作出决定；`files` 是为该卡团队暂存好的 `[A2A file] v1` 引用行。主机有登录时需要界面登录。 |
+| `GET /__dsh_a2a/superagent/models` | 未配 `superagent: false` 时：团队设置用的 DSH 模型目录（读不到时页面允许手填） |
+| `GET /__dsh_a2a/superagent/decisions/file` | 未配 `superagent: false` 时：`?card=&sha256=&teamId=`：下载某张卡上的文件（发起方附的，或随决定附的），文件通道保留期内（24 小时）有效。主机有登录时需要界面登录。 |
 | `GET`/`POST /__dsh_a2a/superagent/teams` | 未配 `superagent: false` 时：本实例的团队；POST `{ canvas, router }` 新增一个。列表也含已建链实例公布的团队，POST `{ action: 'send', address, session, text }` 以该会话的身份发需求（设计 M9）。`/__dsh_a2a/superagent` 的 POST 体 `teamId` 或 GET 的 `?teamId=` 按 id 选团队（设计 M3）。 |
+| `GET`/`POST /__dsh_a2a/superagent/staffing` | 编制变更（S1a）：GET 列出账本；POST `{ action: 'submit', change: { id, summary?, ops }, agree?: true }` 或 `{ action: 'agree', id }`，须在已登录的 DSH 界面里操作。操作为 `team.create`、`member.add`（可带 profile）、`team.rules.set`（scope：team / dispatch / member:<seatId>）；只用已有会话，失败时倒序撤销。 |
 | `/__dsh_a2a/session-log` · `/remote-session-log` | 供工作台读取会话日志。 |
 | `/__dsh_a2a/owner-settings` | 属主面板：读取（GET）或写入（POST）`teamJoinAllowlist`、`teamScopeInfo`、`seatNames` 与 `announce` 到 home patch 层（`announce` 需重启生效，GET 的 `announceRestartPending` 标出；其余即时生效）。`seatNames` 为完整映射，删去会话 id 即清除。复用属主鉴权，不提供模型命名工具；本机 shell/配置写入者仍处于既有运营者信任边界内。 |
 | `/__dsh_a2a/fleet-canvas-op` | 把画布操作中继到某 peer 的 `/a2a/canvas-op`，盖上本节点的 OriginClaim；由对端的链接门裁决。 |

@@ -12,6 +12,14 @@
 > **Next version (next/0.8, superagent p1-receipt-cmd):** the codec also
 > carries `disposition` (§2a), and the CLI gains `a2a-net receipt`, the one
 > formal-receipt command for a CLI identity.
+>
+> **Update (2026-11-13, checked against `src/receipt.ts`):** the codec now also
+> carries `disposition`, `onBehalfOf`, `authRef`, `by`, `artifacts`, `question`,
+> `progress` and `tickets` (the who/what/question fields are designed in
+> [receipt-envelope-fields](../design/receipt-envelope-fields.md)), so `artifacts`
+> is no longer missing. Still not implemented: the envelope `taskId` field, the
+> §3 4096-byte overflow rule, the §5 T1/T2 liveness ladder; the ledger still
+> never writes the `expired` outcome.
 
 - **Status**: design frozen with the orchestration face (co-design round, pure-spec slice ahead of implementation) — codec since shipped; see the status note above
 - **Owner**: dsh-open-a2a-net (protocol face) · Co-signer: graph_loop orchestration face (pending_remote W3 consumer)

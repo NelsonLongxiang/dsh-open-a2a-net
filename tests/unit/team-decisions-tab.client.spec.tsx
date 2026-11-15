@@ -73,3 +73,46 @@ describe('the decisions view', () => {
     expect(canApprove(card({ level: 'P3' }))).toBe(true)
   })
 })
+
+describe('files on a card (C8)', () => {
+  function serveWithBlob(decisions: DecisionRow[]) {
+    const list = [...decisions]
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('/__dsh_a2a/blob')) return { ok: true, status: 200, json: async () => ({ ok: true, ref: `[A2A file] v1 sha256=${'a'.repeat(64)} size=2 name=n.txt from=http://h` }) } as Response
+      if (init?.method === 'POST') { list.length = 0; return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response }
+      return { ok: true, status: 200, json: async () => ({ decisions: [...list] }) } as Response
+    })
+    vi.stubGlobal('fetch', fetcher)
+    return fetcher
+  }
+  it('lists the proposer\'s files as downloads from this card', async () => {
+    serve([card({ teamId: 'aaaaaaaa', files: [{ sha256: 'b'.repeat(64), size: 2048, name: '方案.md' }] })])
+    render(<TeamDecisionsTab t={t} />)
+    const link = await screen.findByRole('link', { name: /方案\.md/ }) as HTMLAnchorElement
+    expect(link.getAttribute('href')).toBe(`/__dsh_a2a/superagent/decisions/file?card=d-1&sha256=${'b'.repeat(64)}&teamId=aaaaaaaa`)
+    expect(link.textContent).toContain('2.0 KB')
+  })
+  it('stages the owner\'s files to the card\'s team and sends their references with the decision', async () => {
+    const f = serveWithBlob([card({ address: 'dsh/canvas/ops' })])
+    const { container } = render(<TeamDecisionsTab t={t} />)
+    await screen.findByText('要不要升级？')
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(['hi'], 'n.txt')] } })
+    await screen.findByText('n.txt')
+    fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
+    await screen.findByText(en['team.noDecisions'])
+    const urls = f.mock.calls.map(([url]) => url)
+    expect(urls.find(url => url.startsWith('/__dsh_a2a/blob'))).toContain(encodeURIComponent('dsh/canvas/ops'))
+    const decided = f.mock.calls.filter(([url, init]) => init?.method === 'POST' && !url.startsWith('/__dsh_a2a/blob')).map(([, init]) => JSON.parse(String(init!.body)) as Record<string, unknown>)
+    expect(decided).toEqual([{ id: 'd-1', how: 'approve', files: [`[A2A file] v1 sha256=${'a'.repeat(64)} size=2 name=n.txt from=http://h`] }])
+  })
+  it('refuses to send files when the card names no team address, and keeps the card', async () => {
+    serveWithBlob([card()])
+    const { container } = render(<TeamDecisionsTab t={t} />)
+    await screen.findByText('要不要升级？')
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [new File(['hi'], 'n.txt')] } })
+    fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
+    await waitFor(() => { expect(screen.getByRole('status').textContent).toContain(en['team.noFileTarget']) })
+    expect(screen.getByText('要不要升级？')).toBeTruthy()
+  })
+})

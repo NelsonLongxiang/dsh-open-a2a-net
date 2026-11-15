@@ -10,6 +10,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { SuperagentHost, type SuperagentHostDeps } from './index.ts'
+export { ensureTeamYglHome, ensureTeamYglProject } from './ygl-home.ts'
 
 const TEAM_ID = /^[0-9a-f]{8}$/
 
@@ -44,6 +45,9 @@ export class SuperagentTeams {
   /** The team a session has a role in. */
   ofSession(sessionId: string): SuperagentHost | undefined { return this.all().find(team => team.roleOf(sessionId) !== undefined) }
 
+  /** A team's id ('' for the primary team), or undefined when it is not one of these. */
+  idOf(team: SuperagentHost): string | undefined { return team === this.primary ? '' : [...this.extras].find(([, t]) => t === team)?.[0] }
+
   /** The team bound to a canvas. */
   ofCanvas(canvas: string): SuperagentHost | undefined { return this.all().find(team => team.settings.canvas === canvas) }
 
@@ -53,6 +57,11 @@ export class SuperagentTeams {
       return { id, primary: team === this.primary, ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), open: canvas !== undefined && router !== undefined && sources.workbench }
     }
     return [row('', this.primary), ...[...this.extras].map(([id, team]) => row(id, team))]
+  }
+
+  /** Every team's health problems, each with the team it belongs to (reliability R6). */
+  health(): Array<Record<string, unknown>> {
+    return [['', this.primary] as const, ...this.extras].flatMap(([id, team]) => team.health().map(problem => ({ ...problem, teamId: id, team: team.settings.canvas ?? '' })))
   }
 
   /** Every team's waiting decisions, each with the team it belongs to. */
@@ -80,7 +89,13 @@ export class SuperagentTeams {
     const team = unbound?.[1] ?? this.build(id)
     const saved = team.saveSettings({ canvas: settings.canvas, router: settings.router }, sessionValid, presetOf)
     if (!saved.ok) return saved
-    if (unbound === undefined) { this.extras.set(id, team); if (this.started) team.start() }
+    if (unbound === undefined) {
+      this.extras.set(id, team)
+      if (this.started) team.start()
+      // saveSettings told the tool lists before the team was in the registry, so they still saw its sessions as outside any
+      // team: the router was refused its work tools but never shown superagent_* (remote report 2026-11-10). Tell them again.
+      try { this.deps.onRolesChanged?.() } catch (error) { this.deps.logger.warn('superagent: role change not applied: %s', String(error)) }
+    }
     return { ok: true, id }
   }
 

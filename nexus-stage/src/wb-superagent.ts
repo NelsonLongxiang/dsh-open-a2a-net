@@ -49,6 +49,10 @@ export interface SaSettings {
   readonly remoteMembers: ReadonlyArray<{ ref: string; key: string; url: string }>
   /** The repository each member works in (owner/name), by member; absent on hosts before it. */
   readonly repos?: Readonly<Record<string, string>>
+  /** Which model each role's sessions run (owner 2026-11-10); unset leaves a session's own choice alone. */
+  readonly models?: { readonly router?: { provider: string; model: string; reasoningEffort?: string }; readonly member?: { provider: string; model: string; reasoningEffort?: string } }
+  /** The owner's prompt supplements (owner 2026-11-10, 对照上游): communication and delivery; empty is the default. */
+  readonly prompts?: { readonly communication?: string; readonly delivery?: string }
   readonly rules?: readonly TeamRule[]
   readonly profiles?: Readonly<Record<string, { readonly role?: string; readonly rules: readonly TeamRule[] }>>
   readonly observers?: readonly string[]
@@ -59,9 +63,22 @@ export interface SaSettings {
   readonly serves?: { url: string; key: string; members: readonly string[]; team?: string }
 }
 /** One team on this instance (`GET /__dsh_a2a/superagent/teams`); id '' is the primary team. */
-export interface SaTeamRow { readonly id: string; readonly canvas?: string }
+/** `waiting`: tickets waiting on a person in that team (filled for the teams not shown, so the picker says where to look). */
+export interface SaTeamRow { readonly id: string; readonly canvas?: string; readonly waiting?: number }
+
+/** A problem the host found (design reliability R6). */
+export interface SaHealth { readonly code: string; readonly session?: string; readonly ticketId?: string; readonly title?: string; readonly minutes?: number }
+
+/** The words for a problem the host found. */
+export function healthText(problem: SaHealth, sessionName: (id: string) => string = id => id): string {
+  if (problem.code === 'router-not-loaded') return `总工会话 ${sessionName(problem.session ?? '')} 没有加载：需求送不到它，打开这个会话即可`
+  if (problem.code === 'member-not-loaded') return `成员会话 ${sessionName(problem.session ?? '')} 没有加载：工单派不给它，打开这个会话即可`
+  if (problem.code === 'ticket-quiet') return `工单「${problem.title ?? problem.ticketId ?? ''}」已经 ${String(problem.minutes ?? 0)} 分钟没有动静`
+  return problem.code
+}
 
 export interface SaState {
+  readonly health?: readonly SaHealth[]
   readonly settings: SaSettings; readonly policyVersion: string
   /** This instance's teams, and which one this state is, added by the poll. */
   readonly teams?: readonly SaTeamRow[]
@@ -82,6 +99,8 @@ export interface SaState {
   readonly executor: { bindings: ReadonlyArray<{ member: string; ticketId: string; at: string }> }
   readonly error?: string
   readonly threads: readonly SaThread[]; readonly tickets: readonly SaTicket[]
+  /** The team's recent settings saves (the 设置 view shows them): who, when, which fields changed. */
+  readonly settingsHistory?: ReadonlyArray<{ id: string; at: string; by: string; changes: ReadonlyArray<{ field: string; from: string; to: string }> }>
 }
 /** A local session the pickers offer (the workbench's /state rows). */
 export interface SaSession { readonly id: string; readonly name?: string; readonly joined?: boolean }
@@ -91,6 +110,10 @@ export interface SuperagentPaneDeps {
   act(body: Json): Promise<Json>
   /** Re-read the state after a write (the next poll otherwise). */
   refresh(): void
+  /** The team page's 搜索: GET the current team's records for a query (empty query: no results). */
+  search?(query: string): Promise<Json>
+  /** The models DSH offers (the settings' pickers); absent or failed: the pickers take free text. */
+  models?(): Promise<Json>
   /** Show another team on this instance. */
   selectTeam?(id: string): void
   /** Bind another canvas team as a new team on this instance. */
@@ -102,6 +125,8 @@ const VIEWS: ReadonlyArray<{ key: SaView; label: string }> = [
   { key: 'person', label: '待你处理' }, { key: 'request', label: '提需求' }, { key: 'tickets', label: '工单' },
   { key: 'team', label: '团队' }, { key: 'settings', label: '设置' },
 ]
+
+const VIEW_KEY = 'dsh-a2a.superagent.view'
 
 const PERSON_ACTION: Readonly<Record<string, string>> = { answer: '待你回答', review: '待你查看结果', blocked: '受阻', failed: '失败', delivery: '投递失败' }
 
@@ -128,6 +153,7 @@ export function problemsOf(state: SaState, now: number): SaProblem[] {
   if (state.settings.router === undefined) out.push({ tone: 'danger', text: '还没有指定总工：需求会停在候选里，没人决定（到「设置」里选）' })
   if (state.settings.members.length === 0 && state.settings.remoteMembers.length === 0) out.push({ tone: 'warn', text: '成员池是空的：在画布团队里加成员，接下的工单才有人做' })
   if (state.settings.paused) out.push({ tone: 'warn', text: '执行已暂停：新工单不会派给成员' })
+  for (const problem of state.health ?? []) out.push({ tone: problem.code === 'ticket-quiet' ? 'warn' : 'danger', text: healthText(problem) })
   if (state.pullRequestProblem !== undefined) out.push({ tone: 'warn', text: `读取 PR 状态失败，稍后重试：${state.pullRequestProblem}` })
   for (const [entry, health] of Object.entries(state.a2a.health)) if (health.state === 'error') out.push({ tone: 'danger', text: `A2A Source（${entry}）出错：${health.detail ?? ''}` })
   for (const thread of state.threads) {
@@ -136,6 +162,31 @@ export function problemsOf(state: SaState, now: number): SaProblem[] {
   }
   return out
 }
+
+const DRAFTS_KEY = 'dsh-a2a.superagent.drafts'
+/** How many unsent drafts are kept; the oldest go first. */
+const DRAFTS_MAX = 40
+
+function readDrafts(): Record<string, string> {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(DRAFTS_KEY) ?? '{}')
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.fromEntries(Object.entries(parsed).filter((e): e is [string, string] => typeof e[1] === 'string')) : {}
+  } catch { return {} }
+}
+
+function storeDraft(key: string, text: string): void {
+  try {
+    const all = readDrafts()
+    delete all[key]
+    if (text.trim() !== '') all[key] = text.slice(0, 8000)
+    const keys = Object.keys(all)
+    for (const old of keys.slice(0, Math.max(0, keys.length - DRAFTS_MAX))) delete all[old]
+    window.localStorage.setItem(DRAFTS_KEY, JSON.stringify(all))
+  } catch { /* per-viewer convenience only */ }
+}
+
+function keepDraft(box: HTMLTextAreaElement): void { if (box.dataset.draft !== undefined) storeDraft(box.dataset.draft, box.value) }
+function clearDraft(box: HTMLTextAreaElement): void { box.value = ''; keepDraft(box) }
 
 /** Open tickets waiting on a person, oldest change first. */
 export function personTickets(state: SaState): SaTicket[] {
@@ -222,9 +273,46 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   const addTeamBox = el('div', 'wb-sa-addteam')
   addTeamBox.hidden = true
   teamBar.append(teamSelect, addTeamToggle)
-  root.append(el('div', 'wb-pane-head', 'superagent 团队'), teamBar, addTeamBox, nav, note, body)
+  // The team page's 搜索 (upstream's search): this team's requests, threads and tickets; clicking a result shows it.
+  const searchBox = el('input', 'wb-sa-search')
+  searchBox.type = 'search'
+  searchBox.setAttribute('aria-label', '搜索本团队')
+  searchBox.placeholder = '搜索：文字 / 工单或需求 id / 线程 / #数字'
+  const searchDrop = el('div', 'wb-sa-drop')
+  searchDrop.hidden = true
+  let searchTimer: ReturnType<typeof setTimeout> | undefined
+  const closeSearch = (): void => { searchDrop.hidden = true }
+  const runSearch = (query: string): void => {
+    clearTimeout(searchTimer)
+    if (deps.search === undefined || query.trim().length < 2) { searchDrop.hidden = true; return }
+    searchTimer = setTimeout(() => {
+      void deps.search?.(query).then(out => {
+        if (searchBox.value !== query || !root.contains(searchBox)) return
+        const rows = Array.isArray(out.results) ? out.results as ReadonlyArray<Record<string, unknown>> : []
+        searchDrop.replaceChildren()
+        if (rows.length === 0) searchDrop.appendChild(el('div', 'wb-sa-hint', '没有匹配的结果'))
+        for (const row of rows.slice(0, 20)) {
+          const kind = String(row.kind)
+          const line = el('button', 'wb-sa-hit')
+          line.type = 'button'
+          line.append(el('span', 'wb-sa-hit-kind', kind === 'ticket' ? '工单' : kind === 'request' ? '需求' : '消息'), el('span', 'wb-sa-hit-text', String(row.title ?? '')))
+          line.addEventListener('click', () => { closeSearch(); searchBox.value = ''; locate(kind, row) })
+          searchDrop.appendChild(line)
+        }
+        searchDrop.hidden = false
+      }).catch(() => { searchDrop.hidden = true })
+    }, 300)
+  }
+  searchBox.addEventListener('input', () => { runSearch(searchBox.value) })
+  searchBox.addEventListener('blur', () => { setTimeout(closeSearch, 150) })
+  const searchWrap = el('div', 'wb-sa-searchwrap')
+  searchWrap.append(searchBox, searchDrop)
+  root.append(el('div', 'wb-pane-head', 'superagent 团队'), teamBar, addTeamBox, searchWrap, nav, note, body)
 
-  let view: SaView = 'person'
+  // The sub-tab is a per-viewer convenience kept across reloads (every access guarded).
+  let view: SaView = (() => {
+    try { const v = window.localStorage.getItem(VIEW_KEY); return VIEWS.some(d => d.key === v) ? v as SaView : 'person' } catch { return 'person' }
+  })()
   // undefined until the first poll answers; null once it says this host runs no team.
   let last: SaState | null | undefined = undefined
   let sessions: readonly SaSession[] = []
@@ -252,7 +340,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const key = JSON.stringify(teams)
     if (key !== teamOptions && document.activeElement !== teamSelect) {
       teamOptions = key
-      teamSelect.replaceChildren(...teams.map(team => new Option(team.canvas ?? '（未绑定）', team.id)))
+      teamSelect.replaceChildren(...teams.map(team => new Option(`${team.canvas ?? '（未绑定）'}${(team.waiting ?? 0) > 0 ? `（${team.waiting} 待你处理）` : ''}`, team.id)))
     }
     if (document.activeElement !== teamSelect) teamSelect.value = state.selectedTeam ?? ''
   }
@@ -300,12 +388,23 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   requestBox.setAttribute('aria-label', '需求内容')
   const requestSend = el('button', 'wb-btn wb-btn-primary', '提交需求')
   requestSend.type = 'button'
-  requestSend.addEventListener('click', () => { void send({ action: 'request', text: requestBox.value }, () => { requestBox.value = '' }, '需求已提交，等总工决定') })
-  /** Follow-up / answer drafts by thread id. */
+  requestSend.addEventListener('click', () => { void send({ action: 'request', text: requestBox.value }, () => { clearDraft(requestBox) }, '需求已提交，等总工决定') })
+  requestBox.addEventListener('input', () => { keepDraft(requestBox) })
+  /** Follow-up / answer drafts by team and thread; their text also outlives a reload (per-viewer, in localStorage). */
   const drafts = new Map<string, HTMLTextAreaElement>()
+  const draftKey = (thread: string): string => `${last?.selectedTeam ?? ''}|${thread}`
   const draftFor = (thread: string, placeholder: string): HTMLTextAreaElement => {
-    let box = drafts.get(thread)
-    if (box === undefined) { box = el('textarea', 'wb-sa-input'); box.rows = 2; drafts.set(thread, box) }
+    const key = draftKey(thread)
+    let box = drafts.get(key)
+    if (box === undefined) {
+      box = el('textarea', 'wb-sa-input')
+      box.rows = 2
+      box.dataset.draft = key
+      box.value = readDrafts()[key] ?? ''
+      const b = box
+      box.addEventListener('input', () => { keepDraft(b) })
+      drafts.set(key, box)
+    }
     box.placeholder = placeholder
     return box
   }
@@ -359,7 +458,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
           const box = draftFor(thread, '回答这个问题（会作为这条需求的后续消息送给成员）')
           const answer = el('button', 'wb-btn wb-btn-primary', '回答')
           answer.type = 'button'
-          answer.addEventListener('click', () => { void send({ action: 'request', text: box.value, thread }, () => { box.value = '' }, '回答已送出') })
+          answer.addEventListener('click', () => { void send({ action: 'request', text: box.value, thread }, () => { clearDraft(box) }, '回答已送出') })
           card.appendChild(box)
           actions.appendChild(answer)
         } else {
@@ -367,7 +466,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
           const box = draftFor(`ticket:${ticket.id}`, '回答这个问题（请求方是 agent，由你来答，答复会送给成员）')
           const answer = el('button', 'wb-btn wb-btn-primary', '回答')
           answer.type = 'button'
-          answer.addEventListener('click', () => { void send({ action: 'answer', ticket_id: ticket.id, text: box.value }, () => { box.value = '' }, '回答已送出') })
+          answer.addEventListener('click', () => { void send({ action: 'answer', ticket_id: ticket.id, text: box.value }, () => { clearDraft(box) }, '回答已送出') })
           card.appendChild(box)
           actions.appendChild(answer)
         }
@@ -408,6 +507,8 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   }
 
   function renderRequest(state: SaState): void {
+    const key = draftKey('request')
+    if (requestBox.dataset.draft !== key) { requestBox.dataset.draft = key; requestBox.value = readDrafts()[key] ?? '' }
     const form = el('div', 'wb-sa-form')
     form.append(requestBox, requestSend)
     if (!state.settings.sources.workbench) form.appendChild(el('div', 'wb-sa-hint', '工作台 Source 已关闭：需求不会被受理（到「设置」里打开）'))
@@ -443,7 +544,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       const box = draftFor(thread.ref.id, '在这条需求下追加（补充、回答、或要求停止）')
       const more = el('button', 'wb-btn', '追加')
       more.type = 'button'
-      more.addEventListener('click', () => { void send({ action: 'request', text: box.value, thread: thread.ref.id }, () => { box.value = '' }, '已追加') })
+      more.addEventListener('click', () => { void send({ action: 'request', text: box.value, thread: thread.ref.id }, () => { clearDraft(box) }, '已追加') })
       const actions = el('div', 'wb-sa-actions')
       actions.appendChild(more)
       card.append(box, actions)
@@ -515,6 +616,19 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   function renderSettings(state: SaState): void {
     if (settingsForm === undefined || !settingsDirty) settingsForm = buildSettings(state.settings, state.canvases ?? [])
     body.appendChild(settingsForm)
+    // The team's recent settings saves: who, when, and what moved (rules keep their own 最近修改; this is the rest).
+    const history = state.settingsHistory ?? []
+    if (history.length > 0) {
+      const block = el('div', 'wb-led-card')
+      block.appendChild(el('div', 'wb-kv-k', '设置保存记录（最近）'))
+      for (const row of history.slice(0, 10)) {
+        const item = el('div', 'wb-sa-hist')
+        item.append(el('span', 'wb-sa-when', `${ago(row.at, now)} · ${row.by === 'owner' ? '属主' : row.by}`))
+        for (const change of row.changes.slice(0, 8)) item.appendChild(el('div', 'wb-sa-hist-line', `${change.field}：${change.from} → ${change.to}`))
+        block.appendChild(item)
+      }
+      body.appendChild(block)
+    }
   }
 
   function buildSettings(s: SaSettings, canvases: readonly string[]): HTMLElement {
@@ -550,6 +664,37 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     mode.addEventListener('change', mark)
     form.appendChild(label('接单模式', mode))
 
+    // Which model each role's sessions run (owner 2026-11-10): a picker from DSH's catalog, free text when it cannot be read.
+    const modelRow = (text: string, which: 'router' | 'member'): HTMLInputElement => {
+      const input = el('input', 'wb-sa-model')
+      input.type = 'text'
+      input.setAttribute('list', `wb-sa-models-${which}`)
+      input.placeholder = 'provider/model（留空：不动会话自己的选择）'
+      const current = s.models?.[which]
+      input.value = current === undefined ? '' : `${current.provider}/${current.model}`
+      input.addEventListener('input', mark)
+      const list = el('datalist')
+      list.id = `wb-sa-models-${which}`
+      form.appendChild(list)
+      form.appendChild(label(text, input))
+      return input
+    }
+    const routerModel = modelRow('总工模型', 'router')
+    const memberModel = modelRow('成员模型（观察者同此）', 'member')
+    void deps.models?.().then(catalog => {
+      const rows: string[] = []
+      for (const group of Array.isArray(catalog.providers) ? catalog.providers as ReadonlyArray<Record<string, unknown>> : []) {
+        for (const model of Array.isArray(group.models) ? group.models as ReadonlyArray<Record<string, unknown>> : []) {
+          if (typeof group.id === 'string' && typeof model.id === 'string') rows.push(`${group.id}/${model.id}`)
+        }
+      }
+      for (const which of ['router', 'member'] as const) {
+        const list = form.querySelector<HTMLDataListElement>(`#wb-sa-models-${which}`)
+        if (list === null) continue
+        for (const value of rows) list.appendChild(new Option(value, value))
+      }
+    }).catch(() => undefined)
+
     const flag = (text: string, on: boolean): HTMLInputElement => {
       const box = el('input'); box.type = 'checkbox'; box.checked = on
       box.addEventListener('change', mark)
@@ -559,16 +704,61 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const wb = flag('工作台 Source', s.sources.workbench)
     const a2a = flag('A2A Source', s.sources.a2a)
     const paused = flag('暂停执行', s.paused)
-    const fields = buildTeamFields(s, sessionName, mark)
+    const fields = buildTeamFields(s, sessionName, mark, () => { void send({ action: 'sync-github-allowed' }, () => { settingsDirty = false }, 'GitHub 账号已同步') })
     form.append(...fields.nodes)
+
+    // The owner's prompt supplements (owner 2026-11-10, 对照上游): how the team talks, and what delivery looks like.
+    // Empty is the default; the presets' own text cannot be edited, and on a clash it stands.
+    const promptBox = (text: string, which: 'communication' | 'delivery', aria: string): HTMLTextAreaElement => {
+      const box = el('textarea', 'wb-sa-prompt')
+      box.setAttribute('aria-label', aria)
+      box.maxLength = 4000
+      box.placeholder = '（留空：按预设默认）'
+      box.value = s.prompts?.[which] ?? ''
+      box.addEventListener('input', mark)
+      form.appendChild(label(text, box))
+      return box
+    }
+    const communication = promptBox('沟通方式补充说明', 'communication', '沟通方式补充说明')
+    const delivery = promptBox('交付要求补充说明', 'delivery', '交付要求补充说明')
+    void communication; void delivery
 
     const save = el('button', 'wb-btn wb-btn-primary', '保存')
     save.type = 'button'
     save.addEventListener('click', () => {
-      const patch: Json = { canvas: canvas.value === '' ? null : canvas.value, router: router.value === '' ? null : router.value, acceptMode: mode.value, sources: { workbench: wb.checked, a2a: a2a.checked }, paused: paused.checked }
+      const pick = (input: HTMLInputElement): Json | null | undefined => {
+        const text = input.value.trim()
+        if (text === '') return null
+        const slash = text.indexOf('/')
+        if (slash <= 0 || slash === text.length - 1) { say('模型写成 provider/model，例如 deepseek/deepseek-chat', 'danger'); return undefined }
+        return { provider: text.slice(0, slash), model: text.slice(slash + 1) }
+      }
+      const routerPick = pick(routerModel), memberPick = pick(memberModel)
+      if (routerPick === undefined || memberPick === undefined) return
+      // Models ride along only when a picker changed (review of #566): an untouched save keeps the stored choices, effort included.
+      const shown = (which: 'router' | 'member'): string => { const m = s.models?.[which]; return m === undefined ? '' : `${m.provider}/${m.model}` }
+      const routerChanged = routerModel.value.trim() !== shown('router'), memberChanged = memberModel.value.trim() !== shown('member')
+      // Only the changed picker is named: the host keeps an unnamed one as saved, and '' clears a named one.
+      const models: Json = { ...(routerChanged ? { router: routerPick ?? '' } : {}), ...(memberChanged ? { member: memberPick ?? '' } : {}) }
+      const patch: Json = { canvas: canvas.value === '' ? null : canvas.value, router: router.value === '' ? null : router.value, acceptMode: mode.value, sources: { workbench: wb.checked, a2a: a2a.checked }, paused: paused.checked, ...(routerChanged || memberChanged ? { models } : {}) }
       const edited = fields.patch()
       if ('error' in edited) { say(edited.error, 'danger'); return }
-      Object.assign(patch, edited.patch)
+      // The GitHub switch rides in sources only when it changed (design github-issues G7).
+      const { sources: githubSource, ...rest } = edited.patch as Json & { sources?: Json }
+      Object.assign(patch, rest)
+      if (githubSource !== undefined) patch.sources = { ...(patch.sources as Json), ...githubSource }
+      // Prompts ride along only when one actually changed (review of #567): untouched saves keep their own owner-proof
+      // lane, and a host with no login saves ordinary settings without a 403.
+      const saved = s.prompts ?? {}
+      const nextCommunication = communication.value, nextDelivery = delivery.value
+      const communicationChanged = (nextCommunication.trim() === '' ? undefined : nextCommunication) !== saved.communication
+      const deliveryChanged = (nextDelivery.trim() === '' ? undefined : nextDelivery) !== saved.delivery
+      if (communicationChanged || deliveryChanged) {
+        // Clearing one box sends '' for it explicitly (host: '' clears that one; both-empty '' would too, but '' is only
+        // sent for what actually changed) - prompts: null would clear both (#567 second review).
+        const prompts: Json = { ...(communicationChanged ? { communication: nextCommunication } : {}), ...(deliveryChanged ? { delivery: nextDelivery } : {}) }
+        Object.assign(patch, { prompts })
+      }
       void send({ action: 'settings', settings: patch }, () => { settingsDirty = false }, '设置已保存')
     })
     const reset = el('button', 'wb-btn', '放弃修改')
@@ -585,16 +775,45 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     body.replaceChildren()
     builtFrom = viewKey()
     builtAt = now
-    if (last === undefined) { body.appendChild(el('div', 'wb-sa-hint', '正在读取团队状态…')); return }
+    // Until the switched-to team's state arrives, the old team's would show under the new name, and act() already
+    // writes to the new team: nothing is built from it.
+    if (last === undefined || pendingTeam !== undefined) { body.appendChild(el('div', 'wb-sa-hint', '正在读取团队状态…')); return }
     if (last === null) { body.appendChild(el('div', 'wb-sa-hint', '这台主机没有运行 superagent 团队')); return }
     if (view === 'person') renderPerson(last)
     else if (view === 'request') renderRequest(last)
     else if (view === 'tickets') renderTickets(last)
     else if (view === 'team') renderTeam(last)
     else renderSettings(last)
+    applyFocus()
   }
 
-  function select(next: SaView): void { view = next; render() }
+  function select(next: SaView): void {
+    view = next
+    try { window.localStorage.setItem(VIEW_KEY, next) } catch { /* per-viewer convenience only */ }
+    render()
+  }
+
+  /** A search result the person clicked: show it where it lives, and flash it. */
+  let pendingFocus: { readonly kind: string; readonly id: string } | undefined
+  function locate(kind: string, row: Record<string, unknown>): void {
+    const id = String(row.id ?? '')
+    if (id === '') return
+    pendingFocus = { kind, id }
+    const wanted: SaView = kind === 'ticket' ? 'tickets' : 'request'
+    if (view !== wanted) { view = wanted; render() } else { render() }
+  }
+
+  function applyFocus(): void {
+    const focus = pendingFocus
+    pendingFocus = undefined
+    if (focus === undefined) return
+    const node = focus.kind === 'ticket' ? body.querySelector(`[data-ticket="${focus.id}"]`) : body.querySelector(`[data-thread="${focus.id}"]`) ?? body.querySelector(`[data-thread="${String(focus.id)}"]`)
+    if (node instanceof HTMLElement) {
+      node.scrollIntoView?.({ block: 'center' })
+      node.classList.add('is-flash')
+      setTimeout(() => { node.classList.remove('is-flash') }, 1600)
+    }
+  }
 
   function focusVisible(node: HTMLElement): boolean { try { return node.matches(':focus-visible') } catch { return false } }
 
@@ -628,7 +847,9 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const changed = viewKey() !== builtFrom || at - builtAt >= 60_000
     if (changed && !busy) render()
     if (state === null) return { badge: '' }
-    const waiting = personTickets(state).length
+    // The rail badge counts every team's waiting tickets: the picker names the other teams' counts, and a badge that
+    // showed only this team's would hide them (an owner on one team never learned another needed them).
+    const waiting = personTickets(state).length + (state.teams ?? []).reduce((n, team) => n + (team.id !== state.selectedTeam ? team.waiting ?? 0 : 0), 0)
     const problems = problemsOf(state, at)
     if (problems.some(p => p.tone === 'danger')) return { badge: String(waiting + problems.length), tone: 'danger' }
     return waiting + problems.length > 0 ? { badge: String(waiting + problems.length), tone: 'warn' } : { badge: '' }
