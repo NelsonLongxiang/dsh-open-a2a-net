@@ -12,20 +12,28 @@
  *   runtime_probes 3081 运行时探针（nexus 页 / state 面）
  *   release_gate   发布闸门推导（候选就位、公网npmjs精确版本未发布）
  *
- * 用法：node scripts/verify-probe.mjs [--base http://127.0.0.1:3081] [--out verify/snapshot.sqlite]
+ * 用法：node scripts/verify-temp-clean.mjs -- node scripts/verify-probe.mjs
+ *   [--candidate-root EXACT_EXPORT --candidate-sha FULL_SHA --source-repo EXISTING_REPO]
+ *   [--base http://127.0.0.1:3081 | --runtime-unavailable]
+ *   [--run-dir tmp/verify-probe/NEW_RUN]；输出摘要给出本轮 snapshot/submission 的精确路径。
  * 退出码：0 = 采集完成（不代表判定结果；判定由 verify run 出报告）。
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, resolve, join } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, realpathSync, lstatSync, openSync, closeSync } from "node:fs";
+import { inspectCandidateSource } from "./verify-submission.mjs";
+import { dirname, resolve, join, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 
-const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const COLLECTOR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+let REPO = COLLECTOR_ROOT;
 const argv = process.argv.slice(2);
 const flag = (name, dflt) => {
   const i = argv.indexOf(`--${name}`);
-  return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt;
+  if (i < 0) return dflt;
+  const value = argv[i + 1];
+  if (!value || value.startsWith("--")) throw Error("--" + name + " requires a value");
+  return value;
 };
 const BASE = flag("base", "http://127.0.0.1:3081");
 const OUT = resolve(REPO, flag("out", "verify/snapshot.sqlite"));
@@ -77,6 +85,10 @@ if (argv.includes('--a2a-shadow')) {
   }
 }
 
+// Early release-audit/shadow modes retain their original collector-root scope.
+const requestedRoot = resolve(COLLECTOR_ROOT, flag("candidate-root", "."));
+if (lstatSync(requestedRoot).isSymbolicLink()) throw Error("candidate root is a link");
+REPO = realpathSync(requestedRoot);
 const pkg = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8"));
 
 /* ── 小工具 ─────────────────────────────────────────────── */
@@ -86,7 +98,8 @@ const run = (label, command, args, timeoutMs) => {
   const t0 = Date.now();
   const res = spawnSync(command, args, { cwd: REPO, encoding: "utf8", timeout: timeoutMs, maxBuffer: 64 << 20, shell: SHELL });
   const duration = Date.now() - t0;
-  const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
+  const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`.replace(/\u001b\[[0-9;]*m/g, "");
+  writeNew(join(RUN_DIR, label.replaceAll(":", "-") + ".log"), out);
   // gh#4: vitest prints one summary line per project plus a grand total —
   // summing every match double-counts. The LAST "N passed" line is the
   // grand total (single-project runs have exactly one).
@@ -96,19 +109,49 @@ const run = (label, command, args, timeoutMs) => {
   const skipped = last(/(\d+) skipped/g);
   const killed = res.error?.code === "ETIMEDOUT";
   console.error(`[probe] ${label}: exit=${res.status ?? -1} ${duration}ms passed=${passed} failed=${failed}${killed ? " (TIMEOUT)" : ""}`);
-  return { gate: label, exit_code: res.status ?? -1, passed, failed, skipped, duration_ms: duration, stdout_tail: out.slice(-500) };
+  return { gate: label, exit_code: res.status ?? -1, signal: res.signal, error: res.error?.code ?? null, timed_out: killed, output_truncated: res.error?.code === "ENOBUFS", passed, failed, skipped, duration_ms: duration, stdout_tail: out.slice(-500) };
 };
 
 /* ── 1. 仓库事实 ────────────────────────────────────────── */
-const git = (args) => spawnSync("git", args, { cwd: REPO, encoding: "utf8" }).stdout?.trim() ?? "";
-const gitHead = git(["rev-parse", "HEAD"]);
-const gitDirty = git(["status", "--porcelain"]);
-const distTracked = git(["ls-files", "assets/nexusDist/assets"]).split("\n").filter(Boolean).length;
+const candidateSha = flag("candidate-sha", undefined);
+const sourceRepo = resolve(REPO, flag("source-repo", "."));
+const source = inspectCandidateSource(REPO, candidateSha, sourceRepo);
+const collector = REPO === realpathSync(COLLECTOR_ROOT) ? source : inspectCandidateSource(COLLECTOR_ROOT, flag("collector-sha", undefined), sourceRepo);
+const collectorFiles = ["scripts/verify-probe.mjs", "scripts/verify-submission.mjs"].map(path => ({ path, sha256: createHash("sha256").update(readFileSync(resolve(COLLECTOR_ROOT, path))).digest("hex") }));
+const gitHead = source.sha;
+const gitDirty = source.clean ? "" : source.cleanDetail;
+const distTracked = source.entries.filter(entry => entry.path.startsWith("assets/nexusDist/assets/")).length;
+// Each collection owns a new run directory. Never overwrite a prior snapshot, summary or source export.
+const projectTmp = resolve(REPO, "tmp"), runParent = resolve(projectTmp, "verify-probe");
+for (const parent of [projectTmp, runParent]) {
+  if (existsSync(parent) && lstatSync(parent).isSymbolicLink()) throw Error("probe temporary parent is a link");
+  mkdirSync(parent, { recursive: true });
+}
+const requestedRun = flag("run-dir", undefined);
+const runPath = requestedRun === undefined ? mkdtempSync(join(runParent, "run-")) : resolve(REPO, requestedRun);
+if (requestedRun !== undefined) {
+  const rel = relative(runParent, runPath);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel) || dirname(runPath) !== runParent || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$/.test(rel)) throw Error("--run-dir must be a new direct child of project tmp/verify-probe");
+  mkdirSync(runPath); // existing output is a refusal, not permission to clear it
+}
+const RUN_DIR = realpathSync(runPath);
+const RC_OUT = argv.includes("--out") ? resolve(REPO, flag("out", "")) : join(RUN_DIR, "snapshot.sqlite");
+if (dirname(RC_OUT) !== RUN_DIR || existsSync(RC_OUT)) throw Error("snapshot must be a new file inside this probe run directory");
+const SUMMARY = join(RUN_DIR, "probe-summary.json");
+const writeNew = (file, bytes) => writeFileSync(file, bytes, { flag: "wx", mode: 0o600 });
 const repoFacts = [
   ["package_version", pkg.version],
   ["git_head", gitHead],
   ["git_clean", gitDirty ? "0" : "1"],
   ["dist_files_tracked", String(distTracked)],
+  ["source_kind", source.kind],
+  ["candidate_tree", source.tree],
+  ["object_repository", realpathSync(sourceRepo)],
+  ["candidate_root", REPO],
+  ["collector_root", COLLECTOR_ROOT],
+  ["collector_sha", collector.sha],
+  ["source_manifest_sha256", createHash("sha256").update(JSON.stringify(source.entries)).digest("hex")],
+  ["executable_modes_verified", source.executableModesVerified ? "1" : "0"],
 ];
 
 /* ── 2. 质量门禁（真命令，限时） ────────────────────────── */
@@ -117,13 +160,30 @@ const gates = [
   run("verify:docs", "pnpm", ["run", "verify:docs"], 180_000),
   run("test:unit", "pnpm", ["run", "test:unit"], 300_000),
   run("test:wire", "pnpm", ["run", "test:wire"], 300_000),
-  run("verify:nexus", "pnpm", ["run", "verify:nexus"], 600_000),
+  ...(source.kind === "git-worktree" ? [run("verify:nexus", "pnpm", ["run", "verify:nexus"], 600_000)] : (() => {
+    const steps = [
+      run("nexus-install", process.execPath, ["scripts/verify-nexus-ci.mjs"], 180_000),
+      run("nexus-build", "npm", ["--prefix", "nexus-stage", "run", "build"], 180_000),
+      run("nexus-test", "npm", ["--prefix", "nexus-stage", "run", "test"], 300_000),
+    ];
+    let assetMatch = false;
+    try {
+      const entries = source.entries.filter(entry => entry.path.startsWith("assets/nexusDist/"));
+      assetMatch = entries.length > 0 && entries.every(entry => createHash("sha256").update(readFileSync(resolve(REPO, entry.path))).digest("hex") === entry.sha256);
+    } catch {}
+    return [{ gate: "verify:nexus", exit_code: steps.every(step => step.exit_code === 0) && assetMatch ? 0 : 1, passed: steps.at(-1).passed, failed: steps.at(-1).failed, skipped: steps.at(-1).skipped, duration_ms: steps.reduce((sum, step) => sum + step.duration_ms, 0), stdout_tail: JSON.stringify({ steps: steps.map(step => ({ gate: step.gate, exit_code: step.exit_code })), exact_candidate_dist_bytes: assetMatch }) }];
+  })()),
 ];
 
 /* ── 3. 运行时探针（3081） ──────────────────────────────── */
 const probeRuntime = async () => {
   const rows = [];
   const t = new Date().toISOString();
+  if (argv.includes("--runtime-unavailable")) {
+    for (const endpoint of ["nexus_page", "state"]) rows.push({ endpoint, http_status: 0, version: null, peers: null, isolated: null, sessions_live: null, sessions_cold: null, remote_rows: null, ledger_pending: null, ledger_dead: null, ledger_archived: null, checked_at: t });
+    console.error("[probe] runtime unavailable: no authorized candidate runtime window; no HTTP calls made");
+    return rows;
+  }
   try {
     const page = await fetch(`${BASE}/__dsh_a2a_nexus/`, { signal: AbortSignal.timeout(8_000) });
     await page.text();
@@ -188,23 +248,28 @@ const gateRows = [
 ];
 
 /* ── 5. 导出提交树（验证器 file 检查的 submission 面） ──── */
-// 不用工作树本身：.claude/worktrees 里有 pnpm junction 环（walk ELOOP），且 node_modules 是非提交物。
-// 提交面 = git ls-files 的导出 —— 与「提交物」语义严格一致。
-// 位置必须在仓库外（os tmpdir）：放进 repo 的 tmp/ 会被 vitest 当测试树收进 test:wire（实测踩坑 0.6.14）。
-const SUBMISSION = mkdtempSync(join(tmpdir(), "dsh-a2a-submission-"));
-const tracked = git(["ls-files"]).split("\n").filter(Boolean);
+// Recheck every committed source byte after real gates; no ignored read error or stale ancestor HEAD.
+const after = inspectCandidateSource(REPO, source.sha, sourceRepo);
+if (JSON.stringify(after.entries) !== JSON.stringify(source.entries) || after.clean !== source.clean) throw Error("candidate source changed during collection");
+const collectorAfter = inspectCandidateSource(COLLECTOR_ROOT, collector.sha, sourceRepo);
+if (JSON.stringify(collectorAfter.entries) !== JSON.stringify(collector.entries)) throw Error("collector source changed during collection");
+const SUBMISSION = mkdtempSync(join(RUN_DIR, "dsh-a2a-submission-"));
+const tracked = source.entries.map(entry => entry.path);
 for (const rel of tracked) {
   const dest = resolve(SUBMISSION, rel);
   mkdirSync(dirname(dest), { recursive: true });
-  try { writeFileSync(dest, readFileSync(resolve(REPO, rel))); } catch { /* 跳过读不了的边角 */ }
+  const bytes = readFileSync(resolve(REPO, rel));
+  if (createHash("sha256").update(bytes).digest("hex") !== source.entries.find(entry => entry.path === rel).sha256) throw Error("source changed during submission export: " + rel);
+  writeNew(dest, bytes);
 }
+writeNew(join(RUN_DIR, "source-manifest.json"), JSON.stringify({ sha: source.sha, tree: source.tree, kind: source.kind, files: source.entries }, null, 2) + "\n");
 console.error(`[probe] submission exported: ${tracked.length} tracked files -> ${SUBMISSION}`);
 
 /* ── 6. 冻结成 sqlite ───────────────────────────────────── */
 const { DatabaseSync } = await import("node:sqlite");
-mkdirSync(dirname(OUT), { recursive: true });
-if (existsSync(OUT)) rmSync(OUT);
-const db = new DatabaseSync(OUT);
+// Reserve a new owned path before SQLite opens it; never rm an earlier evidence database.
+const reserved = openSync(RC_OUT, "wx", 0o600); closeSync(reserved);
+const db = new DatabaseSync(RC_OUT);
 db.exec(`
 CREATE TABLE repo_facts (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE quality_gates (gate TEXT PRIMARY KEY, exit_code INTEGER NOT NULL, passed INTEGER, failed INTEGER, skipped INTEGER, duration_ms INTEGER NOT NULL, stdout_tail TEXT);
@@ -220,16 +285,29 @@ db.close();
 
 const summary = {
   package_version: pkg.version,
-  git_head: gitHead.slice(0, 8),
+  git_head: gitHead,
+  candidate_sha: gitHead,
+  source_kind: source.kind,
+  collector_root: COLLECTOR_ROOT,
+  collector_sha: collector.sha,
+  collector_files: collectorFiles,
+  candidate_root: REPO,
+  object_repository: realpathSync(sourceRepo),
+  executable_modes_verified: source.executableModesVerified,
+  executable_mode_scope: source.executableModeScope,
+  candidate_tree: source.tree,
+  source_manifest: join(RUN_DIR, "source-manifest.json"),
+  submission_root: RUN_DIR,
   git_clean: !gitDirty,
   gates: Object.fromEntries(gates.map((g) => [g.gate, { exit: g.exit_code, passed: g.passed, failed: g.failed }])),
+  gate_observations: gates,
   runtime: Object.fromEntries(runtimeRows.map((r) => [r.endpoint, r.http_status === 200
     ? { ok: true, source: `${BASE}/${r.endpoint === "state" ? "__dsh_a2a/state" : "__dsh_a2a_nexus/"}`, checked_at: r.checked_at, version: r.version, peers: r.peers, isolated: r.isolated === null ? null : r.isolated === 1, dead: r.ledger_dead }
     : { ok: false, source: `${BASE}/${r.endpoint === "state" ? "__dsh_a2a/state" : "__dsh_a2a_nexus/"}`, checked_at: r.checked_at, status: r.http_status }])),
   release_gate: Object.fromEntries(gateRows.map((g) => [g.rule, !!g.holds])),
   release_evidence: { source: regUrl, checked_at: regCheckedAt, exact_version: pkg.version, registry_state: regState },
-  snapshot: OUT,
+  snapshot: RC_OUT,
   submission: SUBMISSION,
 };
-writeFileSync(resolve(REPO, "verify/probe-summary.json"), JSON.stringify(summary, null, 2) + "\n");
+writeNew(SUMMARY, JSON.stringify(summary, null, 2) + "\n");
 console.log(JSON.stringify(summary, null, 2));

@@ -26,6 +26,10 @@ const CORPUS = process.env.YGL_VERIFY_CORPUS ?? resolve(REPO, "..", "ygl-trees",
 const ARCHIVES = resolve(YGL_HOME, "verify/archives");
 
 const argv = process.argv.slice(2);
+const value = (name, fallback) => { const i = argv.indexOf("--" + name); return i < 0 ? fallback : argv[i + 1]; };
+let summaryFile = resolve(REPO, value("summary", "verify/probe-summary.json"));
+let snapshotFile = resolve(REPO, value("snapshot", "verify/snapshot.sqlite"));
+let explicitCandidate = value("candidate-sha", undefined);
 const runJson = (args, opts = {}) => {
   const res = spawnSync(process.execPath, [YGL_BIN, ...args], {
     encoding: "utf8", timeout: 300_000, maxBuffer: 64 << 20,
@@ -55,20 +59,31 @@ const layers = [];
 
 /* ── 可选：fresh 重采证据（--fresh 时先跑探针） ──────────── */
 if (argv.includes("--fresh")) {
-  const res = spawnSync(process.execPath, [resolve(REPO, "scripts/verify-probe.mjs")], {
-    cwd: REPO, encoding: "utf8", timeout: 900_000, maxBuffer: 64 << 20, stdio: "inherit",
-  });
-  if (res.status !== 0) {
-    console.log(JSON.stringify({ ok: false, layers: [...layers, { layer: "probe", ok: false, detail: `probe exit ${res.status}` }] }, null, 2));
+  const args = [resolve(REPO, "scripts/verify-temp-clean.mjs"), "--", process.execPath, resolve(REPO, "scripts/verify-probe.mjs")];
+  for (const name of ["candidate-root", "candidate-sha", "collector-sha", "source-repo", "base", "run-dir"]) {
+    const argument = value(name, undefined);
+    if (argument !== undefined) args.push("--" + name, argument);
+  }
+  if (argv.includes("--runtime-unavailable")) args.push("--runtime-unavailable");
+  const res = spawnSync(process.execPath, args, { cwd: REPO, encoding: "utf8", timeout: 900_000, maxBuffer: 64 << 20 });
+  const output = (res.stdout ?? "").trim();
+  const marker = output.indexOf("\n[temp-clean]");
+  let collected;
+  try { collected = JSON.parse(marker < 0 ? output : output.slice(0, marker)); } catch {}
+  if (res.error || res.status !== 0 || !collected || !/^[a-f0-9]{40}$/.test(collected.candidate_sha ?? "") || typeof collected.snapshot !== "string" || typeof collected.submission_root !== "string") {
+    console.log(JSON.stringify({ ok: false, layers: [...layers, { layer: "probe", ok: false, detail: "probe did not return one bound collection summary", exit: res.status, error: String(res.error ?? res.stderr ?? "") }] }, null, 2));
     process.exit(1);
   }
+  snapshotFile = collected.snapshot;
+  summaryFile = resolve(collected.submission_root, "probe-summary.json");
+  explicitCandidate = collected.candidate_sha;
 }
 
 /* ── L·判定：冻结 spec 跑当前快照 ──────────────────────── */
 {
-  const snapshot = resolve(REPO, "verify/snapshot.sqlite");
-  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: REPO, encoding: "utf8" }).stdout?.trim() ?? "";
-  const submission = submissionFromProbe(resolve(REPO, "verify/probe-summary.json"), snapshot, head);
+  const snapshot = snapshotFile;
+  const head = explicitCandidate ?? spawnSync("git", ["rev-parse", "HEAD"], { cwd: REPO, encoding: "utf8" }).stdout?.trim() ?? "";
+  const submission = submissionFromProbe(summaryFile, snapshot, head);
   if (!existsSync(snapshot)) {
     layers.push({ layer: "spec-run", ok: false, detail: "verify/snapshot.sqlite missing — run scripts/verify-probe.mjs first" });
   } else if (!submission.ok) {
@@ -106,10 +121,10 @@ if (argv.includes("--fresh")) {
 
 const ok = layers.every(l => l.ok);
 const summary = { ok, spec_id: SPEC_ID, layers };
-const summaryPath = resolve(REPO, "verify/recursive-summary.json");
+const summaryPath = resolve(snapshotFile, "..", "recursive-summary-" + String(Date.now()) + "-" + String(process.pid) + ".json");
 try {
   const fs = await import("node:fs");
-  fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + "\n");
+  fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + "\n", { flag: "wx", mode: 0o600 });
 } catch { /* 摘要写不进不阻断回报 */ }
 console.log(JSON.stringify(summary, null, 2));
 process.exit(ok ? 0 : 1);

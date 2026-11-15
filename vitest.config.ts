@@ -1,13 +1,17 @@
 import { configDefaults, defineConfig } from 'vitest/config'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const repoRoot = fileURLToPath(new URL('.', import.meta.url))
+const scratchGlob = resolve(repoRoot, 'tmp').replaceAll('\\', '/').replace(/([*?\[\]{}()!+@])/g, '\\$1') + '/**'
 
 export default defineConfig({
   test: {
     // A plugin instance in a test makes the superagent team's ygl-trees workspace and projects (ygl-home.ts); without this it
     // would write them into the developer's real ~/.ygl-trees-superagent.
-    env: { SUPERAGENT_YGL_HOME: mkdtempSync(join(tmpdir(), 'a2a-test-ygl-')) },
+    env: { SUPERAGENT_YGL_HOME: process.env.A2A_TEST_YGL_HOME ?? mkdtempSync(join(tmpdir(), 'a2a-test-ygl-')) },
     // jsdom is requested per-file through @vitest-environment docblocks.
     server: {
       deps: {
@@ -32,7 +36,7 @@ export default defineConfig({
       // Scratch space (supervisor/review repro drops, probe logs). The
       // review repro spec is intentionally NOT part of the gate: it pins
       // the pre-fix violation shape and expects the fixed tree to diverge.
-      '**/tmp/**',
+      scratchGlob,
       ...configDefaults.exclude,
     ],
   },
