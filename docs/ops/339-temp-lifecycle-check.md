@@ -27,3 +27,14 @@ Windows最终两轮默认完整verify：bash-d3bf11fc7ef94a8d、bash-3b643773b44
 这两个外层工具链项**不属于门禁管理的内层根，不加入内层残留豁免名单，也不据此豁免任何测试目录**。内层检查仍要求全部步骤结束后entries严格0；外层验证器应独立记录父工具链项及测试残留，不能混作“测试泄漏”或掩盖新增目录。监督席原始复核见PR340评论（407f458），本次修订仅更新说明，不改测试/门禁代码。
 
 #339仍保持打开。关闭条件为a2a-net评审链合并PR后，监督主机在merged master上再观察一轮验证器，确认无新测试临时目录；本次macOS PASS不替代该合并后验收。未清监督席历史存量，未部署生产。
+
+
+## PR #708 工程收口修订（2026-11-15，继承原记录，不回写历史通过）
+
+原回执修复头 `4f60ee08869c3fcf930f6eee595b70f8d03b594f` 的分组工程测试本体通过，但外层报告 `a2a-test-ygl-*` 残留并返回 rc1。根因是 Vitest 配置自己分配 ygl home，外层 runner 不拥有该分配事实；不能据测试本体通过宣称完整门禁通过。
+
+本修订仍使用 `scripts/verify-temp-clean.mjs`，按入口文件所在项目分配 `tmp/test-runs/run-<唯一后缀>`，不使用外部系统 tmp 或另一检出的根。runner 在自己本次根中命名并向子树传递 `A2A_TEST_YGL_HOME`；Vitest 使用该值，而非再次分配匿名 home。子进程结束后只清理这个精确 owned fixture，再对剩余项逐项判定：任意其他残留仍 rc1，原子进程非零码仍保留，owned fixture 被替换为链接则 rc1且不遍历外部目标。旧目录、继承的 ygl home、他人测试根均不删除。直接绕过 runner 的历史测试行为不被宣称已修复。
+
+定向回归用真实 runner 子进程验证：自己的 ygl fixture 正常清理且外层零残留；继承 home 和旧 sibling 哨兵不变；故意未拥有目录/文件仍失败并点名；子进程 exit7仍为7；链接替换失败且外部哨兵不变。红例在旧入口实际返回74并保留配置分配残留；修订后再跑真实 Vitest 配置、同组 LAN-IP及构建布局检查，不调既有业务断言/timeout/skip，不重跑整批已闭合业务反例。首次定向工程运行typecheck、verify:docs、runner语法检查、3files/11tests（4项新runner回归+4项真实LAN-IP+3项现有构建布局）均rc0，外层remaining=[]/entries0/rc0。原三批大范围测试/旧外层rc1不据此重标全绿；本轮没有完整verify:core、RC或运维验收产物。
+
+GitHub 只读核对当时仓库 Actions workflow 数量为0，本修复分支无run，PR statusCheckRollup为空，next/0.8未配置branch protection。它们代表没有远端检查，不是CI绿。本次不新配CI或保护规则、不人工伪造check/status，也不触发安装、发布、部署。后续合并判断仍须分别看本修订准确SHA的工程原日志、独立delta复核及既有完整工程/RC/运维门；小范围零残留不替代完整 verify:core 或实盘验收。
