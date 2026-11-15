@@ -35,6 +35,8 @@ function fixture(over: { rows?: unknown; pages?: unknown; health?: unknown; trig
   const dir = mkdtempSync(join(repo, 'tmp', 'a2a-shadow-unit-'))
   const db = new DatabaseSync(join(dir, 'superagent.db'))
   db.exec(UPSTREAM_DDL)
+  // Populate one fixture atomically instead of fsyncing each synthetic row on Windows.
+  db.exec('BEGIN')
   const kv = (k: string, v: unknown) => db.prepare('INSERT INTO kv VALUES (?,?)').run(k, JSON.stringify(v))
   kv(KV.rows, over.rows ?? [
     row(1, 'stored', '2026-11-06T23:59:00.000Z'), // before the window: counted in shadow_meta, not in shadow_rows
@@ -62,6 +64,7 @@ function fixture(over: { rows?: unknown; pages?: unknown; health?: unknown; trig
   db.prepare('INSERT INTO outbox VALUES (?,?)').run('o2', JSON.stringify({ id: 'o2', channel: { source: 'feishu' }, text: 'x', status: 'sent' }))
   db.prepare('INSERT INTO ticket VALUES (?,?)').run('k1', JSON.stringify({ id: 'k1', mandate: { basis: { source: 'github', via: 'addressed' } } }))
   db.prepare('INSERT INTO ticket VALUES (?,?)').run('k2', JSON.stringify({ id: 'k2' }))
+  db.exec('COMMIT')
   db.close()
   const cliHome = join(dir, 'cli')
   mkdirSync(cliHome)
@@ -190,31 +193,31 @@ describe('p2 shadow collector (verify-probe --a2a-shadow)', () => {
     expect(readFileSync(f.out, 'utf8')).toBe('evidence')
   })
 
-  it('usage errors exit 2 with one JSON object', () => {
+  it.each(['missing-cli-home', 'missing-window', 'reverse-window', 'missing-zone', 'missing-source'] as const)('usage error %s exits 2 with one JSON object', kind => {
     const f = fixture()
-    for (const args of [
-      ['--a2a-shadow', f.source, '--window', WINDOW, '--out', f.out],
-      ['--a2a-shadow', f.source, '--cli-home', f.cliHome, '--out', f.out],
-      ['--a2a-shadow', f.source, '--cli-home', f.cliHome, '--window', '2026-11-08..2026-11-07', '--out', f.out],
-      ['--a2a-shadow', f.source, '--cli-home', f.cliHome, '--window', '2026-11-07T00:00..2026-11-08', '--out', f.out],
-      ['--a2a-shadow', '--cli-home', f.cliHome, '--window', WINDOW, '--out', f.out],
-    ]) {
-      const r = probe(args)
-      expect(r.code, JSON.stringify(args)).toBe(2)
-      expect(typeof r.json.error).toBe('string')
-      expect(existsSync(f.out)).toBe(false)
+    const cases = {
+      'missing-cli-home': ['--a2a-shadow', f.source, '--window', WINDOW, '--out', f.out],
+      'missing-window': ['--a2a-shadow', f.source, '--cli-home', f.cliHome, '--out', f.out],
+      'reverse-window': ['--a2a-shadow', f.source, '--cli-home', f.cliHome, '--window', '2026-11-08..2026-11-07', '--out', f.out],
+      'missing-zone': ['--a2a-shadow', f.source, '--cli-home', f.cliHome, '--window', '2026-11-07T00:00..2026-11-08', '--out', f.out],
+      'missing-source': ['--a2a-shadow', '--cli-home', f.cliHome, '--window', WINDOW, '--out', f.out],
     }
+    const result = probe(cases[kind])
+    expect(result.code, JSON.stringify(cases[kind])).toBe(2)
+    expect(typeof result.json.error).toBe('string')
+    expect(existsSync(f.out)).toBe(false)
   })
 
-  it('fails closed on a malformed record and leaves no snapshot behind', () => {
-    for (const over of [{ rows: [row(1, 'kept', '2026-11-07T01:00:00.000Z')] }, { rows: { not: 'a list' } },
-      { pages: [{ at: '2026-11-07T01:00:00.000Z', after: 'ep1:1', next: 'ep1:2', epoch: 'ep1', lost: 1.5, epochChanged: false, cursorAhead: false }] }]) {
-      const f = fixture(over)
-      const r = probe(['--a2a-shadow', f.source, '--cli-home', f.cliHome, '--window', WINDOW, '--out', f.out])
-      expect(r.code, r.stdout).toBe(1)
-      expect(r.json.error).toMatch(/snapshot was not written/)
-      expect(existsSync(f.out)).toBe(false)
-    }
+  it.each([
+    { rows: [row(1, 'kept', '2026-11-07T01:00:00.000Z')] },
+    { rows: { not: 'a list' } },
+    { pages: [{ at: '2026-11-07T01:00:00.000Z', after: 'ep1:1', next: 'ep1:2', epoch: 'ep1', lost: 1.5, epochChanged: false, cursorAhead: false }] },
+  ])('fails closed on malformed record %j and leaves no snapshot behind', over => {
+    const f = fixture(over)
+    const result = probe(['--a2a-shadow', f.source, '--cli-home', f.cliHome, '--window', WINDOW, '--out', f.out])
+    expect(result.code, result.stdout).toBe(1)
+    expect(result.json.error).toMatch(/snapshot was not written/)
+    expect(existsSync(f.out)).toBe(false)
   })
 
   it('lookup columns: Trigger presence and filter code, seq records, health error, Trigger window', () => {
@@ -297,9 +300,11 @@ describe('p2 shadow collector (verify-probe --a2a-shadow)', () => {
   })
 
   it('checkTally: exactly the TALLY rows, each equal to its re-count, or the run fails', () => {
+    const databases: DatabaseSync[] = []
     const make = (extra: string) => {
       mkdirSync(join(repo, 'tmp'), { recursive: true })
       const db = new DatabaseSync(join(mkdtempSync(join(repo, 'tmp', 'a2a-shadow-tally-')), 'snap.sqlite'))
+      databases.push(db)
       db.exec(`CREATE TABLE shadow_outbox (id TEXT, channel_source TEXT, status TEXT, drop_reason TEXT);
         CREATE TABLE shadow_sent (handle TEXT, task_id TEXT, at TEXT, source_handle TEXT);
         CREATE TABLE shadow_tickets (id TEXT, basis_source TEXT);
@@ -312,13 +317,15 @@ describe('p2 shadow collector (verify-probe --a2a-shadow)', () => {
       return db
     }
     const four = (outbox: number) => `INSERT INTO shadow_tally VALUES ('outbox_sent', ${String(outbox)}), ('source_sent', 0), ('tickets_a2a', 0), ('gaps_uncovered', 0), ('cli_identity_stored', 0), ('heartbeat_row_delta', 0);`
-    expect(() => checkTally(make(four(1)))).not.toThrow()
-    expect(() => checkTally(make(four(0)))).toThrow(/outbox_sent is 0 but the snapshot holds 1/)
-    expect(() => checkTally(make("INSERT INTO shadow_tally VALUES ('outbox_sent', 1), ('source_sent', 0), ('tickets_a2a', 0);"))).toThrow(/exactly/)
-    expect(() => checkTally(make(`${four(1)} INSERT INTO shadow_tally VALUES ('outbox_sent_x', 0);`))).toThrow(/exactly/)
-    expect(() => checkTally(make("INSERT INTO shadow_tally VALUES ('outbox_sentX', 1), ('source_sent', 0), ('tickets_a2a', 0), ('gaps_uncovered', 0), ('cli_identity_stored', 0), ('heartbeat_row_delta', 0);"))).toThrow(/exactly/)
-    expect(() => checkTally(make("INSERT INTO shadow_tally VALUES ('outbox_sent', 1), ('source_sent', 0), ('tickets_a2a', 0), ('gaps_uncovered', 0);"))).toThrow(/exactly/)
-    expect(Object.keys(TALLY).sort()).toEqual(['cli_identity_stored', 'gaps_uncovered', 'heartbeat_row_delta', 'outbox_sent', 'source_sent', 'tickets_a2a'])
+    try {
+      expect(() => checkTally(make(four(1)))).not.toThrow()
+      expect(() => checkTally(make(four(0)))).toThrow(/outbox_sent is 0 but the snapshot holds 1/)
+      expect(() => checkTally(make("INSERT INTO shadow_tally VALUES ('outbox_sent', 1), ('source_sent', 0), ('tickets_a2a', 0);"))).toThrow(/exactly/)
+      expect(() => checkTally(make(`${four(1)} INSERT INTO shadow_tally VALUES ('outbox_sent_x', 0);`))).toThrow(/exactly/)
+      expect(() => checkTally(make("INSERT INTO shadow_tally VALUES ('outbox_sentX', 1), ('source_sent', 0), ('tickets_a2a', 0), ('gaps_uncovered', 0), ('cli_identity_stored', 0), ('heartbeat_row_delta', 0);"))).toThrow(/exactly/)
+      expect(() => checkTally(make("INSERT INTO shadow_tally VALUES ('outbox_sent', 1), ('source_sent', 0), ('tickets_a2a', 0), ('gaps_uncovered', 0);"))).toThrow(/exactly/)
+      expect(Object.keys(TALLY).sort()).toEqual(['cli_identity_stored', 'gaps_uncovered', 'heartbeat_row_delta', 'outbox_sent', 'source_sent', 'tickets_a2a'])
+    } finally { for (const db of databases) db.close() }
   })
 
   it('A7b gaps: covered exactly by (after_seq, after_seq+lost] of a lost>0 page of the same epoch', () => {
