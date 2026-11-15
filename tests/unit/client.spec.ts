@@ -7,7 +7,7 @@ import { generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { A2aClient, type A2aFetch } from '../../src/a2a-client.ts'
 import { signCard } from '../../src/card.ts'
-import { receiptFailure } from '../../src/receipt-retry.ts'
+import { receiptFailure, RECEIPT_CONFIRMED, RECEIPT_NOT_INSERTED } from '../../src/receipt-retry.ts'
 import { isLinkKey, normalizeLinkKeys, outboundKeyFor } from '../../src/link-keys.ts'
 
 
@@ -84,6 +84,30 @@ function freshCard(): ReturnType<typeof signCard> {
   const { privateKey } = generateKeyPairSync('ed25519')
   return signCard({ name: 'peer', session: 'sess-9', team: 'research', capabilities: {}, expiresAt: Date.now() + 60_000 }, privateKey)
 }
+
+describe('receipt delivery evidence never guesses',()=>{
+ it('only an exact, unambiguous routed receipt response is confirmed',async()=>{
+  const valid={routed:true,delivered:true,task_id:'receipt-fixed',task_status:'TASK_STATE_COMPLETED'}
+  for(const patch of [{},{task_id:undefined},{task_id:'another'},{routed:false},{acceptance:'unknown'},{acceptance:'inserted'},{receiverBookkeeping:'failed'},{task_status:'TASK_STATE_FAILED'},{settlement:{status:'refused'}},{bridge:'native-teams'}]){
+   const {fetch}=stubFetch(()=>({status:200,body:{...valid,...patch}})),result=await makeClient({fetch}).routeDirect('https://peer.invalid','alpha/aaaaaaaa','[A2A receipt] task original complete',undefined,undefined,'beta/bbbbbbbb',true,'receipt-fixed')
+   expect(result.ok&&result[RECEIPT_CONFIRMED]===true).toBe(Object.keys(patch).length===0)
+  }
+ })
+ it('not-inserted evidence requires an explicit matching failed transport and cannot contradict acceptance',async()=>{
+  const valid={error:'task ledger write failed',code:-32000,task_id:'receipt-fixed',delivered:false,task_status:'TASK_STATE_FAILED',receipt_delivery:'not-inserted'}
+  for(const patch of [{},{task_id:'another'},{task_id:undefined},{routed:true},{delivered:true},{acceptance:'unknown'},{task_status:'TASK_STATE_DELIVERED'}]){
+   const {fetch}=stubFetch(()=>({status:503,body:{...valid,...patch}})),result=await makeClient({fetch}).routeDirect('https://peer.invalid','alpha/aaaaaaaa','[A2A receipt] task original complete',undefined,undefined,'beta/bbbbbbbb',true,'receipt-fixed')
+   expect(!result.ok&&result[RECEIPT_NOT_INSERTED]===true).toBe(Object.keys(patch).length===0)
+  }
+ })
+ it('query receipt evidence remains task-bound and generic completed prose carries none',async()=>{
+  const body={found:true,status:'completed',reply:'delivered',settled_at:'2026-11-15T00:00:00Z',task_id:'receipt-fixed',receipt_delivery:'delivered'}
+  for(const [patch,expected]of [[{},'delivered'],[{task_id:'another'},undefined],[{task_id:undefined},undefined],[{receipt_delivery:undefined},'generic']] as const){
+   const {fetch}=stubFetch(()=>({status:200,body:{...body,...patch}})),answer=await makeClient({fetch}).queryOutcome('https://peer.invalid','receipt-fixed','fingerprint')
+   if(expected==='generic')expect(answer).not.toHaveProperty('receiptDelivery');else if(expected===undefined)expect(answer).toBeUndefined();else expect(answer).toMatchObject({found:true,status:'completed',receiptDelivery:expected})
+  }
+ })
+})
 
 describe('fetchCard', () => {
   it('returns the verified card from a reachable peer', async () => {

@@ -72,10 +72,21 @@ A pending row with `answeredAt` records that its actual local target produced a 
 
 The host may send a sourced `[A2A reconciliation reminder]` while the session is truly idle. It lists existing pending task ids, senders, bounded original-message briefs and ages. **It is not a new task, acknowledgement, or completion evidence**: no slot is released and no receipt is owed to the reminder itself. Check each original task and send your own formal receipt to its original sender when the outcome is known (completed / failed / rejected / abandoned). If still working, use an ordinary follow-up; do not use a terminal receipt header merely to mean “in progress”.
 
-Reminder attempts are persisted before injection, merged per session, skipped without counting while busy, and backed off after three attempts to about two hours without stopping. They stop only when the original row leaves pending by a real receipt, cancellation, expiry or another existing terminal path. Counters do not prove the model read a reminder. Local senders may receive one warning; remote push notifications are not shipped. Tasks/state and CLI show attempts, last/next times and “多次提醒未对账”.
+Reminder attempts are persisted before injection, merged per session, skipped without counting while busy, and backed off after three attempts to about two hours without stopping. Unanswered work continues to be reminded while pending. Once the actual receiver has authored a terminal receipt, ordinary work reminders stop: delivery failure becomes receipt-delivery debt, not an instruction to redo work. Cancellation/expiry and receipt settlement still use their existing terminal paths. Counters do not prove the model read a reminder. Local senders may receive one warning; remote push notifications are not shipped. Tasks/state and CLI show attempts, last/next times and “多次提醒未对账”.
 
 #356 queues both idle reminders and local sender notices through `agent.followup`, preserving the declared `a2a-relay` source and lineage. Busy sessions are still skipped by the reminder scheduler; this does not make a reminder an acknowledgement or a new debt. There is no unlabelled human `kind:user` prompt and no fallback to `steer` when `followup` is missing. Receipt authorization, queue counting and synchronous reply ownership do not change. An unwritable ledger fails closed; the host does not invent completion or settle production backlog for you.
 
+## Answered work with a blocked receipt return
+
+An already-answered `receipt-undelivered` row stays owed, but is not an ordinary task reminder. The original live idle receiver gets one persisted, sourced `[A2A receipt delivery blocked]` notice. It is not a task or a receipt and owes no reply. Do not rerun business work, publish again, create another business card, change the transport id, route the receipt to the host owner instead, or self-change presence/permissions to silence it. The current `a2a_tasks`/owner state exposes bounded `receiptRecovery` state, code, attempts and next time; private full receipt bytes/keys are not projected.
+
+New task-correlated terminal receipts are atomically retained with `answeredAt` in the existing private task ledger before any delivery. The record freezes the full authored text and payload digest, original task birth/context, receiver SessionId, local key, exact target, one transport id and original return lane. Manual and task-attributed automatic receipts use the same store; an explicit authored receipt is not replaced by a later automatic summary. Acknowledged/progress/question receipts keep the original result debt and its work reminders.
+
+The host rechecks current authority, original identity and the exact return lane before each effect. It uses short same-receipt retry delays, then long backoff, within a bounded replay window. A missing/expired CLI or temporarily unreachable original home is delivery-blocked, not a reason to execute work again or choose another owner. An authenticated structured pre-insertion refusal permits the same receipt transport to be tried again. A timeout, malformed/contradictory success, `-32005`, pending/missing query, claim conflict or post-insertion bookkeeping failure never permits a blind new POST: query only that original transport and payload. Confirmed query delivery requires explicit persisted `receipt_delivery: delivered`; generic completed status or prose is not proof. Only confirmed original delivery plus the existing settlement judge ends the debt.
+
+One host is the ledger writer (the existing composition assumption). Atomic file replacement/fsync failure refuses transport; a post-send save failure leaves the sending checkpoint for reconciliation. Restart restores the private outbox without replaying work or waking cold/archived sessions for it. Stop cancels host-owned scans/timers, not the debt. Ordinary raw routing and non-task-correlated receipts retain their existing gates; no new model tools or admission exemption are added.
+
+Legacy `answeredAt`/`receipt-undelivered` rows without the full retained original receipt are `legacy-unknown`. They are not reconstructed from the capped brief, stale final output or error summary, and are not automatically resent. The four pre-repair incident debts are untouched by this change; authoritative manual reconciliation and any actual delivery require separate operational authorization. Code delivery does not deploy or clear production backlog. Rolling back code keeps ordinary task rows, but older writers may discard the new private extension: back up the complete home before any later version switch.
 ## Idempotency
 
 A route carries a fingerprint (caller + message + team + wait-mode). Re-
@@ -89,8 +100,9 @@ work around a duplicate verdict by mutating the message — reconcile instead.
 2. Wait for the receipt envelope; or
 3. Re-check via the coordinating surface (`a2a_status` activity ring, the
    peer's state `tasks` face) for the task id's settled outcome.
-4. Only re-dispatch when BOTH the receipt is absent AND the peer's ledger
-   shows the task unknown — otherwise you risk duplicate execution.
+4. Unknown or absent ledger/query data does not prove non-delivery. Keep the
+   original task/transport and reconcile; do not blindly re-dispatch the work.
+   Task-correlated receipt delivery uses the bounded retained return flow above.
 
 ## Owner-qualified canvas ids (#282)
 

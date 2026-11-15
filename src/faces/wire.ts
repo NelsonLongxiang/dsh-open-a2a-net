@@ -545,6 +545,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 ? {
                   found: true,
                   status: 'completed',
+                  ...(verdict.receiptDelivery?{receipt_delivery:verdict.receiptDelivery}:{}),
                   reply: verdict.reply,
                   settled_at: new Date(verdict.settledAt).toISOString(),
                   task_id: taskId,
@@ -857,7 +858,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             // A failed receipt settlement did not deliver: keep its fixed transport identity retryable.
             if(parseReceipt(message)!==null)idempotencyStore.releaseUncompleted(taskId,idemFingerprint)
             // Body end runs outside the webServer guard; a failed commit must not escape or steer.
-            const payload = JSON.stringify({ error: 'task ledger write failed; settlement was not committed', code: -32000, task_id: taskId, task_status: 'TASK_STATE_FAILED', delivered: false })
+            const payload = JSON.stringify({ error: 'task ledger write failed; settlement was not committed', code: -32000, task_id: taskId, task_status: 'TASK_STATE_FAILED', delivered: false, ...(parseReceipt(message)!==null?{receipt_delivery:'not-inserted'}:{}) })
             res.writeHead(503, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
             return
@@ -869,7 +870,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           if (d.sidebarReceipt?.(mailTeam, message, caller, refusedSettlement === undefined) === true) {
             recordActivity('in', team, caller, true)
             const note = `received for the team tab of ${team}`
-            idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: note })
+            idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: note, receiptDelivery:refusedSettlement===undefined?'delivered':'refused' })
             const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'sidebar', team, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_COMPLETED', note })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
@@ -884,9 +885,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const answered = parseReceipt(message)
             // #298: only the answering member's own, unrefused receipt is the duplicate of a sync answer.
             const duplicate = answered !== null && refusedSettlement === undefined && syncAnswered.take(answered.taskId, mailTeam, caller)
-            const evicted = cliDeposits.mail(mailTeam, caller, `${directHeader(caller)}\n\n${message}`, duplicate ? 'sync-answered' : undefined, { taskId, contextId, proof: callerProof, ...(answered !== null ? { receiptFor: answered.taskId } : {}), ...(answered?.envelope?.disposition !== undefined ? { disposition: answered.envelope.disposition } : {}),
-              // p1-mail-admission: the rule this host matched when it took the delivery, as it already computed it.
-              ...(admission.ok ? { admission: admission.rule } : {}) })
+            const thread={taskId,contextId,proof:callerProof,...(answered!==null?{receiptFor:answered.taskId}:{}),...(answered?.envelope?.disposition!==undefined?{disposition:answered.envelope.disposition}:{}),...(admission.ok?{admission:admission.rule}:{})}
+            const mailed=`${directHeader(caller)}\n\n${message}`
+            const evicted=answered===null?cliDeposits.mail(mailTeam,caller,mailed,undefined,thread):cliDeposits.mailReceipt(mailTeam,caller,mailed,thread,duplicate?'sync-answered':undefined)
             // p1-mailbox-owes (D-5): a row the cap pushed out takes its owed inbound row with it (slot freed, counted as evicted).
             for (const gone of evicted) if (gone.task_id !== undefined) taskLedger.evictInbound(gone.task_id, taskLedger.find(gone.task_id)?.team ?? mailTeam)
             recordActivity('in', team, caller, true)
@@ -912,7 +913,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             // side, so a resend of this id reads `completed`. A receipt the
             // CLI routes back later still reaches its caller, but does not
             // replace this outcome (recordOutcome is first-writer-wins).
-            idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: note })
+            idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: note, ...(answered!==null?{receiptDelivery:refusedSettlement===undefined?'delivered' as const:'refused' as const}:{}) })
             // p1-context-read: name the conversation the row was mailed under, as every other taken reply does.
             const payload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_COMPLETED', note })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -995,7 +996,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 d.keepTaskBody?.(taskId, target, from, message)
                 const acceptance=followupRelay(target, `${directHeader(from)}\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from, undefined, taskId, claim.ok?claim.card.publicKey:undefined, !deliveredReceipt)
                 steered = true
-                if(deliveredReceipt&&refusedSettlement===undefined)idempotencyStore.recordOutcome(taskId,{status:'completed',reply:'receipt delivered'})
+                if(deliveredReceipt&&acceptance!=='inserted'&&['enqueued','claimed'].includes(taskLedger.deliveryFor(taskId)?.state??''))idempotencyStore.recordOutcome(taskId,{status:'completed',reply:'receipt delivered',receiptDelivery:refusedSettlement===undefined?'delivered':'refused'})
                 recordActivity('in', team, caller, true)
                 // v0.5.23 (async-stall): "delivered" only proves the steer call
                 // returned — not that a turn started. An idle-phase steer wakes

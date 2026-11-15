@@ -18,6 +18,7 @@ import { createPublicKey, randomUUID, verify } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { verifyCard } from './card.ts'
+import { writeTaskLedger } from './task-ledger-persistence.ts'
 import type { ReceiptDisposition } from './receipt.ts'
 import type { AdmissionRule, AuthProof } from './task-auth.ts'
 
@@ -291,6 +292,9 @@ export class CliDepositStore {
     return row
   }
 
+  /** Operator-established local household identity, including its offline tombstone; never a remote directory claim. */
+  heldKey(handle:string):string|undefined {const row=this.deposits.get(handle);return row?publicKeyOf(row.cardJson)||undefined:undefined}
+
   /** Card-serve rows: LIVE deposits only (an expired card 404s). */
   cardRows(): Array<{ team: string; name: string; description: string }> {
     return this.list().filter(row => row.expiredAt === undefined && row.expiresAt > this.now())
@@ -351,6 +355,20 @@ export class CliDepositStore {
     this.mailbox.set(handle, list.slice(0, MAILBOX_CAP))
     this.persist()
     return list.slice(MAILBOX_CAP)
+  }
+
+  /** Receipt-only mailbox commit: fixed transport id deduplicates and persistence must precede success. */
+  mailReceipt(handle:string,from:string,text:string,thread:CliMailThread,dup?:'sync-answered'):readonly CliMail[] {
+    if(!this.get(handle)||!thread.taskId||!thread.receiptFor||text.length>MAILBOX_TEXT_CAP)throw Error('receipt mailbox is unavailable or invalid')
+    const prior=this.mailbox.get(handle)??[],same=prior.find(row=>row.task_id===thread.taskId)
+    if(same&&(same.text!==text||same.from!==from||same.receipt_for!==thread.receiptFor))throw Error('receipt mailbox transport identity conflict')
+    const seq=this.nextSeq.get(handle)??1
+    const list=same?prior:[{at:this.now(),from,text,seq,...(dup?{dup}:{}),task_id:thread.taskId,receipt_for:thread.receiptFor,...(thread.contextId?{context_id:thread.contextId}:{}),...(thread.proof?{proof:thread.proof}:{}),...(thread.admission?{admission:thread.admission}:{}),...(thread.disposition?{disposition:thread.disposition}:{})},...prior].slice(0,MAILBOX_CAP)
+    const dropped=(this.dropped.get(handle)??0)+(same?0:Math.max(0,prior.length+1-MAILBOX_CAP))
+    const snapshot:Snapshot={deposits:[...this.deposits.values()],mailbox:{...Object.fromEntries(this.mailbox),[handle]:list},epoch:this.epoch,nextSeq:{...Object.fromEntries(this.nextSeq),[handle]:same?seq:seq+1},dropped:{...Object.fromEntries(this.dropped),[handle]:dropped},truncated:Object.fromEntries(this.truncated)}
+    writeTaskLedger(this.path,JSON.stringify(snapshot))
+    this.mailbox.set(handle,list);if(!same)this.nextSeq.set(handle,seq+1);this.dropped.set(handle,dropped);this.unpersisted=false
+    return same?[]:prior.slice(Math.max(0,MAILBOX_CAP-1))
   }
 
   readMail(handle: string): readonly CliMail[] {

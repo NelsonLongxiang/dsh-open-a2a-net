@@ -57,7 +57,7 @@ it.each(['recipient','message','home','session'] as const)('isolated manual rece
   let result:any
   try{result=await f.b.ctx.tools.get('a2a_route')!.execute({team:target,message,async:true},runContext(agent))}finally{spy.mockRestore()}
   expect(result.ok,JSON.stringify(result)).toBe(false)
-  expect(result.error).toContain(boundary==='home'?'receipt return home no longer matches the task birth':'teamless')
+  expect(result.error).toContain(boundary==='home'?'RECEIPT_AUTHORITY_CHANGED':'teamless')
   expect(receiptPosts).toBe(0);expect((await state(f.a)).tasks.some((r:any)=>r.taskId==='return-boundary')).toBe(true)
  }finally{await f.dispose()}
 })
@@ -95,10 +95,10 @@ it('receipt target and completed signer identity remain bound to the frozen task
   other=await bootNode({name:'returnC',session:'returnC',team:'beta',sessionNodes:true,teamScopeRouting:true})
   expect((await f.raw('return-bound',cli,other)).routed).not.toBe(true)
   expect((await state(f.a)).tasks.some((r:any)=>r.taskId==='return-bound')).toBe(true)
-  expect((await state(f.b)).tasks.find((r:any)=>r.taskId==='return-bound')).toMatchObject({receiptDelivery:'receipt-undelivered'})
+  const originalRow=(await state(f.b)).tasks.find((r:any)=>r.taskId==='return-bound');expect(originalRow.answeredAt).toBeUndefined();expect(originalRow.receiptDelivery).toBeUndefined()
  }finally{await other?.dispose();await f.dispose()}
 })
-it('failed correlated receipt transport preserves explicitly undelivered debt for retry',async()=>{
+it('unconfirmed correlated receipt transport preserves debt without blind reposting',async()=>{
  const f=await fixture();try{
   await f.submit('return-fail');const original=globalThis.fetch
   const spy=vi.spyOn(globalThis,'fetch').mockImplementation((url,init)=>String(url)===f.a.baseUrl+'/a2a/direct'&&init?.method==='POST'?Promise.reject(Error('unavailable')):original(url,init))
@@ -108,6 +108,7 @@ it('failed correlated receipt transport preserves explicitly undelivered debt fo
   expect(new TaskLedger(join(f.b.home,'a2a/tasks.json')).find('return-fail')).toMatchObject({receiptDelivery:'receipt-undelivered'})
   const view=await f.b.ctx.tools.get('a2a_tasks')!.execute({},runContext(f.agent))as any;expect(view.tasks.find((r:any)=>r.taskId==='return-fail').receiptDelivery).toBe('receipt-undelivered')
   const cliResult=await promisify(execFile)(process.execPath,['cli/a2a.mjs','tasks','--json','--home',f.b.baseUrl],{env:cliEnv(f.b.home),encoding:'utf8'});expect(JSON.parse(cliResult.stdout).pending.find((r:any)=>r.taskId==='return-fail').receiptDelivery).toBe('receipt-undelivered')
-  const retry=await f.send('[A2A receipt] task return-fail complete');expect(retry.ok,JSON.stringify(retry)).toBe(true);expect((await state(f.a)).archived.find((r:any)=>r.taskId==='return-fail')).toMatchObject({endedBy:'receipt'})
+  let reposts=0;const noRepost=vi.spyOn(globalThis,'fetch').mockImplementation((url,init)=>{if(String(url)===f.a.baseUrl+'/a2a/direct'&&init?.method==='POST')reposts++;return original(url,init)})
+  try{const retry=await f.send('[A2A receipt] task return-fail complete');expect(retry.ok).toBe(false);expect(reposts).toBe(0);expect((await state(f.a)).archived.some((r:any)=>r.taskId==='return-fail')).toBe(false);expect((await state(f.b)).tasks.find((r:any)=>r.taskId==='return-fail')).toMatchObject({receiptRecovery:{state:'retained'}})}finally{noRepost.mockRestore()}
  }finally{await f.dispose()}
 })

@@ -439,6 +439,8 @@ export interface ReceiptResolvedInfo {
 
 /** The persisted ledger document: the owed book plus its settled archive. */
 export interface TaskLedgerSnapshot {
+  readonly receiptOutboxRestoreError?: true
+  readonly receiptOutbox?: readonly import('./receipt-outbox.ts').ReceiptOutboxRecord[]
   readonly taskDeliveryRestoreError?: true
   readonly taskDeliveries?: readonly import('./task-delivery.ts').TaskDelivery[]
   readonly reconciliationSessions?: Record<string, number>

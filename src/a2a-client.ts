@@ -8,7 +8,7 @@ import {ACCEPTANCE_UNKNOWN_NOTE,ACCEPTANCE_INSERTED_NOTE} from './followup-admis
  */
 
 import { ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
-import { RECEIPT_RETRYABLE } from './receipt-retry.ts'
+import { RECEIPT_RETRYABLE, RECEIPT_NOT_INSERTED, RECEIPT_CONFIRMED } from './receipt-retry.ts'
 import { verifyCard, type CardRejection } from './card.ts'
 import { MAX_ROUTE_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
 import type { A2aPeerCard, A2aRouteResult } from './types.ts'
@@ -325,10 +325,13 @@ export class A2aClient {
           /* prose body — keep the generic code */
         }
       }
+      let notInserted=false
+      if(typeof bodyText==='string')try{const refusal=JSON.parse(bodyText);notInserted=refusal.receipt_delivery==='not-inserted'&&refusal.task_id===taskIdFromCaller&&refusal.delivered===false&&refusal.routed!==true&&refusal.task_status==='TASK_STATE_FAILED'&&refusal.acceptance!=='unknown'}catch{/* no structured proof */}
       const status=(error as {statusCode?:unknown})?.statusCode
-      const transient=status===503&&typeof bodyText==='string'&&bodyText.includes('task ledger write failed')||status===undefined&&(abortClass||error instanceof TypeError||/ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH/.test(String(error)+' '+String((error as {code?:unknown;cause?:{code?:unknown}})?.code??'')+' '+String((error as {cause?:{code?:unknown}})?.cause?.code??'')))
+      const transient=status===503&&typeof bodyText==='string'&&bodyText.includes('task ledger write failed')||status===undefined
       const failure: Extract<A2aRouteResult, { ok: false }> = {
         ...(transient?{[RECEIPT_RETRYABLE]:true as const}:{}),
+        ...(notInserted&&status===503?{[RECEIPT_NOT_INSERTED]:true as const}:{}),
         ok: false,
         error: `direct route to peer failed: ${String(error)}`,
         code,
@@ -357,6 +360,7 @@ export class A2aClient {
     if (raw.routed === true && raw.delivered === true) {
       const taskId = wireText(raw.task_id) !== '' ? wireText(raw.task_id) : taskIdFromCaller ?? ''
       const bridge = wireBridge(raw.bridge)
+      const receiptConfirmed=raw.task_id===taskIdFromCaller&&raw.acceptance!=='inserted'&&raw.acceptance!=='unknown'&&raw.task_status!=='TASK_STATE_FAILED'&&raw.receiverBookkeeping!=='failed'&&!settlementRefused&&bridge===undefined
       // F1 client half (async-stall §三): the peer's consumed probe rides
       // through — a delivered-but-unconsumed message is queued (busy turn)
       // or latched, and the caller should follow up, not assume arrival.
@@ -364,6 +368,7 @@ export class A2aClient {
       return {
         ok: true,
         team,
+        ...(receiptConfirmed?{[RECEIPT_CONFIRMED]:true as const}:{}),
         ...(raw.receiverBookkeeping==='failed'?{receiverBookkeeping:'failed' as const}:{}),
         ...(raw.acceptance==='inserted'?{acceptance:'inserted' as const}:{}),
         reply: raw.acceptance==='inserted'?ACCEPTANCE_INSERTED_NOTE:raw.receiverBookkeeping==='failed'?ADMITTED_BOOKKEEPING_NOTE:!asyncMode&&bridge===undefined&&raw.reply_final!==true?'已送达、未得到最终答复，请按 task id 对账。Delivered without a final reply; reconcile task '+taskId+'.':bridge !== undefined
@@ -418,6 +423,8 @@ export class A2aClient {
         body: JSON.stringify({ task_id: taskId, fingerprint }),
         ...(signal !== undefined ? { signal } : {}),
       }, baseUrl) as Record<string, unknown>
+      if(raw.task_id!==undefined&&raw.task_id!==taskId)return undefined
+      if(raw.receipt_delivery!==undefined&&raw.task_id!==taskId)return undefined
       return parseQueryAnswer(raw)
     } catch {
       return undefined
@@ -429,7 +436,7 @@ export class A2aClient {
 export type A2aQueryAnswer =
   | { readonly found: false; readonly reason: 'unknown-task' | 'payload-mismatch' }
   | { readonly found: true; readonly status: 'pending' }
-  | { readonly found: true; readonly status: 'completed'; readonly reply: string; readonly settledAt: string; readonly truncated?: boolean }
+  | { readonly found: true; readonly status: 'completed'; readonly receiptDelivery?: 'delivered' | 'refused'; readonly reply: string; readonly settledAt: string; readonly truncated?: boolean }
   | { readonly found: true; readonly status: 'failed'; readonly error: string; readonly settledAt: string; readonly truncated?: boolean }
 
 /** Coerce one raw wire body into an {@link A2aQueryAnswer}; anything
@@ -445,7 +452,7 @@ function parseQueryAnswer(raw: Record<string, unknown>): A2aQueryAnswer | undefi
   if (settledAt === undefined) return undefined
   const truncated = raw.truncated === true ? { truncated: true } : {}
   if (raw.status === 'completed' && typeof raw.reply === 'string') {
-    return { found: true, status: 'completed', reply: raw.reply, settledAt, ...truncated }
+    return { found: true, status: 'completed', reply: raw.reply, settledAt, ...(raw.receipt_delivery==='delivered'||raw.receipt_delivery==='refused'?{receiptDelivery:raw.receipt_delivery}:{}), ...truncated }
   }
   if (raw.status === 'failed' && typeof raw.error === 'string') {
     return { found: true, status: 'failed', error: raw.error, settledAt, ...truncated }
