@@ -2,6 +2,7 @@
  * superagent design v4, PR-D: the role tool lists (pinned) and how the host applies them.
  */
 import { describe, expect, it } from 'vitest'
+import { mkdtempSync } from '../temp-dirs.ts'
 import { Config } from '../../src/config.ts'
 import { MEMBER_DENY, MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, TEAM_TOOLS, memberBoundary, roleToolRefusal, type Role, type RoleAgent } from '../../src/superagent/host/role-tools.ts'
 
@@ -196,7 +197,6 @@ describe('the team\'s agent presets: shipped in the bundle layer, required of a 
 
   it('the host refuses such settings', async () => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
-    const { mkdtempSync } = await import('../temp-dirs.ts')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
     const of = (id: string) => ({ 'session-r': 'superagent-router', 'session-m': 'superagent-member', 'session-s': 'standard' } as Record<string, string>)[id]
