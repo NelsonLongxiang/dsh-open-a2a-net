@@ -45,7 +45,7 @@ export class ReconciliationInbox {
         if (at < 0) continue // Unknown metadata blocks, rather than granting permission to append or erase it.
         let scope: { v?: unknown; k?: unknown; t?: unknown }
         try { scope = JSON.parse(text.slice(at + scopeMarker.length)) } catch { continue }
-        if (scope?.v !== 1 || !['reminder', 'notice'].includes(String(scope.k)) || !Array.isArray(scope.t) || scope.t.length < 1 || scope.t.length > 8 || scope.t.some(key => typeof key !== 'string' || !/^[a-f0-9]{32}$/.test(key))) continue
+        if (scope?.v !== 1 || (scope.k !== 'reminder' && scope.k !== 'notice') || !Array.isArray(scope.t) || scope.t.length < 1 || scope.t.length > 8 || scope.t.some(key => typeof key !== 'string' || !/^[a-f0-9]{32}$/.test(key))) continue
         if (scope.t.every(key => live.has(key))) continue
         // One of the summary's debts ended or was answered: invalidate the summary, not the debt.
         if (typeof agent.inbox.remove !== 'function') throw Object.assign(Error('host inbox cannot invalidate a stale reconciliation summary'), { code: 'REMINDER_REMOVE_UNAVAILABLE' })

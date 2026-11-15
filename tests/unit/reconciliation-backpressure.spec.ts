@@ -187,6 +187,39 @@ describe('reconciliation reminder queue backpressure', () => {
     expect(f.controller.diagnostics.blockedSessions).toBe(1)
     expect(f.controller.diagnostics.answeredReceiptDebt).toBe(1)
   })
+  it.each([{ kind: ['reminder'] }, { kind: ['notice'] }, { kind: {} }, { kind: null }, { kind: false }, { kind: 0 }])('keeps a corrupted kind $kind queued and blocks new summaries', ({ kind }) => {
+    const f = fixture(); f.controller.scan()
+    const original = f.target.inbox.nextTurn[0]
+    const marker = '\n[A2A reconciliation scope] '
+    const at = original.content[0].text.lastIndexOf(marker)
+    const scope = JSON.parse(original.content[0].text.slice(at + marker.length))
+    scope.k = kind
+    original.content[0].text = original.content[0].text.slice(0, at + marker.length) + JSON.stringify(scope)
+    const remove = vi.spyOn(f.target.inbox, 'remove'), followup = vi.spyOn(f.target, 'followup')
+    f.ledger.markAnswered('job', 'beta/aaaaaaaa')
+    f.ledger.track('live-job', 'beta/aaaaaaaa', 'local')
+    f.advance(REMINDER_MIN_MS)
+    const rows = JSON.stringify({ tasks: f.ledger.list(), archive: f.ledger.archive(), reminder: f.ledger.reminderState('job') })
+    expect(f.delivery.available(f.target)).toBe(false)
+    f.controller.scan()
+    expect(f.target.inbox.nextTurn).toEqual([original])
+    expect(remove).not.toHaveBeenCalled()
+    expect(followup).not.toHaveBeenCalled()
+    expect(f.ledger.reminderState('live-job')).toBeUndefined()
+    expect(f.controller.diagnostics.blockedSessions).toBe(1)
+    expect(JSON.stringify({ tasks: f.ledger.list(), archive: f.ledger.archive(), reminder: f.ledger.reminderState('job') })).toBe(rows)
+  })
+  it.each(['reminder', 'notice'] as const)('still invalidates a valid primitive %s scope without settling its debt', kind => {
+    const f = fixture()
+    expect(f.delivery.send(f.target, '[A2A reconciliation ' + kind + '] valid', { kind, taskIds: ['job'], requestId: 'valid-kind' })).toBe(true)
+    const remove = vi.spyOn(f.target.inbox, 'remove')
+    f.ledger.markAnswered('job', 'beta/aaaaaaaa')
+    expect(f.delivery.available(f.target)).toBe(true)
+    expect(f.target.inbox.nextTurn).toEqual([])
+    expect(remove).toHaveBeenCalledTimes(1)
+    expect(f.ledger.find('job')).toMatchObject({ status: 'pending', receiptDelivery: 'receipt-undelivered' })
+    expect(f.ledger.archive()).toEqual([])
+  })
   it('a removal write failure does not free the slot or mutate debt', () => {
     const f = fixture(); f.controller.scan(); f.ledger.markAnswered('job', 'beta/aaaaaaaa')
     f.target.inbox.remove = () => { throw Object.assign(Error('read only session log'), { code: 'EACCES' }) }
