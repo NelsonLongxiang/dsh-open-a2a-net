@@ -42,6 +42,15 @@ ygl-trees verify run              确定性判定（只在快照+提交树上，
 
 severity：V1–V6、V15=S1（闸门面）V7–V10=S2（运行时）V11–V14=S3（提交物）。
 
+## 精确候选采集入口（工具修复，旧冻结判据不变）
+
+- 共享检出有在途改动时，从现有对象仓取得精确提交的完整导出；禁止让祖先 `.git` 自动发现冒充导出目录的 HEAD。显式传 `--candidate-root <导出目录> --candidate-sha <完整候选SHA> --source-repo <现有对象仓>`；外部采集器还须用 `--collector-sha <采集器完整SHA>` 绑定自身来源。每个已跟踪文件逐字节核 Git blob 与 SHA256，运行后再次核对，缺失/篡改/未知源文件/链接均拒绝，不应用 CRLF 过滤。
+- 命令在被验候选根执行，测试、依赖与构建物不混入提交物；默认工作树模式仍检查自己的仓库根、HEAD 和 status。源码归档核对通过只证明来源，**没有可核的候选 Git 工作树时 `worktree_clean=0`，现行 V7 不通过**。不得改冻结材料/谓词，也不得克隆、建 worktree、清理或切换他人在途检出来制造洁净。Windows 不可核 executable bit 时单列模式保存缺口。
+- 新 RC 采集在候选自身 `tmp/verify-probe/<本轮唯一目录>/` 保存 snapshot、summary、source-manifest、submission 和原命令记录；通过 `--run-dir` 指定时必须是该目录下新的一层子目录。既有输出拒绝复用/覆盖。`--runtime-unavailable` 明确记录无授权运行窗口，**不发 HTTP 请求且运行时判据失败**，不借此略过判据。
+- 命令入口：`node scripts/verify-temp-clean.mjs -- node scripts/verify-probe.mjs <以上精确参数>`。从输出的本轮 `snapshot`、`submission` 和完整 `candidate_sha` 绑定正式 `ygl-trees verify run`；递归入口接受 `--summary <本轮摘要> --snapshot <本轮快照> --candidate-sha <完整SHA>`，`--fresh` 将真实新采集输出传下去，不回落旧固定目录。旧 release-audit/shadow 模式保留原输出契约。
+- 测试 scratch 仅排除有效测试根自身的 `tmp/`，不能因父级目录叫 tmp 就漏掉全部测试；runner 拥有本轮 `tmp/test-runs/run-*` 和明确的 team ygl 工作区，其他残留继续失败。不得给产品运行态或唯一证据套用该清理入口。
+- 本节是采集方法说明，不是候选 PASS。完整源码/包/正式报告/归档、3081 用户验收与运维结论仍分开留证；导出模式的 V7 缺口和测试/网络未知必须出现在报告中。
+
 ## 用法
 
 ```bash
