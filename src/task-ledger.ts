@@ -60,6 +60,23 @@ export class TaskLedger {
   private committed = ''
   private deliveries: TaskDelivery[] = []
   private deliveryRestoreError = false
+  private dispatchReservations:Array<{taskId:string;fingerprint:string;createdAt:number}>=[]
+  /** Reserve the caller's eventual owed slot before an asynchronous local or remote effect. Never replays a request. */
+  reserveDispatch(taskId:string,fingerprint:string):void {
+    if(this.deliveryRestoreError||this.counters.damaged)throw Error('damaged delivery ledger cannot reserve dispatch')
+    if(taskId.length===0||taskId.length>80||!/^[0-9a-f]{64}$/.test(fingerprint))throw Error('invalid dispatch reservation')
+    const old=this.dispatchReservations.find(r=>r.taskId===taskId)
+    if(old)throw Error(old.fingerprint!==fingerprint?'dispatch reservation identity conflict':'unresolved original dispatch remains reserved; reconcile original task, do not resend')
+    if(this.tasks.some(r=>r.taskId===taskId)||this.archived.some(r=>r.taskId===taskId))return
+    this.protectReceiptCapacity(taskId)
+    const kept=this.dispatchReservations.filter(r=>this.tasks.some(t=>t.taskId===r.taskId)||this.now()-r.createdAt<=TASK_DELIVERY_RETENTION_MS)
+    if(kept.length>=TASK_CAP)throw Error('dispatch reservation capacity full')
+    this.dispatchReservations=[...kept,{taskId,fingerprint,createdAt:this.now()}];this.trimOwed();this.persist()
+  }
+  releaseDispatch(taskId:string):void {
+    if(!this.dispatchReservations.some(r=>r.taskId===taskId))return
+    this.dispatchReservations=this.dispatchReservations.filter(r=>r.taskId!==taskId);this.persist()
+  }
   markConsumed(taskId:string, consumed:boolean): void {
     const row=this.tasks.find(r=>r.taskId===taskId);if(!row||row.consumed===true||row.consumed===consumed)return
     row.consumed=consumed;this.persist()
@@ -234,7 +251,9 @@ export class TaskLedger {
 
   /** An undelivered full result cannot be discarded to admit unrelated work. */
   private pendingDeliveryBirths():Set<string> {
-    return new Set(this.deliveries.filter(d=>d.taskExpected===true&&!['cancelled','failed'].includes(d.state)&&this.now()-d.createdAt<=TASK_DELIVERY_RETENTION_MS&&!this.tasks.some(t=>t.taskId===d.taskId)&&!this.archived.some(t=>t.taskId===d.taskId)).map(d=>d.taskId))
+    const local=this.deliveries.filter(d=>d.taskExpected===true&&!['cancelled','failed'].includes(d.state)&&this.now()-d.createdAt<=TASK_DELIVERY_RETENTION_MS).map(d=>d.taskId)
+    const outgoing=this.dispatchReservations.filter(d=>this.now()-d.createdAt<=TASK_DELIVERY_RETENTION_MS).map(d=>d.taskId)
+    return new Set([...local,...outgoing].filter(id=>!this.tasks.some(t=>t.taskId===id)&&!this.archived.some(t=>t.taskId===id)))
   }
   receiptCapacityAvailable(taskId?:string):boolean {
     const reserved=this.pendingDeliveryBirths()
@@ -836,6 +855,10 @@ export class TaskLedger {
         this.reminderSessions=Object.fromEntries(Object.entries(snapshot.reconciliationSessions).filter(([id,at])=>id.length>0&&id.length<=256&&Number.isSafeInteger(at)&&at>=0).slice(0,TASK_CAP))
       }
       if(snapshot.taskDeliveryRestoreError===true)this.deliveryRestoreError=true
+      if(snapshot.dispatchReservations!==undefined){
+        if(!Array.isArray(snapshot.dispatchReservations)||snapshot.dispatchReservations.length>TASK_CAP)this.deliveryRestoreError=true
+        else for(const raw of snapshot.dispatchReservations){if(!raw||typeof raw.taskId!=='string'||raw.taskId.length===0||raw.taskId.length>80||typeof raw.fingerprint!=='string'||!/^[0-9a-f]{64}$/.test(raw.fingerprint)||!Number.isSafeInteger(raw.createdAt)||raw.createdAt<0||this.dispatchReservations.some(r=>r.taskId===raw.taskId)){this.deliveryRestoreError=true;break}this.dispatchReservations.push({taskId:raw.taskId,fingerprint:raw.fingerprint,createdAt:raw.createdAt})}
+      }
       if(snapshot.taskDeliveries!==undefined) {
         if(!Array.isArray(snapshot.taskDeliveries)||snapshot.taskDeliveries.length>TASK_DELIVERY_CAP)this.deliveryRestoreError=true
         else {
@@ -1010,6 +1033,7 @@ export class TaskLedger {
       this.receiptRestoreError = previous.receiptOutboxRestoreError===true
       this.reminders = Object.assign(Object.create(null), previous.reconciliationReminders ?? {})
       this.reminderSessions = previous.reconciliationSessions ?? Object.create(null)
+      this.dispatchReservations=(previous.dispatchReservations??[]).map(r=>({...r}))
       this.deliveryRestoreError = previous.taskDeliveryRestoreError===true
       this.deliveries = previous.taskDeliveries ? previous.taskDeliveries.map(r=>({...r})) : []
       this.tasks = [...previous.tasks]
@@ -1028,6 +1052,7 @@ export class TaskLedger {
         ...(this.receiptRestoreError?{receiptOutboxRestoreError:true as const}:{}),
         ...(this.receiptRecords.length?{receiptOutbox:this.receiptRecords.filter(r=>this.tasks.some(t=>t.taskId===r.taskId)).map(r=>structuredClone(r))}:{}),
         ...(this.deliveryRestoreError?{taskDeliveryRestoreError:true as const}:{}),
+        ...(this.dispatchReservations.length?{dispatchReservations:this.dispatchReservations.map(r=>({...r}))}:{}),
         ...(this.deliveries.length ? {taskDeliveries:this.deliveries.map(row=>({...row}))} : {}),
         ...(Object.keys(this.reminderSessions).length ? { reconciliationSessions: {...this.reminderSessions} } : {}),
         ...(Object.keys(this.reminders).length ? { reconciliationReminders: Object.fromEntries(Object.entries(this.reminders).filter(([id])=>this.tasks.some(row=>row.taskId===id&&row.status==='pending'))) } : {}),

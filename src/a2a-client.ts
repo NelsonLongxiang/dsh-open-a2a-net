@@ -329,9 +329,13 @@ export class A2aClient {
       if(typeof bodyText==='string')try{const refusal=JSON.parse(bodyText);notInserted=refusal.receipt_delivery==='not-inserted'&&refusal.task_id===taskIdFromCaller&&refusal.delivered===false&&refusal.routed!==true&&refusal.task_status==='TASK_STATE_FAILED'&&refusal.acceptance!=='unknown'}catch{/* no structured proof */}
       const status=(error as {statusCode?:unknown})?.statusCode
       const transient=status===503&&typeof bodyText==='string'&&bodyText.includes('task ledger write failed')||status===undefined
+      const networkCode=(error as {code?:unknown;cause?:{code?:unknown}})?.cause?.code??(error as {code?:unknown})?.code
+      const preconnectRefusal=typeof networkCode==='string'&&['ECONNREFUSED','ENOTFOUND','EAI_AGAIN','ENETUNREACH','EHOSTUNREACH'].includes(networkCode)
+      const uncertain=(status===undefined&&!preconnectRefusal)||(typeof status==='number'&&status>=500&&!notInserted)
       const failure: Extract<A2aRouteResult, { ok: false }> = {
         ...(transient?{[RECEIPT_RETRYABLE]:true as const}:{}),
         ...(notInserted&&status===503?{[RECEIPT_NOT_INSERTED]:true as const}:{}),
+        ...(uncertain&&taskIdFromCaller!==undefined?{acceptance:'unknown' as const,task_id:taskIdFromCaller}:{}),
         ok: false,
         error: `direct route to peer failed: ${String(error)}`,
         code,

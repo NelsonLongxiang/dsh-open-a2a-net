@@ -180,6 +180,12 @@ describe('fetchCardDetail', () => {
 })
 
 describe('routeDirect', () => {
+  it('caller identity survives lost responses while an explicit preconnect refusal remains failover-safe',async()=>{
+    const cases=[{error:new TypeError('fetch failed'),unknown:true},{error:Object.assign(Error('reset after admission'),{cause:{code:'ECONNRESET'}}),unknown:true},{error:Object.assign(Error('unreachable'),{cause:{code:'ECONNREFUSED'}}),unknown:false}]
+    for(const entry of cases){const result=await makeClient({fetch:async()=>{throw entry.error},schedule:frozenSchedule().arm}).routeDirect('https://peer.invalid','beta/aaaaaaaa','one work',undefined,undefined,'alpha/bbbbbbbb',true,'original-task');expect(result.ok).toBe(false);if(!result.ok){expect(result.acceptance==='unknown').toBe(entry.unknown);if(entry.unknown)expect(result.task_id).toBe('original-task')}}
+    const {fetch}=stubFetch(()=>({status:503,body:{error:'mail accepted, settlement save failed',acceptance:'unknown',task_id:'original-task'}}));expect(await makeClient({fetch,schedule:frozenSchedule().arm}).routeDirect('https://peer.invalid','beta/aaaaaaaa','work',undefined,undefined,'alpha/bbbbbbbb',true,'original-task')).toMatchObject({ok:false,acceptance:'unknown',task_id:'original-task'})
+  })
+
   it('preserves accepted receiver bookkeeping failure and warns the tool caller to reconcile',async()=>{
     const f=stubFetch(()=>({status:200,body:{routed:true,delivered:true,task_id:'work',task_status:'TASK_STATE_DELIVERED',receiverBookkeeping:'failed'}}))
     const result=await makeClient({fetch:f.fetch,schedule:frozenSchedule().arm}).routeDirect('https://peer.invalid','beta/aaaaaaaa','work',undefined,undefined,undefined,true)

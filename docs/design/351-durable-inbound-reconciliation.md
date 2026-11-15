@@ -15,6 +15,7 @@
 - 持久写失败必须零投递，发后写失败保留sending/unknown；重启按原ID对账，所有host timer随stop取消。沿用单host/singlewriter账本假设，不新增分布式锁、后台schedule或可调用恢复工具。
 - 精确头cef46a53的非作者评审FAIL保留：F1邮箱提交前结账、F2容量淘汰全文丢失、F3 lane与原CLI key绑定不足。后继修复改为收件write-ahead journal先落盘再结算、保护未交付回执容量且满时前置拒绝、lane/sourceKey完整摘要及出生核对、CLI自身key独立保存并每次对比；收件成功后重启只完成同receipt结算，绝不重执行业务。空contextId与同步final保存失败的原waiter恢复也纳入真实回归。
 - 后继精确头76585803仍为FAIL并保留：F2冷唤醒await后容量变化造成先投递后记账失败，journal仅改phase可伪完成。再修订让既有TaskDelivery在实际入队前原子预留owed槽并持久保留，原任务建账消费自己的槽，其他任务不能抢占；mail journal将phase纳入摘要且仅原子完成更新可重hash。新增真实冷唤醒63/64边界、可重入建账/重启、phase-only损坏不结账不回delivered的回归。
+- 精确头f7487faa的窄复审关闭收件端槽位与phase完整性，但仍FAIL：远端调用端只有入口容量检查，POST接纳后才建owed。后继修正由会话路由与CLI转发在effect前持久预留调用方槽位，原taskId消费自己的预留；明确未接纳可释放，unknown/响应丢失/接纳后写失败保留原ID预留且不再派。卡片等待、remote响应、peerBirth建账边界、满容量零POST、预留写失败零POST、接纳后写失败与重启保留等专项回归均按原判据执行。
 - 本补丁只在隔离测试home验证；不改4条真实账、不恢复对端presence、不部署。正式验证器/RC与运行态验收独立，不以工程测试或静态评审冒充。
 
 实现、回归和当前行为说明以[路由契约](../../src/skill/references/routing.md#answered-work-with-a-blocked-receipt-return)为准。下面“answered仍普通提醒”与旧owner阶梯回执等历史条目由本修订替代，不代表原账被清除。

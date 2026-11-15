@@ -4396,6 +4396,9 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const taskId = `direct-${Math.random().toString(16).slice(2, 10)}`
       const routedReceipt = parseReceipt(args.message) !== null
       if(!routedReceipt&&!taskLedger.receiptCapacityAvailable())return localRoute({ok:false,error:'receipt-protected capacity is full; nothing delivered',code:WIRE_ERROR_QUEUE_FULL})
+      let retainDispatch=false
+      if(!routedReceipt)try{taskLedger.reserveDispatch(taskId,peerPayloadFingerprint({caller:callerSession??session,message:JSON.stringify([args.message,args.context_id??'',callbackAddress??'']),noWait:args.async===true,team:args.team}))}catch{return localRoute({ok:false,error:'original dispatch could not reserve durable ledger capacity; nothing delivered',code:WIRE_ERROR_QUEUE_FULL})}
+      try {
       // Candidate order: this host's own teams first (an in-process steer —
       // cheapest possible and immune to nested-signal aborts), then direct
       // publishers, then zone delegations, deduplicated by URL.
@@ -4411,7 +4414,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           // gh#198: host-built delivery notes, or a reply from a clean local session (resolved as routeIntoAgent does), are this host's alone.
           return ((outcome.bridge === undefined && (outcome.task_status === 'TASK_STATE_DELIVERED' || outcome.task_status === 'TASK_STATE_ABORTED_WAIT' || (t => t !== undefined && nodeTaint.of(String(t.id)) === '')(resolveAgentForTeam(args.team) ?? canvasLiveAgent(parseCanvasTeamName(args.team))))) ? localRoute(outcome) : outcome) as unknown as Record<string, JsonValue>
         }
-        if(outcome.acceptance==='unknown')return localRoute(outcome) as unknown as Record<string,JsonValue>
+        if(outcome.acceptance==='unknown'){retainDispatch=true;return localRoute(outcome) as unknown as Record<string,JsonValue>}
         failures.push(`local: ${outcome.error}`)
       }
       // Failover seam for canvas teams: after the local tiers miss, the
@@ -4457,7 +4460,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           peerAsync = card !== undefined && caps?.async === true
         }
         const result = await dispatchPeerCandidate(candidate, target, args.message, args.context_id, signal, callerSession, peerAsync, taskId, callbackAddress)
-        if(!result.ok&&result.acceptance==='unknown')return result as unknown as Record<string,JsonValue>
+        if(!result.ok&&(result.acceptance==='unknown'||result.code===-32005)){retainDispatch=true;return result as unknown as Record<string,JsonValue>}
         if (result.ok || signal.aborted) {
           // A receipt the creditor refused (its enforce verdict) pays nothing here either (review of PR #149 P2-2).
           if (result.ok && routedReceipt) {
@@ -4481,6 +4484,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       if (failures.length > 0) logger.warn(`route to team "${args.team}" exhausted its candidates: ${failures.join('; ')}`)
       const verdict = routeVerdict(args.team, failures, candidatePool.length)
       return { ...verdict, error: await diagnoseCanvas(args.team, verdict.error, callerSession) }
+      }catch{retainDispatch=true;return {ok:false,acceptance:'unknown',task_id:taskId,error:'original dispatch or its final ledger commit is unresolved; reconcile this task id and retained reservation, do not resend the work',code:-32000,receipt:'none',peer_content:false}}finally{if(!routedReceipt&&!retainDispatch)try{taskLedger.releaseDispatch(taskId)}catch{logger.warn('a2a: dispatch reservation release remains blocked')}}
   }
 
   /**
@@ -4526,7 +4530,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // gh#224: a full target queue refuses a same-host delivery as the wire face does (receipts, CLI mailboxes pass).
     // p1-mailbox-owes (S33): a deposit that declares it owes receipts is under the cap like a session.
     // superagent v4: a request to the team's A2A address is a Trigger; the engine's worker slots govern it, not this cap.
-    const queueRefusal = parseReceipt(message)===null&&!taskLedger.receiptCapacityAvailable()?'receipt-protected capacity is full; nothing delivered':queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(mailTeam) !== undefined && !cliDeposits.owes(mailTeam)) || superagentHost?.a2aAddress === mailTeam, ownTask)
+    const queueRefusal = parseReceipt(message)===null&&!taskLedger.receiptCapacityAvailable(taskIdFromCaller)?'receipt-protected capacity is full; nothing delivered':queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(mailTeam) !== undefined && !cliDeposits.owes(mailTeam)) || superagentHost?.a2aAddress === mailTeam, ownTask)
     if (queueRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL, next: QUEUE_FULL_NEXT }

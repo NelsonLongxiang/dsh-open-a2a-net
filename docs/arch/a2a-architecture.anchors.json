@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "fb831550ca22022b7d0b75b18cb09e7edd23fd76ed1078eb8bfc39fe1b457040",
+    "src/index.ts": "963d05cb2ff48b1b373c3dbbb502e86157961cbe786e2c40643fa061304a2cf5",
     "src/faces/admin.ts": "df581bb11493c28567b4f6d59c0315912bdef297d05e1f25eefebd0df866f9ba",
     "src/canvas-store.ts": "dafeaf63aa7c285933e0ab5ddad298740715fc6d3462be8d7a580a3908350224",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
@@ -14,7 +14,7 @@
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
     "nexus-stage/src/planning-card-text.ts": "1cd8c266532093ad7a1d7fe7df3ac34c6440182eff1469a0dc1d5d3e70889033",
     "nexus-stage/src/planning-fit.ts": "cbda0255062632bd412deb2131c7a01e1e16ab9c72d2a70a32c362e108f8c07a",
-    "src/task-ledger.ts": "9506a7506b05b48a4f402d0ef7dab469fd0987580255e4a1e9f979e364549b6f",
+    "src/task-ledger.ts": "2b6f67b6075dee647ae2e63e613020b1b30d95aca9160bfd79893ba569c46166",
     "nexus-stage/src/world.ts": "8191581b4551b3b5ea3658a4a640fcb68cea0311d500743884de666441501cd0",
     "nexus-stage/src/planning-overlap.ts": "f4e7ecf5af229f6107191f35be2b5a10ebab921b175ba0950f577458dacc5019",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4541",
+      "ref": "src/index.ts:4545",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -309,7 +309,7 @@
     {
       "page": "p1-arch",
       "cell": "d10",
-      "ref": "src/task-ledger.ts:761",
+      "ref": "src/task-ledger.ts:780",
       "expect": "private trimOwed(): void {"
     },
     {

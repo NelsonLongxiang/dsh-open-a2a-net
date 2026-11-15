@@ -3,9 +3,10 @@ import{generateKeyPairSync}from'node:crypto'
 import{bootNode,reservePort,runContext,type MeshNode}from'./harness.ts'
 import{signCard}from'../../src/card.ts'
 import{signOriginClaim}from'../../src/origin-claim.ts'
+const nativeFetch=globalThis.fetch.bind(globalThis)
 const cli='sync-cli/0123456789abcdef',id='session-bbbbbbbb11112222',target='beta/bbbbbbbb'
-const post=(n:MeshNode,path:string,body:unknown)=>fetch(n.baseUrl+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json())
-const state=(n:MeshNode)=>fetch(n.baseUrl+'/__dsh_a2a/state').then(r=>r.json())
+const post=(n:MeshNode,path:string,body:unknown)=>nativeFetch(n.baseUrl+path,{method:'POST',headers:{'Content-Type':'application/json',Connection:'close'},body:JSON.stringify(body)}).then(r=>r.json())
+const state=(n:MeshNode)=>nativeFetch(n.baseUrl+'/__dsh_a2a/state',{headers:{Connection:'close'}}).then(r=>r.json())
 async function fixture(ttl=60000){
  const pa=await reservePort(),pb=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb
  const a=await bootNode({name:'syncA',session:'syncA',team:'alpha',port:pa,peers:[bu],sessionNodes:true,teamScopeRouting:false,silent:true,asyncNudgeDelayMs:86400000})
@@ -17,7 +18,7 @@ async function fixture(ttl=60000){
  const queued:any[]=[];b.agents.agent!.followup=m=>queued.push(m)
  const timeouts:Array<{delay:number;dispose:ReturnType<typeof vi.fn>}>=[],timeout=b.ctx.timer.timeout.bind(b.ctx.timer)
  vi.spyOn(b.ctx.timer,'timeout').mockImplementation(((fn:()=>void,delay:number)=>{const dispose=vi.fn(timeout(fn,delay));timeouts.push({delay,dispose});return dispose})as any)
- const send=(task:string)=>{const url=au+'/a2a/direct',body=JSON.stringify({team:target,caller_session:cli,task_id:task,message:'sync work',wait:true});return fetch(url,{method:'POST',headers:{'Content-Type':'application/json',...signOriginClaim({url,method:'POST',body},{caller:'sync-cli',callerUrl:au+'/a2a/cli/'+encodeURIComponent(cli),privateKey:key,unbound:false,now:Date.now()})},body}).then(r=>r.json())}
+ const send=(task:string)=>{const url=au+'/a2a/direct',body=JSON.stringify({team:target,caller_session:cli,task_id:task,message:'sync work',wait:true});return nativeFetch(url,{method:'POST',headers:{'Content-Type':'application/json',Connection:'close',...signOriginClaim({url,method:'POST',body},{caller:'sync-cli',callerUrl:au+'/a2a/cli/'+encodeURIComponent(cli),privateKey:key,unbound:false,now:Date.now()})},body}).then(r=>r.json())}
  const finish=(task:string,text='own final',kind='completed')=>{const m=queued.find(x=>x.source.taskId===task);(b.agents.agent!.session as any).events.push({type:'turn/start'},{type:'user/message',data:{content:m.content}},...(text?[{type:'assistant/message',data:{message:{content:[{type:'text',text}]}}}]:[]),{type:'turn/end',data:{reason:{kind}}});b.ctx.emit('agent/status',{agent:b.agents.agent!,status:'idle'})}
  return{a,b,queued,send,finish,timeouts,dispose:async()=>{await a.dispose();await b.dispose()}}
 }

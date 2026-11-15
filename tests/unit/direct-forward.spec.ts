@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createDirectForward, ForwardBirths, forwardReceiptBasis, teamReceiptBasis, type DirectForwardDeps, type ForwardRequest } from '../../src/direct-forward.ts'
 import { TaskLedger } from '../../src/task-ledger.ts'
+import {receiptBirth,receiptPayloadHash,receiptTransportId,type ReceiptOutboxRecord} from '../../src/receipt-outbox.ts'
 import { checkGuardAtIngress, DEFAULT_HOP_BUDGET } from '../../src/recursion-guard.ts'
 import type { A2aPeerCard, A2aRouteResult } from '../../src/types.ts'
 const request: ForwardRequest = { team: 'beta/01234567', caller: 'ops-cli/a1b2c3d4e5f60718', taskId: 'direct-fwd', message: 'hello', contextId: 'ctx', noWait: true, localCliProof: true, guarded: false }
@@ -15,6 +16,31 @@ function fixture(results: A2aRouteResult[] = [ok]) {
   return { deps, ledger, sent }
 }
 describe('one-hop CLI forwarding', () => {
+  it('F2 CLI forwarding reserves the caller slot before remote acceptance and protects it from competing results',async()=>{
+    const x=fixture();let posts=0
+    x.deps.dispatch=async()=>{
+      posts++
+      for(let i=0;i<63;i++){
+        const taskId='protected-'+i,text='[A2A receipt] task '+taskId+' original result'
+        x.ledger.trackInbound(taskId,'alpha/aaaaaaaa','beta/bbbbbbbb','ctx',true,'work',undefined,undefined,'session-author')
+        const r:Omit<ReceiptOutboxRecord,'payloadHash'>={version:1,taskId,authorId:'session-author',authorTeam:'alpha/aaaaaaaa',target:'beta/bbbbbbbb',text,transportId:receiptTransportId(taskId,'beta/bbbbbbbb',text),caller:'alpha/aaaaaaaa',payer:'alpha',localKey:'key',birth:receiptBirth(x.ledger.find(taskId)!),lane:{kind:'local-session',sessionId:'caller'},contextId:'ctx',createdAt:Date.now(),deadline:Date.now()+3600000,attempts:0,nextAt:Date.now(),phase:'ready'}
+        x.ledger.prepareReceipt({...r,payloadHash:receiptPayloadHash(r)})
+      }
+      expect(()=>x.ledger.trackInbound('steal','alpha/aaaaaaaa','beta/bbbbbbbb')).toThrow('receipt-protected')
+      return ok
+    }
+    expect(await createDirectForward(x.deps)(request)).toMatchObject({ok:true,task_id:request.taskId})
+    expect(posts).toBe(1);expect(x.ledger.list()).toHaveLength(64);expect(x.ledger.find(request.taskId)).toMatchObject({direction:'outbound',forwarded:true});expect(x.ledger.conservation().conserved).toBe(true)
+  })
+  it('F2 CLI reservation failure sends nothing, and unknown delivery never authorizes the same request again',async()=>{
+    const x=fixture(),reserve=vi.spyOn(x.ledger,'reserveDispatch').mockImplementationOnce(()=>{throw Error('disk denied')})
+    expect(await createDirectForward(x.deps)(request)).toMatchObject({ok:false,error:expect.stringContaining('nothing forwarded')});expect(x.sent).toEqual([]);reserve.mockRestore()
+    x.deps.dispatch=async()=>({ok:false,acceptance:'unknown',code:-32000,error:'response lost'})
+    expect(await createDirectForward(x.deps)(request)).toMatchObject({ok:false,acceptance:'unknown'})
+    const dispatch=vi.fn(x.deps.dispatch);x.deps.dispatch=dispatch
+    expect(await createDirectForward(x.deps)(request)).toMatchObject({ok:false});expect(dispatch).not.toHaveBeenCalled()
+  })
+
   it('#282 S2: an owner-qualified canvas id reaches candidates as-is, while scope, the peer, receivers and the ledger see the plain team', async () => {
     const x = fixture()
     const team = 'beta/canvas/ops'
@@ -74,7 +100,8 @@ describe('one-hop CLI forwarding', () => {
   })
   it('#275 dispatch exceptions release the birth waiter without manufacturing a row', async () => {
     const x=fixture();x.deps.dispatch=async()=>{throw Error('dispatch failed')}
-    await expect(createDirectForward(x.deps)(request)).rejects.toThrow('dispatch failed')
+    await expect(createDirectForward(x.deps)(request)).resolves.toMatchObject({ok:false,acceptance:'unknown',task_id:request.taskId})
+    expect(()=>x.ledger.reserveDispatch(request.taskId,'a'.repeat(64))).toThrow('identity conflict')
     expect(x.deps.births.wait(request.taskId)).toBeUndefined();expect(x.ledger.list()).toEqual([])
   })
 

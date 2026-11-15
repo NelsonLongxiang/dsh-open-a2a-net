@@ -15,6 +15,15 @@ function fixture(){
  return {file,ledger,make,deliver,validate,notify,schedule,warn,settle,deps,worker:new ReceiptOutbox(deps),advance:(ms:number)=>{now+=ms}}
 }
 describe('authored receipt return outbox',()=>{
+ it('F2 caller dispatch reservation survives restart and cannot be reused to authorize a new POST',()=>{
+  const f=fixture();f.ledger.reserveDispatch('outgoing','a'.repeat(64));const raw=JSON.parse(readFileSync(f.file,'utf8'));expect(raw.dispatchReservations).toEqual([{taskId:'outgoing',fingerprint:'a'.repeat(64),createdAt:1_000_000}])
+  const restored=new TaskLedger(f.file,{now:()=>1_000_000});expect(()=>restored.reserveDispatch('outgoing','a'.repeat(64))).toThrow('reconcile original task');expect(()=>restored.reserveDispatch('outgoing','b'.repeat(64))).toThrow('identity conflict')
+  restored.track('outgoing','remote/aaaaaaaa','https://original.test');expect(restored.find('outgoing')).toBeDefined();restored.releaseDispatch('outgoing');expect(JSON.parse(readFileSync(f.file,'utf8')).dispatchReservations??[]).toEqual([])
+ })
+ it('F2 damaged caller reservation cannot authorize later dispatch',()=>{
+  const f=fixture();f.ledger.reserveDispatch('outgoing','a'.repeat(64));const raw=JSON.parse(readFileSync(f.file,'utf8'));raw.dispatchReservations[0].fingerprint='';writeFileSync(f.file,JSON.stringify(raw));const restored=new TaskLedger(f.file,{now:()=>1_000_000});expect(()=>restored.reserveDispatch('new','b'.repeat(64))).toThrow('damaged');expect(restored.list()).toHaveLength(1)
+ })
+
  it('F2 preserves full return through capacity pressure, dead TTL, archive churn and restart',()=>{
   const f=fixture(),receipt=f.make();f.ledger.prepareReceipt(receipt)
   for(let i=0;i<150;i++)f.ledger.track('other-'+i,'beta/aaaaaaaa','peer')
