@@ -50,6 +50,7 @@
     "cli",
     "assets/nexusDist",
     "images",
+    "screenshots.json",
     "README_zh.md",
     "cordis.patch.yml",
     "pi/extension/a2a-seat.ts",
@@ -97,10 +98,11 @@
     "test:live": "vitest run tests/live",
     "test:build-layout": "vitest run tests/gates/build-layout.spec.ts",
     "verify:docs": "node scripts/doc-drift.mjs",
+    "verify:storefront": "node --test tests/market-metadata.test.mjs",
     "reanchor:arch": "node scripts/reanchor-architecture.mjs",
     "verify:nexus": "node scripts/verify-nexus-ci.mjs && npm --prefix nexus-stage run build && npm --prefix nexus-stage run test && git diff --exit-code -- assets/nexusDist/assets && git diff --ignore-cr-at-eol --exit-code -- assets/nexusDist/index.html",
     "verify": "node scripts/verify-temp-clean.mjs",
-    "verify:core": "pnpm typecheck && pnpm verify:docs && pnpm build && pnpm test && pnpm test:build-layout && pnpm verify:nexus"
+    "verify:core": "pnpm verify:storefront && pnpm typecheck && pnpm verify:docs && pnpm build && pnpm test && pnpm test:build-layout && pnpm verify:nexus"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.1",
