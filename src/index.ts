@@ -883,7 +883,7 @@ export function apply(ctx: Context, config: Config): void {
   const sidebarSends = new SidebarSends(join(home, 'a2a', 'sidebar-sends.json'))
   const refuseIfFlooded = createFloodGuard(idempotencyStore, recordActivity)
   const ownTask = (taskId: string): boolean => taskLedger.list().some(r => r.taskId === taskId) || taskLedger.archive().some(r => r.taskId === taskId)
-  const refuseIfQueueFull = createQueueGuard(() => taskLedger.list(), () => config.targetQueueCap, ownTask, idempotencyStore, recordActivity, id=>reminderView(taskLedger.reminderState(id)))
+  const refuseIfQueueFull = createQueueGuard(() => taskLedger.list(), () => config.targetQueueCap, ownTask, idempotencyStore, recordActivity, id=>reminderView(taskLedger.reminderState(id)),()=>taskLedger.receiptCapacityAvailable())
 
   // Unmasked-identity suppression: gossip mirrors peer lists back and forth,
   // so a URL whose fetch just proved it serves this node — or an already
@@ -2559,13 +2559,14 @@ export function apply(ctx: Context, config: Config): void {
     const incomingKey=taskLedger.deliveryFor(row.taskId)?.callerKey
     const household=CLI_HANDLE_RE.test(target)?cliDeposits.heldKey(target):undefined
     if(household&&(depositKey(target)!==undefined||canvasStore.cliHomeOf(target)===undefined))return {kind:'local-cli',key:household}
-    if(row.direction==='inbound'&&row.auth?.proof==='origin-claim'&&row.auth.claim!==undefined) {
+    const pinnedCliCarrier=CLI_HANDLE_RE.test(target)&&row.auth?.caller_key!==undefined&&row.auth.claim!==undefined&&canvasStore.cliHomeOf(target)===row.auth.claim.origin
+    if(row.direction==='inbound'&&row.auth?.claim!==undefined&&(row.auth.proof==='origin-claim'||pinnedCliCarrier)) {
       const url=row.auth.carrier_url??row.auth.claim.origin
       const key=incomingKey
-      if(key&&key!==receiptLocalKey)return {kind:'peer',url,key}
+      if(key&&key!==receiptLocalKey)return {kind:'peer',url,key,...(row.auth.caller_key?{cliKey:row.auth.caller_key}:{})}
     }
     if(CLI_HANDLE_RE.test(target)) {
-      const key=incomingKey??depositKey(target)
+      const key=cliDeposits.heldKey(target)
       return key?{kind:'local-cli',key}:{kind:'unresolved'}
     }
     const local=localHandleResolver()(target)
@@ -2578,7 +2579,7 @@ export function apply(ctx: Context, config: Config): void {
       return old // Explicit receipt wins over the later automatic summary of the same turn.
     }
     const authorTeam=sessionTeamOf(target),caller=automatic?(row.auth?.target.includes('/')?authorTeam:session):authorTeam
-    const receipt={version:1 as const,taskId:row.taskId,authorId:String(target.id),authorTeam,target:to,text,transportId:receiptTransportId(row.taskId,to,text),caller,payer:automatic?session:authorTeam,localKey:receiptLocalKey,birth:receiptBirth(row),lane:receiptReturnLane(row,to),...(row.contextId?{contextId:row.contextId}:{}),createdAt:Date.now(),deadline:Date.now()+23*60*60_000,attempts:0,nextAt:Date.now(),phase:'ready' as const}
+    const receipt={version:1 as const,taskId:row.taskId,authorId:String(target.id),authorTeam,target:to,text,transportId:receiptTransportId(row.taskId,to,text),caller,payer:automatic?session:authorTeam,localKey:receiptLocalKey,birth:receiptBirth(row,taskLedger.deliveryFor(row.taskId)?.callerKey),...(taskLedger.deliveryFor(row.taskId)?.callerKey?{sourceKey:taskLedger.deliveryFor(row.taskId)!.callerKey}:{}),lane:receiptReturnLane(row,to),...(row.contextId!==undefined?{contextId:row.contextId}:{}),createdAt:Date.now(),deadline:Date.now()+23*60*60_000,attempts:0,nextAt:Date.now(),phase:'ready' as const}
     return taskLedger.prepareReceipt({...receipt,payloadHash:receiptPayloadHash(receipt)})
   }
   const receiptValidationStamps=new Map<string,string>()
@@ -2593,7 +2594,7 @@ export function apply(ctx: Context, config: Config): void {
       const stamp=receiptAuthorityStamp(record)
       const allow=()=>{if(stamp!==receiptAuthorityStamp(record))return {ok:false as const,code:'RECEIPT_AUTHORITY_CHANGED',retry:false};receiptValidationStamps.set(record.transportId,stamp);return {ok:true as const}}
       const refuse=(code:string,retry=false)=>({ok:false as const,code,retry})
-      if(record.localKey!==receiptLocalKey||receiptBirth(row)!==record.birth)return refuse('RECEIPT_IDENTITY_CHANGED')
+      if(record.localKey!==receiptLocalKey||receiptBirth(row,taskLedger.deliveryFor(row.taskId)?.callerKey)!==record.birth||record.sourceKey!==taskLedger.deliveryFor(row.taskId)?.callerKey)return refuse('RECEIPT_IDENTITY_CHANGED')
       if(config.isolated)return refuse('RECEIPT_ROUTE_UNAVAILABLE',true)
       const author=sessionNodes.get(record.authorId)??reminderAgents().find(a=>String(a.id)===record.authorId)
       if(!author||sessionTeamOf(author)!==record.authorTeam||archivedSessionFilter()?.(record.authorId)===true)return refuse('RECEIPT_AUTHOR_UNAVAILABLE',true)
@@ -2640,7 +2641,9 @@ export function apply(ctx: Context, config: Config): void {
       cardCache.set(lane.url,{at:Date.now(),card})
       if(CLI_HANDLE_RE.test(record.target)) {
         const online=await client.fetchCard(lane.url+'/a2a/cli/'+encodeURIComponent(record.target))
+        if(!lane.cliKey)return refuse('RECEIPT_RETURN_PROOF_MISSING')
         if(!online||online.team!==record.target)return refuse('RECEIPT_ROUTE_UNAVAILABLE',true)
+        if(online.publicKey!==lane.cliKey)return refuse('RECEIPT_IDENTITY_CHANGED')
       }
       // The original authenticated return home is a receipt-only lane, not a discovery membership grant.
       return frozenReturn||peerAdmissionLinkState(lane.url).link==='linked'||!config.teamScopeRouting?allow():refuse('RECEIPT_AUTHORITY_CHANGED')
@@ -2712,13 +2715,16 @@ export function apply(ctx: Context, config: Config): void {
     warn:code=>logger.warn('a2a: receipt outbox %s',code),
   })
   ctx.effect(()=>{const timer=ctx.timer.interval(()=>{void receiptOutbox.scan()},REMINDER_SCAN_MS);queueMicrotask(()=>{void receiptOutbox.scan()});return ()=>{receiptOutbox.stop();timer();for(const stop of receiptTimers)stop();receiptTimers.clear();receiptValidationStamps.clear()}},'a2a: durable original receipt return')
-  async function sendAuthoredReceipt(author:Agent,row:TaskRecord,to:string,text:string,automatic=false):Promise<Record<string,JsonValue>> {
+  async function deliverRetainedReceipt(record:ReceiptOutboxRecord):Promise<Record<string,JsonValue>> {
     try {
-      let record:ReceiptOutboxRecord
-      try {record=reserveAuthoredReceipt(author,row,to,text,automatic)}catch{return {ok:false,error:'original receipt could not be durably reserved; no delivery attempted',code:-32000,receipt:'none',peer_content:false}}
-      const result=await receiptOutbox.send(row.taskId)
-      return result.confirmed?{ok:true,team:to,reply:'original receipt delivered',task_id:record.transportId,context_id:record.contextId??'',task_status:'TASK_STATE_COMPLETED',receipt:'none',peer_content:record.lane.kind==='peer'}:{ok:false,error:'receipt retained; delivery blocked ('+result.code+'); do not redo the original work or replace this receipt',code:-32000,task_id:record.transportId,receipt:'none',peer_content:false}
+      const result=await receiptOutbox.send(record.taskId)
+      return result.confirmed?{ok:true,team:record.target,reply:'original receipt delivered',task_id:record.transportId,context_id:record.contextId??'',task_status:'TASK_STATE_COMPLETED',receipt:'none',peer_content:record.lane.kind==='peer'}:{ok:false,error:'receipt retained; delivery blocked ('+result.code+'); do not redo the original work or replace this receipt',code:-32000,task_id:record.transportId,receipt:'none',peer_content:false}
     }catch{return {ok:false,error:'receipt delivery could not be confirmed; reconcile the retained original transport, do not resend the work',code:-32000,receipt:'none',peer_content:false}}
+  }
+  function sendAuthoredReceipt(author:Agent,row:TaskRecord,to:string,text:string):Promise<Record<string,JsonValue>> {
+    let record:ReceiptOutboxRecord
+    try {record=reserveAuthoredReceipt(author,row,to,text,false)}catch{return Promise.resolve({ok:false,error:'original receipt could not be durably reserved; no delivery attempted',code:-32000,receipt:'none',peer_content:false})}
+    return deliverRetainedReceipt(record)
   }
 
   function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {
@@ -2766,7 +2772,10 @@ export function apply(ctx: Context, config: Config): void {
         onBehalfOf: sessionTeamOf(target),
         ...(row?.auth !== undefined ? { authRef: authorizationRef(row.auth) } : {}),
       })
-      if(row!==undefined)void sendAuthoredReceipt(target,row,callerTeam,receipt,true)
+      if(row!==undefined) {
+        const retained=reserveAuthoredReceipt(target,row,callerTeam,receipt,true) // throws synchronously: the final waiter remains for a later idle
+        void deliverRetainedReceipt(retained)
+      }
     }, { taskId, steerFloor }, 'receipt')
   }
 
@@ -3883,7 +3892,10 @@ export function apply(ctx: Context, config: Config): void {
       cardCache.set(url, { at: Date.now(), card })
       if (peerAdmissionLinkState(url).link !== 'linked') continue
       const row = card.sessionTeams?.find(item => item.team === handle)
-      if (row !== undefined) return { origin: home, viaUrl: claim.callerUrl, bound: true, online: row.offline === false }
+      if (row !== undefined) {
+        const cliCard=row.offline===false?await client.fetchCard(home+'/a2a/cli/'+encodeURIComponent(handle)):undefined
+        return {origin:home,viaUrl:claim.callerUrl,bound:true,online:row.offline===false&&cliCard?.team===handle,...(cliCard?.team===handle?{key:cliCard.publicKey}:{})}
+      }
     }
     return { origin: home, viaUrl: claim.callerUrl, bound: true, online: false }
   }
@@ -4383,6 +4395,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // the target correlates with the route's own result verbatim.
       const taskId = `direct-${Math.random().toString(16).slice(2, 10)}`
       const routedReceipt = parseReceipt(args.message) !== null
+      if(!routedReceipt&&!taskLedger.receiptCapacityAvailable())return localRoute({ok:false,error:'receipt-protected capacity is full; nothing delivered',code:WIRE_ERROR_QUEUE_FULL})
       // Candidate order: this host's own teams first (an in-process steer —
       // cheapest possible and immune to nested-signal aborts), then direct
       // publishers, then zone delegations, deduplicated by URL.
@@ -4513,7 +4526,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // gh#224: a full target queue refuses a same-host delivery as the wire face does (receipts, CLI mailboxes pass).
     // p1-mailbox-owes (S33): a deposit that declares it owes receipts is under the cap like a session.
     // superagent v4: a request to the team's A2A address is a Trigger; the engine's worker slots govern it, not this cap.
-    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(mailTeam) !== undefined && !cliDeposits.owes(mailTeam)) || superagentHost?.a2aAddress === mailTeam, ownTask)
+    const queueRefusal = parseReceipt(message)===null&&!taskLedger.receiptCapacityAvailable()?'receipt-protected capacity is full; nothing delivered':queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(mailTeam) !== undefined && !cliDeposits.owes(mailTeam)) || superagentHost?.a2aAddress === mailTeam, ownTask)
     if (queueRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL, next: QUEUE_FULL_NEXT }

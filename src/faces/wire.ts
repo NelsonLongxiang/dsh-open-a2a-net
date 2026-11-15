@@ -27,6 +27,7 @@ import { refuseIfBudgetExhausted } from '../recursion-guard.ts'
 import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from '../idempotency-store.ts'
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
 import { parseReceipt, taskIdRefusal } from '../receipt.ts'
+import {receiptMailboxBirth,receiptMailboxHash,type ReceiptMailboxCommit} from '../receipt-mailbox.ts'
 import { buildAuthorization, claimCovers, nextOf, refusalOf, type Admission, type AuthProof, type RemoteCliProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from '../admitted-bookkeeping.ts'
 import { isRootOriginUrl, type OriginClaimVerdict } from '../origin-claim.ts'
@@ -476,6 +477,29 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     },
   }), 'a2a: peer log face endpoint')
 
+  /** Mailbox insertion is durable before this original-debt settlement can run. No delivery is replayed here. */
+  function finishMailboxReceipt(commit:ReceiptMailboxCommit):'delivered'|'refused' {
+    if(cliDeposits.heldKey(commit.handle)!==commit.targetKey)throw Error('receipt mailbox owner changed; reconciliation required')
+    const parsed=parseReceipt(commit.message)!
+    const row=taskLedger.find(parsed.taskId),archived=taskLedger.archive().find(r=>r.taskId===parsed.taskId)
+    if(commit.originalBirth!==undefined&&(!row&&!archived||receiptMailboxBirth((row??archived)!)!==commit.originalBirth))throw Error('original mailbox receipt task birth changed')
+    if(commit.phase!=='pending')return commit.phase
+    if(archived?.endedBy==='cancelled'||archived?.endedBy==='abandoned') {
+      cliDeposits.completeReceiptCommit(commit.transportId,'refused');return 'refused'
+    }
+    const refusal=archived?.endedBy==='receipt'?undefined:settleAndAnnounce(commit.message,commit.settler)
+    const phase=refusal===undefined?'delivered':'refused'
+    cliDeposits.completeReceiptCommit(commit.transportId,phase)
+    idempotencyStore.recordOutcome(commit.transportId,{status:'completed',reply:'receipt '+phase,receiptDelivery:phase})
+    return phase
+  }
+  let stoppedMailboxRecovery=false
+  ctx.effect(()=>{
+    const scan=()=>{if(stoppedMailboxRecovery)return;try{for(const commit of cliDeposits.pendingReceiptCommits())try{finishMailboxReceipt(commit)}catch{logger.warn('a2a: original mailbox receipt settlement remains blocked')}}catch{logger.warn('a2a: receipt mailbox recovery storage unavailable')}}
+    queueMicrotask(scan);const timer=ctx.timer.interval(scan,1000)
+    return ()=>{stoppedMailboxRecovery=true;timer()}
+  },'a2a: durable mailbox receipt settlement recovery')
+
   // W7 slice 2: the S1 outcome-retrieval surface — a READ-ONLY lookup of
   // one claimed task's settled outcome. The body carries ONLY the task id
   // and the submit payload's fingerprint (peerPayloadFingerprint, the
@@ -534,9 +558,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
         }
         const taskId = typeof body.task_id === 'string' ? body.task_id : ''
         const fingerprint = typeof body.fingerprint === 'string' ? body.fingerprint : ''
-        const verdict = taskId === '' || fingerprint === ''
+        let verdict = taskId === '' || fingerprint === ''
           ? { found: false as const, reason: 'unknown-task' as const }
           : idempotencyStore.query(taskId, fingerprint)
+        try {
+          const commit=cliDeposits.receiptCommitFor(taskId)
+          if(commit&&commit.fingerprint===fingerprint)verdict=commit.phase==='pending'?{found:true,status:'pending'}:{found:true,status:'completed',receiptDelivery:commit.phase,reply:'receipt '+commit.phase,settledAt:commit.at}
+        }catch{/* corrupt receipt journal supplies no stronger evidence */}
         const payload = JSON.stringify(
           verdict.found
             ? verdict.status === 'pending'
@@ -705,11 +733,11 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           }
           const priorFingerprint=peerPayloadFingerprint({caller,message,noWait,team})
           const priorTransport=idempotencyStore.query(taskId,priorFingerprint)
-          if(earlyClaim.ok&&priorTransport.found&&priorTransport.status==='completed'&&d.receiptReplayAllowed(message,caller,team,earlyClaim)) {
+          if(earlyClaim.ok&&priorTransport.found&&priorTransport.status==='completed'&&priorTransport.receiptDelivery==='delivered'&&d.receiptReplayAllowed(message,caller,team,earlyClaim)) {
             const payload=JSON.stringify({routed:true,delivered:true,receipt:'none',team,task_id:taskId,task_status:'TASK_STATE_COMPLETED',note:'receipt delivery already confirmed'})
             res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
           }
-          const cliProof = foreignCli && earlyClaim?.ok ? await remoteCliProof(caller, earlyClaim).catch(() => undefined) : undefined
+          const cliProof = (foreignCli||CLI_HANDLE_RE.test(caller)&&cliDeposits.get(caller)===undefined) && earlyClaim?.ok ? await remoteCliProof(caller, earlyClaim).catch(() => undefined) : undefined
           let admission = foreignCli ? a2aCallerAdmission(caller, mailTeam, cliProof, earlyClaim?.ok ? earlyClaim.card.publicKey : undefined) : gate.admission
           // #282 S3 (same team authorizes): a receipt for this host's own forward, to the CLI that sent it, from a
           // receiver frozen at birth on the selected peer's key — the owner's signed canvas is the return path.
@@ -853,7 +881,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           await waitForForwardBirth(message)
           let refusedSettlement: SettlementRefusal | undefined
           try {
-            refusedSettlement = settleAndAnnounce(message, { caller, proof: callerProof, ...settlerClaimFields(claim, originOf), ingress: 'wire' })
+            if(parseReceipt(message)===null||cliDeposits.get(mailTeam)===undefined)refusedSettlement = settleAndAnnounce(message, { caller, proof: callerProof, ...settlerClaimFields(claim, originOf), ingress: 'wire' })
           } catch {
             // A failed receipt settlement did not deliver: keep its fixed transport identity retryable.
             if(parseReceipt(message)!==null)idempotencyStore.releaseUncompleted(taskId,idemFingerprint)
@@ -867,7 +895,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           if (refusedSettlement !== undefined) withSettlementField(res, refusedSettlement)
           // A request sent from the team tab is the person's: its receipt settles above and goes to the tab, not to the
           // session it went out as (owner ruling 2026-11-13: a sidebar send must not turn into a new message that wakes it).
-          if (d.sidebarReceipt?.(mailTeam, message, caller, refusedSettlement === undefined) === true) {
+          if (cliDeposits.get(mailTeam)===undefined&&d.sidebarReceipt?.(mailTeam, message, caller, refusedSettlement === undefined) === true) {
             recordActivity('in', team, caller, true)
             const note = `received for the team tab of ${team}`
             idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: note, receiptDelivery:refusedSettlement===undefined?'delivered':'refused' })
@@ -887,7 +915,28 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const duplicate = answered !== null && refusedSettlement === undefined && syncAnswered.take(answered.taskId, mailTeam, caller)
             const thread={taskId,contextId,proof:callerProof,...(answered!==null?{receiptFor:answered.taskId}:{}),...(answered?.envelope?.disposition!==undefined?{disposition:answered.envelope.disposition}:{}),...(admission.ok?{admission:admission.rule}:{})}
             const mailed=`${directHeader(caller)}\n\n${message}`
-            const evicted=answered===null?cliDeposits.mail(mailTeam,caller,mailed,undefined,thread):cliDeposits.mailReceipt(mailTeam,caller,mailed,thread,duplicate?'sync-answered':undefined)
+            let commit:ReceiptMailboxCommit|undefined
+            if(answered!==null) {
+              const original=taskLedger.find(answered.taskId)??taskLedger.archive().find(r=>r.taskId===answered.taskId)
+              const receipt={version:1 as const,transportId:taskId,fingerprint:idemFingerprint,handle:mailTeam,targetKey:cliDeposits.heldKey(mailTeam)!,from:caller,message,settler:{caller,proof:callerProof,...settlerClaimFields(claim,originOf),ingress:'wire' as const},...(original?{originalBirth:receiptMailboxBirth(original)}:{}),at:Date.now(),phase:'pending' as const}
+              commit={...receipt,hash:receiptMailboxHash(receipt)}
+            }
+            let evicted:readonly import('../cli-deposit.ts').CliMail[]
+            try {evicted=answered===null?cliDeposits.mail(mailTeam,caller,mailed,undefined,thread):cliDeposits.mailReceipt(mailTeam,caller,mailed,thread,duplicate?'sync-answered':undefined,commit)}catch {
+              if(answered!==null)idempotencyStore.releaseUncompleted(taskId,idemFingerprint)
+              const payload=JSON.stringify({error:'receipt mailbox write failed; original task remains owed',code:-32000,task_id:taskId,task_status:'TASK_STATE_FAILED',delivered:false,...(answered!==null?{receipt_delivery:'not-inserted'}:{})})
+              res.writeHead(503,{'Content-Type':'application/json'});res.end(payload);return
+            }
+            if(commit) {
+              try {
+                const kept=cliDeposits.receiptCommitFor(taskId)!
+                if(finishMailboxReceipt(kept)==='refused')refusedSettlement={status:'refused',reason:'settler-off-chain',task_id:answered!.taskId}
+                if(refusedSettlement!==undefined)withSettlementField(res,refusedSettlement)
+              }catch {
+                const payload=JSON.stringify({error:'mailbox receipt is durable but local settlement commit failed; reconcile original transport',code:-32011,task_id:taskId,task_status:'TASK_STATE_FAILED',acceptance:'unknown'})
+                res.writeHead(503,{'Content-Type':'application/json'});res.end(payload);return
+              }
+            }
             // p1-mailbox-owes (D-5): a row the cap pushed out takes its owed inbound row with it (slot freed, counted as evicted).
             for (const gone of evicted) if (gone.task_id !== undefined) taskLedger.evictInbound(gone.task_id, taskLedger.find(gone.task_id)?.team ?? mailTeam)
             recordActivity('in', team, caller, true)
@@ -1030,7 +1079,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                   caller,
                   proof: callerProof,
                   ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}),
-                  ...(admission.rule === 'remote-ref-cli' && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}),
+                  ...(admission.rule === 'remote-ref-cli' && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}), ...(CLI_HANDLE_RE.test(caller)&&(cliProof?.key||claim.ok&&claim.cli===true)?{callerKey:cliProof?.key??(claim.ok?claim.card.publicKey:'')}:{}),
                   ingress: 'wire',
                   allowlistVersion: admittedAt.version,
                   target: team,
@@ -1116,7 +1165,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           const syncSteered = req.headers['x-a2a-guard'] === undefined || parseReceipt(message) !== null ? undefined : (target: Agent, floor: number,acceptance?:'inserted'|void): void => {
             syncTarget = sessionTeamOf(target)
             const receiptTarget = callback !== '' ? callback : caller
-            const auth = buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ...(admission.rule === 'remote-ref-cli' && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget, receivedAt: admittedAt.at })
+            const auth = buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ...(admission.rule === 'remote-ref-cli' && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}), ...(CLI_HANDLE_RE.test(caller)&&(cliProof?.key||claim.ok&&claim.cli===true)?{callerKey:cliProof?.key??(claim.ok?claim.card.publicKey:'')}:{}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget, receivedAt: admittedAt.at })
             try{taskLedger.trackInbound(taskId, team, receiptTarget, contextId, receiptExpectationOf(receiptTarget) !== 'process-label', briefOf(message), auth, syncTarget === team ? undefined : syncTarget, String(target.id), acceptance==='inserted'?false:taskLedger.deliveryFor(taskId)?.state==='claimed')}catch(error){taskLedger.noteAdmittedBookkeepingFailure(error);throw new AdmittedBookkeepingError(error)}
             if(acceptance!=='inserted')armReceiptAutosend(target, taskId, receiptTarget, message, floor)
           }

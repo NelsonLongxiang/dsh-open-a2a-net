@@ -1,4 +1,4 @@
-import {it,expect,vi}from'vitest'
+import {it,expect,vi,afterEach}from'vitest'
 import {SessionId}from'@deepseek-ai/dsh-session'
 import {generateKeyPairSync,createPrivateKey}from'node:crypto'
 import {readFileSync,writeFileSync}from'node:fs'
@@ -9,12 +9,15 @@ import {join}from'node:path'
 import {signCard}from'../../src/card.ts'
 import {signOriginClaim}from'../../src/origin-claim.ts'
 import {bootNode,reservePort,runContext,cliEnv,type MeshNode}from'./harness.ts'
+const receiptFault=vi.hoisted(()=>({path:'',fail:false}))
+vi.mock('../../src/task-ledger-persistence.ts',async original=>{const actual=await original<typeof import('../../src/task-ledger-persistence.ts')>();return {...actual,writeTaskLedger:(path:string,bytes:string)=>{if(receiptFault.fail&&path===receiptFault.path)throw Object.assign(Error('receipt fault'),{code:'EACCES'});actual.writeTaskLedger(path,bytes)}}})
+afterEach(()=>{receiptFault.fail=false;receiptFault.path='';vi.restoreAllMocks()})
 const cli='return-cli/a1b2c3d4e5f60718',receiver='beta/bbbbbbbb',id='session-bbbbbbbb11112222'
-const post=(n:MeshNode,path:string,body:unknown)=>fetch(n.baseUrl+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json())
-const state=(n:MeshNode)=>fetch(n.baseUrl+'/__dsh_a2a/state').then(r=>r.json())
+const post=(n:MeshNode,path:string,body:unknown)=>fetch(n.baseUrl+path,{method:'POST',headers:{'Content-Type':'application/json',Connection:'close'},body:JSON.stringify(body)}).then(r=>r.json())
+const state=(n:MeshNode)=>fetch(n.baseUrl+'/__dsh_a2a/state',{headers:{Connection:'close'}}).then(r=>r.json())
 async function fixture(canvas=false){
  const pa=await reservePort(),pb=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb
- const a=await bootNode({name:'returnA',session:'returnA',team:'alpha',port:pa,peers:[bu],sessionNodes:true,teamScopeRouting:true,forwardDirect:true,settlementAuth:'enforce',asyncNudgeDelayMs:86400000})
+ let a=await bootNode({name:'returnA',session:'returnA',team:'alpha',port:pa,peers:[bu],sessionNodes:true,teamScopeRouting:true,forwardDirect:true,settlementAuth:'enforce',asyncNudgeDelayMs:86400000})
  let b=await bootNode({name:'returnB',session:'returnB',team:'beta',agentId:id,port:pb,peers:[au],sessionNodes:true,teamScopeRouting:true,silent:true,settlementAuth:'enforce',asyncNudgeDelayMs:86400000})
  await post(b,'/__dsh_a2a/join',{id});let agent=b.agents.agent!;agent.followup=m=>b.steered.push(m)
  const key=generateKeyPairSync('ed25519').privateKey
@@ -32,7 +35,13 @@ async function fixture(canvas=false){
   if(changePin!==undefined){const file=join(home,'a2a/canvas.json'),snapshot=JSON.parse(readFileSync(file,'utf8'));snapshot.cliHome[cli]=changePin;writeFileSync(file,JSON.stringify(snapshot))}
   b=await bootNode({home,name:'returnB',session:'returnB',team:'beta',agentId:id,port:pb,peers:[au],sessionNodes:true,teamScopeRouting:true,silent:true,settlementAuth:'enforce',asyncNudgeDelayMs:86400000});agent=b.agents.agent!;agent.followup=m=>b.steered.push(m);(b.agents as any).requireInitiator=()=>undefined
  }
- return{a,get b(){return b},get agent(){return agent},submit,send,raw,restartReceiver,dispose:async()=>{await a.dispose();await b.dispose()}}
+ const restartCaller=async(replacement?:typeof key,beforeBoot?:()=>void)=>{
+  const home=a.home;await a.dispose()
+  if(replacement){const file=join(home,'a2a/cli-deposits.json'),snapshot=JSON.parse(readFileSync(file,'utf8'));snapshot.deposits.find((r:any)=>r.handle===cli).cardJson=JSON.stringify(signCard({name:'return-cli',session:'return-cli',team:cli,capabilities:{route:true,async:true},expiresAt:Date.now()+3600000},replacement));writeFileSync(file,JSON.stringify(snapshot))}
+  beforeBoot?.()
+  a=await bootNode({home,name:'returnA',session:'returnA',team:'alpha',port:pa,peers:[bu],sessionNodes:true,teamScopeRouting:true,forwardDirect:true,settlementAuth:'enforce',asyncNudgeDelayMs:86400000})
+ }
+ return{get a(){return a},key,get b(){return b},get agent(){return agent},submit,send,raw,restartReceiver,restartCaller,dispose:async()=>{await a.dispose();await b.dispose()}}
 }
 it('manual correlated receipt uses the frozen return lane after restart without ordinary scope',async()=>{
  const f=await fixture();try{
@@ -110,5 +119,44 @@ it('unconfirmed correlated receipt transport preserves debt without blind repost
   const cliResult=await promisify(execFile)(process.execPath,['cli/a2a.mjs','tasks','--json','--home',f.b.baseUrl],{env:cliEnv(f.b.home),encoding:'utf8'});expect(JSON.parse(cliResult.stdout).pending.find((r:any)=>r.taskId==='return-fail').receiptDelivery).toBe('receipt-undelivered')
   let reposts=0;const noRepost=vi.spyOn(globalThis,'fetch').mockImplementation((url,init)=>{if(String(url)===f.a.baseUrl+'/a2a/direct'&&init?.method==='POST')reposts++;return original(url,init)})
   try{const retry=await f.send('[A2A receipt] task return-fail complete');expect(retry.ok).toBe(false);expect(reposts).toBe(0);expect((await state(f.a)).archived.some((r:any)=>r.taskId==='return-fail')).toBe(false);expect((await state(f.b)).tasks.find((r:any)=>r.taskId==='return-fail')).toMatchObject({receiptRecovery:{state:'retained'}})}finally{noRepost.mockRestore()}
+ }finally{await f.dispose()}
+})
+
+it('F1 mailbox write refusal keeps original debt and same-id retry inserts exactly once',async()=>{
+ const f=await fixture();let clock:ReturnType<typeof vi.spyOn>|undefined
+ try{
+  await f.submit('mail-before-settle');receiptFault.path=join(f.a.home,'a2a/cli-deposits.json');receiptFault.fail=true
+  const text='[A2A receipt] task mail-before-settle original full result',first=await f.send(text)
+  expect(first.ok).toBe(false);expect((await state(f.a)).tasks.some((r:any)=>r.taskId==='mail-before-settle')).toBe(true);expect((await state(f.a)).archived.some((r:any)=>r.taskId==='mail-before-settle')).toBe(false)
+  expect((await post(f.a,'/__dsh_a2a/cli-deposit',{action:'inbox',handle:cli})).mail.some((r:any)=>r.receipt_for==='mail-before-settle')).toBe(false)
+  receiptFault.fail=false;const out=JSON.parse(readFileSync(join(f.b.home,'a2a/tasks.json'),'utf8')).receiptOutbox.find((r:any)=>r.taskId==='mail-before-settle');clock=vi.spyOn(Date,'now').mockReturnValue(out.nextAt+1)
+  const second=await f.send(text);expect(second.ok,JSON.stringify(second)).toBe(true);expect(second.task_id).toBe(first.task_id)
+  const mailbox=(await post(f.a,'/__dsh_a2a/cli-deposit',{action:'inbox',handle:cli})).mail.filter((r:any)=>r.receipt_for==='mail-before-settle');expect(mailbox).toHaveLength(1)
+  expect((await state(f.a)).archived.filter((r:any)=>r.taskId==='mail-before-settle')).toHaveLength(1)
+ }finally{clock?.mockRestore();receiptFault.fail=false;await f.dispose()}
+})
+it('F1 durable mailbox plus failed settlement recovers after receiver restart without another POST',async()=>{
+ const f=await fixture();try{
+  await f.submit('mail-commit-restart');receiptFault.path=join(f.a.home,'a2a/tasks.json');receiptFault.fail=true
+  const first=await f.send('[A2A receipt] task mail-commit-restart original full result');expect(first.ok).toBe(false)
+  expect((await state(f.a)).tasks.some((r:any)=>r.taskId==='mail-commit-restart')).toBe(true);expect((await state(f.a)).archived.some((r:any)=>r.taskId==='mail-commit-restart')).toBe(false)
+  const mailbox=(await post(f.a,'/__dsh_a2a/cli-deposit',{action:'inbox',handle:cli})).mail.filter((r:any)=>r.receipt_for==='mail-commit-restart');expect(mailbox).toHaveLength(1)
+  const snapshot=JSON.parse(readFileSync(join(f.a.home,'a2a/cli-deposits.json'),'utf8')),pending=snapshot.receiptCommits.find((r:any)=>r.transportId===first.task_id);expect(pending.phase).toBe('pending')
+  let posts=0;const original=globalThis.fetch,spy=vi.spyOn(globalThis,'fetch').mockImplementation((url,init)=>{if(String(url)===f.a.baseUrl+'/a2a/direct'&&init?.method==='POST')posts++;return original(url,init)})
+  try{
+   await f.restartCaller(undefined,()=>{receiptFault.fail=false})
+   await vi.waitFor(async()=>expect((await state(f.a)).archived.filter((r:any)=>r.taskId==='mail-commit-restart')).toHaveLength(1),{timeout:3000})
+   const readback=await post(f.a,'/a2a/query',{task_id:first.task_id,fingerprint:pending.fingerprint});expect(readback).toMatchObject({found:true,status:'completed',receipt_delivery:'delivered'})
+   expect(posts).toBe(0);expect((await post(f.a,'/__dsh_a2a/cli-deposit',{action:'inbox',handle:cli})).mail.filter((r:any)=>r.receipt_for==='mail-commit-restart')).toHaveLength(1)
+  }finally{spy.mockRestore()}
+ }finally{receiptFault.fail=false;await f.dispose()}
+})
+it.each([false,true])('F3b same-home CLI identity after restart preserves original key: replacement=%s',async replacement=>{
+ const f=await fixture();try{
+  const task='cli-key-'+replacement;await f.submit(task)
+  const saved=JSON.parse(readFileSync(join(f.b.home,'a2a/tasks.json'),'utf8')).tasks.find((r:any)=>r.taskId===task);expect(saved.auth.caller_key).toBe(signCard({name:'original',session:'original',team:cli,capabilities:{route:true},expiresAt:Date.now()+3600000},f.key).publicKey)
+  await f.restartCaller(replacement?generateKeyPairSync('ed25519').privateKey:undefined)
+  let posts=0;const original=globalThis.fetch,spy=vi.spyOn(globalThis,'fetch').mockImplementation((url,init)=>{if(String(url)===f.a.baseUrl+'/a2a/direct'&&init?.method==='POST')posts++;return original(url,init)})
+  try{const result=await f.send('[A2A receipt] task '+task+' original full result');if(replacement){expect(result.ok).toBe(false);expect(result.error).toContain('RECEIPT_IDENTITY_CHANGED');expect(posts).toBe(0);expect((await state(f.b)).tasks.find((r:any)=>r.taskId===task)).toMatchObject({receiptDelivery:'receipt-undelivered',receiptRecovery:{state:'blocked'}});expect((await state(f.a)).tasks.some((r:any)=>r.taskId===task)).toBe(true)}else{expect(result.ok,JSON.stringify(result)).toBe(true);expect(posts).toBe(1)}}finally{spy.mockRestore()}
  }finally{await f.dispose()}
 })

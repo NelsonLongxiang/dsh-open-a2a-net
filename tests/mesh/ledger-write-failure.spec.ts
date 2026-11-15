@@ -32,11 +32,12 @@ describe('ledger errors stay inside the real host event boundary',()=>{
    expect(await query()).toMatchObject({found:true,status:'pending'})
    const key=createPrivateKey(readFileSync(join(b.home,'a2a/node-key.pem'),'utf8'))
    const receipt=async(id:string)=>{const body=JSON.stringify({team:handle,caller_session:'beta/01234567',task_id:id,message:'[A2A receipt] task '+task+' exact completed result',wait:false});return fetch(target,{method:'POST',signal:AbortSignal.timeout(3000),headers:{'Content-Type':'application/json',...signOriginClaim({url:target,method:'POST',body},{caller:'beta',callerUrl:bu,privateKey:key,unbound:false,now:Date.now()})},body})}
-   denied.prefix=join(a.home,'a2a/tasks.json')+'.';denied.remaining=1
+   denied.prefix=join(a.home,'a2a/tasks.json')+'.';denied.remaining=100 // Keep the commit unavailable until after pending is checked.
    expect((await receipt('enforce-query-failure')).status).toBe(503)
    expect(await query()).toMatchObject({found:true,status:'pending'})
    expect((await state(au)).tasks.some((r:any)=>r.taskId===task)).toBe(true)
-   denied.remaining=0;const accepted=await receipt('enforce-query-success');expect(accepted.status).toBe(200);expect((await accepted.json()).settlement).toBeUndefined()
+   denied.remaining=0;await vi.waitFor(async()=>expect((await state(au)).archived.some((r:any)=>r.taskId===task)).toBe(true)) // Recovery commits the original retained receipt, never another transport.
+    const accepted=await receipt('enforce-query-failure');expect(accepted.status).toBe(200);expect((await accepted.json()).settlement).toBeUndefined()
    expect((await state(au)).archived.some((r:any)=>r.taskId===task)).toBe(true)
    expect(await query()).toMatchObject({found:true,status:'completed',reply:'exact completed result'})
   }finally{denied.remaining=0;await a.dispose();await b.dispose()}
@@ -50,12 +51,12 @@ describe('ledger errors stay inside the real host event boundary',()=>{
    for(const n of [a,b])await fetch(n.baseUrl+'/__dsh_a2a/join',{method:'POST',body:JSON.stringify({id:String(n.agents.agent!.id)})})
    const sent=await a.ctx.tools.get('a2a_route')!.execute({team:'beta/01234567',message:'own inbound commit test',async:true},runContext(a.agents.agent)) as any
    expect(sent.ok).toBe(true);const task=sent.task_id,file=join(b.home,'a2a/tasks.json')
-   denied.prefix=file+'.';denied.remaining=1;denied.skip=1 // answered commit succeeds; post-peer own-inbound commit fails.
+   denied.prefix=file+'.';denied.remaining=1;denied.skip=2 // reservation and sending checkpoint succeed; post-peer own-inbound commit fails.
    const result=await b.ctx.tools.get('a2a_route')!.execute({team:'alpha/01234567',message:'[A2A receipt] task '+task+' completed',async:true},runContext(b.agents.agent)) as any
-   expect(result).toMatchObject({ok:false,error:expect.stringContaining('local settlement commit failed')})
+   expect(result).toMatchObject({ok:false,error:expect.stringContaining('RECEIPT_SETTLEMENT_COMMIT_FAILED')})
    expect((await state(au)).archived.some((r:any)=>r.taskId===task)).toBe(true)
    expect(JSON.parse(readFileSync(file,'utf8')).tasks.some((r:any)=>r.taskId===task)).toBe(true)
-   expect((await state(bu)).ledgerPersistence.lastError.code).toBe('EACCES')
+   expect((await state(bu)).tasks.find((r:any)=>r.taskId===task)).toMatchObject({receiptDelivery:'receipt-undelivered',receiptRecovery:{state:'retained',code:'RECEIPT_SETTLEMENT_COMMIT_FAILED'}})
   }finally{denied.remaining=0;denied.skip=0;await a.dispose();await b.dispose()}
  })
 

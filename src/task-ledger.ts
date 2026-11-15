@@ -25,7 +25,7 @@ import { writeTaskLedger } from './task-ledger-persistence.ts'
 import { safeObservationCode } from './nudge-observability.ts'
 import { parseTaskDelivery, TASK_DELIVERY_CAP, TASK_DELIVERY_RETENTION_MS, type TaskDelivery } from './task-delivery.ts'
 import { parseReminder, REMINDER_LONG_MS, type ReminderState } from './reconciliation-state.ts'
-import { parseReceiptOutbox, receiptBirth, type ReceiptOutboxRecord } from './receipt-outbox.ts'
+import { parseReceiptOutbox, receiptBirth, receiptPayloadHash, receiptLaneMatchesBirth, type ReceiptOutboxRecord } from './receipt-outbox.ts'
 import { holdsRow, parseReceipt, RECEIPT_DISPOSITIONS, RECEIPT_OUTCOMES, type ReceiptDisposition, type ReceiptOutcomeV2 } from './receipt.ts'
 import { classifyConservationBlock, ConservationCounters, type ConservationVerdict } from './ledger-conservation.ts'
 import { CALLER_ENDED_PREFIX, TASK_CAP, ARCHIVE_CAP, SUMMARY_CAP, TASK_STALE_TTL_MS, TASK_ACKNOWLEDGED_TTL_MS, ARCHIVE_ENDS, ECHO_SUMMARY, ROUTING_FACT_CAP, SETTLEMENT_ID_CAP, SETTLEMENT_REFUSAL_CAP, withSender, withAuth, routingOf, birthFacts, withRouting, withSettledBy, parseRefusal, archivedEndedBy, WITHDRAWAL_RESULTS, isWithdrawalResult } from './task-ledger-rows.ts'
@@ -112,10 +112,11 @@ export class TaskLedger {
   prepareReceipt(input: ReceiptOutboxRecord): ReceiptOutboxRecord {
     if(this.receiptRestoreError||this.deliveryRestoreError||this.counters.damaged)throw Error('damaged ledger cannot authorize receipt replay')
     const record=parseReceiptOutbox(input),row=this.tasks.find(r=>r.taskId===input.taskId)
-    if(!record||!row||row.status!=='pending'||row.receiptExpected===false||!(row.direction==='inbound'||row.peer==='local')||receiptBirth(row)!==record.birth)throw Error('receipt does not match pending task birth')
+    if(!record||!row||row.status!=='pending'||row.receiptExpected===false||!(row.direction==='inbound'||row.peer==='local')||receiptBirth(row,this.deliveryFor(row.taskId)?.callerKey)!==record.birth||record.sourceKey!==this.deliveryFor(row.taskId)?.callerKey)throw Error('receipt does not match pending task birth')
+    if(!receiptLaneMatchesBirth(record,row))throw Error('receipt lane differs from original authenticated birth')
     if((row.deliveredTo??row.team)!==record.authorTeam||(row.receiverSessionId!==undefined&&row.receiverSessionId!==record.authorId))throw Error('receipt author is not the original receiver')
     const target=row.auth?.receipt_target??row.sender?.id??(row.peer.startsWith('local:')?row.peer.slice(6):undefined)
-    if(!target||target!==record.target||record.contextId!==row.contextId)throw Error('receipt return target or conversation differs from original task')
+    if(!target||target!==record.target||(record.contextId??'')!==(row.contextId??''))throw Error('receipt return target or conversation differs from original task')
     const old=this.receiptFor(record.taskId)
     if(old) {
       if(old.target!==record.target||old.text!==record.text||old.authorId!==record.authorId||old.caller!==record.caller||old.payer!==record.payer||old.localKey!==record.localKey||old.contextId!==record.contextId||old.birth!==record.birth||JSON.stringify(old.lane)!==JSON.stringify(record.lane))throw Error('the original terminal receipt is already reserved')
@@ -139,7 +140,7 @@ export class TaskLedger {
   bindReceiptLane(taskId:string,transportId:string,lane:ReceiptOutboxRecord['lane']):void {
     const prior=this.receiptFor(taskId)
     if(!prior||prior.transportId!==transportId||prior.lane.kind!=='unresolved'||prior.attempts!==0||prior.phase!=='ready'||lane.kind==='unresolved')throw Error('receipt lane is already frozen')
-    const next=parseReceiptOutbox({...prior,lane});if(!next)throw Error('invalid receipt return lane')
+    const binding={...prior,lane};const next=parseReceiptOutbox({...binding,payloadHash:receiptPayloadHash(binding)}),row=this.tasks.find(r=>r.taskId===taskId);if(!next||!row||!receiptLaneMatchesBirth(next,row))throw Error('invalid receipt return lane')
     this.receiptRecords=this.receiptRecords.map(r=>r.taskId===taskId?next:r);this.persist()
   }
   private reminderRecoveryPending = false
@@ -230,6 +231,11 @@ export class TaskLedger {
     return [...this.archived]
   }
 
+  /** An undelivered full result cannot be discarded to admit unrelated work. */
+  receiptCapacityAvailable():boolean {return this.tasks.length<TASK_CAP||this.tasks.some(t=>!this.receiptRecords.some(r=>r.taskId===t.taskId))}
+  private protectReceiptCapacity():void {
+    if(!this.receiptCapacityAvailable())throw Error('receipt-protected task capacity full; no new work admitted')
+  }
   /**
    * Remember one outbound task owed a receipt, most-recent first, bounded by
    * {@link TASK_CAP} over the owed book only (settled rows live in the
@@ -253,6 +259,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    this.protectReceiptCapacity()
     this.counters.trackedTotal += 1
     this.tasks = [{
       taskId,
@@ -276,6 +283,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    this.protectReceiptCapacity()
     this.counters.trackedTotal += 1
     this.tasks = [{
       taskId,
@@ -311,6 +319,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    this.protectReceiptCapacity()
     this.counters.trackedTotal += 1
     this.tasks = [{
       taskId,
@@ -340,7 +349,7 @@ export class TaskLedger {
    * @returns whether a pending inbound row of `team` was archived.
    */
   evictInbound(taskId: string, team: string): boolean {
-    if (taskId === '') return false
+    if (taskId === ''||this.receiptRecords.some(r=>r.taskId===taskId)) return false
     this.sweep(this.now())
     const row = this.tasks.find(entry => entry.taskId === taskId)
     if (row === undefined || !(row.direction === 'inbound' || row.peer === 'local') || row.status !== 'pending' || (row.deliveredTo ?? row.team) !== team) return false
@@ -743,8 +752,12 @@ export class TaskLedger {
    */
   private trimOwed(): void {
     if (this.tasks.length <= TASK_CAP) return
-    const overflow = this.tasks.slice(TASK_CAP)
-    this.tasks = this.tasks.slice(0, TASK_CAP)
+    const protectedIds=new Set(this.receiptRecords.map(r=>r.taskId))
+    const protectedRows=this.tasks.filter(t=>protectedIds.has(t.taskId))
+    const ordinary=this.tasks.filter(t=>!protectedIds.has(t.taskId))
+    const overflow=ordinary.slice(Math.max(0,TASK_CAP-protectedRows.length))
+    const removed=new Set(overflow.map(t=>t.taskId))
+    this.tasks=this.tasks.filter(t=>!removed.has(t.taskId))
     const now = this.now()
     for (const row of overflow) {
       this.archiveSettled({
@@ -930,7 +943,7 @@ export class TaskLedger {
           const seen=new Set<string>()
           for(const raw of snapshot.receiptOutbox) {
             const parsed=parseReceiptOutbox(raw),row=parsed?this.tasks.find(r=>r.taskId===parsed.taskId):undefined
-            if(!parsed||seen.has(parsed.taskId)||!row||row.answeredAt===undefined||row.receiptDelivery!=='receipt-undelivered'||receiptBirth(row)!==parsed.birth||(row.deliveredTo??row.team)!==parsed.authorTeam||(row.receiverSessionId!==undefined&&row.receiverSessionId!==parsed.authorId)||(row.auth?.receipt_target??row.sender?.id??(row.peer.startsWith('local:')?row.peer.slice(6):undefined))!==parsed.target) {this.receiptRestoreError=true;break}
+            if(!parsed||seen.has(parsed.taskId)||!row||!receiptLaneMatchesBirth(parsed,row)||row.answeredAt===undefined||row.receiptDelivery!=='receipt-undelivered'||receiptBirth(row,this.deliveryFor(row.taskId)?.callerKey)!==parsed.birth||parsed.sourceKey!==this.deliveryFor(row.taskId)?.callerKey||(row.deliveredTo??row.team)!==parsed.authorTeam||(row.receiverSessionId!==undefined&&row.receiverSessionId!==parsed.authorId)||(row.auth?.receipt_target??row.sender?.id??(row.peer.startsWith('local:')?row.peer.slice(6):undefined))!==parsed.target) {this.receiptRestoreError=true;break}
             seen.add(parsed.taskId);this.receiptRecords.push(parsed)
           }
         }

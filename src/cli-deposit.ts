@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { verifyCard } from './card.ts'
 import { writeTaskLedger } from './task-ledger-persistence.ts'
+import {parseReceiptMailbox,RECEIPT_MAILBOX_CAP,RECEIPT_MAILBOX_RETENTION_MS,type ReceiptMailboxCommit} from './receipt-mailbox.ts'
 import type { ReceiptDisposition } from './receipt.ts'
 import type { AdmissionRule, AuthProof } from './task-auth.ts'
 
@@ -145,6 +146,8 @@ export interface CliMailbox {
 }
 
 interface Snapshot {
+  receiptCommits?:ReceiptMailboxCommit[]
+  receiptCommitsCorrupt?:true
   deposits: CliDeposit[]
   mailbox: Record<string, CliMail[]>
   /** gh#113: absent in pre-gh#113 snapshots. */
@@ -222,6 +225,8 @@ export class CliDepositStore {
   private epoch = newEpoch()
   /** gh#113 review: true while the last write failed — the epoch on disk no longer matches memory. */
   private unpersisted = false
+  private receiptCommits:ReceiptMailboxCommit[]=[]
+  private receiptCommitsCorrupt=false
   private now: () => number
 
   constructor(private readonly path: string, options?: { now?: () => number }) {
@@ -358,17 +363,42 @@ export class CliDepositStore {
   }
 
   /** Receipt-only mailbox commit: fixed transport id deduplicates and persistence must precede success. */
-  mailReceipt(handle:string,from:string,text:string,thread:CliMailThread,dup?:'sync-answered'):readonly CliMail[] {
+  mailReceipt(handle:string,from:string,text:string,thread:CliMailThread,dup?:'sync-answered',commit?:ReceiptMailboxCommit):readonly CliMail[] {
+    if(this.receiptCommitsCorrupt)throw Error('receipt mailbox journal is corrupt')
     if(!this.get(handle)||!thread.taskId||!thread.receiptFor||text.length>MAILBOX_TEXT_CAP)throw Error('receipt mailbox is unavailable or invalid')
     const prior=this.mailbox.get(handle)??[],same=prior.find(row=>row.task_id===thread.taskId)
     if(same&&(same.text!==text||same.from!==from||same.receipt_for!==thread.receiptFor))throw Error('receipt mailbox transport identity conflict')
+    const retained=this.receiptCommits.filter(r=>r.phase==='pending'||this.now()-r.at<=RECEIPT_MAILBOX_RETENTION_MS)
+    if(commit) {
+      const parsed=parseReceiptMailbox(commit),old=retained.find(r=>r.transportId===thread.taskId)
+      if(!parsed||parsed.transportId!==thread.taskId||parsed.handle!==handle||parsed.from!==from||parsed.targetKey!==this.heldKey(handle))throw Error('receipt mailbox commit binding mismatch')
+      if(old&&(old.fingerprint!==parsed.fingerprint||old.handle!==parsed.handle||old.from!==parsed.from||old.message!==parsed.message||old.targetKey!==parsed.targetKey||old.originalBirth!==parsed.originalBirth||JSON.stringify(old.settler)!==JSON.stringify(parsed.settler)))throw Error('receipt mailbox commit identity conflict')
+      if(!old){while(retained.length>=RECEIPT_MAILBOX_CAP){const i=retained.findLastIndex(r=>r.phase!=='pending');if(i<0)throw Error('receipt mailbox journal capacity full');retained.splice(i,1)}retained.unshift(parsed)}
+    }
     const seq=this.nextSeq.get(handle)??1
     const list=same?prior:[{at:this.now(),from,text,seq,...(dup?{dup}:{}),task_id:thread.taskId,receipt_for:thread.receiptFor,...(thread.contextId?{context_id:thread.contextId}:{}),...(thread.proof?{proof:thread.proof}:{}),...(thread.admission?{admission:thread.admission}:{}),...(thread.disposition?{disposition:thread.disposition}:{})},...prior].slice(0,MAILBOX_CAP)
     const dropped=(this.dropped.get(handle)??0)+(same?0:Math.max(0,prior.length+1-MAILBOX_CAP))
-    const snapshot:Snapshot={deposits:[...this.deposits.values()],mailbox:{...Object.fromEntries(this.mailbox),[handle]:list},epoch:this.epoch,nextSeq:{...Object.fromEntries(this.nextSeq),[handle]:same?seq:seq+1},dropped:{...Object.fromEntries(this.dropped),[handle]:dropped},truncated:Object.fromEntries(this.truncated)}
+    const snapshot:Snapshot={receiptCommits:retained,deposits:[...this.deposits.values()],mailbox:{...Object.fromEntries(this.mailbox),[handle]:list},epoch:this.epoch,nextSeq:{...Object.fromEntries(this.nextSeq),[handle]:same?seq:seq+1},dropped:{...Object.fromEntries(this.dropped),[handle]:dropped},truncated:Object.fromEntries(this.truncated)}
     writeTaskLedger(this.path,JSON.stringify(snapshot))
+    this.receiptCommits=retained
     this.mailbox.set(handle,list);if(!same)this.nextSeq.set(handle,seq+1);this.dropped.set(handle,dropped);this.unpersisted=false
     return same?[]:prior.slice(Math.max(0,MAILBOX_CAP-1))
+  }
+
+  pendingReceiptCommits():ReceiptMailboxCommit[] {
+    if(this.receiptCommitsCorrupt)throw Error('receipt mailbox journal is corrupt')
+    return this.receiptCommits.filter(r=>r.phase==='pending').map(r=>structuredClone(r))
+  }
+  receiptCommitFor(transportId:string):ReceiptMailboxCommit|undefined {
+    if(this.receiptCommitsCorrupt)throw Error('receipt mailbox journal is corrupt')
+    const row=this.receiptCommits.find(r=>r.transportId===transportId);return row?structuredClone(row):undefined
+  }
+  completeReceiptCommit(transportId:string,phase:'delivered'|'refused'):void {
+    const before=this.receiptCommits,record=before.find(r=>r.transportId===transportId)
+    if(!record)throw Error('receipt mailbox commit not found')
+    const next=before.map(r=>r.transportId===transportId?{...r,phase}:r)
+    const snapshot:Snapshot={receiptCommits:next,deposits:[...this.deposits.values()],mailbox:Object.fromEntries(this.mailbox),epoch:this.epoch,nextSeq:Object.fromEntries(this.nextSeq),dropped:Object.fromEntries(this.dropped),truncated:Object.fromEntries(this.truncated)}
+    writeTaskLedger(this.path,JSON.stringify(snapshot));this.receiptCommits=next
   }
 
   readMail(handle: string): readonly CliMail[] {
@@ -426,11 +456,11 @@ export class CliDepositStore {
     for (const [handle, list] of this.mailbox) mailbox[handle] = [...list]
     const snapshot: Snapshot = {
       deposits: [...this.deposits.values()], mailbox, epoch: this.epoch,
+      ...(this.receiptCommits.length?{receiptCommits:this.receiptCommits}:{}),...(this.receiptCommitsCorrupt?{receiptCommitsCorrupt:true as const}:{}),
       nextSeq: Object.fromEntries(this.nextSeq), dropped: Object.fromEntries(this.dropped), truncated: Object.fromEntries(this.truncated),
     }
     try {
-      mkdirSync(join(this.path, '..'), { recursive: true })
-      writeFileSync(this.path, JSON.stringify(snapshot), 'utf8')
+      writeTaskLedger(this.path, JSON.stringify(snapshot))
       this.unpersisted = false
     } catch {
       // Persistence stays best-effort (re-publishes self-heal), but a seq
@@ -450,6 +480,11 @@ export class CliDepositStore {
     if (this.path === '' || !existsSync(this.path)) return
     try {
       const snapshot = JSON.parse(readFileSync(this.path, 'utf8')) as Partial<Snapshot>
+      if(snapshot.receiptCommitsCorrupt)this.receiptCommitsCorrupt=true
+      if(snapshot.receiptCommits!==undefined) {
+        if(!Array.isArray(snapshot.receiptCommits)||snapshot.receiptCommits.length>RECEIPT_MAILBOX_CAP)this.receiptCommitsCorrupt=true
+        else for(const raw of snapshot.receiptCommits){const parsed=parseReceiptMailbox(raw);if(!parsed||this.receiptCommits.some(r=>r.transportId===parsed.transportId)){this.receiptCommitsCorrupt=true;break}this.receiptCommits.push(parsed)}
+      }
       for (const row of snapshot.deposits ?? []) {
         if (typeof row?.handle === 'string' && typeof row.cardJson === 'string' && typeof row.expiresAt === 'number') {
           this.deposits.set(row.handle, row as CliDeposit)

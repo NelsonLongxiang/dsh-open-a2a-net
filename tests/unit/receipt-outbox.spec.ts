@@ -15,6 +15,29 @@ function fixture(){
  return {file,ledger,make,deliver,validate,notify,schedule,warn,settle,deps,worker:new ReceiptOutbox(deps),advance:(ms:number)=>{now+=ms}}
 }
 describe('authored receipt return outbox',()=>{
+ it('F2 preserves full return through capacity pressure, dead TTL, archive churn and restart',()=>{
+  const f=fixture(),receipt=f.make();f.ledger.prepareReceipt(receipt)
+  for(let i=0;i<150;i++)f.ledger.track('other-'+i,'beta/aaaaaaaa','peer')
+  expect(f.ledger.find('job')).toMatchObject({status:'pending',receiptDelivery:'receipt-undelivered'});expect(f.ledger.receiptFor('job')!.text).toBe(receipt.text)
+  expect(f.ledger.archive().some(r=>r.taskId==='job')).toBe(false);f.advance(25*60*60_000);f.ledger.list()
+  expect(JSON.parse(readFileSync(f.file,'utf8')).receiptOutbox[0].text).toBe(receipt.text)
+  const restored=new TaskLedger(f.file,{now:()=>1_000_000+25*60*60_000});expect(restored.find('job')?.status).toBe('dead');expect(restored.receiptObservation('job')).toMatchObject({receiptRecovery:{state:'retained'}})
+  restored.cancel('job');expect(restored.receipts()).toEqual([])
+ })
+ it('F2 refuses new work when all slots protect undelivered results without changing disk or counters',()=>{
+  const f=fixture();f.ledger.prepareReceipt(f.make())
+  for(let i=1;i<64;i++){const id='protected-'+i;f.ledger.track(id,'beta/aaaaaaaa','local','ctx','work',{kind:'session',id:'alpha/bbbbbbbb'},{receiverSessionId:'session-author'});const text='[A2A receipt] task '+id+' original full result',record={...f.make(),taskId:id,text,birth:receiptBirth(f.ledger.find(id)!),transportId:receiptTransportId(id,'alpha/bbbbbbbb',text)};f.ledger.prepareReceipt({...record,payloadHash:receiptPayloadHash(record)})}
+  const before=readFileSync(f.file,'utf8');expect(()=>f.ledger.track('overflow','beta/aaaaaaaa','peer')).toThrow('receipt-protected');expect(readFileSync(f.file,'utf8')).toBe(before);expect(f.ledger.list()).toHaveLength(64);expect(f.ledger.receipts()).toHaveLength(64)
+ })
+ it('F3a rejects lane-only URL, key or full-session changes with unchanged payload digest',()=>{
+  const f=fixture(),original=f.make()
+  for(const lane of [{kind:'local-session',sessionId:'different'},{kind:'local-cli',key:'different'},{kind:'peer',url:'https://other.example',key:'different'}])expect(parseReceiptOutbox({...original,lane})).toBeUndefined()
+  f.ledger.prepareReceipt(original);const saved=JSON.parse(readFileSync(f.file,'utf8'));saved.receiptOutbox[0].lane.sessionId='different';writeFileSync(f.file,JSON.stringify(saved));const restored=new TaskLedger(f.file,{now:()=>1_000_000});expect(()=>restored.receipts()).toThrow('corrupt');expect(restored.list()).toHaveLength(1)
+ })
+ it('F3a refuses restore if original callerKey disappeared despite an intact retained receipt',()=>{
+  const f=fixture(),key='original-carrier-key';f.ledger.reserveDelivery({version:1,taskId:'job',sessionId:'session-author',messageId:'original-delivery',fingerprint:'a'.repeat(64),callerKey:key,createdAt:1_000_000,state:'claimed',taskExpected:true});const record={...f.make(),sourceKey:key,birth:receiptBirth(f.ledger.find('job')!,key)};f.ledger.prepareReceipt({...record,payloadHash:receiptPayloadHash(record)});const saved=JSON.parse(readFileSync(f.file,'utf8'));delete saved.taskDeliveries[0].callerKey;writeFileSync(f.file,JSON.stringify(saved));const restored=new TaskLedger(f.file,{now:()=>1_000_000});expect(()=>restored.receipts()).toThrow('corrupt');expect(restored.list()).toHaveLength(1)
+ })
+
  it('cannot recreate authored bytes for a legacy answered debt even when a new caller supplies matching prose',()=>{
   const f=fixture();f.ledger.markAnswered('job','beta/aaaaaaaa');const before=readFileSync(f.file,'utf8');expect(()=>f.ledger.prepareReceipt(f.make())).toThrow('legacy answered');expect(readFileSync(f.file,'utf8')).toBe(before)
  })

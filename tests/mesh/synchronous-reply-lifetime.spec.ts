@@ -56,7 +56,7 @@ it('cancellation and original task TTL prevent a late final from sending any rec
   }finally{await f.dispose()}
  }
 })
-it('late final transient retry has one fixed receipt identity, one business delivery and one settlement',async()=>{
+it('late final with unknown insertion retains one receipt and never blindly reposts or re-executes',async()=>{
  const f=await fixture(3600000);const original=globalThis.fetch,bodies:string[]=[],accepted:string[]=[];let failed=false
  try{
   await f.send('sync-retry')
@@ -65,7 +65,16 @@ it('late final transient retry has one fixed receipt identity, one business deli
    if(receipt){bodies.push(String(init!.body));if(!failed){failed=true;throw new TypeError('fetch failed')}}
    const r=await original(url,init);if(receipt&&r.ok)accepted.push(String(init!.body));return r
   })
-  try{f.finish('sync-retry');await vi.waitFor(()=>expect(bodies).toHaveLength(1));const now=Date.now(),clock=vi.spyOn(Date,'now').mockImplementation(()=>now+300000);try{(f.b.agents.agent as any).status='idle';f.b.ctx.emit('agent/status',{agent:f.b.agents.agent!,status:'idle'});await vi.waitFor(async()=>expect((await state(f.b)).tasks.find((r:any)=>r.taskId==='sync-retry').reminderAttempts).toBe(1))}finally{clock.mockRestore()}for(let i=0;i<5;i++)f.b.ctx.emit('agent/status',{agent:f.b.agents.agent!,status:'idle'});await vi.waitFor(async()=>{expect((await state(f.a)).archived.filter((r:any)=>r.taskId==='sync-retry')).toHaveLength(1);expect((await state(f.b)).archived.filter((r:any)=>r.taskId==='sync-retry')).toHaveLength(1)},{timeout:3000});expect(new Set(bodies).size).toBe(1);expect(bodies).toHaveLength(2);expect(accepted).toHaveLength(1);expect(f.queued.filter(m=>m.source.taskId==='sync-retry')).toHaveLength(1)}finally{spy.mockRestore()}
+  try{
+   f.finish('sync-retry');await vi.waitFor(()=>expect(bodies).toHaveLength(1))
+   for(let i=0;i<5;i++)f.b.ctx.emit('agent/status',{agent:f.b.agents.agent!,status:'idle'})
+   await vi.waitFor(async()=>expect((await state(f.b)).tasks.find((r:any)=>r.taskId==='sync-retry')).toMatchObject({answeredAt:expect.any(Number),receiptRecovery:{state:'retained'}}))
+   // Unknown insertion is queried, not reposted or paid to an owner instead.
+   expect(bodies).toHaveLength(1);expect(accepted).toHaveLength(0);expect(new Set(bodies).size).toBe(1)
+   expect((await state(f.a)).archived.some((r:any)=>r.taskId==='sync-retry')).toBe(false)
+   expect((await state(f.b)).archived.some((r:any)=>r.taskId==='sync-retry')).toBe(false)
+   expect(f.queued.filter(m=>m.source.taskId==='sync-retry')).toHaveLength(1)
+  }finally{spy.mockRestore()}
  }finally{await f.dispose()}
 })
 it('receipt TTL timer is disposed on cancellation and all resources disappear on unload',async()=>{
