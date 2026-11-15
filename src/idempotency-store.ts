@@ -316,6 +316,12 @@ export class IdempotencyStore {
     return this.rows.has(taskId)
   }
 
+  /** Recovery veto only: an exact retained payload under ANY task id is evidence, never resend authority. */
+  hasFingerprint(fingerprint:string):boolean {
+    this.prune(this.now())
+    return [...this.rows.values()].some(row=>row.fingerprint===fingerprint)
+  }
+
   /** Drop expired keys; runs on every entry point, never timer-driven. */
   private prune(now: number): void {
     let changed = false

@@ -28,6 +28,20 @@ import {
 } from '../../src/idempotency-store.ts'
 
 describe('idempotency store', () => {
+  it('recovery payload veto finds retained claims under any id without changing their outcomes or counters',()=>{
+    let now=1000
+    const {store,file}=tmpStore({now:()=>now,ttlMs:1000})
+    store.claim('old-transport','original-body');store.recordOutcome('old-transport',{status:'completed',reply:'done'})
+    store.claim('still-pending','pending-body');store.claim('failed-transport','failed-body');store.recordOutcome('failed-transport',{status:'failed',error:'unknown'})
+    const before=store.stats(),restored=new IdempotencyStore(file,{now:()=>now,ttlMs:1000})
+    for(const body of ['original-body','pending-body','failed-body'])expect(restored.hasFingerprint(body)).toBe(true)
+    expect(restored.hasFingerprint('other-body')).toBe(false);expect(restored.stats()).toEqual(before)
+    expect(restored.query('old-transport','original-body')).toMatchObject({status:'completed',reply:'done'})
+    now+=1001;expect(restored.hasFingerprint('original-body')).toBe(false)
+    // A false veto result only says no retained claim; it never grants or claims any effect.
+    expect(restored.stats().claimsFresh).toBe(before.claimsFresh)
+  })
+
   it('releases only an uncompleted matching receipt claim and preserves conflict and completed keys',()=>{
     const store=new IdempotencyStore('');expect(store.claim('receipt-attempt','body')).toBe('fresh')
     store.releaseUncompleted('receipt-attempt','different');expect(store.claim('receipt-attempt','body')).toBe('replay')

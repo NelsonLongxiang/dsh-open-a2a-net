@@ -3,7 +3,7 @@ import {createPublicKey,type KeyObject} from 'node:crypto'
 import type {Agent} from '@deepseek-ai/dsh-agent'
 import type {A2aPeerCard} from './types.ts'
 import type {TaskLedger} from './task-ledger.ts'
-import type {IdempotencyStore} from './idempotency-store.ts'
+import {peerPayloadFingerprint,type IdempotencyStore} from './idempotency-store.ts'
 import {RequestRecoveryStore,signRecoveryProposal,verifyRecoveryProposal,verifyRecoveryPermit,recoveryFingerprint,type RecoveryBinding,type RecoveryPermit,type RecoveryClaim} from './request-recovery.ts'
 export interface RequestRecoveryRuntimeDeps {
  key:KeyObject
@@ -45,6 +45,8 @@ export class RequestRecoveryRuntime {
   if(this.d.target(b.target)!==target||!this.d.targetValid(target,b.target)||b.receiverHome!==this.d.home())throw Error('receiver changed while reconciling')
   // Any retained admission/claim vetoes an absence-based override. Expired/missing records alone never imply not-sent.
   for(const task of [...b.originalTasks,b.taskId])if(this.d.ledger.find(task)||this.d.ledger.archive().some(r=>r.taskId===task)||this.d.ledger.deliveryFor(task)||this.d.idempotency.has(task))throw Error('original attempt already has local admission evidence; reconcile it first')
+  // A different transport id cannot hide an admitted original body. Both wait modes are the same business.
+  for(const noWait of [true,false])if(this.d.idempotency.hasFingerprint(peerPayloadFingerprint({caller:b.caller,team:b.target,message:b.message,noWait})))throw Error('original payload already has local admission evidence; reconcile it first')
   return this.d.store.grant(proposal,this.d.key,reconciliation,checked)
  }
  async inspect(raw:unknown,input:{caller:string;hostKey:string;home:string;team:string;message:string;taskId:string;contextId:string;noWait:boolean;callback?:string}):Promise<{binding:RecoveryBinding;claim:RecoveryClaim}>{

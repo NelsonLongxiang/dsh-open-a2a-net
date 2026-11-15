@@ -62,6 +62,22 @@ it('only original browser owner can consent; API-like credentials cannot grant o
  }finally{await f.dispose()}
 })
 
+it.each([false,true])('receiver consent refuses same-body admission under a different id, restored=%s',async restored=>{
+ const f=await fixture()
+ try{
+  expect((await f.post(f.b,'/__dsh_a2a/canvas',{action:'add-member',name:'prior-link',id:caller,home:f.a.baseUrl})).data.ok).toBe(true)
+  expect((await f.post(f.b,'/__dsh_a2a/canvas',{action:'add-member',name:'prior-link',id:receiverId})).data.ok).toBe(true)
+  const original=await f.raw({task_id:'ordinary-previous-id'})
+  expect(original.data,JSON.stringify(original)).toMatchObject({routed:true,delivered:true})
+  expect(f.b.steered).toHaveLength(1)
+  if(restored)await f.restart()
+  const grant=await f.grant()
+  expect(grant.status,JSON.stringify(grant)).toBe(409)
+  expect(grant.data.ok).toBe(false)
+  expect(f.b.steered).toHaveLength(restored?0:1)
+ }finally{await f.dispose()}
+})
+
 it.each([false,true])('a receiver grant fences an in-flight ordinary request: same payload with new id=%s',async changedId=>{
  const f=await fixture();let release:(()=>void)|undefined
  try{
