@@ -2,6 +2,8 @@
 import { createHash } from 'node:crypto'
 import type { TaskLedger, TaskRecord } from './task-ledger.ts'
 import { taskIdRefusal } from './receipt.ts'
+import { reconciliationDue, type ReconciliationScope } from './reconciliation-inbox.ts'
+import { FollowupAcceptanceUnknown } from './followup-admission.ts'
 import { REMINDER_MIN_MS, REMINDER_LONG_MS, REMINDER_WARNING_MS, nextReminderDelay, type ReminderState } from './reconciliation-state.ts'
 export interface ReminderAgent { id: unknown; status: string }
 export interface ReminderDeps {
@@ -9,7 +11,9 @@ export interface ReminderDeps {
   agents: () => readonly ReminderAgent[]
   resolve: (row: TaskRecord) => ReminderAgent | undefined
   sender: (row: TaskRecord) => ReminderAgent | undefined
-  followup: (agent: ReminderAgent, text: string) => void
+  /** Read/invalidate the host-owned pending summary; false means the shared slot is occupied. */
+  available: (agent: ReminderAgent) => boolean
+  followup: (agent: ReminderAgent, text: string, scope: ReconciliationScope) => boolean | void
   /**
    * Redeliver an unconsumed task's original text to its idle receiver, once (src/task-bodies.ts; market request
    * 2026-11-14). True when it went out; the host sends it as the original sender's content, never as this host's.
@@ -18,14 +22,14 @@ export interface ReminderDeps {
   now?: () => number
   warn: (code: string) => void
 }
-const dueRow = (row: TaskRecord): boolean => row.status==='pending' && row.receiptExpected!==false && (row.direction==='inbound'||row.peer==='local') && !row.brief?.startsWith('[A2A receipt]')
+const dueRow = reconciliationDue
 const safe = (value: string, cap: number): string => JSON.stringify(value.replace(/[\u0000-\u001f\u007f]/g,' ').slice(0,cap))
 export class ReconciliationReminders {
   private stopped=false
   private active=new Set<string>()
   private failedUntil=new Map<string,number>()
   private nudgeAt=new Map<string,number>()
-  readonly diagnostics: { lastCheckedAt:number; unresolved:number; lastError?:{at:number;code:string} }={lastCheckedAt:0,unresolved:0}
+  readonly diagnostics: { lastCheckedAt:number; unresolved:number; blockedSessions:number; inboxUnavailable:number; answeredReceiptDebt:number; lastError?:{at:number;code:string} }={lastCheckedAt:0,unresolved:0,blockedSessions:0,inboxUnavailable:0,answeredReceiptDebt:0}
   constructor(private readonly d: ReminderDeps) {}
   stop():void { this.stopped=true }
   /** Shared session gate with the existing unread nudge; no budget/consumption changes. */
@@ -41,8 +45,13 @@ export class ReconciliationReminders {
     if(this.stopped)return
     try {
       this.diagnostics.lastCheckedAt=this.now();this.diagnostics.unresolved=0
+      this.diagnostics.blockedSessions=0;this.diagnostics.inboxUnavailable=0
+      const debt=this.d.ledger.list()
+      this.diagnostics.answeredReceiptDebt=debt.filter(row=>row.status==='pending'&&row.receiptExpected!==false&&row.answeredAt!==undefined&&(row.direction==='inbound'||row.peer==='local')).length
+      // Also invalidate ended/answered summaries when no debt group remains. No session is woken here.
+      for(const agent of this.d.agents())try{if(!this.d.available(agent))this.diagnostics.blockedSessions++}catch(error){this.diagnostics.inboxUnavailable++;this.report(error)}
       const groups=new Map<ReminderAgent,TaskRecord[]>()
-      for(const row of this.d.ledger.list()) {
+      for(const row of debt) {
         if(!dueRow(row))continue
         const agent=this.d.resolve(row)
         if(!agent){this.diagnostics.unresolved++;continue}
@@ -69,6 +78,7 @@ export class ReconciliationReminders {
       if(row.consumed!==false||row.direction!=='inbound'||taskIdRefusal(row.taskId)!==undefined)continue
       if(this.d.redeliver(agent,row)){this.noteNudge(id);return}
     }
+    if(!this.d.available(agent))return
     const due=rows.filter(row=>{
       if(taskIdRefusal(row.taskId)!==undefined)return false
       const r=this.d.ledger.reminderState(row.taskId)
@@ -80,7 +90,7 @@ export class ReconciliationReminders {
     for(const row of due){
       const sender=row.auth?.caller??row.sender?.id??row.peer.replace(/^local:/,'')
       const line='task '+row.taskId+'; from '+safe(sender,256)+'; receipt-to '+safe(row.auth?.receipt_target??row.sender?.id??row.peer.replace(/^local:/,''),256)+'; age '+Math.max(0,Math.floor((now-row.startedAt)/1000))+'s; brief '+safe(row.brief??'',160)
-      if(selected.length>=8||Buffer.byteLength(head+lines.join('\n')+'\n'+line)>3700)break
+      if(selected.length>=8||Buffer.byteLength(head+lines.join('\n')+'\n'+line)>3400)break
       selected.push(row);lines.push(line)
     }
     if(!selected.length)return
@@ -92,12 +102,15 @@ export class ReconciliationReminders {
     })
     this.d.ledger.saveReminders(updates,{id,at:now})
     // A disk observer or concurrent receipt can change admission while reserving. Never steer busy/stale work.
-    if(!this.idle(agent)||selected.some(row=>!this.d.ledger.find(row.taskId)||!dueRow(this.d.ledger.find(row.taskId)!))) {
+    let available:boolean
+    try{available=this.d.available(agent)}catch(error){this.d.ledger.saveReminders(previous,{id,at:oldSession});throw error}
+    if(!this.idle(agent)||!available||selected.some(row=>!this.d.ledger.find(row.taskId)||!dueRow(this.d.ledger.find(row.taskId)!))) {
       this.d.ledger.saveReminders(previous,{id,at:oldSession});return
     }
     try {
-      this.d.followup(agent,head+lines.join('\n')+(rows.length>selected.length?'\n另有'+(rows.length-selected.length)+'条，请用 a2a_tasks 查原账。':''))
-    }catch(error){this.d.ledger.saveReminders(updates.map(u=>({...u,state:{...u.state,lastResult:'failed' as const}})));throw error}
+      const sent=this.d.followup(agent,head+lines.join('\n')+(rows.length>selected.length?'\n另有'+(rows.length-selected.length)+'条，请用 a2a_tasks 查原账。':''),{kind:'reminder',taskIds:selected.map(row=>row.taskId),requestId:updates.map(update=>update.state.requestId).join(':')})
+      if(sent===false){this.d.ledger.saveReminders(previous,{id,at:oldSession});return}
+    }catch(error){const lastResult=error instanceof FollowupAcceptanceUnknown?'unknown' as const:'failed' as const;this.d.ledger.saveReminders(updates.map(u=>({...u,state:{...u.state,lastResult}})));throw error}
     this.d.ledger.saveReminders(updates.map(u=>({...u,state:{...u.state,deliveredCount:Math.min(Number.MAX_SAFE_INTEGER,u.state.deliveredCount+1),lastDeliveredAt:now,lastResult:'delivered' as const}})))
   }
   private notify(rows:TaskRecord[]):void {
@@ -109,13 +122,18 @@ export class ReconciliationReminders {
       const list=groups.get(sender)??[];list.push(row);groups.set(sender,list)
     }
     for(const [agent,list]of groups){
-      const id=String(agent.id);if(this.throttled(id,now))continue
+      const id=String(agent.id);if(this.throttled(id,now)||!this.d.available(agent))continue
       const oldSession=this.d.ledger.reminderSessionAt(id)
-      const selected=list.slice(0,8).filter(row=>taskIdRefusal(row.taskId)===undefined),updates=selected.map(row=>({taskId:row.taskId,state:{...this.d.ledger.reminderState(row.taskId)!,noticeAttemptedAt:now}}))
+      const selected:TaskRecord[]=[]
+      for(const row of list){if(taskIdRefusal(row.taskId)!==undefined)continue;if(selected.length>=8||Buffer.byteLength(selected.map(item=>item.taskId).join(', ')+row.taskId)>3000)break;selected.push(row)}
+      const updates=selected.map(row=>({taskId:row.taskId,state:{...this.d.ledger.reminderState(row.taskId)!,noticeAttemptedAt:now}}))
       if(!selected.length)continue
       this.d.ledger.saveReminders(updates,{id,at:now})
-      if(!this.idle(agent)||selected.some(row=>!this.d.ledger.find(row.taskId)||!dueRow(this.d.ledger.find(row.taskId)!))) {this.d.ledger.saveReminders(updates.map(u=>({...u,state:{...u.state,noticeAttemptedAt:undefined}})),{id,at:oldSession});continue}
-      this.d.followup(agent,'[A2A reconciliation notice] 仅本机欠账警示，不是确认或新任务：'+selected.map(r=>r.taskId).join(', ')+'；目标已多次提醒仍欠正式回执，请沿原任务核实，由有权方决定追问或撤单。此提示不需回执。')
+      let available:boolean
+      try{available=this.d.available(agent)}catch(error){this.d.ledger.saveReminders(updates.map(u=>({...u,state:{...u.state,noticeAttemptedAt:undefined}})),{id,at:oldSession});throw error}
+      if(!this.idle(agent)||!available||selected.some(row=>!this.d.ledger.find(row.taskId)||!dueRow(this.d.ledger.find(row.taskId)!))) {this.d.ledger.saveReminders(updates.map(u=>({...u,state:{...u.state,noticeAttemptedAt:undefined}})),{id,at:oldSession});continue}
+      const sent=this.d.followup(agent,'[A2A reconciliation notice] 仅本机欠账警示，不是确认或新任务：'+selected.map(r=>r.taskId).join(', ')+'；目标已多次提醒仍欠正式回执，请沿原任务核实，由有权方决定追问或撤单。此提示不需回执。',{kind:'notice',taskIds:selected.map(row=>row.taskId),requestId:updates.map(update=>update.state.requestId).join(':')})
+      if(sent===false){this.d.ledger.saveReminders(updates.map(u=>({...u,state:{...u.state,noticeAttemptedAt:undefined}})),{id,at:oldSession});continue}
       this.d.ledger.saveReminders(updates.map(u=>({...u,state:{...u.state,notifiedAt:now}})))
     }
   }

@@ -57,16 +57,31 @@ it('cancellation and original task TTL prevent a late final from sending any rec
  }
 })
 it('late final transient retry has one fixed receipt identity, one business delivery and one settlement',async()=>{
- const f=await fixture(3600000);const original=globalThis.fetch,bodies:string[]=[],accepted:string[]=[];let failed=false
+ const f=await fixture(3600000),original=globalThis.fetch,bodies:string[]=[],accepted:string[]=[],releaseRetry=Promise.withResolvers<void>();let failed=false
  try{
   await f.send('sync-retry')
   const spy=vi.spyOn(globalThis,'fetch').mockImplementation(async(url,init)=>{
    const receipt=String(url)===f.a.baseUrl+'/a2a/direct'&&init?.method==='POST'&&String(init.body).includes('[A2A receipt] task sync-retry')
-   if(receipt){bodies.push(String(init!.body));if(!failed){failed=true;throw new TypeError('fetch failed')}}
+   if(receipt){bodies.push(String(init!.body));if(!failed){failed=true;throw new TypeError('fetch failed')}await releaseRetry.promise}
    const r=await original(url,init);if(receipt&&r.ok)accepted.push(String(init!.body));return r
   })
-  try{f.finish('sync-retry');await vi.waitFor(()=>expect(bodies).toHaveLength(1));const now=Date.now(),clock=vi.spyOn(Date,'now').mockImplementation(()=>now+300000);try{(f.b.agents.agent as any).status='idle';f.b.ctx.emit('agent/status',{agent:f.b.agents.agent!,status:'idle'});await vi.waitFor(async()=>expect((await state(f.b)).tasks.find((r:any)=>r.taskId==='sync-retry').reminderAttempts).toBe(1))}finally{clock.mockRestore()}for(let i=0;i<5;i++)f.b.ctx.emit('agent/status',{agent:f.b.agents.agent!,status:'idle'});await vi.waitFor(async()=>{expect((await state(f.a)).archived.filter((r:any)=>r.taskId==='sync-retry')).toHaveLength(1);expect((await state(f.b)).archived.filter((r:any)=>r.taskId==='sync-retry')).toHaveLength(1)},{timeout:3000});expect(new Set(bodies).size).toBe(1);expect(bodies).toHaveLength(2);expect(accepted).toHaveLength(1);expect(f.queued.filter(m=>m.source.taskId==='sync-retry')).toHaveLength(1)}finally{spy.mockRestore()}
- }finally{await f.dispose()}
+  try{
+   f.finish('sync-retry');await vi.waitFor(()=>expect(bodies.length).toBeGreaterThanOrEqual(1))
+   const now=Date.now(),clock=vi.spyOn(Date,'now').mockImplementation(()=>now+300000)
+   try{
+    ;(f.b.agents.agent as any).status='idle';f.b.ctx.emit('agent/status',{agent:f.b.agents.agent!,status:'idle'})
+    await vi.waitFor(async()=>expect((await state(f.b)).reconciliationReminders.lastCheckedAt).toBeGreaterThanOrEqual(now+300000))
+    const owed=(await state(f.b)).tasks.find((r:any)=>r.taskId==='sync-retry')
+    expect(owed).toMatchObject({status:'pending',receiptDelivery:'receipt-undelivered',answeredAt:expect.any(Number)})
+    expect(owed.reminderAttempts).toBeUndefined()
+    expect(f.queued.some(m=>String(m.content?.[0]?.text).startsWith('[A2A reconciliation reminder]'))).toBe(false)
+   }finally{clock.mockRestore()}
+   for(let i=0;i<5;i++)f.b.ctx.emit('agent/status',{agent:f.b.agents.agent!,status:'idle'})
+   releaseRetry.resolve()
+   await vi.waitFor(async()=>{expect((await state(f.a)).archived.filter((r:any)=>r.taskId==='sync-retry')).toHaveLength(1);expect((await state(f.b)).archived.filter((r:any)=>r.taskId==='sync-retry')).toHaveLength(1)},{timeout:3000})
+   expect(new Set(bodies).size).toBe(1);expect(bodies).toHaveLength(2);expect(accepted).toHaveLength(1);expect(f.queued.filter(m=>m.source.taskId==='sync-retry')).toHaveLength(1)
+  }finally{releaseRetry.resolve();spy.mockRestore()}
+ }finally{releaseRetry.resolve();await f.dispose()}
 })
 it('receipt TTL timer is disposed on cancellation and all resources disappear on unload',async()=>{
  const f=await fixture();try{await f.send('sync-cleanup');const timer=f.timeouts.find(x=>x.delay>50000)!;expect(timer).toBeDefined();expect(timer.dispose).not.toHaveBeenCalled();await post(f.b,'/__dsh_a2a/tasks/cancel',{task_id:'sync-cleanup'});expect(timer.dispose).toHaveBeenCalled()}finally{await f.dispose()}
