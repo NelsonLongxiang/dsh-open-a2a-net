@@ -19,7 +19,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { verifyCard } from './card.ts'
 import { writeTaskLedger } from './task-ledger-persistence.ts'
-import {parseReceiptMailbox,RECEIPT_MAILBOX_CAP,RECEIPT_MAILBOX_RETENTION_MS,type ReceiptMailboxCommit} from './receipt-mailbox.ts'
+import {parseReceiptMailbox,receiptMailboxHash,RECEIPT_MAILBOX_CAP,RECEIPT_MAILBOX_RETENTION_MS,type ReceiptMailboxCommit} from './receipt-mailbox.ts'
 import type { ReceiptDisposition } from './receipt.ts'
 import type { AdmissionRule, AuthProof } from './task-auth.ts'
 
@@ -396,7 +396,7 @@ export class CliDepositStore {
   completeReceiptCommit(transportId:string,phase:'delivered'|'refused'):void {
     const before=this.receiptCommits,record=before.find(r=>r.transportId===transportId)
     if(!record)throw Error('receipt mailbox commit not found')
-    const next=before.map(r=>r.transportId===transportId?{...r,phase}:r)
+    const next=before.map(r=>{if(r.transportId!==transportId)return r;const updated={...r,phase};return {...updated,hash:receiptMailboxHash(updated)}})
     const snapshot:Snapshot={receiptCommits:next,deposits:[...this.deposits.values()],mailbox:Object.fromEntries(this.mailbox),epoch:this.epoch,nextSeq:Object.fromEntries(this.nextSeq),dropped:Object.fromEntries(this.dropped),truncated:Object.fromEntries(this.truncated)}
     writeTaskLedger(this.path,JSON.stringify(snapshot));this.receiptCommits=next
   }

@@ -79,9 +79,10 @@ export class TaskLedger {
       if(old.sessionId!==record.sessionId||old.fingerprint!==record.fingerprint)throw Error('task delivery identity conflict')
       return old
     }
+    if(record.taskExpected===true)this.protectReceiptCapacity(record.taskId)
     this.deliveries=this.deliveries.filter(row=>this.tasks.some(t=>t.taskId===row.taskId)||this.now()-row.createdAt<=TASK_DELIVERY_RETENTION_MS)
     if(this.deliveries.length>=TASK_DELIVERY_CAP)throw Error('task delivery correspondence capacity reached; refusing untracked delivery')
-    this.deliveries.push(parsed);this.persist();return {...parsed}
+    this.deliveries.push(parsed);this.trimOwed();this.persist();return {...parsed}
   }
   updateDelivery(taskId:string, state:TaskDelivery['state']): void {
     const row=this.deliveries.find(r=>r.taskId===taskId);if(!row)throw Error('unknown task delivery correspondence')
@@ -232,9 +233,16 @@ export class TaskLedger {
   }
 
   /** An undelivered full result cannot be discarded to admit unrelated work. */
-  receiptCapacityAvailable():boolean {return this.tasks.length<TASK_CAP||this.tasks.some(t=>!this.receiptRecords.some(r=>r.taskId===t.taskId))}
-  private protectReceiptCapacity():void {
-    if(!this.receiptCapacityAvailable())throw Error('receipt-protected task capacity full; no new work admitted')
+  private pendingDeliveryBirths():Set<string> {
+    return new Set(this.deliveries.filter(d=>d.taskExpected===true&&!['cancelled','failed'].includes(d.state)&&this.now()-d.createdAt<=TASK_DELIVERY_RETENTION_MS&&!this.tasks.some(t=>t.taskId===d.taskId)&&!this.archived.some(t=>t.taskId===d.taskId)).map(d=>d.taskId))
+  }
+  receiptCapacityAvailable(taskId?:string):boolean {
+    const reserved=this.pendingDeliveryBirths()
+    if(taskId!==undefined&&reserved.has(taskId))return true
+    return this.tasks.filter(t=>this.receiptRecords.some(r=>r.taskId===t.taskId)).length+reserved.size<TASK_CAP
+  }
+  private protectReceiptCapacity(taskId?:string):void {
+    if(!this.receiptCapacityAvailable(taskId))throw Error('receipt-protected task capacity full; no new work admitted')
   }
   /**
    * Remember one outbound task owed a receipt, most-recent first, bounded by
@@ -259,7 +267,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
-    this.protectReceiptCapacity()
+    this.protectReceiptCapacity(taskId)
     this.counters.trackedTotal += 1
     this.tasks = [{
       taskId,
@@ -283,7 +291,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
-    this.protectReceiptCapacity()
+    this.protectReceiptCapacity(taskId)
     this.counters.trackedTotal += 1
     this.tasks = [{
       taskId,
@@ -319,7 +327,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
-    this.protectReceiptCapacity()
+    this.protectReceiptCapacity(taskId)
     this.counters.trackedTotal += 1
     this.tasks = [{
       taskId,
@@ -751,11 +759,12 @@ export class TaskLedger {
    * with no trace. L8 criterion: zero silently-dropped.
    */
   private trimOwed(): void {
-    if (this.tasks.length <= TASK_CAP) return
+    const capacity=Math.max(0,TASK_CAP-this.pendingDeliveryBirths().size)
+    if (this.tasks.length <= capacity) return
     const protectedIds=new Set(this.receiptRecords.map(r=>r.taskId))
     const protectedRows=this.tasks.filter(t=>protectedIds.has(t.taskId))
     const ordinary=this.tasks.filter(t=>!protectedIds.has(t.taskId))
-    const overflow=ordinary.slice(Math.max(0,TASK_CAP-protectedRows.length))
+    const overflow=ordinary.slice(Math.max(0,capacity-protectedRows.length))
     const removed=new Set(overflow.map(t=>t.taskId))
     this.tasks=this.tasks.filter(t=>!removed.has(t.taskId))
     const now = this.now()

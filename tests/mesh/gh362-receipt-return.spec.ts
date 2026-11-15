@@ -151,6 +151,18 @@ it('F1 durable mailbox plus failed settlement recovers after receiver restart wi
   }finally{spy.mockRestore()}
  }finally{receiptFault.fail=false;await f.dispose()}
 })
+it('P2 phase-only mailbox journal corruption cannot forge delivered or settle original debt after restart',async()=>{
+ const f=await fixture();try{
+  await f.submit('mail-phase-corrupt');receiptFault.path=join(f.a.home,'a2a/tasks.json');receiptFault.fail=true
+  const first=await f.send('[A2A receipt] task mail-phase-corrupt original full result');expect(first.ok).toBe(false)
+  const file=join(f.a.home,'a2a/cli-deposits.json'),snapshot=JSON.parse(readFileSync(file,'utf8')),commit=snapshot.receiptCommits.find((r:any)=>r.transportId===first.task_id)
+  expect(commit.phase).toBe('pending')
+  await f.restartCaller(undefined,()=>{const saved=JSON.parse(readFileSync(file,'utf8'));saved.receiptCommits.find((r:any)=>r.transportId===first.task_id).phase='delivered';writeFileSync(file,JSON.stringify(saved));receiptFault.fail=false})
+  expect((await state(f.a)).tasks.some((r:any)=>r.taskId==='mail-phase-corrupt')).toBe(true)
+  expect((await state(f.a)).archived.some((r:any)=>r.taskId==='mail-phase-corrupt')).toBe(false)
+  const query=await post(f.a,'/a2a/query',{task_id:first.task_id,fingerprint:commit.fingerprint});expect(query.receipt_delivery).not.toBe('delivered');expect(query.status).toBe('pending')
+ }finally{receiptFault.fail=false;await f.dispose()}
+})
 it.each([false,true])('F3b same-home CLI identity after restart preserves original key: replacement=%s',async replacement=>{
  const f=await fixture();try{
   const task='cli-key-'+replacement;await f.submit(task)
