@@ -1,5 +1,6 @@
 /** Health reminders (reliability R7): one card per problem, taken back when it goes away, held off by a decision. */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { rmSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'

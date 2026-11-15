@@ -1,6 +1,7 @@
 // @vitest-environment node
 /** A request sent from the team tab to another instance: its receipts are kept for the tab (owner ruling 2026-11-13). */
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
