@@ -72,3 +72,11 @@ runner的专属DSH_HOME只建立每轮与真实宿主的隔离，不等于所有
 本片只修测试故障的因果同步：原八种模式抽取同一exercise，recoverable ledger及ledger-lost-response的后继测试transport在调用真实fetch前等待首次失败核对及故障解除，记录body仍在等待前，原固定transport/text/单次消费/账本结清/无ownerfallback的断言不改；release在finally也执行，避免失败收尾阻塞。原permanent/conflict/exhausted/replay/unknown等分支不接该门，不改变产品timer/backoff、持久化、HTTP或重试预算，不增加waitFor/test限时或skip/worker覆盖。新增两项真实观察滞后反例，旧源码0过/2败（都exact3vs2）、8过滤未选；修复后原八加两项10/0/0，相关5文件44/0/0、外层remaining=[]。
 
 原2479默认全量、341默认wire、2483单worker完整诊断及其所有失败/跳过原件继续保留；本确定竞争只证明一种测试失效机制，不冒它是以前全部超时或某次空archive失败的唯一根因。Windows journal0600/有效ACL、完整默认质量、原verify:core安装步骤、formalRC/准确包/独立OPS与运行门均未由44项通过消除。新精确提交/独立增量复核另做，不重复原8df夹具审或改变原隐私裁决。
+
+## PR #708 候选默认调度修订（2026-11-16，结果待实测）
+
+原默认worker未限定，既有多次默认全量存在时序失败；显式单worker诊断同样保有超时、回执与Windows权限失败，不能简单归因为外部负载，也不能将过去诊断改称默认通过。本片仅使用Vitest4受支持的顶层test.maxWorkers=1，将资源边界写入新候选；不使用已移除的poolOptions，不改变原测试选择、断言、5000ms测试/10000ms hook限时、retry0或既有skip。
+
+新增配置回归通过已安装vitest/node公开入口createVitest读取root与实际test project，不调用ctx.start，不运行嵌套套件；对解析后的worker1、forks池、原预算/重试及既有全局home生命周期作断言。原配置真实0过/1败（worker为null），新配置1过/0败、outer0。它只证明配置生效，不能证明运行期间所有争用和产品行为正确。
+
+后继在准确提交上运行完整默认vitest入口，不加--maxWorkers覆盖；原test:unit/wire/mesh、vendor、gates及原条件跳过均保留。完整verify:core的依赖安装/运行窗口、formal RC/制品/OPS仍分别门。原2479/341/2483失败和后继专项证据各绑定原源码，旧Windows0600/ACL与属主另裁事项不由调度修订豁免。
