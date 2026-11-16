@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { spawnSync } from 'node:child_process'
+import { copyFileSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs'
 import { join, relative, isAbsolute } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdtempSync } from '../temp-dirs.ts'
@@ -33,6 +34,33 @@ describe('project-owned test temp lifecycle', () => {
     const run = invoke("const fs=require('node:fs'),p=require('node:path');fs.mkdirSync(process.env.A2A_TEST_YGL_HOME);fs.writeFileSync(p.join(process.env.TMP,'unowned-residue'),'must fail');")
     expect(run.status).toBe(1)
     expect(run.temp).toMatchObject({ entries: 1, remaining: ['unowned-residue'], status: 1 })
+  })
+  it.each(['javascript', 'native'])('the default entry invokes a %s manager as a program, not as binary JavaScript', kind => {
+    const fixture = mkdtempSync(join(tmpdir(), 'verify-manager-entry-'))
+    mkdirSync(join(fixture, 'scripts'))
+    // The native Node fixture loads an extensionless 'run' file. Pin its own
+    // package scope instead of inheriting the repository's type=module.
+    writeFileSync(join(fixture, 'package.json'), JSON.stringify({ private: true, type: 'commonjs' }))
+    const fixtureGate = join(fixture, 'scripts', 'verify-temp-clean.mjs')
+    copyFileSync(gate, fixtureGate)
+    const script = "const fs=require('node:fs'),p=require('node:path');if(process.argv.slice(2).join(' ')!==EXPECTED)throw Error('wrong manager arguments');const root=process.env.TMP;if(!root||process.env.A2A_TEST_YGL_HOME!==p.join(root,'superagent-ygl'))throw Error('wrong lifecycle environment');fs.mkdirSync(process.env.A2A_TEST_YGL_HOME);fs.writeFileSync(p.join(process.env.A2A_TEST_YGL_HOME,'owned'),'owned');"
+    const manager = kind === 'native' ? process.execPath : join(fixture, 'manager.cjs')
+    // A real Node executable serves as the native-manager fixture. Its first
+    // positional argument is an existing 'run' program in the fixture cwd.
+    writeFileSync(kind === 'native' ? join(fixture, 'run') : manager,
+      script.replace('EXPECTED', JSON.stringify(kind === 'native' ? 'verify:core' : 'run verify:core')))
+    // Windows env keys are case-insensitive; remove inherited NPM_EXECPATH
+    // before setting our fake manager, or the real ancestor project is run.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'npm_execpath'))
+    const run = spawnSync(process.execPath, [fixtureGate], {
+      cwd: fixture, env: { ...env, npm_execpath: manager }, encoding: 'utf8', timeout: 20000,
+    })
+    expect(run.error, JSON.stringify({ stdout: run.stdout, stderr: run.stderr, args: run.spawnargs, manager, keys: Object.keys(process.env).filter(k => /npm_execpath/i.test(k)) })).toBeUndefined()
+    expect(run.status, run.stderr).toBe(0)
+    const lines = run.stdout.split(/\r?\n/).filter(line => line.startsWith('[temp-clean] '))
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0]!.slice('[temp-clean] '.length))).toMatchObject({ entries: 0, remaining: [], status: 0 })
+    expect(readdirSync(join(fixture, 'tmp', 'test-runs'))).toEqual([])
   })
   it('preserves a child failure even with an otherwise empty temp root', () => {
     const run = invoke('process.exit(7)')

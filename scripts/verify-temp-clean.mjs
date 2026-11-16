@@ -7,8 +7,12 @@ import { spawn } from 'node:child_process'
 const custom = process.argv.slice(2)
 if (custom[0] === '--') custom.shift()
 const external = custom.length > 0
-const command = external ? custom.shift() : process.execPath
-const args = external ? custom : process.env.npm_execpath ? [process.env.npm_execpath, 'run', 'verify:core'] : undefined
+// Package managers may be native executables (.exe on Windows, extensionless
+// on Unix), or JavaScript entrypoints that must run under the current Node.
+const manager = process.env.npm_execpath
+const nativeManager = manager && !/[.](?:cjs|mjs|js)$/i.test(manager)
+const command = external ? custom.shift() : nativeManager ? manager : process.execPath
+const args = external ? custom : manager ? nativeManager ? ['run', 'verify:core'] : [manager, 'run', 'verify:core'] : undefined
 if (!args) throw Error('run with pnpm verify, or pass -- <executable> <arguments>')
 const repo = realpathSync(fileURLToPath(new URL('..', import.meta.url)))
 const runs = join(repo, 'tmp', 'test-runs')
