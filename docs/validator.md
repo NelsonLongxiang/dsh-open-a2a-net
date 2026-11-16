@@ -49,7 +49,7 @@ severity：V1–V6、V15=S1（闸门面）V7–V10=S2（运行时）V11–V14=S3
 - 新 RC 采集在候选自身 `tmp/verify-probe/<本轮唯一目录>/` 保存 snapshot、summary、source-manifest、submission 和原命令记录；通过 `--run-dir` 指定时必须是该目录下新的一层子目录。既有输出拒绝复用/覆盖。`--runtime-unavailable` 明确记录无授权运行窗口，**不发 HTTP 请求且运行时判据失败**，不借此略过判据。
 - 命令入口：`node scripts/verify-temp-clean.mjs -- node scripts/verify-probe.mjs <以上精确参数>`。从输出的本轮 `snapshot`、`submission` 和完整 `candidate_sha` 绑定正式 `ygl-trees verify run`；递归入口接受 `--summary <本轮摘要> --snapshot <本轮快照> --candidate-sha <完整SHA>`，`--fresh` 将真实新采集输出传下去，不回落旧固定目录。旧 release-audit/shadow 模式保留原输出契约。
 - 测试 scratch 仅排除有效测试根自身的 `tmp/`，不能因父级目录叫 tmp 就漏掉全部测试；runner 拥有本轮 `tmp/test-runs/run-*` 和明确的 team ygl 工作区，其他残留继续失败。不得给产品运行态或唯一证据套用该清理入口。
-- 临时根默认仍在项目 `tmp/test-runs/`；`A2A_RUN_TMP_BASE=<可写目录>` 可把本轮拥有的临时根改放到更快卷（实测同一 unit 套件在 `%TEMP%` 约 30 秒全绿、在工作区卷 42–55 秒且随机 5 秒超时——工作区盘的 I/O 尾延迟是超时变量）。改放后仍由 runner 创建并清理，生命周期归属不变；该开关只影响测试临时根，不改变采集面与判据。
+- 测试临时根固定在本项目 `tmp/test-runs/run-*`，不支持 `A2A_RUN_TMP_BASE` 切换至系统临时区。先前不同临时根的耗时比较混入了并行调度、宿主负载和夹具差异，不能认定卷 I/O 已是确定根因。尤其 Vitest 4 已移除 `poolOptions.forks.maxWorkers`；此前使用该旧键的运行未证明并行约束生效。必须读取解析后的 `test.maxWorkers`，在相同项目临时根、断言和限时下验证实际有界调度。
 - 本节是采集方法说明，不是候选 PASS。完整源码/包/正式报告/归档、3081 用户验收与运维结论仍分开留证；导出模式的 V7 缺口和测试/网络未知必须出现在报告中。
 
 ## 用法
