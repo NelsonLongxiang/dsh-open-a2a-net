@@ -5,12 +5,11 @@
  * all against a fake agents service. Client wire behavior is covered by
  * client.spec.ts against src/a2a-client.ts seams.
  */
-import { mkdtempSync } from '../temp-dirs.ts'
+import { mkdtempSync, cleanupBeforeTempDirs } from '../temp-dirs.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { generateKeyPairSync } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { generateKeyPairSync, createHash } from 'node:crypto'
+import { mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -23,6 +22,8 @@ import { signCard } from '../../src/card.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE } from '../../src/transport-caps.ts'
 import { apply, Config as ConfigSchema, type A2aSchedule, type Config } from '../../src/index.ts'
 import { envelopeFor } from './envelope.ts'
+import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { NodeStore } from '../../src/node-store.ts'
 
 /** Fake agents registry: one recoverable root agent or none. */
 class FakeAgentsService extends Service {
@@ -118,15 +119,19 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     cardCacheTtlMs: 60_000,
     cardCacheNegativeTtlMs: 30_000,
     remoteRowsTtlMs: 15_000,
-    dshHome: '',
     cardTtlMs: 172_800_000,
     ...overrides,
+    // Apply last so an explicit undefined cannot erase the owned default.
+    // A deliberate empty string still reaches the dedicated resolver case.
+    dshHome: overrides.dshHome ?? tmpHome(),
   }
 }
 
 /** Per-test DSH home so announce keygen never touches the developer's home. */
 function tmpHome(): string {
-  return mkdtempSync(join(tmpdir(), 'dsh-a2a-key-'))
+  const parent = join(process.cwd(), 'tmp')
+  mkdirSync(parent, { recursive: true })
+  return mkdtempSync(join(parent, 'dsh-a2a-key-'))
 }
 
 function runContext(): ToolRunContext {
@@ -196,6 +201,51 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+})
+
+describe('C2-R1 ordinary apply factory home isolation', () => {
+  const mount = async (config = makeConfig()) => {
+    const ctx = new Context()
+    cleanupBeforeTempDirs(() => ctx.fiber.dispose())
+    await ctx.plugin(SystemPrompt); await ctx.plugin(ToolRuntime); await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    apply(ctx, config)
+    const home = config.dshHome === '' ? resolveDshHome() : resolveDshHome(config.dshHome)
+    return { ctx, home, key: createHash('sha256').update(readFileSync(join(home, 'a2a', 'node-key.pem'))).digest('hex') }
+  }
+  it('gives ordinary nodes independent homes, keys and persistent stores without touching ambient home', async () => {
+    const ambient = tmpHome()
+    writeFileSync(join(ambient, 'sentinel'), 'untouched')
+    vi.stubEnv('DSH_HOME', ambient)
+    const hosts: Array<Awaited<ReturnType<typeof mount>>> = []
+    try {
+      const a = await mount(); hosts.push(a)
+      const b = await mount(makeConfig({ dshHome: undefined })); hosts.push(b)
+      expect(a.home).not.toBe(b.home)
+      expect(a.home).not.toBe(ambient); expect(b.home).not.toBe(ambient)
+      expect(a.key).not.toBe(b.key)
+      const store = new NodeStore(join(a.home, 'a2a'))
+      expect(store.create({ name: 'only-a' }, 'fixture-isolation')).toMatchObject({ ok: true })
+      expect(new NodeStore(join(b.home, 'a2a')).get('only-a')).toBeUndefined()
+      expect(readdirSync(ambient)).toEqual(['sentinel'])
+      expect(readFileSync(join(ambient, 'sentinel'), 'utf8')).toBe('untouched')
+    } finally { for (const host of hosts) await host.ctx.fiber.dispose(); vi.unstubAllEnvs() }
+  })
+  it('preserves explicit same-home restart key and durable node state', async () => {
+    const home = tmpHome(), ambient = tmpHome()
+    writeFileSync(join(ambient, 'sentinel'), 'untouched')
+    vi.stubEnv('DSH_HOME', ambient)
+    const hosts: Array<Awaited<ReturnType<typeof mount>>> = []
+    try {
+      const a = await mount(makeConfig({ dshHome: home })); hosts.push(a)
+      expect(new NodeStore(join(home, 'a2a')).create({ name: 'survives' }, 'fixture-isolation')).toMatchObject({ ok: true })
+      await a.ctx.fiber.dispose()
+      const b = await mount(makeConfig({ dshHome: home })); hosts.push(b)
+      expect(b.home).toBe(home); expect(b.key).toBe(a.key)
+      expect(new NodeStore(join(home, 'a2a')).get('survives')).toMatchObject({ name: 'survives' })
+      expect(readdirSync(ambient)).toEqual(['sentinel'])
+    } finally { for (const host of hosts) await host.ctx.fiber.dispose(); vi.unstubAllEnvs() }
+  })
 })
 
 describe('a2a plugin announce (peer discovery)', () => {
@@ -272,21 +322,26 @@ describe('a2a plugin announce (peer discovery)', () => {
   })
 
   it('publishes with the default DSH home when dshHome is empty', async () => {
-    const prev = process.env.DSH_HOME
-    process.env.DSH_HOME = tmpHome()
+    const home = tmpHome()
+    writeFileSync(join(home, 'sentinel'), 'owned default-home fixture')
+    vi.stubEnv('DSH_HOME', home)
     const ctx = new Context()
+    cleanupBeforeTempDirs(() => ctx.fiber.dispose())
     try {
       await ctx.plugin(TimerService)
       await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
       await ctx.plugin(SystemPrompt)
       await ctx.plugin(ToolRuntime)
-      apply(ctx, makeConfig({ announce: true }))
+      // Only this case deliberately exercises the real empty-home resolver.
+      apply(ctx, makeConfig({ announce: true, dshHome: '' }))
       const port = (ctx as unknown as { webServer: WebServer }).webServer.port
-      expect((await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).status).toBe(200)
-      await ctx.fiber.dispose()
+      expect((await globalThis.fetch('http://127.0.0.1:' + String(port) + '/.well-known/agent-card.json')).status).toBe(200)
+      expect(resolveDshHome()).toBe(home)
+      expect(readFileSync(join(home, 'a2a', 'node-key.pem'), 'utf8')).toContain('PRIVATE KEY')
+      expect(readFileSync(join(home, 'sentinel'), 'utf8')).toBe('owned default-home fixture')
     } finally {
-      if (prev === undefined) delete process.env.DSH_HOME
-      else process.env.DSH_HOME = prev
+      await ctx.fiber.dispose()
+      vi.unstubAllEnvs()
     }
   })
 
