@@ -1,5 +1,6 @@
 /** The team page's 搜索 and the settings-save history: one team's records, kept with its state. */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { rmSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'

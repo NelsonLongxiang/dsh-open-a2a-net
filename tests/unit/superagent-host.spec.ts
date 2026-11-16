@@ -11,7 +11,7 @@ import { Engine, MemoryRepositories, ticketStage, type Candidate, type EngineOpt
 import { JsonRepositories } from '../../src/superagent/host/store.ts'
 import { DEFAULT_SETTINGS, parseSettings, policyEffects, policyVersion, teamPolicy, teamScope, type TeamSettings } from '../../src/superagent/host/policy.ts'
 import { policyChangedLines } from '../../src/superagent/host/executor.ts'
-import { ORIGIN_LINE_NOTE, OTHER_TICKETS_SHOWN, candidateCard } from '../../src/superagent/host/index.ts'
+import { ORIGIN_LINE_NOTE, OTHER_TICKETS_SHOWN, SENDER_HOLD_MAX_AGE_MS, candidateCard } from '../../src/superagent/host/index.ts'
 import { SAID_CAP, attentionText, registerSuperagentTools } from '../../src/superagent/host/tools.ts'
 
 /** Design v5: the team is a canvas team; tests give the host one canvas, `team`, with these sessions (router first). */
@@ -860,9 +860,12 @@ describe('ops team ledger: every A2A message to the team address gets a formal o
     const bot = 'reporter/0123456789abcdef', stranger = 'stranger/0123456789abcdef'
     expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'observe', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
     const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
-    const receive = (n: string, from: string, ctx = `ctx-${n}`) => {
+    // Clock-independent stamps (the test went red on 2026-11-15 when wb()'s fixed 2026-11-07 date crossed the host's
+    // 8-day END_RECEIPT_HORIZON_MS): requests are stamped now, and the stranger's explicitly older than the 24h
+    // SENDER_HOLD_MAX_AGE_MS, past which an unlisted sender's request is refused instead of held for the owner.
+    const receive = (n: string, from: string, ctx = `ctx-${n}`, at = new Date().toISOString()) => {
       const task = `direct-${n.padStart(12, '0')}`
-      h.engine.receive({ ...wb(n, ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: from }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: from, task, context: ctx } }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } })
+      h.engine.receive({ ...wb(n, ctx), at, source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: from }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: from, task, context: ctx } }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } })
       h.pass()
       return task
     }
@@ -872,7 +875,7 @@ describe('ops team ledger: every A2A message to the team address gets a formal o
     const observed = receive('1', bot)
     expect(routeItem(h, { trigger_id: '1', kind: 'accept', title: 't', scope: 's', reason: 'matches deps', rules: ['deps'] })).toMatchObject({ ok: true, decision: 'ignore' })
     // A sender not on the list is refused at the gate.
-    const refused = receive('2', stranger)
+    const refused = receive('2', stranger, 'ctx-2', new Date(Date.now() - SENDER_HOLD_MAX_AGE_MS - 3_600_000).toISOString())
     await settle()
     expect(outcome(receiptFor(observed))).toBe('rejected')
     expect(receiptFor(observed)!.at(-1)).toContain('观察模式')

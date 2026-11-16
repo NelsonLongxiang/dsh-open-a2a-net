@@ -38,3 +38,15 @@ Windows最终两轮默认完整verify：bash-d3bf11fc7ef94a8d、bash-3b643773b44
 定向回归用真实 runner 子进程验证：自己的 ygl fixture 正常清理且外层零残留；继承 home 和旧 sibling 哨兵不变；故意未拥有目录/文件仍失败并点名；子进程 exit7仍为7；链接替换失败且外部哨兵不变。红例在旧入口实际返回74并保留配置分配残留；修订后再跑真实 Vitest 配置、同组 LAN-IP及构建布局检查，不调既有业务断言/timeout/skip，不重跑整批已闭合业务反例。首次定向工程运行typecheck、verify:docs、runner语法检查、3files/11tests（4项新runner回归+4项真实LAN-IP+3项现有构建布局）均rc0，外层remaining=[]/entries0/rc0。原三批大范围测试/旧外层rc1不据此重标全绿；本轮没有完整verify:core、RC或运维验收产物。
 
 GitHub 只读核对当时仓库 Actions workflow 数量为0，本修复分支无run，PR statusCheckRollup为空，next/0.8未配置branch protection。它们代表没有远端检查，不是CI绿。本次不新配CI或保护规则、不人工伪造check/status，也不触发安装、发布、部署。后续合并判断仍须分别看本修订准确SHA的工程原日志、独立delta复核及既有完整工程/RC/运维门；小范围零残留不替代完整 verify:core 或实盘验收。
+
+## PR #708 对齐 next/0.8 的生命周期接缝（2026-11-16，未完成验收）
+
+自有整合从原 `da7552c81` 合入准确目标 `f859168f`，仅 Vitest 配置冲突：采用目标的 `tests/global-ygl-home.ts` 全局生命周期，避免 config load 分配目录。新增真实入口回归核全局 setup 在 runner 的项目内临时根分配和清理、不触及继承 home；既有泄漏、非零子退出和链接替换反例保持。原回执运行时代码没有因整合变化。
+
+首轮单次 unit+wire+mesh 为 2370 过/104 败/5 原跳过，外层两处测试根残留且 rc1；原结果保留，不归并为负载故障或用后续小批覆盖。两个稳定 wire 错误的夹具使用空 dshHome，沿继承 DSH_HOME 回落真实用户宿主，已暂停该面测试并上报风险，不读/清/改真账、不凭无前快照宣称线上状态未变。现有 runner 改为仅对子进程提供本轮根下的 DSH_HOME；与原 ygl fixture 一样只认该精确拥有路径，继承 home 不清，链接替换拒绝，任意其他残留与非零退出照旧失败。安全反例只用测试自有哨兵，旧 runner 在任何 home 写入前 exit81；修复后完整生命周期8项通过，外层无残留，原两条无agent断言不改即可通过。
+
+补登记 named-dispatch host 与 standalone node 的资源关闭，使测试断言失败时也在临时目录删除前停止写入；成功路径的原 stop/close 保留。当前原6份回执反例定向59/0/0、外层0，仅是隔离后的诊断证据，不能替代仍红的完整回归。Windows sent journal 的0600断言、默认并行下时序/清理失败仍需分别处理；不据平台差异增加skip、延时或改判据。完整 verify:core（含依赖安装）、formal RC/spec-run、准确包和独立OPS尚未通过；无受保护主干合并、发布或生产操作。
+
+V1整合/隔离已获原非作者静态可采纳、必修0（原direct-4313f53c）；这不是全量或新提交验收。后继明确诊断：wire339过/1个本机ENOBUFS失败；显式单worker unit1620过/1断言败/3原skip，另shadow tally夹具六个SQLite连接未关导致suite收尾EPERM；单worker mesh515过/2原skip，外层0。均是独立诊断，不替换原默认全量FAIL，也不把单worker参数写入当前候选。
+
+SQLite后继窄修只在原测试的make工厂创建连接后用现有cleanupBeforeTempDirs登记close，不改生产采集器、SQL判据、断言、用例数或限时。原型16项15过/1个原5秒心跳反例超时，原红保留；落源码后针对原checkTally用例验证1过/15过滤未选、outer0。Windows合成临时文件请求0600和0666在Node24.12均报告mode0666，但实际ACL未测；原0600承诺及断言不据该诊断豁免。新精确提交还须非作者delta/绑定、完整工程与原RC/OPS分别验收。

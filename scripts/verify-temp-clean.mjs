@@ -18,16 +18,17 @@ for (const directory of [projectTmp, runs]) {
   mkdirSync(directory, { recursive: true })
 }
 const root = mkdtempSync(join(runs, 'run-'))
-const yglHome = join(root, 'superagent-ygl')
+const yglHome = join(root, 'superagent-ygl'), dshHome = join(root, 'dsh-home')
 let status = 1, signal = null, remaining = [], cleanupError, runnerError
 try {
-  const child = spawn(command, args, { stdio: 'inherit', env: { ...process.env, TMPDIR: root, TEMP: root, TMP: root, A2A_TEST_YGL_HOME: yglHome, NODE_DISABLE_COMPILE_CACHE: '1' } })
+  const child = spawn(command, args, { stdio: 'inherit', env: { ...process.env, TMPDIR: root, TEMP: root, TMP: root, DSH_HOME: dshHome, A2A_TEST_YGL_HOME: yglHome, NODE_DISABLE_COMPILE_CACHE: '1' } })
   const settled = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, sig) => resolve({ code, sig })) })
   status = settled.code ?? 1; signal = settled.sig
-  // Only this exact runner-owned fixture is intentional. Arbitrary sibling residue still fails.
-  if (existsSync(yglHome)) {
-    if (lstatSync(yglHome).isSymbolicLink()) throw Error('owned ygl home replaced by link')
-    rmSync(yglHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  // Only these exact runner-created home boundaries are intentional; never inherit a real host's state.
+  // Arbitrary siblings still fail, and a substituted home never authorizes traversal of its target.
+  for (const [home, label] of [[yglHome, 'ygl'], [dshHome, 'DSH']]) if (existsSync(home)) {
+    if (lstatSync(home).isSymbolicLink()) throw Error('owned ' + label + ' home replaced by link')
+    rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   }
   remaining = readdirSync(root)
   if (remaining.length) {

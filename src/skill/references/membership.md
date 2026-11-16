@@ -2,9 +2,10 @@
 
 ## Joining
 
-- GUI: sidebar → A2A 网络 → join toggle. The join writes the session into
-  `a2a/joined.json` (node home) — this is the discovery + admission
-  membership layer.
+- GUI: the workbench planning board (`/__dsh_a2a_nexus/`, the session row's
+  network join/leave action — the panel-slim move took join/leave out of the
+  sidebar). The join writes the session into `a2a/joined.json` (node home) —
+  this is the discovery + admission membership layer.
 - API-created sessions do NOT materialize a consumable agent; open the
   session in the GUI once (a queued prompt is then consumed) or create the
   session through the GUI.
@@ -60,11 +61,15 @@
 ## Exposure tiers (#19)
 
 - `a2a_exposure` sets a session's own tier: `linked` (the default floor) or
-  `fleet` (a voluntary opt-up). There is no tier below linked in v1, and a
-  group's visibility derives from its strictest member (no group knob).
+  `fleet` (a voluntary opt-up). There is no tier below linked in v1. **As it
+  stands today the tier is only persisted (`a2a/exposure.json`) and shown in
+  the state face — no card or directory code reads it** (owner ruling on
+  #449, 2026-11-08: document it as it is), and "a group's visibility derives
+  from its strictest member" is a written rule with no group-level API or
+  enforcement point in v1.
 - On the card face, member listings go to LINKED callers only (see
-  [discovery.md](discovery.md)); as of 0.6.27 the fleet tier is recorded but
-  does not widen the card face.
+  [discovery.md](discovery.md)); the fleet tier is recorded but does not
+  widen the card face.
 
 ## Leaving
 

@@ -1,5 +1,6 @@
 /** Team model choices (owner 2026-11-10, 对照上游): settings.models parsed and applied through session/selectModel; failures never block. */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { rmSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'

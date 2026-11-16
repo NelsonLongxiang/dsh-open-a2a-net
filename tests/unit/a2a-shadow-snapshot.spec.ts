@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtempSync } from '../temp-dirs.ts'
+import { cleanupBeforeTempDirs, mkdtempSync } from '../temp-dirs.ts'
 import { CAPS, KV as SNAP_KV, key as snapKey, LINK_RULES as SNAP_LINK_RULES, LOOP_PREFIX as SNAP_LOOP_PREFIX, seqGaps, isLoss, parseWindow, checkTally, TALLY, flattenShadow } from '../../scripts/a2a-shadow-snapshot.mjs'
 import { HEALTH_RECORD_CAP, KV, LINK_RULES, LOOP_PREFIX, PAGE_RECORD_CAP, ROW_RECORD_CAP } from '../../src/superagent/a2a-watch.ts'
 import { key } from '../../src/superagent/source-types.ts'
@@ -300,6 +300,7 @@ describe('p2 shadow collector (verify-probe --a2a-shadow)', () => {
     const make = (extra: string) => {
       mkdirSync(join(repo, 'tmp'), { recursive: true })
       const db = new DatabaseSync(join(mkdtempSync(join(repo, 'tmp', 'a2a-shadow-tally-')), 'snap.sqlite'))
+      cleanupBeforeTempDirs(() => { if (db.isOpen) db.close() })
       db.exec(`CREATE TABLE shadow_outbox (id TEXT, channel_source TEXT, status TEXT, drop_reason TEXT);
         CREATE TABLE shadow_sent (handle TEXT, task_id TEXT, at TEXT, source_handle TEXT);
         CREATE TABLE shadow_tickets (id TEXT, basis_source TEXT);
