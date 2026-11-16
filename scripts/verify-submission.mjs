@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, realpathSync, readdirSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, realpathSync, readdirSync, mkdirSync, mkdtempSync, openSync, writeFileSync, fchmodSync, fstatSync, closeSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -73,6 +73,31 @@ const manifestEntryShape = entry => entry !== null && typeof entry === 'object' 
   && !entry.path.split('/').some(part => !part || part === '.' || part === '..' || /[\u0000-\u001f]/.test(part))
   && Number.isSafeInteger(entry.size) && entry.size >= 0 && /^[0-9a-f]{64}$/.test(entry.sha256 ?? '')
   && (entry.mode === undefined || entry.mode === '100644' || entry.mode === '100755')
+
+/** Export verified source bytes into one newly owned submission; never modify the source or an old export. */
+export function exportCandidateSubmission(sourceRoot, entries, runRoot) {
+  if (!Array.isArray(entries) || entries.length === 0 || !entries.every(entry => manifestEntryShape(entry) && (entry.mode === '100644' || entry.mode === '100755')) || new Set(entries.map(entry => entry.path)).size !== entries.length) throw Error('invalid source export manifest')
+  if (lstatSync(runRoot).isSymbolicLink() || !lstatSync(runRoot).isDirectory()) throw Error('submission run root must be a real directory')
+  const submission = mkdtempSync(join(realpathSync(runRoot), 'dsh-a2a-submission-'))
+  for (const entry of entries) {
+    const bytes = readFileSync(join(sourceRoot, ...entry.path.split('/')))
+    if (bytes.length !== entry.size || digest(bytes) !== entry.sha256) throw Error('source changed during submission export: ' + entry.path)
+    const dest = join(submission, ...entry.path.split('/'))
+    mkdirSync(dirname(dest), { recursive: true })
+    const fd = openSync(dest, 'wx', 0o600)
+    try {
+      writeFileSync(fd, bytes)
+      if (process.platform !== 'win32') {
+        // Only this newly created owned fd is chmodded. fchmod restores bits
+        // removed by a restrictive umask; never change source or old exports.
+        const mode = entry.mode === '100755' ? 0o755 : 0o644
+        fchmodSync(fd, mode)
+        if ((fstatSync(fd).mode & 0o7777) !== mode) throw Error('submission export mode verification failed: ' + entry.path)
+      }
+    } finally { closeSync(fd) }
+  }
+  return submission
+}
 
 /** Walk an exported submission tree: regular files only, no links, no other node types. */
 function walkSubmission(root) {
