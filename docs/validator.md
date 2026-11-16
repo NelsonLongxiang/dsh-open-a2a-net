@@ -51,6 +51,8 @@ severity：V1–V6、V15=S1（闸门面）V7–V10=S2（运行时）V11–V14=S3
 - 测试 scratch 仅排除有效测试根自身的 `tmp/`，不能因父级目录叫 tmp 就漏掉全部测试；runner 拥有本轮 `tmp/test-runs/run-*` 和明确的 team ygl 工作区，其他残留继续失败。不得给产品运行态或唯一证据套用该清理入口。
 - 测试临时根固定在本项目 `tmp/test-runs/run-*`，不支持 `A2A_RUN_TMP_BASE` 切换至系统临时区。先前不同临时根的耗时比较混入了并行调度、宿主负载和夹具差异，不能认定卷 I/O 已是确定根因。尤其 Vitest 4 已移除 `poolOptions.forks.maxWorkers`；此前使用该旧键的运行未证明并行约束生效。必须读取解析后的 `test.maxWorkers`，在相同项目临时根、断言和限时下验证实际有界调度。
 - 提交物源码导出按钉住的 Git `100644` / `100755` 保留权限：仅对本轮新建 owned 文件以 `wx` 打开，写入后在 POSIX 对该 fd 设置 `0644` / `0755` 并真实核验，不 chmod 已有源码、旧提交物或运行态；任一步失败直接拒绝。摘要、日志、快照等证据文件仍保持私有权限。`node --test tests/gates/submission-export-mode.mjs` 直接调用生产导出函数，覆盖 restrictive umask 的真实 POSIX 正例和去执行位负例；Windows 只验字节/不可覆盖边界并显式跳过 POSIX 用例，不冒称执行位通过。
+- 测试入口必须为 child 覆盖本轮 project-owned `DSH_HOME`，不继承真实宿主 home；与 `TMPDIR/TEMP/TMP`、ygl home 一并按大小写去重后设置，只清理本轮明确拥有的目录。链接／junction 替换、异常或未知清理必须失败；显式非空测试 fixture home 的优先级和产品 resolver 默认行为不改。旧运行没有前态证据时不能声称真实用户态零写入，不为排查而读取、清理或回滚真实 keys／账本。
+- 递归归档层只使用本次正式 CLI run 返回的准确 path／archive_id／hash；绑定该 run 的 report、spec/version、payload 与本轮原快照 SHA，再调用正式 `verify archive verify` 并同时检查命令成功及 JSON 身份。当前归档缺失、损坏、被另一有效 ZIP 替换、非零退出打印 ok 或校验期间原件变动一律失败，不按目录最新归档回退；归档完整不把业务 FAIL 提升为 PASS。
 - 本节是采集方法说明，不是候选 PASS。完整源码/包/正式报告/归档、3081 用户验收与运维结论仍分开留证；导出模式的 V7 缺口和测试/网络未知必须出现在报告中。
 
 ## 用法

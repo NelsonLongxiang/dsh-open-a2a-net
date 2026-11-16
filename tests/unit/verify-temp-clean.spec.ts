@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs'
+import { copyFileSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative, isAbsolute } from 'node:path'
 import { tmpdir } from 'node:os'
 import { mkdtempSync } from '../temp-dirs.ts'
 
 const gate = join(process.cwd(), 'scripts', 'verify-temp-clean.mjs')
 function invoke(script: string, extraEnv: Record<string, string> = {}) {
-  const result = spawnSync(process.execPath, [gate, '--', process.execPath, '-e', script], { encoding: 'utf8', timeout: 20000, env: { ...process.env, ...extraEnv } })
+  const keys = new Set(Object.keys(extraEnv).map(key => key.toLowerCase()))
+  const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !keys.has(key.toLowerCase()))), ...extraEnv }
+  const result = spawnSync(process.execPath, [gate, '--', process.execPath, '-e', script], { encoding: 'utf8', timeout: 20000, env })
   expect(result.error).toBeUndefined()
   const lines = result.stdout.split(/\r?\n/).filter(line => line.startsWith('[temp-clean] '))
   expect(lines).toHaveLength(1)
@@ -29,6 +31,29 @@ describe('project-owned test temp lifecycle', () => {
     expect(selected.startsWith('run-')).toBe(true)
     expect(isAbsolute(selected)).toBe(false)
     expect(relative(requested, run.temp.root).startsWith('..')).toBe(true)
+  })
+  it.each(['DSH_HOME', 'dsh_home'])('overrides inherited %s using the real resolver and leaves the original sentinel untouched', key => {
+    const original = mkdtempSync(join(tmpdir(), 'host-home-sentinel-'))
+    const explicit = mkdtempSync(join(tmpdir(), 'explicit-fixture-home-'))
+    writeFileSync(join(original, 'do-not-touch'), 'unchanged synthetic host sentinel')
+    const script = "(async()=>{const assert=require('node:assert/strict'),fs=require('node:fs'),p=require('node:path');const {resolveDshHome}=await import('@deepseek-ai/dsh-home-paths');const home=resolveDshHome();assert.equal(home,p.join(process.env.TMP,'dsh-home'));assert.equal(resolveDshHome(process.env.EXPLICIT_FIXTURE_HOME),process.env.EXPLICIT_FIXTURE_HOME);assert.notEqual(home,process.env.ORIGINAL_HOME);fs.mkdirSync(p.join(home,'a2a'));fs.writeFileSync(p.join(home,'a2a','synthetic-state'),'owned');console.log('OWNED_DSH_RESOLVER_OK')})().catch(e=>{console.error(e);process.exitCode=1})"
+    const run = invoke(script, { [key]: original, ORIGINAL_HOME: original, EXPLICIT_FIXTURE_HOME: explicit })
+    expect(run.status, run.stderr).toBe(0)
+    expect(run.stdout).toContain('OWNED_DSH_RESOLVER_OK')
+    expect(run.temp).toMatchObject({ entries: 0, status: 0 })
+    expect(readdirSync(original)).toEqual(['do-not-touch'])
+    expect(readFileSync(join(original, 'do-not-touch'), 'utf8')).toBe('unchanged synthetic host sentinel')
+    expect(readdirSync(explicit)).toEqual([])
+  })
+  it('rejects a replaced child DSH_HOME junction without touching its external target', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'home-link-target-'))
+    writeFileSync(join(outside, 'sentinel'), 'keep')
+    const run = invoke("const fs=require('node:fs');fs.rmdirSync(process.env.DSH_HOME);fs.symlinkSync(process.env.OUTSIDE_HOME,process.env.DSH_HOME,process.platform==='win32'?'junction':'dir')", { OUTSIDE_HOME: outside })
+    expect(run.status).toBe(1)
+    expect(run.temp.status).toBe(1)
+    expect(run.temp.error).toContain('owned test home was replaced')
+    expect(readdirSync(outside)).toEqual(['sentinel'])
+    expect(readFileSync(join(outside, 'sentinel'), 'utf8')).toBe('keep')
   })
   it('still rejects a child leak outside the one intentional team workspace', () => {
     const run = invoke("const fs=require('node:fs'),p=require('node:path');fs.mkdirSync(process.env.A2A_TEST_YGL_HOME);fs.writeFileSync(p.join(process.env.TMP,'unowned-residue'),'must fail');")

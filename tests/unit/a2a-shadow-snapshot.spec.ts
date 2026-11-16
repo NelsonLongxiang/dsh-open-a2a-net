@@ -305,7 +305,10 @@ describe('p2 shadow collector (verify-probe --a2a-shadow)', () => {
       mkdirSync(join(repo, 'tmp'), { recursive: true })
       const db = new DatabaseSync(join(mkdtempSync(join(repo, 'tmp', 'a2a-shadow-tally-')), 'snap.sqlite'))
       databases.push(db)
-      db.exec(`CREATE TABLE shadow_outbox (id TEXT, channel_source TEXT, status TEXT, drop_reason TEXT);
+      // Build one synthetic initial state atomically; the assertions below
+      // exercise re-counting, not per-statement filesystem commit latency.
+      db.exec(`BEGIN;
+        CREATE TABLE shadow_outbox (id TEXT, channel_source TEXT, status TEXT, drop_reason TEXT);
         CREATE TABLE shadow_sent (handle TEXT, task_id TEXT, at TEXT, source_handle TEXT);
         CREATE TABLE shadow_tickets (id TEXT, basis_source TEXT);
         CREATE TABLE shadow_seq_gaps (epoch TEXT, seq INTEGER, covered INTEGER);
@@ -313,7 +316,8 @@ describe('p2 shadow collector (verify-probe --a2a-shadow)', () => {
         CREATE TABLE shadow_pages (at TEXT, heartbeat INTEGER, rows INTEGER);
         CREATE TABLE shadow_tally (name TEXT PRIMARY KEY, n INTEGER NOT NULL);
         INSERT INTO shadow_outbox VALUES ('o1', 'a2a', 'sent', NULL);
-        ${extra}`)
+        ${extra}
+        COMMIT;`)
       return db
     }
     const four = (outbox: number) => `INSERT INTO shadow_tally VALUES ('outbox_sent', ${String(outbox)}), ('source_sent', 0), ('tickets_a2a', 0), ('gaps_uncovered', 0), ('cli_identity_stored', 0), ('heartbeat_row_delta', 0);`
