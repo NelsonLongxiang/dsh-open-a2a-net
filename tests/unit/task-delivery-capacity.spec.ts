@@ -55,6 +55,7 @@ describe('#713 pure correspondence-capacity observation (not admission)', () => 
   it('retains future timestamps on clock rollback without a negative expiry or immediate retry promise', () => {
     const result = observe(input([row(0, NOW + TTL)], new Set(), NOW - 1))
     expect(result.retained).toBe(1); expect(result.earliestPossibleExpiryAt).toBe(NOW + TTL * 2 + 1)
+    expect(parseDeliveryCapacitySnapshot(result)).toEqual(result)
   })
 
   it('uses the earliest representable unbound expiry, not array order or an old bound entry', () => {
@@ -139,6 +140,17 @@ describe('#713 bounded capacity DTO decoder (not a wired transport yet)', () => 
       expect(r).toEqual(v); expect(r).not.toBe(v)
       if (r?.status === 'observed' && v.status === 'observed') { r.retainedByState.cancelled = 0; expect(v.retainedByState.cancelled).toBe(1) }
     }
+  })
+
+  it.each([1, TTL])('rejects expiry %i above observedAt but below the legal creation-time domain', expiry => {
+    const result = observe(input([row(0, 0)], new Set(), 0))
+    expect(parseDeliveryCapacitySnapshot({ ...result, earliestPossibleExpiryAt: expiry })).toBeUndefined()
+  })
+
+  it.each([0, TTL])('accepts the earliest representable expiry of creation epoch zero at observedAt=%i', now => {
+    const result = observe(input([row(0, 0)], new Set(), now))
+    expect(result.earliestPossibleExpiryAt).toBe(TTL + 1)
+    expect(parseDeliveryCapacitySnapshot(result)).toEqual(result)
   })
 
   it.each([undefined, null, [], 0, '', { status: 'unavailable', reason: 'legacy-guess' }, { status: 'unavailable', reason: 'ledger-damaged', taskId: 'private' }])('keeps legacy/malformed output unknown: %j', raw => {

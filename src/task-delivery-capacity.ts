@@ -94,7 +94,7 @@ export function parseDeliveryCapacitySnapshot(raw: unknown): DeliveryCapacitySna
   if (raw.saturated !== (retained >= TASK_DELIVERY_CAP) || !object(counts) || !exactKeys(counts, STATES)) return undefined
   let sum = 0
   for (const state of STATES) { const n = counts[state]; if (!integer(n) || n > retained) return undefined; sum += n }
-  if (sum !== retained || (expiry !== null && (!integer(expiry) || expiry <= observedAt || retained === taskBound))) return undefined
+  if (sum !== retained || (expiry !== null && (!integer(expiry) || expiry < TASK_DELIVERY_RETENTION_MS + 1 || expiry <= observedAt || retained === taskBound))) return undefined
   return {
     status: 'observed', observedAt, capacity: TASK_DELIVERY_CAP, retentionMs: TASK_DELIVERY_RETENTION_MS,
     stored, retained, expiredUntracked, taskBound, saturated: raw.saturated as boolean,
