@@ -117,9 +117,9 @@ export class RequestRecoveryStore {
   return this.update(entries=>{const e=entries.find(x=>x.permit.proposal.binding.requestId===permit.proposal.binding.requestId);if(!e||e.phase!=='ready'||e.revokedAt!==undefined||recoveryDigest(e.permit)!==recoveryDigest(permit)||permit.expiresAt<=this.now()||this.now()<permit.issuedAt||!recoveryClaimMatches(permit.proposal.binding,claim))throw Error('request recovery permit cannot authorize another effect');e.phase='consumed';e.at=this.now();e.digest=entryDigest(e);return permit.proposal.binding})
  }
  confirm(requestId:string):void {this.update(entries=>{const e=entries.find(x=>x.permit.proposal.binding.requestId===requestId);if(!e||e.phase!=='consumed')throw Error('acceptance requires its consumed checkpoint');e.phase='accepted';e.at=this.now();e.digest=entryDigest(e)})}
- outcome(taskId:string,fingerprint:string):'unknown'|'accepted'|undefined {
+ outcome(taskId:string,fingerprint:string):'ready'|'unknown'|'accepted'|undefined {
   const e=this.read().find(x=>x.permit.proposal.binding.taskId===taskId&&recoveryFingerprint(x.permit.proposal.binding)===fingerprint)
-  return !e?undefined:e.phase==='accepted'?'accepted':'unknown'
+  return !e?undefined:e.phase==='accepted'?'accepted':e.phase==='ready'&&e.revokedAt===undefined&&e.permit.issuedAt<=this.now()&&this.now()<e.permit.expiresAt?'ready':'unknown'
  }
  authority(requestId:string,caller:string,target:string,receiverKey:string,taskId:string,receiverSession:string,home:string,peerLinked:(home:string,key:string)=>boolean=()=>true):boolean {
   const e=this.read().find(x=>x.permit.proposal.binding.requestId===requestId),b=e?.permit.proposal.binding

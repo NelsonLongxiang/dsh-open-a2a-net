@@ -8,7 +8,7 @@
     "src/canvas-store.ts": "dafeaf63aa7c285933e0ab5ddad298740715fc6d3462be8d7a580a3908350224",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
     "src/cli-deposit.ts": "88e75b568993238391849d53d7bfd28103175b4204ae14fec83befd4017302c8",
-    "nexus-stage/src/workbench.ts": "84a423a2d6c94199f1ba11c2c346401465e9a9084f5ead7374f3949f902b9b99",
+    "nexus-stage/src/workbench.ts": "ef8f56d3bbb685eaa5f9266ce1414bf5f843e073af3a23ccdc39ff5d5cdc1cc2",
     "nexus-stage/src/federation.ts": "0ad1e9e077ebaee592e055a9aa56053ef50963bd5e2a47b27b63c2944daafed9",
     "nexus-stage/src/planning-relayout.ts": "7ce77ba2bc95fcbee62af752f22969b726511d8988133e74123a5e04a7a6a571",
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
@@ -19,7 +19,7 @@
     "nexus-stage/src/planning-overlap.ts": "f4e7ecf5af229f6107191f35be2b5a10ebab921b175ba0950f577458dacc5019",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "b4f92c9ce3237019ab3c7ab71f0624c3306e8c316cb15d119d4e7c57f65e604f",
-    "src/faces/wire.ts": "40be2b3ddada3b4f59ab95a6c7a38b462269842ba3e008082bf82f90b60e9209",
+    "src/faces/wire.ts": "0497c52eadc9b48f143b987353385f2550ff0335c39a160386133264a45cb240",
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
     "src/task-auth.ts": "c15a3b6480600bf17f95c9256e9de60b3c005eefb1d0e39d06560eea1e1749d6",
     "src/origin-claim.ts": "54079e01ec324ea1054bc892ef403ba813fa52c480bd99ecb9cf8b73190c376a",
@@ -213,7 +213,7 @@
     {
       "page": "p1-arch",
       "cell": "e1",
-      "ref": "nexus-stage/src/workbench.ts:598",
+      "ref": "nexus-stage/src/workbench.ts:618",
       "expect": "function renderHosts(): void {"
     },
     {

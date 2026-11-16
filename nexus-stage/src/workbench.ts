@@ -24,6 +24,7 @@ import { createCliHomePicker, type CliHomeOptions } from './cli-home-picker'
 import { createMemberProvenancePicker, type ProvenanceChoice } from './member-provenance-picker'
 import { createRailTabs } from './wb-rail'
 import { createSuperagentPane, type SaState, type SuperagentPaneDeps } from './wb-superagent'
+import { createReceiverRecovery, type RecoveryJson } from './request-recovery-panel'
 import { DIRECTORY_FILTERS, learnLogTitle, loadLogTitles, renderDirectory, type DirFilter } from './wb-directory'
 import { ledgerFacts, renderLedger as paintLedger } from './wb-ledger'
 import { nameInto, teamLabel } from './wb-names'
@@ -219,6 +220,8 @@ export interface WorkbenchDeps {
   ownerSettingsRead?(): Promise<{ ok: boolean; seatNames?: Record<string, string>; teamJoinAllowlist?: string[]; teamScopeInfo?: boolean; announce?: boolean; announceRestartPending?: boolean; error?: string }>
   /** gh#34: write owner panel changes; true on success (POST the same face). */
   ownerSettingsWrite?(changes: { seatNames?: Record<string, string>; teamJoinAllowlist?: string[]; teamScopeInfo?: boolean; announce?: boolean }): Promise<{ ok: boolean; restartNeeded?: boolean; error?: string }>
+  /** Same-origin browser-owner request-recovery grant/revoke, never a peer proxy. */
+  requestRecovery?(body: RecoveryJson): Promise<RecoveryJson>
   /** gh#41 fleet planning: regulate a REMOTE peer's canvas team (this host
    *  signs the envelope and forwards; the peer's link gate authorizes). */
   fleetCanvasOp?(peer: string, op: 'create' | 'add-member' | 'remove-member' | 'remove', name: string, id?: string): Promise<{ ok: boolean; members?: string[]; error?: string }>
@@ -309,6 +312,8 @@ export type WorkbenchMode = 'canvas' | 'data'
 
 export interface Workbench {
   readonly root: HTMLElement
+  /** Remove the workbench-owned responsive listener and invalidate recovery drafts; never cancels server work. */
+  dispose(): void
   /** Feed one /state poll (or null while the first fetch is out). */
   update(state: StateBody | null): void
   /** Feed one GET /__dsh_a2a/superagent poll: null when the host runs no superagent team (the 团队 tab hides). */
@@ -380,7 +385,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   menuBtn.dataset.testid = 'wb-menu'
   menuBtn.setAttribute('aria-label', '打开目录抽屉')
   menuBtn.textContent = '☰'
-  menuBtn.addEventListener('click', () => root.classList.toggle('is-rail-open'))
+  menuBtn.addEventListener('click', () => { root.classList.toggle('is-rail-open'); syncRecoveryView() })
   header.appendChild(menuBtn)
   const title = el('div', 'wb-title')
   title.appendChild(el('span', 'wb-title-main')).textContent = 'A2A 工作台'
@@ -395,7 +400,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   ownerBtn.setAttribute('aria-label', '主人设置')
   ownerBtn.title = '主人设置：席位名 / 入网白名单 / 可见性 / 发布'
   ownerBtn.textContent = '⚙'
-  ownerBtn.addEventListener('click', () => { ownerPanelOpen = !ownerPanelOpen; renderOwnerPanel() })
+  ownerBtn.addEventListener('click', () => { ownerPanelOpen = !ownerPanelOpen; if (!ownerPanelOpen) recoveryOwner?.invalidate(); renderOwnerPanel() })
   header.appendChild(ownerBtn)
   const headerStats = el('div', 'wb-header-stats')
   header.appendChild(headerStats)
@@ -406,6 +411,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   railToggle.textContent = '◧'
   railToggle.addEventListener('click', () => {
     root.classList.toggle('is-rail-collapsed')
+    syncRecoveryView()
     // The stage width changed while the board fills it → re-sync its view
     // size (idempotent; focus side effect is harmless in a shell toggle).
     if (mode === 'canvas' && board !== undefined) board.activate()
@@ -416,7 +422,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // Rail tabs (2026-10-23, wb-rail): one panel per pane, each with its own
   // scroll. Panes are created once and re-parented between tab panels
   // (canvas mode) and the stage stack (data mode).
-  const railTabs = createRailTabs(SECTION_DEFS)
+  const railTabs = createRailTabs(SECTION_DEFS, { onChange: () => syncRecoveryView() })
   const rail = railTabs.root
 
   const directoryBody = el('div', 'wb-directory')
@@ -484,7 +490,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   inspectorClose.type = 'button'
   inspectorClose.setAttribute('aria-label', '关闭详情')
   inspectorClose.textContent = '✕'
-  inspectorClose.addEventListener('click', () => select(undefined))
+  inspectorClose.addEventListener('click', () => { ownerPanelOpen = false; recoveryOwner?.invalidate(); select(undefined) })
   inspectorHead.appendChild(inspectorClose)
   inspector.appendChild(inspectorHead)
   const inspectorBody = el('div', 'wb-inspector-body')
@@ -523,11 +529,23 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       pane.classList.toggle('is-hidden', off)
       if (pane.parentElement !== home) home.appendChild(pane)
     }
+    syncRecoveryView(m)
+  }
+
+  let recoveryDisposed = false
+  const onRecoveryResize = (): void => { if (!recoveryDisposed && root.isConnected) syncRecoveryView() }
+  window.addEventListener('resize', onRecoveryResize)
+
+  function syncRecoveryView(m: WorkbenchMode = mode): void {
+    if (recoveryDisposed) return
+    const railVisible = !root.classList.contains('is-rail-collapsed') && (window.innerWidth > 1023 || root.classList.contains('is-rail-open'))
+    superagentPane?.setRecoveryVisible(teamOn && (m === 'data' || railTabs.selected() === 'team' && railVisible))
   }
 
   function syncMode(): void {
     const canvasUp = board !== undefined && board.available()
     const next: WorkbenchMode = canvasUp ? 'canvas' : 'data'
+    if (next !== mode) superagentPane?.setRecoveryVisible(false)
     root.dataset.mode = next
     boardPane.classList.toggle('is-hidden', next !== 'canvas')
     dataStack.classList.toggle('is-hidden', next === 'canvas')
@@ -547,6 +565,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   }
 
   function select(next: Selection): void {
+    if (ownerPanelOpen) { ownerPanelOpen = false; recoveryOwner?.invalidate() }
     selection = next
     // Canvas add-member form is cached per team name (draftForm trick):
     // drop it whenever the selection moves off its team.
@@ -557,6 +576,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     renderInspector()
     // Narrow screens: picking from the drawer closes it so the stage shows.
     root.classList.remove('is-rail-open')
+    syncRecoveryView()
   }
 
   // ── Directory section ──
@@ -854,6 +874,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // gh#34 owner panel state + render (the gear toggles; the inspector hosts).
   let seatEditor: HTMLElement | undefined
   let ownerPanelOpen = false
+  const recoveryOwner = deps.requestRecovery ? createReceiverRecovery(deps.requestRecovery, () => ownerPanelOpen) : undefined
   let ownerState: { seatNames: Record<string, string>; teamJoinAllowlist: string[]; teamScopeInfo: boolean; announce: boolean; announceRestartPending: boolean } | null = null
   function renderOwnerPanel(): void {
     renderInspector()
@@ -880,9 +901,10 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     closeBtn.type = 'button'
     closeBtn.setAttribute('aria-label', '关闭主人设置')
     closeBtn.textContent = '✕'
-    closeBtn.addEventListener('click', () => { ownerPanelOpen = false; renderInspector() })
+    closeBtn.addEventListener('click', () => { ownerPanelOpen = false; recoveryOwner?.invalidate(); renderInspector() })
     head.appendChild(closeBtn)
     card.appendChild(head)
+    if (recoveryOwner) { recoveryOwner.refresh(); card.appendChild(recoveryOwner.root) }
     if (deps.ownerSettingsRead === undefined) {
       const note = el('div', 'wb-hint')
       note.textContent = '此宿主未提供主人设置面（旧版本）——升级后可用。'
@@ -1207,6 +1229,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   function openChat(target: ChatTarget): void {
     chat.open(target)
     root.classList.remove('is-rail-open')
+    syncRecoveryView()
   }
 
   /** Board picks (0.6.13): resolve a node id against the latest state. */
@@ -1335,6 +1358,13 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     placePanes(mode)
   }
 
+  function dispose(): void {
+    if (recoveryDisposed) return
+    recoveryDisposed = true
+    window.removeEventListener('resize', onRecoveryResize)
+    superagentPane?.setRecoveryVisible(false)
+    recoveryOwner?.invalidate()
+  }
   update(null)
-  return { root, update, updateSuperagent, mode: () => mode, selectTab, openNodeChat }
+  return { root, update, updateSuperagent, mode: () => mode, selectTab, openNodeChat, dispose }
 }

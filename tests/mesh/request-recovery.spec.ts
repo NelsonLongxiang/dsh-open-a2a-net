@@ -37,6 +37,7 @@ it('real scoped receiver accepts exactly one permitted request and never creates
   const initial=await f.raw();expect(initial.data.error).toContain('no operator-established canvas link');expect(f.b.steered).toHaveLength(0)
   const granted=await f.grant();expect(granted.status,JSON.stringify(granted)).toBe(200);expect(granted.data.ok).toBe(true)
   const permit=granted.data.permit
+  const unused=await f.post(f.b,'/a2a/query',{task_id:f.binding.taskId,fingerprint:recoveryFingerprint(f.binding)});expect(unused.data).toMatchObject({found:true,status:'pending',task_id:f.binding.taskId,recovery_delivery:'ready'});expect(f.b.steered).toHaveLength(0)
   for(const patch of [{message:'replacement body'},{team:'beta/aaaaaaaa'},{task_id:'new-task'},{context_id:'other-context'}]){const refused=await f.raw(patch,permit);expect(refused.data.delivered).not.toBe(true)}
   expect(f.b.steered).toHaveLength(0)
   const accepted=await f.raw({},permit);expect(accepted.data,JSON.stringify(accepted)).toMatchObject({routed:true,delivered:true,recovery_delivery:'accepted',task_id:f.binding.taskId})
@@ -59,6 +60,7 @@ it('only original browser owner can consent; API-like credentials cannot grant o
   expect((await f.post(f.b,'/__dsh_a2a/request-recovery',{action:'revoke',request_id:f.binding.requestId})).status).toBe(401)
   expect((await f.post(f.b,'/__dsh_a2a/request-recovery',{action:'revoke',request_id:f.binding.requestId},true)).data.ok).toBe(true)
   expect((await f.raw({},grant.data.permit)).data.delivered).not.toBe(true);expect(f.b.steered).toHaveLength(0)
+  const revoked=await f.post(f.b,'/a2a/query',{task_id:f.binding.taskId,fingerprint:recoveryFingerprint(f.binding)});expect(revoked.data.recovery_delivery).not.toBe('ready')
  }finally{await f.dispose()}
 })
 

@@ -27,6 +27,26 @@ function fixture(){
  return{dir,file,old,outbound,notes,narrowNotes,recovery,deps,store,transport,prepare,permit,receiverInfo,denyReceipt:()=>{receiptAllowed=false},allowNotes:(v:boolean)=>{noteAllowed=v},disable:()=>{enabled=false},rekey:()=>{cliKey=pub(key())},setAccepted:(v:boolean)=>{accepted=v},reopen:()=>new NarrowOutboundRecovery({...deps,outbound:new OutboundRequests({path:file,ask:vi.fn(async()=>undefined),note:notes,logger:{warn:()=>{}},now:()=>at})})}
 }
 describe('legacy original-card narrow continuation',()=>{
+ it('two original cards racing to continue produce one transport send, not two',async()=>{
+  const f=fixture(),p=await f.permit();let release:()=>void=()=>{};const hold=new Promise<void>(r=>{release=r})
+  f.transport.mockImplementation(async(_p,mode)=>{if(mode==='send'){await hold;return {accepted:true}}return {accepted:false}})
+  const first=f.recovery.run('card-first','direct-first',p,true)
+  const second=await f.recovery.run('card-second','direct-second',p,true)
+  expect(second).toMatchObject({ok:false,state:'unknown'});release();expect(await first).toMatchObject({ok:true,state:'accepted'})
+  expect(f.transport.mock.calls.filter(c=>c[1]==='send')).toHaveLength(1)
+ })
+ it('only explicit receiver-ready plus a freshly re-read prepared sender group enables first send',async()=>{
+  const f=fixture(),p=await f.permit()
+  f.transport.mockResolvedValue({accepted:false,ready:true} as any)
+  expect(await f.recovery.run('card-first','direct-first',p,false)).toMatchObject({ok:true,state:'prepared',phase:'prepared',query:'ready',task:p.proposal.binding.taskId})
+  expect(f.transport.mock.calls.map(c=>c[1])).toEqual(['query'])
+  f.transport.mockResolvedValue({accepted:false});expect(await f.recovery.run('card-first','direct-first',p,false)).toMatchObject({ok:false,state:'unknown',query:'unknown'})
+  f.transport.mockRejectedValue(Error('query offline'));expect(await f.recovery.run('card-first','direct-first',p,false)).toMatchObject({ok:false,state:'unknown',query:'unavailable'})
+  f.transport.mockResolvedValue({accepted:false});await f.recovery.run('card-first','direct-first',p,true)
+  f.transport.mockResolvedValue({accepted:false,ready:true} as any)
+  expect(await f.recovery.run('card-first','direct-first',p,false)).toMatchObject({ok:false,state:'unknown',query:'unknown'})
+  expect(f.transport.mock.calls.filter(c=>c[1]==='send')).toHaveLength(1)
+ })
  it('a trusted settled result reaches the original ticket once without changing either legacy failure',async()=>{
   const f=fixture(),p=await f.permit();await f.recovery.run('card-first','direct-first',p,true)
   const task=p.proposal.binding.taskId,trigger={id:'formal-result',source:'a2a',actor:{source:'a2a',id:p.proposal.binding.target},text:'[A2A receipt] task '+task+' original result\n'+JSON.stringify({outcome:'completed',disposition:'result'}),at:'2026-11-15T00:01:00Z',meta:{receiptFor:task,proof:'origin-claim'}} as any

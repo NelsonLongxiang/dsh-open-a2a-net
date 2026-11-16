@@ -546,7 +546,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             if(result!==undefined){
               if(result==='accepted'&&verdict.found&&verdict.status!=='pending')withResponseFields(res,{recovery_delivery:'accepted'})
               else {
-                const value={found:true,status:'pending',task_id:taskId,...(result==='accepted'?{recovery_delivery:'accepted'}:{})}
+                const value={found:true,status:'pending',task_id:taskId,...(result==='accepted'?{recovery_delivery:'accepted'}:result==='ready'&&!verdict.found&&verdict.reason==='unknown-task'&&!taskLedger.find(taskId)&&!taskLedger.archive().some(row=>row.taskId===taskId)&&!taskLedger.deliveryFor(taskId)?{recovery_delivery:'ready'}:{})}
                 const payload=JSON.stringify(value);res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
               }
             }

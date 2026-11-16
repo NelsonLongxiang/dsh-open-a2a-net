@@ -9,7 +9,7 @@ export interface NarrowRecoveryDeps {
  approval:(record:Readonly<OutboundRecord>)=>LegacyApproval|undefined
  identity:()=>NarrowIdentity|undefined
  proposal:(binding:RecoveryBinding)=>Promise<RecoveryProposal>
- transport:(permit:RecoveryPermit,mode:'send'|'query',stillApproved:()=>boolean)=>Promise<{accepted:boolean}>
+ transport:(permit:RecoveryPermit,mode:'send'|'query',stillApproved:()=>boolean)=>Promise<{accepted:boolean;ready?:boolean}>
  now:()=>number
 }
 export class NarrowOutboundRecovery {
@@ -40,7 +40,7 @@ export class NarrowOutboundRecovery {
   this.d.outbound.bindNarrowRecovery(records,proposal)
   return proposal
  }
- async run(card:string,task:string,raw:unknown,retry:boolean):Promise<{ok:boolean;state:string;task:string;error?:string}> {
+ async run(card:string,task:string,raw:unknown,retry:boolean):Promise<{ok:boolean;state:string;task:string;query?:'ready'|'unknown'|'unavailable';phase?:string;error?:string}> {
   const permit=verifyRecoveryPermit(raw);if(!permit)throw Error('invalid exact receiver permit')
   const original=this.original(card,task),b=permit.proposal.binding
   if(!this.matches(b,original)||original.records.some(r=>!r.narrowRecovery||recoveryDigest(r.narrowRecovery.proposal)!==recoveryDigest(permit.proposal)||r.narrowRecovery.digest!==narrowRecoveryDigest(r.narrowRecovery)))throw Error('permit differs from retained original chain')
@@ -49,9 +49,12 @@ export class NarrowOutboundRecovery {
   if(phase==='accepted'||phase==='answered')return {ok:true,state:phase,task:b.taskId}
   const stillApproved=()=>{try{return this.matches(b,this.original(card,task))}catch{return false}}
   if(!retry||phase!=='prepared'){
-   let result:{accepted:boolean};try{result=await this.d.transport(permit,'query',stillApproved)}catch{return {ok:false,state:'unknown',task:b.taskId,error:'original continuation query unavailable; no resend'}}
+   let result:{accepted:boolean;ready?:boolean};try{result=await this.d.transport(permit,'query',stillApproved)}catch{return {ok:false,state:'unknown',task:b.taskId,query:'unavailable',phase,error:'original continuation query unavailable; no resend'}}
    if(result.accepted){if(!stillApproved())throw Error('approval changed while reconciling');this.d.outbound.narrowPhase(this.original(card,task).records,'accepted');return {ok:true,state:'accepted',task:b.taskId}}
-   return {ok:false,state:'unknown',task:b.taskId,error:'original recovery delivery remains unknown; no second POST permitted'}
+   const fresh=this.original(card,task),freshPhases=new Set(fresh.records.map(r=>r.narrowRecovery?.phase))
+   if(!this.matches(b,fresh))throw Error('original chain changed during query')
+   if(result.ready&&freshPhases.size===1&&freshPhases.has('prepared')&&this.d.now()>=permit.issuedAt&&this.d.now()<permit.expiresAt)return {ok:true,state:'prepared',task:b.taskId,query:'ready',phase:'prepared'}
+   return {ok:false,state:'unknown',task:b.taskId,query:'unknown',phase:freshPhases.size===1?fresh.records[0]!.narrowRecovery!.phase:'inconsistent',error:'original recovery delivery remains unknown; no second POST permitted'}
   }
   if(this.d.now()<permit.issuedAt||this.d.now()>=permit.expiresAt)throw Error('receiver permit expired')
   this.d.outbound.narrowPhase(original.records,'dispatching')

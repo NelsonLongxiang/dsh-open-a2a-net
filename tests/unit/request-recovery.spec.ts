@@ -16,6 +16,15 @@ function fixture(){const sender=key(),receiver=key(),cli=key();let now=1_700_000
  return{sender,receiver,binding,proposal,claim,file,store,tick:(ms:number)=>{now+=ms},reopen:()=>new RequestRecoveryStore(file,()=>now),grant:()=>store.grant(proposal,receiver,'receiver owner checked original attempts and stopped the old chain',true)}
 }
 describe('owner-reconciled one-request admission',()=>{
+ it('advertises ready only for an unexpired unused permit and never after consume/revoke',()=>{
+  const f=fixture(),p=f.grant(),b=f.binding,fp=recoveryFingerprint(b)
+  expect(f.store.outcome(b.taskId,fp)).toBe('ready')
+  expect(f.reopen().outcome(b.taskId,fp)).toBe('ready')
+  expect(f.store.outcome('another',fp)).toBeUndefined()
+  f.store.consume(p,f.claim);expect(f.reopen().outcome(b.taskId,fp)).toBe('unknown')
+  const revoked=fixture();revoked.grant();revoked.store.revoke(revoked.binding.requestId);expect(revoked.store.outcome(revoked.binding.taskId,recoveryFingerprint(revoked.binding))).toBe('unknown')
+  const expired=fixture();expired.grant();expired.tick(3_600_001);expect(expired.store.outcome(expired.binding.taskId,recoveryFingerprint(expired.binding))).toBe('unknown')
+ })
  it('one original request fence cannot block another caller or target that reuses an old task id',()=>{
   const f=fixture();f.grant();const b=f.binding
   expect(f.store.fences(b.caller,b.target,'different body',b.originalTasks[0]!)).toBe(true)

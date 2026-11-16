@@ -72,7 +72,7 @@ export class RequestRecoveryRuntime {
   const row=this.d.ledger.archive().find(r=>r.taskId===binding.taskId)
   return !!row&&row.endedBy==='receipt'&&row.direction==='outbound'&&row.team===binding.target&&row.peer===binding.receiverHome&&row.peerKey===binding.receiverKey&&row.deliveredTo===binding.target&&row.contextId===binding.contextId&&row.sender?.kind==='cli'&&row.sender.id===binding.caller&&row.settledBy?.caller===caller&&caller===binding.target&&row.settledBy.chain_role==='target'&&message.includes('[A2A receipt] task '+binding.taskId)
  }
- async transport(raw:RecoveryPermit,mode:'send'|'query',current:()=>boolean):Promise<{accepted:boolean}>{
+ async transport(raw:RecoveryPermit,mode:'send'|'query',current:()=>boolean):Promise<{accepted:boolean;ready?:boolean}>{
   const permit=verifyRecoveryPermit(raw);if(!permit)throw Error('invalid receiver permit')
   const b=permit.proposal.binding,identity=this.identity(b.caller)
   if(!identity||Object.entries(identity).some(([k,v])=>b[k as keyof RecoveryBinding]!==v)||!current())throw Error('original sender approval or identity changed')
@@ -81,7 +81,7 @@ export class RequestRecoveryRuntime {
   if(!fresh||Object.entries(fresh).some(([k,v])=>b[k as keyof RecoveryBinding]!==v)||!current())throw Error('sender changed before recovery effect')
   if(mode==='query'){
    const q=await this.d.post(b.receiverHome,'/a2a/query',{task_id:b.taskId,fingerprint:recoveryFingerprint(b)})
-   return {accepted:q.task_id===b.taskId&&q.recovery_delivery==='accepted'}
+   return {accepted:q.task_id===b.taskId&&q.recovery_delivery==='accepted',ready:q.task_id===b.taskId&&q.found===true&&q.status==='pending'&&q.recovery_delivery==='ready'&&!this.d.ledger.find(b.taskId)&&!this.d.ledger.archive().some(row=>row.taskId===b.taskId)}
   }
   const now=(this.d.now??Date.now)();if(now<permit.issuedAt||now>=permit.expiresAt)throw Error('receiver permit expired')
   if(this.d.ledger.find(b.taskId)||this.d.ledger.archive().some(r=>r.taskId===b.taskId))throw Error('original continuation already tracked; query only')

@@ -51,7 +51,7 @@ export const KV_TTL_DAYS = 7
 /** S25 O5: a message still unsent this long after its first failure is gone. */
 export const GONE_AFTER_MS = 24 * 3_600_000
 /** The host's admission vocabulary (src/cli-deposit.ts MAIL_ADMISSIONS): a row record keeps an admission only from this set. */
-export const ADMISSION_VALUES: ReadonlySet<string> = new Set(['scope-off', 'host-face', 'local-exempt', 'roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org', 'node-fact', 'cli-deposit', 'superagent-intake'])
+export const ADMISSION_VALUES: ReadonlySet<string> = new Set(['scope-off', 'host-face', 'local-exempt', 'roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org', 'node-fact', 'cli-deposit', 'superagent-intake', 'request-recovery'])
 /** The host's proof vocabulary (src/task-auth.ts AuthProof): a row record keeps a proof only from this closed set. */
 const PROOF_VALUES: ReadonlySet<string> = new Set(['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound', 'cli-identity', 'in-process', 'none'])
 /** The structured health values a health record may keep; free text (such as a CLI error) stays in the live report only. */

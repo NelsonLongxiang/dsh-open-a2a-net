@@ -88,7 +88,7 @@ export interface SuperagentHostDeps {
   readonly narrowRecovery?: {
     identity:(caller:string)=>NarrowIdentity|undefined
     proposal:(binding:RecoveryBinding)=>Promise<RecoveryProposal>
-    transport:(permit:RecoveryPermit,mode:'send'|'query',current:()=>boolean)=>Promise<{accepted:boolean}>
+    transport:(permit:RecoveryPermit,mode:'send'|'query',current:()=>boolean)=>Promise<{accepted:boolean;ready?:boolean}>
     receipt:(binding:RecoveryBinding,caller:string,message:string)=>boolean
   }
   readonly outboundOutcome?: (input: { sender: string; task: string; address: string; message: string }) => { delivery: 'unknown' | 'not-sent' | 'accepted' }
