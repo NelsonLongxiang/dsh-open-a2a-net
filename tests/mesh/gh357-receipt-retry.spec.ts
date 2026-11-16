@@ -9,11 +9,16 @@ const nativeFetch=globalThis.fetch.bind(globalThis)
 const state=(base:string)=>nativeFetch(base+'/__dsh_a2a/state').then(r=>r.json())
 const receiptPosts=(payloads:unknown[],task:string)=>payloads.filter((p:any)=>{const text=typeof p==='string'?p:(p?.content??[]).map((b:any)=>b.text??'').join('');const at=text.indexOf(' sent:');return at>=0&&text.slice(at+6).trimStart().startsWith('[A2A receipt] task '+task+' ')})
 const finish=(agent:any,task:string)=>{agent.session.events.push({type:'turn/start'},{type:'user/message',data:{content:[{type:'text',text:'[A2A direct] (task '+task+') sender sent:'}]}},{type:'assistant/message',data:{message:{content:[{type:'text',text:'work completed'}]}}},{type:'turn/end',data:{reason:{kind:'completed'}}})}
-it.each(['ledger','lost-response','ledger-lost-response','permanent','exhausted','replay','replay-pending','conflict'] as const)('automatic receipt recovers '+ '%s'+' failure with one fixed identity and no duplicate delivery',async mode=>{
+const failureModes=['ledger','lost-response','ledger-lost-response','permanent','exhausted','replay','replay-pending','conflict'] as const
+type FailureMode=typeof failureModes[number]
+async function exercise(mode:FailureMode,delayedObservation=false):Promise<void>{
  const pa=await reservePort(),pb=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb
  const a=await bootNode({name:'retryA',session:'retryA',team:'alpha',port:pa,peers:[bu],sessionNodes:true,teamScopeRouting:false,silent:true,asyncNudgeDelayMs:86400000})
  const b=await bootNode({name:'retryB',session:'retryB',team:'beta',port:pb,peers:[au],sessionNodes:true,teamScopeRouting:false,silent:true,asyncNudgeDelayMs:86400000})
  const bodies:string[]=[],statuses:number[]=[];let lost=false
+ // The recoverable disk fault belongs to the first attempt, not to test-observer latency.
+ let releaseRecovery!:()=>void
+ const recoveryReady=new Promise<void>(resolve=>{releaseRecovery=resolve})
  try{
   for(const n of[a,b])await fetch(n.baseUrl+'/__dsh_a2a/join',{method:'POST',body:JSON.stringify({id:String(n.agents.agent!.id)})})
   const sent=await a.ctx.tools.get('a2a_route')!.execute({team:'beta/01234567',message:'work',async:true},runContext(a.agents.agent))as any;expect(sent.ok).toBe(true);const task=sent.task_id
@@ -23,7 +28,10 @@ it.each(['ledger','lost-response','ledger-lost-response','permanent','exhausted'
   const queries:string[]=[],replay=mode==='replay'||mode==='replay-pending'
   const original=nativeFetch;vi.spyOn(globalThis,'fetch').mockImplementation(async(url,init)=>{
    const receipt=String(url)===au+'/a2a/direct'&&init?.method==='POST'&&String(init.body).includes('[A2A receipt] task '+task)
-   if(receipt)bodies.push(String(init!.body))
+   if(receipt){
+    bodies.push(String(init!.body))
+    if(bodies.length>1&&(mode==='ledger'||mode==='ledger-lost-response'))await recoveryReady
+   }
    if(replay&&String(url)===au+'/a2a/query'){queries.push(String(init?.body));return mode==='replay-pending'&&queries.length===1?new Response(JSON.stringify({found:true,status:'pending'}),{status:200}):new Response('not found',{status:404})}
    if(receipt&&mode==='permanent')return new Response(JSON.stringify({error:'authorization mismatch',code:-32000}),{status:403})
    if(receipt&&mode==='conflict')return new Response(JSON.stringify({error:'task id reused with a different payload',code:-32002,replay:false}),{status:409})
@@ -49,16 +57,20 @@ it.each(['ledger','lost-response','ledger-lost-response','permanent','exhausted'
    await vi.waitFor(()=>expect(bodies).toHaveLength(2),{timeout:3000}) // Only explicit not-inserted allows the same transport retry.
    expect((await state(bu)).tasks.find((r:any)=>r.taskId===task)).toMatchObject({status:'pending',receiptDelivery:'receipt-undelivered'});expect((await state(bu)).archived.some((r:any)=>r.taskId===task)).toBe(false);expect(new Set(bodies).size).toBe(1);return
   }
+  // Deterministically let a retry become due before the test observes the original failure.
+  if(delayedObservation)await vi.waitFor(()=>expect(bodies.length).toBeGreaterThan(1),{timeout:3000})
   if(mode==='ledger'||mode==='ledger-lost-response'){
    // The first attempt's answer and the undelivered mark land after the request is sent: wait for them, do not race them.
    await vi.waitFor(async()=>{expect(statuses[0]).toBe(503);expect((await state(bu)).tasks.find((r:any)=>r.taskId===task)).toMatchObject({status:'pending',receiptDelivery:'receipt-undelivered'})},{timeout:3000})
    expect((await state(au)).tasks.some((r:any)=>r.taskId===task)).toBe(true)
    expect((await state(bu)).tasks.find((r:any)=>r.taskId===task).reminderAttempts).toBeUndefined()
-   expect((await state(bu)).archived.some((r:any)=>r.taskId===task)).toBe(false);fault.active=false
+   expect((await state(bu)).archived.some((r:any)=>r.taskId===task)).toBe(false);fault.active=false;releaseRecovery()
   }
   await vi.waitFor(async()=>{expect((await state(au)).archived.filter((r:any)=>r.taskId===task)).toHaveLength(1);expect((await state(bu)).archived.filter((r:any)=>r.taskId===task)).toHaveLength(1)},{timeout:4000})
   expect(bodies.length).toBe(mode==='lost-response'?1:2);expect(new Set(bodies.map(x=>JSON.parse(x).task_id)).size).toBe(1);expect(new Set(bodies).size).toBe(1)
   expect((await state(au)).archived.find((r:any)=>r.taskId===task).endedBy).toBe('receipt');expect(receiptPosts(a.steered,task)).toHaveLength(1)
   expect(receiptPosts(b.steered,task)).toHaveLength(0)
- }finally{fault.active=false;await a.dispose();await b.dispose()}
-})
+ }finally{fault.active=false;releaseRecovery();await a.dispose();await b.dispose()}
+}
+it.each(failureModes)('automatic receipt recovers '+ '%s'+' failure with one fixed identity and no duplicate delivery',async mode=>exercise(mode))
+it.each(['ledger','ledger-lost-response'] as const)('automatic receipt preserves its exact retry when the %s failure observer lags',async mode=>exercise(mode,true))

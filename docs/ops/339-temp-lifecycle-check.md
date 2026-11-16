@@ -64,3 +64,11 @@ runner的专属DSH_HOME只建立每轮与真实宿主的隔离，不等于所有
 原非作者 direct-135c5119 对准确4fa472351给required1：两工厂先归一化dshHome、随后spread可由own-property undefined覆盖，恢复共享默认home。原104专项通过没有覆盖该输入，不据此消掉拒审。新增两工厂各两项guard（省略/显式undefined），在插件构造前要求独立非空owned目录；显式非空home复用和显式空串解析继续保留。旧源码真实2过/2败、104过滤未选，两个失败均为undefined而非string；修复仅让归一化dshHome在普通overrides之后赋值。修复后相关7项通过/101过滤未选，两份完整受影响文件108/0/0、外层0，未改变产品默认home语义、原产品断言、限时、skip或并行配置。
 
 旧4fa的完整单worker诊断在取消请求到达前已自行结束raw1，必须按完整失败保留：2474过/4败/5原skip、2483总数、286文件、外层remaining=[]。失败为两项原5000ms超时、一处回执状态断言与Windows journal0600断言；不将此诊断替换默认门或用partial通过拼绿，不称它被成功取消。本R1仅测试工厂输入修复，仍须新准确头窄复审，原Windows隐私、默认完整质量、RC/包/OPS与运行门各自未过。
+
+## PR #708 回执故障观察接缝（2026-11-16，不迁完整质量PASS）
+
+原gh357恢复测试在完成业务后注入接收方账本写故障，待测试核对首次503和两端欠账再解除。观察原用例的一次状态跟踪显示首次NOT_INSERTED后安排1秒重试、早于重试解除故障时原断言通过；这一轻载结果不解释所有历史失败。确定对照让观察者等第二尝试已进入才继续，未改原断言或限时，实际两个恢复场景各发生额外失败尝试、最终需第三次原身份投递，原exact2断言变红；两端最终结清，不据此把产品恢复判为不可用。
+
+本片只修测试故障的因果同步：原八种模式抽取同一exercise，recoverable ledger及ledger-lost-response的后继测试transport在调用真实fetch前等待首次失败核对及故障解除，记录body仍在等待前，原固定transport/text/单次消费/账本结清/无ownerfallback的断言不改；release在finally也执行，避免失败收尾阻塞。原permanent/conflict/exhausted/replay/unknown等分支不接该门，不改变产品timer/backoff、持久化、HTTP或重试预算，不增加waitFor/test限时或skip/worker覆盖。新增两项真实观察滞后反例，旧源码0过/2败（都exact3vs2）、8过滤未选；修复后原八加两项10/0/0，相关5文件44/0/0、外层remaining=[]。
+
+原2479默认全量、341默认wire、2483单worker完整诊断及其所有失败/跳过原件继续保留；本确定竞争只证明一种测试失效机制，不冒它是以前全部超时或某次空archive失败的唯一根因。Windows journal0600/有效ACL、完整默认质量、原verify:core安装步骤、formalRC/准确包/独立OPS与运行门均未由44项通过消除。新精确提交/独立增量复核另做，不重复原8df夹具审或改变原隐私裁决。
