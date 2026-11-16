@@ -9,8 +9,15 @@ const scratchGlob = resolve(repoRoot, 'tmp').replaceAll('\\', '/').replace(/([*?
 
 export default defineConfig({
   test: {
+    // Vitest 4: worker limits are top-level test options; the removed
+    // poolOptions.forks.maxWorkers setting does not constrain execution.
+    // Bound I/O-heavy suites without changing assertions or deadlines.
+    maxWorkers: 1,
     // A plugin instance in a test makes the superagent team's ygl-trees workspace and projects (ygl-home.ts); without this it
     // would write them into the developer's real ~/.ygl-trees-superagent.
+    // Honor a runner-owned ygl workspace when provided (the lifecycle gate cleans it);
+    // fall back to a per-process temp dir for bare invocations. Without this the
+    // suite leaves an unowned ygl dir in the temp root and the gate cannot clear.
     env: { SUPERAGENT_YGL_HOME: process.env.A2A_TEST_YGL_HOME ?? mkdtempSync(join(tmpdir(), 'a2a-test-ygl-')) },
     // jsdom is requested per-file through @vitest-environment docblocks.
     server: {
