@@ -5,7 +5,7 @@
  * 一层入口，三层递归：
  *   L·引擎  ygl-trees `verify self-check`——判官验证自己（canonical 向量 →
  *           语料摘要 → 形状 → 全语料实跑 → 归档链，六环；缺语料诚实 SKIP）
- *   L·证据  `verify archive verify`——重算本候选最新 run 归档的完整 hash 链
+ *   L·证据  `verify archive verify`——重算本次 CLI run 返回的准确归档完整 hash 链
  *           （spec/材料/报告逐字节可复现，防「报告被改过」）
  *   L·判定  `verify run`——冻结 spec 在当前快照上的 15 单元判定（本层不重跑
  *           门禁，读探针刚冻结的快照；探针是命令证据的采集面）
@@ -16,7 +16,9 @@
  * 退出码：0 = 三层全绿；1 = 任一层失败（含 skip 不算失败，但单独点名）；2 = 调用契约错误（未执行任何引擎/判定）。
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { bindCurrentRunArchive, acceptCurrentArchiveVerification } from "./verify-archive-binding.mjs";
 import { resolve } from "node:path";
 import { resolveRunSelection, submissionFromProbe } from "./verify-submission.mjs";
 
@@ -25,7 +27,7 @@ const YGL_BIN = process.env.YGL_BIN ?? resolve(REPO, "..", "ygl-trees", "dist/ap
 const YGL_HOME = process.env.YGL_HOME ?? resolve(REPO, "tmp/ygl-verify");
 const SPEC_ID = process.env.A2A_SPEC_ID ?? "spec_bdf9df9d3851";
 const CORPUS = process.env.YGL_VERIFY_CORPUS ?? resolve(REPO, "..", "ygl-trees", "packages/verify/core/corpus");
-const ARCHIVES = resolve(YGL_HOME, "verify/archives");
+// Archive identity comes only from the current CLI run, never directory order.
 
 const argv = process.argv.slice(2);
 
@@ -46,11 +48,16 @@ const runJson = (args, opts = {}) => {
     env: { ...process.env, YGL_HOME }, ...opts,
   });
   const out = (res.stdout ?? "").trim();
-  const json = out.startsWith("{") || out.startsWith("[") ? JSON.parse(out) : { ok: false, error: out || `exit ${res.status}` };
-  return { status: res.status ?? -1, json };
+  let json;
+  try {
+    json = JSON.parse(out);
+    if (!json || typeof json !== "object" || Array.isArray(json)) throw Error("expected one result object");
+  } catch { json = { ok: false, error: "verifier did not return one complete JSON result object" }; }
+  return { status: res.status ?? -1, signal: res.signal ?? null, error: res.error ? String(res.error) : null, json };
 };
 
 const layers = [];
+let currentRunResult = null, snapshotShaBeforeRun = null;
 
 /* ── L·引擎：判官自证 ─────────────────────────────────── */
 {
@@ -60,7 +67,7 @@ const layers = [];
   const skipped = items.filter(i => i.status === "skip");
   layers.push({
     layer: "engine-self-check",
-    ok: res.status === 0 && res.json.ok === true,
+    ok: res.status === 0 && !res.error && !res.signal && res.json.ok === true,
     detail: `${items.filter(i => i.status === "ok").length} ok / ${skipped.length} skip / ${failed.length} fail`,
     ...(failed.length > 0 ? { problems: failed.map(f => `${f.id}: ${f.detail}`) } : {}),
     ...(skipped.length > 0 ? { skipped: skipped.map(s => s.id) } : {}),
@@ -99,33 +106,27 @@ if (argv.includes("--fresh")) {
   } else if (!submission.ok) {
     layers.push({ layer: "spec-run", ok: false, detail: submission.error });
   } else {
+    snapshotShaBeforeRun = createHash("sha256").update(readFileSync(snapshot)).digest("hex");
     const res = runJson(["verify", "run", SPEC_ID, "--db", snapshot, "--submission", submission.path, "--json"]);
+    currentRunResult = res;
     layers.push({
       layer: "spec-run",
-      ok: res.status === 0 && res.json.overall === "PASS",
+      ok: res.status === 0 && !res.error && !res.signal && res.json.overall === "PASS",
       detail: `${res.json.overall ?? "?"} ${JSON.stringify(res.json.summary ?? {})}`,
       ...(res.json.run_id !== undefined ? { run_id: res.json.run_id } : {}),
     });
   }
 }
 
-/* ── L·证据：最新归档 hash 链重算 ──────────────────────── */
+/* ── L·证据：只核当前 run 的准确归档；缺失或错绑不回退 ─── */
 {
-  if (!existsSync(ARCHIVES)) {
-    layers.push({ layer: "archive-chain", ok: false, detail: `no archives dir: ${ARCHIVES}` });
-  } else {
-    const zips = readdirSync(ARCHIVES).filter(f => f.endsWith(".zip")).sort();
-    if (zips.length === 0) {
-      layers.push({ layer: "archive-chain", ok: false, detail: "no archived runs yet" });
-    } else {
-      const latest = zips[zips.length - 1];
-      const res = runJson(["verify", "archive", "verify", resolve(ARCHIVES, latest), "--json"]);
-      layers.push({
-        layer: "archive-chain",
-        ok: res.json.ok === true,
-        detail: `${latest} — ${res.json.items ?? "?"} items${(res.json.problems ?? []).length > 0 ? `, problems: ${res.json.problems.join("; ")}` : ""}`,
-      });
-    }
+  try {
+    const binding = bindCurrentRunArchive(currentRunResult, SPEC_ID, snapshotFile, snapshotShaBeforeRun);
+    const res = runJson(["verify", "archive", "verify", binding.path, "--json"]);
+    const verified = acceptCurrentArchiveVerification(res, binding);
+    layers.push({ layer: "archive-chain", ok: true, detail: verified.path + " — " + verified.items + " items", ...verified });
+  } catch (error) {
+    layers.push({ layer: "archive-chain", ok: false, detail: String(error.message ?? error) });
   }
 }
 
