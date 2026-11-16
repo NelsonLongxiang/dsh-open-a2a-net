@@ -20,7 +20,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync, realpathSync, lstatSync, openSync, closeSync } from "node:fs";
-import { inspectCandidateSource } from "./verify-submission.mjs";
+import { inspectCandidateSource, exportCandidateSubmission } from "./verify-submission.mjs";
 import { dirname, resolve, join, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
@@ -253,15 +253,8 @@ const after = inspectCandidateSource(REPO, source.sha, sourceRepo);
 if (JSON.stringify(after.entries) !== JSON.stringify(source.entries) || after.clean !== source.clean) throw Error("candidate source changed during collection");
 const collectorAfter = inspectCandidateSource(COLLECTOR_ROOT, collector.sha, sourceRepo);
 if (JSON.stringify(collectorAfter.entries) !== JSON.stringify(collector.entries)) throw Error("collector source changed during collection");
-const SUBMISSION = mkdtempSync(join(RUN_DIR, "dsh-a2a-submission-"));
+const SUBMISSION = exportCandidateSubmission(REPO, source.entries, RUN_DIR);
 const tracked = source.entries.map(entry => entry.path);
-for (const rel of tracked) {
-  const dest = resolve(SUBMISSION, rel);
-  mkdirSync(dirname(dest), { recursive: true });
-  const bytes = readFileSync(resolve(REPO, rel));
-  if (createHash("sha256").update(bytes).digest("hex") !== source.entries.find(entry => entry.path === rel).sha256) throw Error("source changed during submission export: " + rel);
-  writeNew(dest, bytes);
-}
 writeNew(join(RUN_DIR, "source-manifest.json"), JSON.stringify({ sha: source.sha, tree: source.tree, kind: source.kind, files: source.entries }, null, 2) + "\n");
 console.error(`[probe] submission exported: ${tracked.length} tracked files -> ${SUBMISSION}`);
 

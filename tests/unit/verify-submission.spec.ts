@@ -102,6 +102,11 @@ async function boundRun(files: Array<{ path: string; content: string; mode?: '10
 const sample = [{ path: 'package.json', content: '{"name":"x"}\n' }, { path: 'src/main.ts', content: 'export {}\n' }]
 
 describe('new-mode admission binds the actual snapshot, manifest and submission bytes', () => {
+  it('uses the production exporter and retains executable-mode counterexamples', () => {
+    const result = spawnSync(process.execPath, ['--test', join(process.cwd(), 'tests', 'gates', 'submission-export-mode.mjs')], { encoding: 'utf8', timeout: 10000 })
+    expect(result.error).toBeUndefined()
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+  })
   it('accepts one genuinely consistent run and reports what was verified', async () => {
     const f = await boundRun(sample)
     const result = submissionFromProbe(f.summary, f.snapshot, f.head)
