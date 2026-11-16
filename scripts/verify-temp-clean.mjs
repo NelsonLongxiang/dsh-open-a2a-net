@@ -16,7 +16,10 @@ for (const parent of [join(repo, 'tmp'), runs]) {
   if (existsSync(parent) && lstatSync(parent).isSymbolicLink()) throw Error('test temp parent is a link')
   mkdirSync(parent, { recursive: true })
 }
-const root = mkdtempSync(join(runs, 'run-'))
+const tmpBase = process.env.A2A_RUN_TMP_BASE
+// Optional: place the owned temp root on a faster volume (e.g. the OS temp dir).
+// Default stays the project tmp so lifecycle ownership is unchanged.
+const root = tmpBase ? mkdtempSync(join(tmpBase, 'a2a-test-temp-root-')) : mkdtempSync(join(runs, 'run-'))
 const yglHome = join(root, 'superagent-ygl')
 let status = 1, signal = null, remaining = [], cleanupError
 try {
