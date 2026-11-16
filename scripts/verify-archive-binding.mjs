@@ -51,6 +51,7 @@ function processSucceeded(result) {
 export function bindCurrentRunArchive(result, specId, snapshotFile, expectedSnapshotSha256) {
   if (!processSucceeded(result)) throw Error('current spec command did not exit successfully')
   const run = result.json, archive = run.archive
+  if (Object.hasOwn(run, 'archive_error')) throw Error('current run reported archive_error; no archive may be accepted')
   if (!/^run_[a-z0-9_-]+$/i.test(run.run_id ?? '') || run.spec_id !== specId || !Number.isSafeInteger(run.spec_version) || run.spec_version < 1 || !['PASS', 'FAIL'].includes(run.overall)) throw Error('current CLI run identity is invalid')
   if (!archive || !/^arc_[a-z0-9_-]+$/i.test(archive.archive_id ?? '') || !tagged(archive.archive_sha256) || !hash(archive.zip_sha256)) throw Error('current run has no bound archive; no fallback archive is allowed')
   const snapshotSha256 = sha(bytesAt(snapshotFile)), reportBytes = bytesAt(run.report_path, 16 * 1024 * 1024), report = JSON.parse(reportBytes.toString('utf8'))
