@@ -8,8 +8,8 @@
 import { cleanupBeforeTempDirs, mkdtempSync } from '../temp-dirs.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateKeyPairSync } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
@@ -117,9 +117,9 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     cardCacheTtlMs: 60_000,
     cardCacheNegativeTtlMs: 30_000,
     remoteRowsTtlMs: 15_000,
-    dshHome: overrides.dshHome ?? tmpHome(),
     cardTtlMs: 172_800_000,
     ...overrides,
+    dshHome: overrides.dshHome ?? tmpHome(),
   }
 }
 
@@ -400,6 +400,22 @@ describe('a2a plugin announce (peer discovery)', () => {
 })
 
 describe('a2a plugin decentralized routing (peers)', () => {
+  it.each([false, true])('normalizes optional fixture homes before composing nodes (own-undefined=%s)', ownUndefined => {
+    const overrides: Partial<Config> = ownUndefined ? { dshHome: undefined } : {}
+    expect(Object.hasOwn(overrides, 'dshHome')).toBe(ownUndefined)
+    const first = makeConfig(overrides), second = makeConfig({ ...overrides })
+    expect(typeof first.dshHome).toBe('string')
+    expect(first.dshHome).not.toBe('')
+    expect(typeof second.dshHome).toBe('string')
+    expect(second.dshHome).not.toBe(first.dshHome)
+    for (const home of [first.dshHome, second.dshHome]) {
+      expect(dirname(resolve(home))).toBe(resolve(tmpdir()))
+      expect(lstatSync(home).isDirectory()).toBe(true)
+      expect(lstatSync(home).isSymbolicLink()).toBe(false)
+    }
+    expect(makeConfig({ dshHome: first.dshHome }).dshHome).toBe(first.dshHome)
+    expect(makeConfig({ dshHome: '' }).dshHome).toBe('')
+  })
   it('isolates default fixture nodes while an explicit home preserves idempotency across restart', async () => {
     const first = makeConfig(), second = makeConfig()
     // Reject a default/inherited home before constructing any plugin on the old fixture.

@@ -5,8 +5,8 @@
  * limited per session, message-capped.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { join } from 'node:path'
-import { readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { lstatSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { cleanupBeforeTempDirs, mkdtempSync } from '../temp-dirs.ts'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -61,9 +61,9 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     cardCacheTtlMs: 60_000,
     cardCacheNegativeTtlMs: 30_000,
     remoteRowsTtlMs: 15_000,
-    dshHome: overrides.dshHome ?? mkdtempSync(join(tmpdir(), 'a2a-report-host-')),
     cardTtlMs: 172_800_000,
     ...overrides,
+    dshHome: overrides.dshHome ?? mkdtempSync(join(tmpdir(), 'a2a-report-host-')),
   }
 }
 
@@ -94,6 +94,22 @@ async function getReports(port: number): Promise<ReportFace['reports']> {
 }
 
 describe('a2a_report unjoined-node ingress', () => {
+  it.each([false, true])('normalizes optional fixture homes before composing nodes (own-undefined=%s)', ownUndefined => {
+    const overrides: Partial<Config> = ownUndefined ? { dshHome: undefined } : {}
+    expect(Object.hasOwn(overrides, 'dshHome')).toBe(ownUndefined)
+    const first = makeConfig(overrides), second = makeConfig({ ...overrides })
+    expect(typeof first.dshHome).toBe('string')
+    expect(first.dshHome).not.toBe('')
+    expect(typeof second.dshHome).toBe('string')
+    expect(second.dshHome).not.toBe(first.dshHome)
+    for (const home of [first.dshHome, second.dshHome]) {
+      expect(dirname(resolve(home))).toBe(resolve(tmpdir()))
+      expect(lstatSync(home).isDirectory()).toBe(true)
+      expect(lstatSync(home).isSymbolicLink()).toBe(false)
+    }
+    expect(makeConfig({ dshHome: first.dshHome }).dshHome).toBe(first.dshHome)
+    expect(makeConfig({ dshHome: '' }).dshHome).toBe('')
+  })
   it('keeps same-session report hosts on independent homes, keys and report state', async () => {
     const a = await mountHost(), b = await mountHost()
     try {
