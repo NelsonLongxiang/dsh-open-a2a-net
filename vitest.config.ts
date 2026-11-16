@@ -5,6 +5,10 @@ import { join } from 'node:path'
 
 export default defineConfig({
   test: {
+    // Vitest 4: worker limits are top-level test options; the removed
+    // poolOptions.forks.maxWorkers setting does not constrain execution.
+    // Bound I/O-heavy suites without changing assertions or deadlines.
+    maxWorkers: 1,
     // A plugin instance in a test makes the superagent team's ygl-trees workspace and projects (ygl-home.ts); without this it
     // would write them into the developer's real ~/.ygl-trees-superagent.
     // Honor a runner-owned ygl workspace when provided (the lifecycle gate cleans it);
