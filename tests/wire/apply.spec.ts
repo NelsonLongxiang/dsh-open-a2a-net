@@ -5,7 +5,7 @@
  * all against a fake agents service. Client wire behavior is covered by
  * client.spec.ts against src/a2a-client.ts seams.
  */
-import { mkdtempSync } from '../temp-dirs.ts'
+import { cleanupBeforeTempDirs, mkdtempSync } from '../temp-dirs.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateKeyPairSync } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -117,7 +117,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     cardCacheTtlMs: 60_000,
     cardCacheNegativeTtlMs: 30_000,
     remoteRowsTtlMs: 15_000,
-    dshHome: '',
+    dshHome: overrides.dshHome ?? tmpHome(),
     cardTtlMs: 172_800_000,
     ...overrides,
   }
@@ -279,7 +279,7 @@ describe('a2a plugin announce (peer discovery)', () => {
       await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
       await ctx.plugin(SystemPrompt)
       await ctx.plugin(ToolRuntime)
-      apply(ctx, makeConfig({ announce: true }))
+      apply(ctx, makeConfig({ announce: true, dshHome: '' }))
       const port = (ctx as unknown as { webServer: WebServer }).webServer.port
       expect((await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).status).toBe(200)
       await ctx.fiber.dispose()
@@ -400,6 +400,54 @@ describe('a2a plugin announce (peer discovery)', () => {
 })
 
 describe('a2a plugin decentralized routing (peers)', () => {
+  it('isolates default fixture nodes while an explicit home preserves idempotency across restart', async () => {
+    const first = makeConfig(), second = makeConfig()
+    // Reject a default/inherited home before constructing any plugin on the old fixture.
+    expect(first.dshHome).not.toBe('')
+    expect(second.dshHome).not.toBe(first.dshHome)
+    expect(makeConfig({ dshHome: first.dshHome }).dshHome).toBe(first.dshHome)
+    expect(makeConfig({ dshHome: '' }).dshHome).toBe('')
+    const boot = async (config: Config) => {
+      const ctx = new Context()
+      cleanupBeforeTempDirs(() => ctx.fiber.dispose())
+      await ctx.plugin(SystemPrompt)
+      await ctx.plugin(ToolRuntime)
+      await ctx.plugin(TimerService)
+      await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+      apply(ctx, { ...config, sessionNodes: true })
+      const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+      const base = 'http://127.0.0.1:' + String(port)
+      return {
+        ctx,
+        state: async () => {
+          const response = await fetch(base + '/__dsh_a2a/state'), body = await response.text()
+          expect(response.status, body).toBe(200)
+          return JSON.parse(body) as { idempotency: { window: number } }
+        },
+        send: async (message: string) => await fetch(base + '/a2a/direct', {
+          method: 'POST', body: JSON.stringify({ team: 'dsh', message, task_id: 'fixture-independent-key' }),
+        }),
+      }
+    }
+    const a = await boot(first), b = await boot(second)
+    try {
+      expect((await a.state()).idempotency.window).toBe(0)
+      expect((await b.state()).idempotency.window).toBe(0)
+      await expect((await a.send('first node only')).json()).resolves.toMatchObject({ error: 'No live DSH agent is available to accept this message.' })
+      expect((await a.state()).idempotency.window).toBe(1)
+      expect((await b.state()).idempotency.window).toBe(0)
+      await expect((await b.send('same key, independent node')).json()).resolves.toMatchObject({ error: 'No live DSH agent is available to accept this message.' })
+      expect((await b.state()).idempotency.window).toBe(1)
+      await a.ctx.fiber.dispose()
+      const restarted = await boot(makeConfig({ dshHome: first.dshHome }))
+      try {
+        expect((await restarted.state()).idempotency.window).toBe(1)
+        const conflict = await restarted.send('changed on the same explicit home')
+        expect(conflict.status).toBe(409)
+        await expect(conflict.json()).resolves.toMatchObject({ replay: false, error: 'task id reused with a different payload' })
+      } finally { await restarted.ctx.fiber.dispose() }
+    } finally { await a.ctx.fiber.dispose(); await b.ctx.fiber.dispose() }
+  })
   it('serves a direct route with no agents service composed at all', async () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)

@@ -50,3 +50,11 @@ GitHub 只读核对当时仓库 Actions workflow 数量为0，本修复分支无
 V1整合/隔离已获原非作者静态可采纳、必修0（原direct-4313f53c）；这不是全量或新提交验收。后继明确诊断：wire339过/1个本机ENOBUFS失败；显式单worker unit1620过/1断言败/3原skip，另shadow tally夹具六个SQLite连接未关导致suite收尾EPERM；单worker mesh515过/2原skip，外层0。均是独立诊断，不替换原默认全量FAIL，也不把单worker参数写入当前候选。
 
 SQLite后继窄修只在原测试的make工厂创建连接后用现有cleanupBeforeTempDirs登记close，不改生产采集器、SQL判据、断言、用例数或限时。原型16项15过/1个原5秒心跳反例超时，原红保留；落源码后针对原checkTally用例验证1过/15过滤未选、outer0。Windows合成临时文件请求0600和0666在Node24.12均报告mode0666，但实际ACL未测；原0600承诺及断言不据该诊断豁免。新精确提交还须非作者delta/绑定、完整工程与原RC/OPS分别验收。
+
+## PR #708 独占节点夹具修订（2026-11-16，继续保留默认全量失败）
+
+runner的专属DSH_HOME只建立每轮与真实宿主的隔离，不等于所有测试节点互相隔离。静态逐调用核对后，本片只改实际仍使用共享默认home的apply和report-ingress两份wire夹具：默认每次分配现有tracked allocator拥有的独占目录；显式home继续保留重启/持久化语义，专门的空home解析用例显式传空串并使用自己DSH_HOME哨兵。report夹具在启动服务前登记fiber关闭，原成功dispose保留；其他原已显式独占home的文件不动。
+
+新回归先在旧工厂因空home失败，发生在插件构造前；修复首轮新测试遗漏sessionNodes造成状态路由空响应，4过/1败，原红留存，随后补齐仅新夹具前置并先核HTTP状态/原文。新增两个真实用例核默认节点幂等键隔离/显式同home重启保键和409冲突，以及同session report主机目录/合成key/报告互不串扰；共享非空home负向控制在插件构造前的路径不等断言变红。未读取真实identity/ledger，也未修改实际ACL。
+
+两份最终完整受影响文件104/0/0，外层remaining=[]/entries0；先前默认wire整套335过/6败/0跳，共341，外层0，五个5秒超时和一处回执状态断言不符的原记录保留，不能据两文件通过宣整套通过。后续新增report回归后分母增1，既有断言/预算/默认并发/skip/应用代码/runner配置都不改。三层类型、文档与结构检查0。此片仍是测试隔离修复，不补原Windows0600、默认并行全量、完整verify:core安装步骤、正式RC/准确包或独立OPS门；原514的增量审不自动迁新提交，后继精确审另核。

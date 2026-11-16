@@ -5,6 +5,10 @@
  * limited per session, message-capped.
  */
 import { describe, expect, it, vi } from 'vitest'
+import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { cleanupBeforeTempDirs, mkdtempSync } from '../temp-dirs.ts'
 import { Context, Service } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -57,7 +61,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     cardCacheTtlMs: 60_000,
     cardCacheNegativeTtlMs: 30_000,
     remoteRowsTtlMs: 15_000,
-    dshHome: '',
+    dshHome: overrides.dshHome ?? mkdtempSync(join(tmpdir(), 'a2a-report-host-')),
     cardTtlMs: 172_800_000,
     ...overrides,
   }
@@ -67,16 +71,18 @@ interface ReportFace {
   reports: Array<{ at: number; level: string; message: string; session: string; task?: string }>
 }
 
-async function mountHost(): Promise<{ ctx: Context; port: () => number; report: ToolDefinition | undefined }> {
+async function mountHost(): Promise<{ ctx: Context; home: string; port: () => number; report: ToolDefinition | undefined }> {
   const ctx = new Context()
+  cleanupBeforeTempDirs(() => ctx.fiber.dispose())
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(TimerService)
   await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   await ctx.plugin(FakeAgentsService)
-  apply(ctx, makeConfig({ dshHome: '' }))
+  const config = makeConfig()
+  apply(ctx, config)
   return {
-    ctx,
+    ctx, home: config.dshHome,
     port: () => (ctx as unknown as { webServer: WebServer }).webServer.port,
     report: ctx.tools.get('a2a_report'),
   }
@@ -88,6 +94,22 @@ async function getReports(port: number): Promise<ReportFace['reports']> {
 }
 
 describe('a2a_report unjoined-node ingress', () => {
+  it('keeps same-session report hosts on independent homes, keys and report state', async () => {
+    const a = await mountHost(), b = await mountHost()
+    try {
+      expect(a.home).not.toBe('')
+      expect(b.home).not.toBe(a.home)
+      expect(readFileSync(join(a.home, 'a2a', 'node-key.pem'), 'utf8'))
+        .not.toBe(readFileSync(join(b.home, 'a2a', 'node-key.pem'), 'utf8'))
+      const caller = { agent: { id: SessionId('same-fixture-reporter') } }
+      await expect(a.report?.execute({ message: 'only first' }, caller)).resolves.toMatchObject({ ok: true })
+      expect((await getReports(a.port())).map(row => row.message)).toEqual(['only first'])
+      expect(await getReports(b.port())).toEqual([])
+      await expect(b.report?.execute({ message: 'only second' }, caller)).resolves.toMatchObject({ ok: true })
+      expect((await getReports(b.port())).map(row => row.message)).toEqual(['only second'])
+      expect((await getReports(a.port())).map(row => row.message)).toEqual(['only first'])
+    } finally { await a.ctx.fiber.dispose(); await b.ctx.fiber.dispose() }
+  })
   it('an unjoined session can report — the join gate exemption is the point', async () => {
     const { ctx, port, report } = await mountHost()
     // The calling session is NOT a joined node and the fake has no
