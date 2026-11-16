@@ -41,6 +41,7 @@ import {
 import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt, type LayoutViewport } from './viewport'
 import { dropDispatch, localXY } from './planning-drop'
 import { buildChildChip, childChipTitle } from './planning-root'
+import { createFrameSelection } from './planning-frame-selection'
 import { boardBounds, fitBelowHud, hudBottomOf } from './planning-fit'
 import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters, NODE_W, NODE_H } from './world'
 import { applyAction, settleAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
@@ -126,17 +127,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   // by targeting cards directly).
   const frameLayer = document.createElement('div')
   frameLayer.className = 'p-layer p-frames'
-  /** The selected frame keeps its resize handles visible without hover. */
-  let selectedFrame: string | undefined
-  const markSelectedFrame = (name: string | undefined): void => {
-    if (selectedFrame !== undefined) {
-      frameEls.get(selectedFrame)?.classList.remove('selected')
-    }
-    selectedFrame = name
-    if (name !== undefined) {
-      frameEls.get(name)?.classList.add('selected')
-    }
-  }
+  // Frame multi-selection is presentation-only, never a membership or layout write.
+  const frameSelection = createFrameSelection(() => frameEls, () => { model.setSelection([]); renderNodes() })
   const nodeLayer = document.createElement('div')
   nodeLayer.className = 'p-layer p-nodes'
   nodeLayer.setAttribute('role', 'listbox')
@@ -440,6 +432,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     for (const [name, el] of [...frameEls]) {
       if (!seen.has(name)) { el.remove(); frameEls.delete(name) }
     }
+    frameSelection.sync()
   }
 
   // ── keyed diff: nodes ──
@@ -731,21 +724,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       return
     }
     const handleEl = target !== null ? target.closest<HTMLElement>('.p-frame-handle') : null
-    // Selection clearing: any press NOT on the selected frame's own chrome
-    // (head/handle/body) drops the frame selection.
-    if (selectedFrame !== undefined) {
-      const selFrameEl = frameEls.get(selectedFrame)
-      const onSelectedChrome = target !== null && selFrameEl !== undefined &&
-        (selFrameEl.contains(target) || selFrameEl === target)
-      const onSelectedHead = headEl !== null && headEl.dataset.frame === selectedFrame
-      if (!onSelectedChrome && !onSelectedHead) markSelectedFrame(undefined)
-    }
+    frameSelection.beforePointer(target)
     if (handleEl !== null && ev.button === 0) {
       // Frame resize (owner ruling): record the frame's current rect and
       // the world-space origin; the move branch re-solves the rect per
       // direction with a minimum size clamp.
       const name = handleEl.dataset.frame ?? ''
-      markSelectedFrame(name)
+      frameSelection.select(name)
       const rect = model.getFrame(name)
       if (rect === undefined) return
       gesture = { kind: 'frame-resize', name, dir: handleEl.dataset.dir ?? 'se', startRect: { ...rect }, origin: screenToWorld(vp, p.x, p.y), moved: false }
@@ -767,7 +752,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const name = headEl.dataset.frame ?? ''
       // Selecting a frame keeps its resize handles visible (hover-only
       // handles vanished the moment the pointer left).
-      markSelectedFrame(name)
+      frameSelection.select(name, ev.shiftKey)
       const snap = model.beginFrameDrag(name)
       if (snap === undefined) return
       gesture = { kind: 'frame', name, snap, origin: screenToWorld(vp, p.x, p.y), moved: false }
@@ -997,6 +982,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
     if (ev.key === ' ' && ev.target === root) { spaceDown = true; ev.preventDefault(); return }
     // 键盘全等路径（WCAG 2.2 Dragging Movements）：
+    if (frameSelection.keyboard(ev)) return
     const headTarget = (ev.target as Element | null)?.closest?.('.p-frame-head') ?? null
     if ((ev.key === 'Enter' || ev.key === ' ') && headTarget !== null) {
       ev.preventDefault()
@@ -1005,6 +991,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       return
     }
     if (ev.key === ' ' && (ev.target as Element | null)?.classList?.contains('p-node')) {
+      frameSelection.clear()
       const el = ev.target as HTMLElement
       const id = el.dataset.id ?? ''
       const current = model.selectedIds()
@@ -1028,7 +1015,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     if (ev.key === '-') { zoomCenter(1 / 1.2); return }
     if (ev.key === 'Escape') {
       if (menus.isMenuOpen()) { menus.closeMenu(); render(); return } // menu > clear selection
-      model.setSelection([])
+      model.setSelection([]); frameSelection.clear()
       render()
       return
     }
