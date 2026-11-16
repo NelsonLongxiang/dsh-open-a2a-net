@@ -1,6 +1,6 @@
 /** Guard the installed Vitest 4 scheduling contract, not an obsolete config spelling. */
 import { spawnSync } from 'node:child_process'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 // Read configuration only: the child must not execute a nested copy of the suite.
 const inspect = [
@@ -10,17 +10,24 @@ const inspect = [
 ].join(';')
 
 describe('installed Vitest scheduling and lifecycle contract', () => {
-  it('actually resolves one fork worker at unchanged limits and uses the owned ygl workspace', () => {
-    expect(process.env.A2A_TEST_YGL_HOME).toBeTruthy()
-    const result = spawnSync(process.execPath, ['--input-type=module', '-e', inspect], {
-      cwd: process.cwd(), env: process.env, encoding: 'utf8', timeout: 15000,
-    })
-    expect(result.error).toBeUndefined()
-    expect(result.status, result.stderr).toBe(0)
-    expect(result.stderr).not.toContain('test.poolOptions')
-    const config = JSON.parse(result.stdout)
-    expect(config).toMatchObject({ pool: 'forks', maxWorkers: 1, testTimeout: 5000, hookTimeout: 10000, retry: 0 })
-    expect(config.projects).toHaveLength(1)
-    expect(config.projects[0]).toMatchObject({ maxWorkers: 1, testTimeout: 5000, yglHome: process.env.A2A_TEST_YGL_HOME })
+  it.each([true, false])('resolves the configured worker and ygl workspace (outer variable present=%s)', outerVariable => {
+    if (!outerVariable) vi.stubEnv('A2A_TEST_YGL_HOME', undefined)
+    try {
+      // Bare Vitest inherits its configured SUPERAGENT_YGL_HOME; an outer lifecycle
+      // runner additionally provides A2A_TEST_YGL_HOME. Accept either without
+      // allocating a second workspace or making the runner mandatory.
+      const yglHome = process.env.A2A_TEST_YGL_HOME ?? process.env.SUPERAGENT_YGL_HOME
+      expect(yglHome).toBeTruthy()
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', inspect], {
+        cwd: process.cwd(), env: { ...process.env, A2A_TEST_YGL_HOME: yglHome }, encoding: 'utf8', timeout: 15000,
+      })
+      expect(result.error).toBeUndefined()
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stderr).not.toContain('test.poolOptions')
+      const config = JSON.parse(result.stdout)
+      expect(config).toMatchObject({ pool: 'forks', maxWorkers: 1, testTimeout: 5000, hookTimeout: 10000, retry: 0 })
+      expect(config.projects).toHaveLength(1)
+      expect(config.projects[0]).toMatchObject({ maxWorkers: 1, testTimeout: 5000, yglHome })
+    } finally { vi.unstubAllEnvs() }
   })
 })

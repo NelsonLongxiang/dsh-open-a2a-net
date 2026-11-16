@@ -1,21 +1,37 @@
 #!/usr/bin/env node
 /** Test lifecycle gate: run unchanged commands with an owned empty temp root; leaks fail before cleanup. */
-import { mkdtempSync, readdirSync, rmSync, lstatSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdtempSync, readdirSync, rmSync, lstatSync, mkdirSync, existsSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 const custom = process.argv.slice(2)
 if (custom[0] === '--') custom.shift()
 const external = custom.length > 0
-const command = external ? custom.shift() : process.execPath
-const args = external ? custom : process.env.npm_execpath ? [process.env.npm_execpath, 'run', 'verify:core'] : undefined
+// Package managers may be native executables (.exe on Windows, extensionless
+// on Unix), or JavaScript entrypoints that must run under the current Node.
+const manager = process.env.npm_execpath
+const nativeManager = manager && !/[.](?:cjs|mjs|js)$/i.test(manager)
+const command = external ? custom.shift() : nativeManager ? manager : process.execPath
+const args = external ? custom : manager ? nativeManager ? ['run', 'verify:core'] : [manager, 'run', 'verify:core'] : undefined
 if (!args) throw Error('run with pnpm verify, or pass -- <executable> <arguments>')
-const root = mkdtempSync(join(tmpdir(), 'a2a-test-temp-root-'))
+const repo = realpathSync(fileURLToPath(new URL('..', import.meta.url)))
+const runs = join(repo, 'tmp', 'test-runs')
+for (const parent of [join(repo, 'tmp'), runs]) {
+  if (existsSync(parent) && lstatSync(parent).isSymbolicLink()) throw Error('test temp parent is a link')
+  mkdirSync(parent, { recursive: true })
+}
+const root = mkdtempSync(join(runs, 'run-'))
+const yglHome = join(root, 'superagent-ygl')
 let status = 1, signal = null, remaining = [], cleanupError
 try {
-  const child = spawn(command, args, { stdio: 'inherit', env: { ...process.env, TMPDIR: root, TEMP: root, TMP: root, NODE_DISABLE_COMPILE_CACHE: '1' } })
+  const child = spawn(command, args, { stdio: 'inherit', env: { ...process.env, TMPDIR: root, TEMP: root, TMP: root, A2A_TEST_YGL_HOME: yglHome, NODE_DISABLE_COMPILE_CACHE: '1' } })
   const settled = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', (code, sig) => resolve({ code, sig })) })
   status = settled.code ?? 1; signal = settled.sig
+  // Only the explicitly owned ygl workspace is expected; other residue fails.
+  if (existsSync(yglHome)) {
+    if (lstatSync(yglHome).isSymbolicLink()) throw Error('owned ygl workspace was replaced by a link')
+    rmSync(yglHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  }
   remaining = readdirSync(root)
   if (remaining.length) {
     status = 1
