@@ -111,7 +111,7 @@ if (argv.includes("--fresh")) {
     currentRunResult = res;
     layers.push({
       layer: "spec-run",
-      ok: res.status === 0 && !res.error && !res.signal && res.json.overall === "PASS",
+      ok: res.status === 0 && !res.error && !res.signal && !Object.hasOwn(res.json, "archive_error") && res.json.overall === "PASS",
       detail: `${res.json.overall ?? "?"} ${JSON.stringify(res.json.summary ?? {})}`,
       ...(res.json.run_id !== undefined ? { run_id: res.json.run_id } : {}),
     });

@@ -60,6 +60,8 @@ function fixture(scenario = 'correct') {
   const a = artifact('run_aaaa', 'a-current.yglverify.zip', overrides), b = artifact('run_bbbb', 'z-newer-unrelated.yglverify.zip')
   const result: any = { run_id: a.report.run_id, spec_id: spec, spec_version: 1, overall, summary: totals, report_path: a.reportPath, archive: a.archive }
   if (scenario === 'no-current-archive') result.archive = null
+  if (scenario === 'archive-error' || scenario === 'archive-error-with-stale-archive') result.archive_error = 'synthetic current-run archive failure'
+  if (scenario === 'archive-error') result.archive = null
   if (scenario === 'current-missing') rmSync(a.path)
   if (scenario === 'current-corrupt') writeFileSync(a.path, 'not a ZIP')
   if (scenario === 'substituted-path') result.archive.path = b.path
@@ -72,7 +74,7 @@ function fixture(scenario = 'correct') {
     "const f=JSON.parse(readFileSync(process.env.BINDING_CASE,'utf8')),args=process.argv.slice(2)",
     "appendFileSync(f.calls,JSON.stringify(args)+'\\n')",
     "if(args[1]==='self-check'){console.log(JSON.stringify({ok:true,items:[]}))}",
-    "else if(args[1]==='run'){if(f.scenario==='mutated-snapshot')appendFileSync(f.snapshot,'changed');console.log(f.scenario==='malformed-cli'?'not-json':f.scenario==='null-cli'?'null':f.scenario==='array-cli'?'[]':JSON.stringify(f.result));if(f.scenario==='run-nonzero')process.exitCode=9}",
+    "else if(args[1]==='run'){if(f.scenario==='mutated-snapshot')appendFileSync(f.snapshot,'changed');console.log(f.scenario==='malformed-cli'?'not-json':f.scenario==='null-cli'?'null':f.scenario==='array-cli'?'[]':JSON.stringify(f.result));if(f.scenario==='run-nonzero'||f.scenario==='archive-error')process.exitCode=9}",
     "else if(args[1]==='archive'&&args[2]==='verify'){if(f.scenario==='mutated-archive-during-verify')writeFileSync(f.currentPath,'replaced');if(f.scenario==='mutated-snapshot-during-verify')appendFileSync(f.snapshot,'changed');if(f.scenario==='mutated-report-during-verify')appendFileSync(f.result.report_path,' ');const v={...f.verify};if(f.scenario==='verify-false')v.ok=false;if(f.scenario==='verify-wrong-id')v.archive_id='arc_other';console.log(JSON.stringify(v));if(f.scenario==='verify-nonzero')process.exitCode=7}",
     "else{console.error('unexpected synthetic CLI operation');process.exitCode=8}",
   ].join('\n'))
@@ -104,11 +106,12 @@ describe('recursive current-run archive identity (synthetic CLI flow)', () => {
     expect(result.out.layers.find((v: any) => v.layer === 'archive-chain')).toMatchObject({ ok: true, run_id: 'run_aaaa', path: f.a.path })
     expect(result.calls.filter((args: string[]) => args[1] === 'archive')).toEqual([['verify', 'archive', 'verify', f.a.path, '--json']])
   })
-  it.each(['no-current-archive', 'current-missing', 'current-corrupt', 'substituted-path', 'wrong-run-archive', 'wrong-report', 'wrong-manifest-spec', 'wrong-manifest-run', 'wrong-manifest-payload', 'wrong-manifest-snapshot', 'mutated-snapshot', 'malformed-cli', 'null-cli', 'array-cli', 'run-nonzero'])('fails closed for %s rather than falling back to a newer valid ZIP', scenario => {
+  it.each(['no-current-archive', 'archive-error', 'archive-error-with-stale-archive', 'current-missing', 'current-corrupt', 'substituted-path', 'wrong-run-archive', 'wrong-report', 'wrong-manifest-spec', 'wrong-manifest-run', 'wrong-manifest-payload', 'wrong-manifest-snapshot', 'mutated-snapshot', 'malformed-cli', 'null-cli', 'array-cli', 'run-nonzero'])('fails closed for %s rather than falling back to a newer valid ZIP', scenario => {
     const f = fixture(scenario), result = execute(f)
     expect(result.status).toBe(1)
     expect(result.out.ok).toBe(false)
     expect(result.out.layers.find((v: any) => v.layer === 'archive-chain').ok).toBe(false)
+    if (scenario.startsWith('archive-error')) expect(result.out.layers.find((v: any) => v.layer === 'spec-run').ok).toBe(false)
     expect(result.calls.filter((args: string[]) => args[1] === 'archive')).toEqual([])
   })
   it.each(['verify-nonzero', 'verify-false', 'verify-wrong-id', 'mutated-archive-during-verify', 'mutated-snapshot-during-verify', 'mutated-report-during-verify'])('refuses %s even when the CLI prints an ok-shaped body', scenario => {
