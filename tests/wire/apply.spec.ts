@@ -98,6 +98,7 @@ function replyingAgent(ctx: Context): ReturnType<typeof makeAgent> {
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
     apiKey: '',
+    originClaimWindow: true, // #64: fixture posts unsigned deliveries (production default is closed)
     session: 'sess-1',
     team: 'dsh',
     routeTimeoutMs: 60_000,
@@ -2347,8 +2348,8 @@ describe('a2a plugin module surface', () => {
       referralLearning: true,
       // gh#8 (N9): team resolution rides the seeded/delegate basis only.
       referralTeamResolution: false,
-      // gh#9+gh#10 OriginClaim window (default open during migration).
-      originClaimWindow: true,
+      // gh#9+gh#10 OriginClaim window: closed by default since #64 step 1 (2026-11-17).
+      originClaimWindow: false,
       // OriginClaim audience binding: unbound window open, no extra audiences.
       originClaimUnboundWindow: true,
       canvasLegacyBareMembers: true,

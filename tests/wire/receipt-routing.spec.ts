@@ -137,6 +137,7 @@ async function mount(options: { peers?: string[]; announce?: boolean; joined?: s
   }
   apply(ctx, {
     apiKey: '',
+    originClaimWindow: true, // #64: fixture posts unsigned deliveries (production default is closed)
     session: 'bridge-test',
     team: 'dsh',
     routeTimeoutMs: 60_000,
