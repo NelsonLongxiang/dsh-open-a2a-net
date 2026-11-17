@@ -4,7 +4,7 @@ Status: agreed with the workbench market on 2026-11-11 (its items N1c, N1d and N
 
 ## Context
 
-A receipt is `[A2A receipt] task <id> <one line>` plus one JSON envelope line ([receipt-envelope-v2](receipt-envelope-v2.md)). Today the envelope can say `outcome`, `disposition` (`result`, `attention`, `acknowledged`) and a few audit keys. Every reader ignores keys it does not know.
+A receipt is `[A2A receipt] task <id> <one line>` plus one JSON envelope line ([receipt-envelope-v2](../protocol/receipt-envelope-v2.md)). Today the envelope can say `outcome`, `disposition` (`result`, `attention`, `acknowledged`) and a few audit keys. Every reader ignores keys it does not know.
 
 The gaps:
 

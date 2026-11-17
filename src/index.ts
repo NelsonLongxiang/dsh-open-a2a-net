@@ -3192,7 +3192,7 @@ export function apply(ctx: Context, config: Config): void {
     const handle = (session: string): string => `${config.team}/${id8(session)}`
     return {
       zone: config.team,
-      scope: [config.teamScopeRouting, config.originClaimWindow !== false],
+      scope: [config.teamScopeRouting, config.originClaimWindow === true],
       joined: joinedSessions.list().map(handle),
       roster: teamMemberships.list().flatMap(entry => entry.teams.map(team => [handle(entry.session), team] as const)),
       // Local members by their handle (design §2.3), remote refs as they are stored.

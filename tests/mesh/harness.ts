@@ -179,6 +179,9 @@ function meshConfig(options: MeshNodeOptions): Config {
     sessionNodes: options.sessionNodes ?? false,
     teamScopeRouting: options.teamScopeRouting ?? true,
     teamScopeInfo: options.teamScopeInfo ?? true,
+    // #64 step 1: production closes the OriginClaim window by default; mesh fixtures post unsigned deliveries straight at
+    // a node to play a caller, so they keep it open unless a test closes it (origin-claim-window.spec.ts pins closed).
+    originClaimWindow: options.originClaimWindow ?? true,
     wakeJoinedOnBoot: options.wakeJoinedOnBoot ?? false,
     wakePrewarmDelayMs: options.wakePrewarmDelayMs ?? 0,
     wakePrewarmQuietMs: options.wakePrewarmQuietMs ?? 0,

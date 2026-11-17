@@ -8,8 +8,10 @@
 > Drift from the text below is marked inline as *[2026-10-27 note]*: R1
 > (two cache forms) was superseded by the M2 third-round ruling, the
 > "linked" basis is the three bases of `callerLinkedToThisHost`, and there
-> is no `/a2a/cancel` route. The transition window is still open by default
-> (`originClaimWindow: true`).
+> is no `/a2a/cancel` route. The transition window is closed by default
+> since #64 step 1 (`originClaimWindow: false`; `true` reopens it); the
+> unbound window (`originClaimUnboundWindow`) is still open pending its
+> 7-day measure.
 >
 > **Audience binding (§2.1, adopted — owner ruling 2026-11-01):** the envelope gains a bound form that names the target origin,
 > method and path; the code moved to `src/origin-claim.ts`. This revisits

@@ -43,7 +43,7 @@
 | 开关 | 删除条件（机器判定） | 删后行为 |
 |---|---|---|
 | `originClaimUnboundWindow` | #64：全舰队 `unboundInbound`、`boundMissInbound` 连续 7 天零增量 | 只验绑定形式（Sig2/Sig3） |
-| `originClaimWindow` | 同上，且 `legacyInbound` 连续 7 天为 0 | 无信封即拒 |
+| `originClaimWindow` | 同上，且 `legacyInbound` 连续 7 天为 0。**2026-11-17 属主裁定按 #64 分两步：本项先把默认值翻为 `false`，开关保留供运维回退** | 无信封即拒 |
 | Sig2 单独形式（只对带 body 的请求） | 全舰队 ≥ 0.6.37 且 market 已切严格模式 | 带 body 的请求只认 Sig3，堵住「剥掉 Sig3」的降级 |
 | `settlementAuth: observe` | #125：L10/L13 连续 7 天为绿、`enforceBlockers` 为空、全舰队升级 | 默认 enforce；保留 `observe` 作为应急值但不再是默认 |
 
