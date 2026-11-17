@@ -11,7 +11,7 @@
 - 冷唤醒：继续调 `ctx.apiProxy.materializeSession(sessionId)`（现状已可用，核心零改动）。
 - 归档硬拒：`src/index.ts` `archivedSessionFilter()` 读取 `workspaceRegistry.archivedSessionIds`（公开 getter），命中即拒绝唤醒（wakeColdTeam）并清理 joined intent（pruneArchivedJoins，boot 与 state 读取双路径）。
 - UI 隐藏：`/__dsh_a2a/state` 全量 liveRoots 过滤归档，已归档从未加入的根也不再出现。
-- 测试：`tests/apply.spec.ts` 覆盖 180s 回执时限、boot/runtime 归档清理、归档冷目标不唤醒、归档 live 根不列出。
+- 测试：`tests/wire/apply.spec.ts` 覆盖 180s 回执时限、boot/runtime 归档清理、归档冷目标不唤醒、归档 live 根不列出。
 
 ## 留档
 
