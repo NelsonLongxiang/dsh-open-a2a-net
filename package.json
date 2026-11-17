@@ -91,6 +91,7 @@
     "prepare": "pnpm build",
     "build:presets": "node scripts/build-agent-presets.mjs --write",
     "verify:presets": "node scripts/build-agent-presets.mjs --check",
+    "verify:presets-runtime": "node scripts/verify-agent-presets-runtime.mjs",
     "build": "pnpm build:presets && tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsdown && node scripts/copy-skill.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p pi/extension/tsconfig.json",
     "test": "vitest run",

@@ -27,25 +27,43 @@ const digest = (text: string) => createHash('sha256').update(text).digest('hex')
 
 it('ships generated inline router text without changing preset ids or composition', () => {
   expect(patch).toBe(renderPresetPatch())
-  expect(PRESET_PROMPT_PARTS).toEqual({ router: ['router'] })
+  expect(PRESET_PROMPT_PARTS).toEqual({ router: ['router', 'team-transport'], member: ['member', 'team-transport'], observer: ['observer', 'team-transport'] })
   expect(presets.map(row => row.config!.id)).toEqual(['superagent-router', 'superagent-member', 'superagent-observer', 'superagent-builder'])
   expect(prompt).toBe(presetPrompt('router'))
-  const removePersona = (row: Row) => row.config!.plugins.filter((p: Row) => p.id !== 'persona')
-  expect(removePersona(router)).toEqual(removePersona(rows(template).find(row => row.config?.id === 'superagent-router')!))
+  const expectedComposition = {
+    'superagent-router': 'ad75e44b5141e0d73f84516495e3dda385a554dc40ae28b27d0ac8cf34ed10a6',
+    'superagent-member': 'e2fcd4dfb9ef22e5afc14b73a7288df0bad6e74d3752f28d4ab5b9fea97dd3a7',
+    'superagent-observer': 'e2fcd4dfb9ef22e5afc14b73a7288df0bad6e74d3752f28d4ab5b9fea97dd3a7',
+    'superagent-builder': '04658b48dfdf35e0c2dea710a6f58e4efca5f0ffaca3dfa5c566dfab76175390',
+  }
+  for (const row of presets) {
+    expect(digest(JSON.stringify(row.config!.plugins.filter((p: Row) => p.id !== 'persona')))).toBe(expectedComposition[row.config!.id as keyof typeof expectedComposition])
+  }
   expect(persona(router).complete).not.toBe(true)
   expect(patch).not.toContain('@a2a-prompt(')
 })
 
-it('preserves every upstream byte outside the extracted router persona', () => {
-  // next/0.8 a680279c24e468c253a64341bc6297f1a5811caa; marker replaces only that persona's prefix.
-  expect(digest(template)).toBe('b59ab338c25efb9d2ec7e8c128a4ef1db8bb80cd8e29c993d1cd16a26afcc0e6')
-  const originalBlocks = {"member":"1007f93d1998dbaa1fe9a802734c69cb2dd01664bc66805b9741aeee99dbe83b","observer":"ac7cd821e25db84c820b16bebdb063e83130ecc242e7f1c10bbb9669baa028a1","builder":"bd9fd7efb90f977b97ff3aa813dfd7edeae5f04ca99a177677d0f0d23754bd0e"}
-  for (const [role, sha] of Object.entries(originalBlocks)) {
-    const start = patch.indexOf('    - id: superagent-' + role + '-preset\n')
-    const end = patch.indexOf('    - id: ', start + 10)
-    expect(start).toBeGreaterThan(0)
-    expect(digest(patch.slice(start, end < 0 ? undefined : end))).toBe(sha)
+it('adds only the shared boundary to original worker personas and leaves the builder unchanged', () => {
+  // Exact PR707 parent def0342; original worker text is extracted, not rewritten.
+  const originalPrefixes = { member: '36c6a832f2c229a3b344560b899b937d634687299e8acf36b1dfa8244935ce86', observer: '8093867d8c7d5612bc183542093c8ff5026ba74c847dadd1346870d9f83b958f' }
+  for (const [role, sha] of Object.entries(originalPrefixes)) {
+    const original = readFileSync(new URL('src/superagent/prompts/' + role + '.md', root), 'utf8')
+    expect(digest(original)).toBe(sha)
+    expect(persona(presets.find(row => row.config?.id === 'superagent-' + role)!).prefix).toBe(presetPrompt(role))
+    expect(presetPrompt(role).startsWith(original.trimEnd() + '\n\n')).toBe(true)
   }
+  expect(digest(persona(presets.find(row => row.config?.id === 'superagent-builder')!).prefix)).toBe('f51862d6928b0facc965802135eded05331136b3e6d6b3dc89111f0fd2546f5f')
+})
+
+describe.each(['router', 'member', 'observer'])('%s host-managed transport contract', role => {
+  it('inlines CLI boundaries and preserves source/approval/result distinctions in the final persona', () => {
+    const text = presetPrompt(role)
+    expect(text.match(/## Host-managed team transport/g)).toHaveLength(1)
+    for (const clause of ['host-managed transport, not your permission to run a2a-net route', 'initialize or borrow a CLI identity', 'A CLI signature proves an agent key, not human consent', 'peer or canvas link alone does not establish remote-member serve or root/child registration', 'delivery or acknowledgement alone is not completion']) expect(text).toContain(clause)
+    const rendered = renderPrompt({ sections: [{ name: 'a2a:transport', text }], contexts: [], tools: [], variables: { model: 'test-model' } })
+    expect(rendered).not.toContain('{{')
+    expect(rendered).toMatchSnapshot()
+  })
 })
 
 const channels = [
@@ -82,7 +100,12 @@ it('rejects missing/duplicate/unknown markers and unknown roles', () => {
   expect(() => renderPresetPatch(template.replace(marker, ''))).toThrow(/Expected one A2A prompt marker/)
   expect(() => renderPresetPatch(template.replace(marker, marker + marker))).toThrow(/Expected one A2A prompt marker/)
   expect(() => renderPresetPatch(template + '# @a2a-prompt(unknown)\n')).toThrow(/Unknown A2A prompt marker/)
-  for (const role of ['member', '__proto__', 'unknown']) expect(() => presetPrompt(role)).toThrow(/Unknown A2A preset role/)
+  for (const role of ['member', 'observer']) {
+    const workerMarker = '                @a2a-prompt(' + role + ')\n'
+    expect(() => renderPresetPatch(template.replace(workerMarker, ''))).toThrow(/Expected one A2A prompt marker/)
+    expect(() => renderPresetPatch(template.replace(workerMarker, workerMarker + workerMarker))).toThrow(/Expected one A2A prompt marker/)
+  }
+  for (const role of ['builder', '__proto__', 'unknown']) expect(() => presetPrompt(role)).toThrow(/Unknown A2A preset role/)
 })
 
 it('checks drift before build and keeps generation fail-closed', () => {
