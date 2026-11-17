@@ -2,6 +2,8 @@
 
 状态：已接受，并分阶段实施中（见[实施计划](superagent-a2a-plan.md)）。配套文档：[接入规格](superagent-a2a-spec.md)。本版（r8）按 2026-11-07 的属主裁定修订，涉及 S21、S25–S27、S33、S36、S38。
 
+实现核对（2026-11-18，next/0.8 `44907c00`）：p1 系列（#379–#398）和 p3（#402）已交付。后续形态已被改写：v4 把执行器内置进引擎（#409–#419），v5 改用画布团队（#441–#446），送审由 pr-follow 落地（#516、#517、#519）。本 ADR 作为来历保留，现行设计见 [v5 画布团队](superagent-v5-canvas-team.md) 和 [router-owner-asks](superagent-router-owner-asks.md)。
+
 ## 上下文
 
 dsh-superagent 是单仓库、单主机的工作智能体：从 Source 接活，经 Eval 授权开工单，交给 Executor 执行，经 Channel 回复。它不负责节点发现、调用方身份真伪和跨主机投递；它的架构文档还把「Trigger 字段可信度」列为开放问题。

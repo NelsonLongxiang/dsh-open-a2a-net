@@ -5,6 +5,8 @@
 > **v1.1 对齐注记（2026-10-27，按 master ae7e24d 代码复核）**：v1 锁定后 host 已做两处 shape 扩展而未升文档版本——
 > ① 成员数组为**双形**：本机成员 `{id, team, joined, live}`，远端成员 `{id, team, remote: true}`（0.6.6 c858050 统一画布队模型引入）；
 > ② `canvas` 字段由 host **恒下发**（不再以存在性作开关）。下文 shape 已按现状改写；按本文第 5 条，这属于事后补登的契约变更。
+>
+> **v1.2 待补（2026-11-18，next/0.8 `44907c00`）**：v1.1 之后，host 又给画布载荷加了几个字段，例如 `revision`、`memberSlots`、`retainedMembers` 和成员来源（provenance），本文还没写进去。在补齐之前，以 `src/faces/admin.ts`、`src/canvas-store.ts` 的现行代码为准。
 
 ## 读面：`GET /__dsh_a2a/state` → `canvas` 载荷
 
