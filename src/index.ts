@@ -2801,7 +2801,8 @@ export function apply(ctx: Context, config: Config): void {
     // A day the host runs is a measured day even when nothing arrives: touch it hourly (cheap no-op once it exists).
     const timer = setInterval(() => { windowMeasure.touch() }, 3_600_000)
     timer.unref?.()
-    ctx.effect(() => () => { clearInterval(timer) }, 'a2a: OriginClaim window measure day tick')
+    // close() writes anything left and marks the run clean; an unclean run's days are invalid on the next boot.
+    ctx.effect(() => () => { clearInterval(timer); windowMeasure.close() }, 'a2a: OriginClaim window measure day tick')
   }
   /** Which verified callers missed, and the origin they dialled: what to add to originClaimAudiences (#64). */
   const boundMissRecent: Array<{ caller: string; audience: string; count: number; lastAt: number }> = []
