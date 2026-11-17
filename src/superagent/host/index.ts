@@ -212,7 +212,9 @@ export class SuperagentHost {
     })
     this.ruleChanges = new RuleChanges(join(dir, 'rule-changes.json'))
     this.settingsHistory = new SettingsHistory(join(dir, 'settings-history.json'))
-    this.decisions = new DecisionBook(join(dir, 'decisions.json'), ticketId => { const ticket = this.store.tickets.get(ticketId); return ticket !== undefined && ticket.ended === undefined })
+    // The book prunes decided cards by age: on the host's clock, the one the cards are stamped with (a real clock here would
+    // drop a card the host decided "just now" whenever the two disagree, e.g. a host or test with an injected clock).
+    this.decisions = new DecisionBook(join(dir, 'decisions.json'), ticketId => { const ticket = this.store.tickets.get(ticketId); return ticket !== undefined && ticket.ended === undefined }, () => Date.parse(this.now()))
     this.healthReminders = new HealthReminders(
       (question, key, at) => { const out = this.decisions.propose({ source: 'health', by: 'health', question, reason: key, at, spec: { level: 'P2', options: ['去处理', '先忽略 24 小时'], recommended: '去处理' } }); return out.ok ? out.id : undefined },
       cardId => this.decisions.withdraw(cardId),
