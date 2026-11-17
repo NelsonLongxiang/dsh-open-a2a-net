@@ -49,9 +49,9 @@ export type ProbeVerdict = typeof PROBE_VERDICTS[number]
 export const PROBE_MAX_LATENCY_MS = 2_000
 export const PROBE_MAX_LATENCY_CAP_MS = 60_000
 type ProbeRow = { url: string; reachable: boolean; verdict?: ProbeVerdict; ms?: number; team?: string; error?: string }
-/** A positive finite bound, capped; anything else falls back to the default. */
+/** A positive finite bound in whole milliseconds (at least 1), capped; anything else falls back to the default. */
 export const probeLatencyBound = (value: unknown): number =>
-  typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(Math.round(value), PROBE_MAX_LATENCY_CAP_MS) : PROBE_MAX_LATENCY_MS
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(Math.max(1, Math.round(value)), PROBE_MAX_LATENCY_CAP_MS) : PROBE_MAX_LATENCY_MS
 const probeSummary = (rows: readonly ProbeRow[]): string => {
   const up = rows.filter(row => row.reachable).length
   const slow = rows.filter(row => row.verdict === 'slow').length
@@ -812,7 +812,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         + '(the same fetch discovery uses), reporting reachable peers with their team and latency and unreachable '
         + 'ones with the failure reason. Pass url to probe one target instead of the whole fleet. '
         + 'While teamScopeInfo is on (default), the sweep covers only peers serving a joined team, and a single URL is refused unless its verified card proves service. '
-        + 'Each probed row carries a verdict: reachable, slow (answered, but slower than maxLatencyMs), rejected (answered with a card that does not verify) or unreachable. '
+        + 'Each probed row carries a verdict: reachable, slow (answered, but slower than maxLatencyMs), rejected (answered with a card that does not verify) or unreachable. The verdict covers the host card only, not whether a session there accepts work. '
         + 'Use it before dispatching verification work or when routes fail over, instead of guessing which node is down.',
       parameters: {
         url: { type: 'string', description: 'Optional single peer base URL to probe; empty probes every tracked peer.' },

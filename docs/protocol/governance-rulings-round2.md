@@ -10,7 +10,7 @@
 > |---|---|---|
 > | A1 hub/anycast `strategy`, `protoVersion` gate | **retired** | Never implemented and nothing consumes it. The org topology is the #819 two-layer structure (root team and domain routers dispatch). |
 > | A2 group `visibility: public\|private` | **superseded** by #19 | The per-session tiers (`linked`/`fleet`; a group takes its strictest member's tier). |
-> | A3 `captain-frozen`, `autoPromoteOnLoss` | **retired** | Automatic promotion would open a takeover path. A router that stops answering shows up in the `a2a_probe` verdict instead. |
+> | A3 `captain-frozen`, `autoPromoteOnLoss` | **retired** | Automatic promotion would open a takeover path. `a2a_probe` reports host-card reachability, latency and card rejection only; it does not show that a router session is alive, accepts work or consumes turns (T2 session liveness stays retired). |
 > | A4 composite anchors | **superseded** by #19 | See exposure-grants.md. |
 > | C1 OriginClaim | **implemented** (different shape, 0.6.23) | `{caller, callerUrl, ts}`, bare-zone caller, ±5 min window, no nonce; the transition windows close per #64. See delivery-origin-auth.md. |
 > | C2 hop guard | **implemented in part; the rest retired** | The hop budget is implemented (#57 F2/F3, recursion-guard.md). The `visited[]` set, the deadline comparison and the `hopsConsumed/hopsRemaining` ledger meters are retired: a receiving host never forwards again, so the wire has one forward hop and no cycle can form. Reopen if multi-hop forwarding is added. |

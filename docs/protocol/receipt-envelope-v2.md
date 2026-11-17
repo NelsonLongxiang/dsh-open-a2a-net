@@ -185,7 +185,8 @@ still `reachable: true`), `rejected` (answered with a card that does not
 verify) or `unreachable`. A URL refused by the S5 scope gets no verdict,
 because it was not probed. Retired: "two consecutive degradations ⇒ dead",
 the `minScore` floor and the T2 tier. T3 stays: the `/a2a/direct` response
-carries `consumed`.]*
+carries `consumed`. The verdict covers the host card only: a peer whose card
+answers is `reachable` even if no session there accepts or consumes work.]*
 
 | Tier | Signal | Source | Meaning |
 |---|---|---|---|
