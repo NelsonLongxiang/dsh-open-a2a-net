@@ -63,4 +63,15 @@ describe('the health check', () => {
     expect(m.h.state()).toHaveProperty('health')
     await m.h.stop()
   })
+  it('without an explicit time it reads the host\'s clock, as the stamps it compares (#722)', async () => {
+    // The fixture's clock sits in 2026-11; the real clock is days or years away. Neither the timer's call nor state() passes a time.
+    const m = await team(new Set(['session-r', 'session-a']))
+    const ticket = m.open()
+    await vi.waitFor(() => { expect(m.h.executor.bindingOf('session-a')?.ticketId).toBe(ticket) })
+    expect(m.h.health()).toEqual([])
+    expect(m.h.state().health).toEqual([])
+    m.clock.ms += (QUIET_MINUTES + 5) * 60_000
+    expect(m.h.health()).toEqual([expect.objectContaining({ code: 'ticket-quiet', ticketId: ticket, minutes: QUIET_MINUTES + 5 })])
+    await m.h.stop()
+  })
 })

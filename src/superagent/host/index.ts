@@ -1702,7 +1702,9 @@ export class SuperagentHost {
    * @param now - the clock, in milliseconds.
    * @returns the team's problems.
    */
-  health(now = Date.now()): Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> {
+  // #722: default to the host's clock, the one routerFailure.at and the engine's updatedAt are stamped with (as #721 did for the
+  // decision book); the real clock here misreported a ticket quiet for days whenever the host's clock was injected.
+  health(now = Date.parse(this.now())): Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> {
     const out: Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> = []
     const loaded = this.d.sessionLoaded
     if (loaded === undefined || !this.teamBound()) return out
