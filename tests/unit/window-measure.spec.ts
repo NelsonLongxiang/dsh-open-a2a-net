@@ -16,28 +16,63 @@ const at = (iso: string): number => Date.parse(iso)
 const file = (): string => join(mkdtempSync(join(tmpdir(), 'window-measure-')), 'a2a', 'origin-claim-window.json')
 const zero = (day: string) => ({ day, legacy: 0, unbound: 0, boundMiss: 0 })
 const firstSix = () => Array.from({ length: 6 }, (_, i) => zero('2026-11-' + String(i + 1).padStart(2, '0')))
-const seed = (path: string, days: unknown[], run: unknown = { since: '2026-11-01', clean: true }) => {
+// A clean previous run whose last record is two minutes before the 2026-11-07T12:00Z boot the tests use: a covered restart.
+const seed = (path: string, days: unknown[], run: unknown = { since: '2026-11-01', clean: true, lastSeenAt: Date.parse('2026-11-07T11:58:00Z') }) => {
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, JSON.stringify({ run, days }))
 }
 const onDisk = (path: string) => JSON.parse(readFileSync(path, 'utf8')) as { run: { since: string; clean: boolean }; days: Array<{ day: string; unbound: number; invalid?: true }> }
 
 describe('OriginClaim window measure', () => {
-  it('counts by UTC day and survives a clean restart', () => {
+  it('counts by UTC day and survives a short restart; the first boot day is only partly measured', () => {
     const path = file()
     let now = at('2026-11-10T12:00:00Z')
     const first = new WindowMeasure(path, () => now)
     first.note('unbound'); first.note('boundMiss'); first.note('boundMiss')
     first.close()
-    now += DAY
+    now += 2 * 60_000
     const view = new WindowMeasure(path, () => now).view()
     expect(view.since).toBe('2026-11-10')
     expect(view.persisted).toBe(true)
-    expect(view.days).toEqual([
-      { day: '2026-11-11', legacy: 0, unbound: 0, boundMiss: 0 },
-      { day: '2026-11-10', legacy: 0, unbound: 1, boundMiss: 2 },
-    ])
-    expect(view.zeroStreakDays).toBe(0)
+    expect(view.days).toEqual([{ day: '2026-11-10', legacy: 0, unbound: 1, boundMiss: 2, invalid: true }])
+  })
+
+  it('a short restart keeps the streak; a long gap marks its days invalid', () => {
+    const path = file()
+    let now = at('2026-11-01T12:00:00Z')
+    const m = new WindowMeasure(path, () => now)
+    for (let i = 0; i < 8; i++) { now += DAY; m.touch() }
+    m.close()
+    now += 2 * 60_000
+    const restarted = new WindowMeasure(path, () => now)
+    expect(restarted.view().zeroStreakDays).toBe(7)
+    restarted.close()
+    now += DAY
+    const afterGap = new WindowMeasure(path, () => now)
+    expect(afterGap.view().days.slice(0, 2).every(d => d.invalid === true)).toBe(true)
+    expect(afterGap.view().zeroStreakDays).toBe(0)
+  })
+
+  it('re-review R2: a run whose first marker never reached disk cannot leave the previous clean marker vouching for it', () => {
+    const path = file()
+    let now = at('2026-11-01T12:00:00Z')
+    const prior = new WindowMeasure(path, () => now)
+    for (let day = 0; day < 6; day++) { now += DAY; prior.touch() }
+    prior.close()
+    expect(onDisk(path).run.clean).toBe(true)
+    const blocked = `${path}.${String(process.pid)}.tmp`
+    mkdirSync(blocked) // only this test's own temporary-file path: even the new run's first write fails
+    const active = new WindowMeasure(path, () => now)
+    expect(active.view().persisted).toBe(false)
+    active.note('unbound')
+    active.close()
+    expect(onDisk(path).run.clean).toBe(true) // the failed run left nothing behind
+    rmdirSync(blocked)
+    now += DAY
+    const next = new WindowMeasure(path, () => now)
+    expect(next.view().persisted).toBe(true)
+    expect(next.view().zeroStreakDays).toBeLessThan(7)
+    expect(next.view().days.find(d => d.day === '2026-11-07')?.invalid).toBe(true)
   })
 
   it('streak = whole days before today that the host ran with all counts at zero', () => {
@@ -88,7 +123,7 @@ describe('OriginClaim window measure', () => {
 
   it('R1: a valid historical non-zero count is kept as is', () => {
     const path = file()
-    seed(path, [...firstSix(), { day: '2026-11-07', legacy: 0, unbound: 2, boundMiss: 1 }])
+    seed(path, [...firstSix(), { day: '2026-11-07', legacy: 0, unbound: 2, boundMiss: 1 }], { since: '2026-11-01', clean: true, lastSeenAt: at('2026-11-08T11:58:00Z') })
     const m = new WindowMeasure(path, () => at('2026-11-08T12:00:00Z'))
     expect(m.view().days.find(d => d.day === '2026-11-07')).toEqual({ day: '2026-11-07', legacy: 0, unbound: 2, boundMiss: 1 })
   })

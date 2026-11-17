@@ -11,7 +11,11 @@
  * - a failed write leaves the measure dirty: the next note or hourly touch retries it, and close() tries once more;
  * - each run records on disk that it has not ended cleanly yet; close() marks it clean only when nothing is left
  *   unwritten. A boot that finds the previous run unclean (a crash, or a write that never landed) marks every day of
- *   that run invalid, because an event of that run may be missing from disk.
+ *   that run invalid, because an event of that run may be missing from disk;
+ * - a run proves the time it covered only by what reached disk: its start, the hourly touch and its close each record
+ *   `lastSeenAt`. A boot more than RESTART_GRACE_MS after the previous run's last recorded moment marks every day of
+ *   that gap invalid — the host may have been down, or running without being able to write (#727 re-review R2: a run
+ *   whose very first marker never landed leaves the previous run's clean marker behind). A short restart is covered.
  * @module window-measure
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -43,6 +47,8 @@ export interface WindowMeasureView {
 /** Buckets kept on disk and shown on the state face. */
 export const WINDOW_KEEP_DAYS = 30
 export const WINDOW_VIEW_DAYS = 14
+/** The longest gap between one run's last recorded moment and the next boot that still counts as a restart. */
+export const RESTART_GRACE_MS = 5 * 60_000
 
 type Bucket = { legacy: number; unbound: number; boundMiss: number; invalid?: true }
 const DAY = /^\d{4}-\d{2}-\d{2}$/
@@ -63,7 +69,7 @@ export class WindowMeasure {
    */
   constructor(private readonly path: string, private readonly now: () => number = Date.now, private readonly warn: (message: string) => void = () => {}) {
     this.runSince = dayOf(now())
-    let previous: { since?: unknown; clean?: unknown } | undefined
+    let previous: { since?: unknown; clean?: unknown; lastSeenAt?: unknown } | undefined
     try {
       if (existsSync(path)) {
         const raw = JSON.parse(readFileSync(path, 'utf8')) as { days?: unknown; run?: unknown }
@@ -78,7 +84,7 @@ export class WindowMeasure {
           this.days.set(row.day, { legacy: row.legacy, unbound: row.unbound, boundMiss: row.boundMiss })
         }
         if (damaged > 0) warn(`a2a: OriginClaim window measure: ${String(damaged)} damaged day record(s) kept as invalid (unknown, never zero)`)
-        if (raw.run !== null && typeof raw.run === 'object') previous = raw.run as { since?: unknown; clean?: unknown }
+        if (raw.run !== null && typeof raw.run === 'object') previous = raw.run as { since?: unknown; clean?: unknown; lastSeenAt?: unknown }
       }
     } catch (error) { warn(`a2a: OriginClaim window measure unreadable, starting empty: ${String(error)}`) }
     if (previous !== undefined && previous.clean !== true) {
@@ -88,15 +94,28 @@ export class WindowMeasure {
       for (const [day, bucket] of this.days) if (day >= since && bucket.invalid !== true) { bucket.invalid = true; marked++ }
       if (marked > 0) warn(`a2a: OriginClaim window measure: the previous run did not end cleanly; ${String(marked)} of its day(s) marked invalid`)
     }
+    // Coverage: the time from the previous run's last recorded moment to now is unmeasured unless it is a short restart.
+    // No record at all (first boot, or a file without run data) leaves today's earlier hours unmeasured too.
+    const nowMs = now()
+    const lastSeen = previous !== undefined && typeof previous.lastSeenAt === 'number' && Number.isFinite(previous.lastSeenAt) && previous.lastSeenAt <= nowMs ? previous.lastSeenAt : undefined
+    if (lastSeen === undefined || nowMs - lastSeen > RESTART_GRACE_MS) {
+      let marked = 0
+      for (let day = dayOf(lastSeen ?? nowMs); day <= this.runSince; day = dayOf(Date.parse(`${day}T00:00:00Z`) + 86_400_000)) {
+        const bucket = this.days.get(day) ?? { legacy: 0, unbound: 0, boundMiss: 0 }
+        if (bucket.invalid !== true) { bucket.invalid = true; marked++ }
+        this.days.set(day, bucket)
+      }
+      if (lastSeen !== undefined && marked > 0) warn(`a2a: OriginClaim window measure: ${String(Math.round((nowMs - lastSeen) / 60_000))} min since the previous run's last record; ${String(marked)} day(s) not fully measured marked invalid`)
+    }
     this.touch()
     this.save()
   }
 
-  /** Mark today as a measured day (boot and the hourly tick call this) and retry a write that failed. */
+  /** Mark today as a measured day and record that the run is alive (boot and the hourly tick call this); retries a failed write. */
   touch(): void {
     const today = dayOf(this.now())
-    if (!this.days.has(today)) { this.days.set(today, { legacy: 0, unbound: 0, boundMiss: 0 }); this.save(); return }
-    if (this.dirty) this.save()
+    if (!this.days.has(today)) this.days.set(today, { legacy: 0, unbound: 0, boundMiss: 0 })
+    this.save()
   }
 
   note(counter: WindowCounter): void {
@@ -135,7 +154,7 @@ export class WindowMeasure {
     try {
       mkdirSync(dirname(this.path), { recursive: true })
       const tmp = `${this.path}.${String(process.pid)}.tmp`
-      const body = { run: { since: this.runSince, clean: this.clean }, days: keep.map(day => ({ day, ...this.days.get(day)! })) }
+      const body = { run: { since: this.runSince, clean: this.clean, lastSeenAt: this.now() }, days: keep.map(day => ({ day, ...this.days.get(day)! })) }
       writeFileSync(tmp, JSON.stringify(body), { mode: 0o600 })
       renameSync(tmp, this.path)
       this.dirty = false
