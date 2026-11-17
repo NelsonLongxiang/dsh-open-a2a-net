@@ -8,6 +8,10 @@
 > Not yet implemented: the visited set (§4.3) and deadlineAt enforcement (§4.4)
 > (the header field is parsed but not compared), nor the ledger meters
 > `hopsConsumed` / `hopsRemaining` (§4 item 5) — checked against `src/` on 2026-11-13.
+> **Retired (owner ruling 2026-11-17, #63):** the visited set, the deadline
+> comparison and the ledger hop meters. A receiving host never forwards again,
+> so the wire has one forward hop and no cycle can form; reopen them if
+> multi-hop forwarding is added.
 > The independent local zone-walk bound remains `ZONE_DEPTH_CAP = 5` (src/zone.ts).
 
 - **Status**: proposed (work-order P5 / ROUND-2 Cluster C2)

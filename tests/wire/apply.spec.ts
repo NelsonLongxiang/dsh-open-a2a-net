@@ -832,10 +832,12 @@ describe('a2a plugin decentralized routing (peers)', () => {
       expect(result.ok).toBe(true)
       const reachable = result.results.find(entry => entry.url === peer.baseUrl)
       expect(reachable?.reachable).toBe(true)
+      expect((reachable as { verdict?: string } | undefined)?.verdict).toBe('reachable')
       expect(typeof reachable?.ms).toBe('number')
       expect(reachable?.team).toBe('dsh')
       const dead = result.results.find(entry => entry.url === 'http://127.0.0.1:1')
       expect(dead?.reachable).toBe(false)
+      expect((dead as { verdict?: string } | undefined)?.verdict).toBe('unreachable')
       expect(dead?.error).toContain('unreachable')
     } finally {
       await ctx.fiber.dispose()
@@ -2448,6 +2450,24 @@ describe('a2a plugin outbound tools', () => {
         'Fleet probe (2): 1 reachable, 1 down',
         '  ✓ http://peer:1 (team dsh, 42ms)',
         '  ✗ http://gone:1 (unreachable: ECONNREFUSED)',
+      ].join('\n'),
+    }])
+    // #61/#63: a slow peer is still reachable; the summary counts it and its row is marked.
+    const slow = probe?.output.render({}, {
+      ok: true,
+      results: [
+        { url: 'http://peer:1', reachable: true, verdict: 'reachable', ms: 42, team: 'dsh' },
+        { url: 'http://lag:1', reachable: true, verdict: 'slow', ms: 2400, team: 'dsh' },
+        { url: 'http://bad:1', reachable: false, verdict: 'rejected', ms: 5, error: 'rejected: expired card' },
+      ],
+    }) ?? []
+    expect(slow).toEqual([{
+      type: 'text',
+      text: [
+        'Fleet probe (3): 2 reachable (1 slow), 1 down',
+        '  ✓ http://peer:1 (team dsh, 42ms)',
+        '  ~ http://lag:1 (team dsh, 2400ms, slow)',
+        '  ✗ http://bad:1 (rejected: expired card)',
       ].join('\n'),
     }])
     await ctx.fiber.dispose()

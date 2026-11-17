@@ -23,7 +23,7 @@
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
     "src/task-auth.ts": "b10b771f157e337d8cafb3ad8f12e3e08a7b23d96fd3b82939561be84c1f8541",
     "src/origin-claim.ts": "54079e01ec324ea1054bc892ef403ba813fa52c480bd99ecb9cf8b73190c376a",
-    "src/tools/info.ts": "3b40fef6e43560f8f76b67c315582f277885728f6a9a255557e8e49811e99737",
+    "src/tools/info.ts": "40ee8c5254ac687075cb34970ea79b7412288a95bfc3fd3f531697260c90578b",
     "src/tools/act.ts": "983f78c58b8c886b39b5af3f2cf474a1a47e4d03b91fedf5ed581aba3225bed2",
     "src/peer-directory.ts": "1f5eb4c1b19edcb834c168f8e9c36928128085cb92aa75b52e0f040ab2c5f009",
     "src/card.ts": "e22a998925b4a9ab7c7f514e4b39b68bf64b1838e408d7254d794ba5a4e9221a",
@@ -33,13 +33,13 @@
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/tools/info.ts:201",
+      "ref": "src/tools/info.ts:219",
       "expect": "name: 'a2a_whoami',"
     },
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/tools/info.ts:791",
+      "ref": "src/tools/info.ts:809",
       "expect": "name: 'a2a_probe',"
     },
     {
