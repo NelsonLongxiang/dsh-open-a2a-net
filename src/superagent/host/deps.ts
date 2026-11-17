@@ -134,6 +134,6 @@ export interface SuperagentHostDeps {
 /** The candidate card the router reads: bounded facts and the ids its decision names, never authority. */
 /** A message a person typed into a session: only the host can mark one. */
 /** Who a workbench request is from, when it is not the owner at the page: their terminal, or an observer. */
-export type WorkbenchVia = 'cli' | { readonly observer: string }
+export type WorkbenchVia = 'cli' | { readonly observer: string } | { readonly member: string }
 
 export interface PersonMessage { readonly id: string; readonly atMs: number; readonly text: string }
