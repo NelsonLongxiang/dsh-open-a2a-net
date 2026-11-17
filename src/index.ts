@@ -139,6 +139,7 @@ import { MAX_LAYOUT_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from './runtime.ts'
 import { registerAdminFaces } from './faces/admin.ts'
 import { scopeHints } from './scope-hints.ts'
+import { WindowMeasure } from './window-measure.ts'
 import { registerNodeFaces } from './faces/nodes.ts'
 import { NodeStore } from './node-store.ts'
 import { createNodeBinder, NodeBindings } from './node-bind.ts'
@@ -1868,6 +1869,7 @@ export function apply(ctx: Context, config: Config): void {
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
         get legacyInboundCount() { return legacyInboundCount },
+        originClaimWindowMeasure: () => windowMeasure.view(),
         get unboundInboundCount() { return unboundInboundCount },
         get boundMissInboundCount() { return boundMissInboundCount },
         get boundMissRecent() { return boundMissRecent },
@@ -2793,10 +2795,19 @@ export function apply(ctx: Context, config: Config): void {
    *  closing originClaimUnboundWindow; boundMissInbound: those of them whose
    *  bound form missed (a peer dials us by a name not in our audiences). */
   let unboundInboundCount = 0, boundMissInboundCount = 0
+  /** #64 step 2: the same three counts by UTC day on disk, so the 7-day zero measure survives restarts. */
+  const windowMeasure = new WindowMeasure(join(home, 'a2a', 'origin-claim-window.json'), Date.now, message => logger.warn(message))
+  {
+    // A day the host runs is a measured day even when nothing arrives: touch it hourly (cheap no-op once it exists).
+    const timer = setInterval(() => { windowMeasure.touch() }, 3_600_000)
+    timer.unref?.()
+    ctx.effect(() => () => { clearInterval(timer) }, 'a2a: OriginClaim window measure day tick')
+  }
   /** Which verified callers missed, and the origin they dialled: what to add to originClaimAudiences (#64). */
   const boundMissRecent: Array<{ caller: string; audience: string; count: number; lastAt: number }> = []
   const noteBoundMiss = (miss: { caller: string; audience: string }): void => {
     boundMissInboundCount += 1
+    windowMeasure.note('boundMiss')
     const at = boundMissRecent.findIndex(row => row.caller === miss.caller && row.audience === miss.audience)
     const row = at >= 0 ? boundMissRecent.splice(at, 1)[0]! : { ...miss, count: 0, lastAt: 0 }
     boundMissRecent.unshift({ ...row, count: row.count + 1, lastAt: Date.now() })
@@ -2834,7 +2845,7 @@ export function apply(ctx: Context, config: Config): void {
       freshCard: true,
       audiences: [ownCardUrl, ...config.originClaimAudiences ?? []],
       unboundOpen: config.originClaimUnboundWindow !== false,
-      onUnbound: () => { unboundInboundCount += 1 },
+      onUnbound: () => { unboundInboundCount += 1; windowMeasure.note('unbound') },
       onBoundMiss: noteBoundMiss,
       loopbackArrival: (config.originClaimUrl ?? '') === '',
       now: Date.now(),
@@ -3321,7 +3332,7 @@ export function apply(ctx: Context, config: Config): void {
       diagnoseCanvas: (team, reason, caller) => diagnoseCanvas(team, reason, caller),
       callerLinkedToThisHost, get ownCardUrl() { return ownCardUrl },
       recordActivity,
-      bumpLegacyInbound: () => { legacyInboundCount += 1 },
+      bumpLegacyInbound: () => { legacyInboundCount += 1; windowMeasure.note('legacy') },
       a2aCallerRefusal,
       a2aCallerAdmission,
       allowlistVersionNow,

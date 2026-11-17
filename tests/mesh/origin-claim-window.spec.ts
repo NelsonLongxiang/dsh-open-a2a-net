@@ -164,3 +164,29 @@ describe('M1 originClaimWindow pins', () => {
     }
   }, 30_000)
 })
+
+describe('#64 step 2: the restart-proof window measure', () => {
+  it('an envelope-absent delivery lands in today\'s bucket on the state face and is still there after a restart on the same home', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'm1-measure-'))
+    const today = new Date().toISOString().slice(0, 10)
+    const measure = async (port: number): Promise<{ since: string; days: Array<{ day: string; legacy: number }> }> =>
+      ((await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json()) as { originClaimWindow: { since: string; days: Array<{ day: string; legacy: number }> } }).originClaimWindow
+    const first = await mount({ originClaimWindow: true, dshHome: home })
+    try {
+      expect((await measure(first.port)).days[0]).toMatchObject({ day: today, legacy: 0 })
+      expect((await postDirect(first.port)).routed).toBe(true)
+      expect((await measure(first.port)).days[0]).toMatchObject({ day: today, legacy: 1 })
+    } finally {
+      await first.dispose()
+    }
+    const second = await mount({ originClaimWindow: true, dshHome: home })
+    try {
+      expect(await stateLegacy(second.port)).toBe(0)
+      const after = await measure(second.port)
+      expect(after.since).toBe(today)
+      expect(after.days[0]).toMatchObject({ day: today, legacy: 1 })
+    } finally {
+      await second.dispose()
+    }
+  }, 30_000)
+})

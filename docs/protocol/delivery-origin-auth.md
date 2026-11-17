@@ -140,7 +140,14 @@ so the binding holds for a pair of hosts once the sender stops signing the
 unbound form or the receiver stops accepting it. Rollout: upgrade every host, watch
 `unboundInbound` drain to zero, then close the window everywhere. A
 non-zero `boundMissInbound` names a peer that dials this host by an origin
-missing from `originClaimAudiences`: add it before closing. The state face's `boundMissRecent` (and the `miss` lines under `a2a-net status` → `claims`) names each verified caller that missed and the origin it dialled, newest first (at most 16 rows), so the operator knows which origin to add. Close
+missing from `originClaimAudiences`: add it before closing. The state face's `boundMissRecent` (and the `miss` lines under `a2a-net status` → `claims`) names each verified caller that missed and the origin it dialled, newest first (at most 16 rows), so the operator knows which origin to add. The in-memory counters restart at
+0 with the process, so the closing measure (#64 step 2) is kept on disk: the
+state face's `originClaimWindow` holds the three counts per UTC day for the
+last 14 days (30 kept in `<a2a home>/origin-claim-window.json`) and
+`zeroStreakDays`, the whole days before today on which the host ran and all
+three stayed 0 (a day the host did not run ends the streak);
+`a2a-net status` prints it as the `window` line. The unbound window closes
+once every host reads at least 7. Close
 `originClaimWindow` too: while it is open, a delivery with no envelope at
 all still walks the caller gate on the faces that accept legacy deliveries.
 
