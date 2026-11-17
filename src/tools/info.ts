@@ -39,6 +39,24 @@ type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string
 const SCOPE_FIRST_READ = 'If this host or that peer restarted recently, its card may not be read yet — retry shortly.'
 const SCOPE_NEITHER_SIDE = 'Neither side declares the other: no canvas or roster team here names one of its sessions, and none of its canvases holds a joined session of this host.'
 const SCOPE_WIDEN = 'To bring it in scope, either owner puts the two sessions in one canvas team on their own workbench board; an agent cannot do it.'
+/**
+ * #61/#63 owner ruling 2026-11-17 (probe tiering, partial): every probed row carries a four-value verdict. "slow" is a
+ * reachable peer whose card fetch took longer than maxLatencyMs; it stays reachable:true. The stateful parts of the old
+ * ladder (two consecutive degradations => dead, minScore, the T2 session-liveness tier) are retired.
+ */
+export const PROBE_VERDICTS = ['reachable', 'slow', 'rejected', 'unreachable'] as const
+export type ProbeVerdict = typeof PROBE_VERDICTS[number]
+export const PROBE_MAX_LATENCY_MS = 2_000
+export const PROBE_MAX_LATENCY_CAP_MS = 60_000
+type ProbeRow = { url: string; reachable: boolean; verdict?: ProbeVerdict; ms?: number; team?: string; error?: string }
+/** A positive finite bound, capped; anything else falls back to the default. */
+export const probeLatencyBound = (value: unknown): number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(Math.round(value), PROBE_MAX_LATENCY_CAP_MS) : PROBE_MAX_LATENCY_MS
+const probeSummary = (rows: readonly ProbeRow[]): string => {
+  const up = rows.filter(row => row.reachable).length
+  const slow = rows.filter(row => row.verdict === 'slow').length
+  return `Fleet probe (${String(rows.length)}): ${String(up)} reachable${slow > 0 ? ` (${String(slow)} slow)` : ''}, ${String(rows.length - up)} down`
+}
 const PUBLIC_TEAM_ROW_KEYS = ['team', 'memberRef', 'session', 'name', 'seatName', 'kind', 'owner', 'memberCount', 'description', 'local', 'origin', 'via', 'workspace', 'legacy', 'unreachable', 'sharedVia', 'teams'] as const
 
 /** A directory row as a2a_teams publishes it: the declared fields only. */
@@ -794,9 +812,11 @@ export function createInfoTools(deps: InfoToolsDeps) {
         + '(the same fetch discovery uses), reporting reachable peers with their team and latency and unreachable '
         + 'ones with the failure reason. Pass url to probe one target instead of the whole fleet. '
         + 'While teamScopeInfo is on (default), the sweep covers only peers serving a joined team, and a single URL is refused unless its verified card proves service. '
+        + 'Each probed row carries a verdict: reachable, slow (answered, but slower than maxLatencyMs), rejected (answered with a card that does not verify) or unreachable. '
         + 'Use it before dispatching verification work or when routes fail over, instead of guessing which node is down.',
       parameters: {
         url: { type: 'string', description: 'Optional single peer base URL to probe; empty probes every tracked peer.' },
+        maxLatencyMs: { type: 'number', description: `Latency above which a reachable peer is reported slow (default ${String(PROBE_MAX_LATENCY_MS)}, at most ${String(PROBE_MAX_LATENCY_CAP_MS)}).` },
       },
       output: {
         // gh#198: the host's own verdict on whether this result came from outside this host, persisted on tool/result.
@@ -815,6 +835,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
                 properties: {
                   url: { type: 'string', required: true },
                   reachable: { type: 'boolean', required: true },
+                  verdict: { type: 'string', enum: [...PROBE_VERDICTS], description: 'The four-value verdict (#61/#63); absent when the URL was refused without a probe.' },
                   ms: { type: 'number', description: 'Round-trip of the card fetch, reachable or not.' },
                   team: { type: 'string', description: 'The team the peer publishes, when reachable.' },
                   error: { type: 'string', description: 'Why the peer is unreachable.' },
@@ -828,16 +849,17 @@ export function createInfoTools(deps: InfoToolsDeps) {
           text: value.results.length === 0
             ? 'No peers are tracked; add seeds or let referrals arrive.'
             : [
-              `Fleet probe (${String(value.results.length)}): ${String(value.results.filter((row: { reachable: boolean }) => row.reachable).length)} reachable, ${String(value.results.filter((row: { reachable: boolean }) => !row.reachable).length)} down`,
-              ...value.results.map((row: { url: string; reachable: boolean; ms?: number; team?: string; error?: string }) =>
-                `  ${row.reachable ? '✓' : '✗'} ${row.url}${row.reachable ? ` (team ${String(row.team)}, ${String(row.ms)}ms)` : ` (${String(row.error)})`}`),
+              probeSummary(value.results),
+              ...value.results.map((row: ProbeRow) =>
+                `  ${row.verdict === 'slow' ? '~' : row.reachable ? '✓' : '✗'} ${row.url}${row.reachable ? ` (team ${String(row.team)}, ${String(row.ms)}ms${row.verdict === 'slow' ? ', slow' : ''})` : ` (${String(row.error)})`}`),
             ].join('\n'),
         }],
       },
       presentCall: args => ({ card: 'generic', title: args.url === undefined || args.url === '' ? 'Probe the A2A fleet' : `Probe A2A peer: ${args.url}`, kind: 'other', rawInput: args }),
-      execute: async (args: { url?: string }, exec): Promise<{ ok: boolean; results: { url: string; reachable: boolean; ms: number; team?: string; error?: string }[] }> => {
+      execute: async (args: { url?: string; maxLatencyMs?: number }, exec): Promise<{ ok: boolean; results: ProbeRow[] }> => {
         a2aJoinGateRefusal(exec)
-        const probeOne = async (url: string): Promise<{ url: string; reachable: boolean; ms: number; team?: string; error?: string }> => {
+        const maxLatencyMs = probeLatencyBound(args.maxLatencyMs)
+        const probeOne = async (url: string): Promise<ProbeRow> => {
           const startedAt = Date.now()
           const outcome = await client.fetchCardDetail(url)
           const ms = Date.now() - startedAt
@@ -850,12 +872,12 @@ export function createInfoTools(deps: InfoToolsDeps) {
             // cache — the probe is often the FIRST contact (no directory sweep
             // has run), and the state face's peerOrg reads exactly this cache.
             cardCache.set(url, { at: Date.now(), card })
-            return { url, reachable: true, ms, team: card.team }
+            return { url, reachable: true, verdict: ms > maxLatencyMs ? 'slow' : 'reachable', ms, team: card.team }
           }
-          if (outcome.ok) return { url, reachable: false, ms, error: 'dropped: the card lists this node back as its own referral' }
+          if (outcome.ok) return { url, reachable: false, verdict: 'rejected', ms, error: 'dropped: the card lists this node back as its own referral' }
           return outcome.stage === 'unreachable'
-            ? { url, reachable: false, ms, error: `unreachable: ${outcome.detail}` }
-            : { url, reachable: false, ms, error: `rejected: ${outcome.reason} card` }
+            ? { url, reachable: false, verdict: 'unreachable', ms, error: `unreachable: ${outcome.detail}` }
+            : { url, reachable: false, verdict: 'rejected', ms, error: `rejected: ${outcome.reason} card` }
         }
         // S5: a reachability report is fleet disclosure too. The sweep probes
         // only peers whose verified card serves a joined team (memoized —

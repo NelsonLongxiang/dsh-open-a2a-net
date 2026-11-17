@@ -1,21 +1,24 @@
 # Protocol Face Ruling Dossier — ROUND-2 Clusters A/C
 
-> **Implementation status (2026-10-27, as of ae7e24d / 0.6.28): archived
-> ruling record, mostly not implemented as written.** The rulings below
-> are kept verbatim; this table records what the code does today.
+> **Implementation status: archived ruling record.** The rulings below are
+> kept verbatim; the table records the final disposition of each row.
 >
-> | Item | Status in `src/` |
-> |---|---|
-> | A1 hub/anycast `strategy`, `protoVersion` gate | not implemented (no `strategy` enum, no `protoVersion`) |
-> | A2 group `visibility: public\|private` | not implemented; superseded by the #19 per-session tiers (`linked`/`fleet`; a group takes its strictest member's tier) |
-> | A3 `captain-frozen`, `autoPromoteOnLoss` | not implemented |
-> | A4 composite anchors | not implemented here; see exposure-grants.md (superseded by #19) |
-> | C1 OriginClaim | **implemented 0.6.23** with a different shape: `{caller, callerUrl, ts}`, bare-zone caller, ±5 min window, no nonce; `legacyInbound` is a counter on the state face, not a per-row flag. See delivery-origin-auth.md |
-> | C2 hop guard | not implemented; see recursion-guard.md |
-> | C3 excerpt modes | implemented as `exposureExcerpt: full\|masked\|off` (default `full`); no `internalFacts` surface |
-> | §4.1 abandon / cancel | both implemented as control routes (`/__dsh_a2a/tasks/abandon\|cancel`; `a2a_tasks` only reads); archive summaries are `caller-abandoned…` / `caller-cancelled…` with `endedBy`, not `'cancelled-by-caller'`; a remote cancel is a stop-notice over `/a2a/direct`; no `ignored` late-settlement state (a late receipt stamps `late`) |
-> | §4.2 `resolve()` predicate, probe `thresholds` | not implemented; `a2a_probe` takes only `url` and returns `reachable: boolean` |
-> | §5 `internal-not-routable` | not implemented (no `internalFacts` surface exists) |
+> **Final dispositions (owner ruling 2026-11-17, #63):** every row now has a
+> final status: implemented, retired, or superseded.
+>
+> | Item | Final status | What the code does / why |
+> |---|---|---|
+> | A1 hub/anycast `strategy`, `protoVersion` gate | **retired** | Never implemented and nothing consumes it. The org topology is the #819 two-layer structure (root team and domain routers dispatch). |
+> | A2 group `visibility: public\|private` | **superseded** by #19 | The per-session tiers (`linked`/`fleet`; a group takes its strictest member's tier). |
+> | A3 `captain-frozen`, `autoPromoteOnLoss` | **retired** | Automatic promotion would open a takeover path. A router that stops answering shows up in the `a2a_probe` verdict instead. |
+> | A4 composite anchors | **superseded** by #19 | See exposure-grants.md. |
+> | C1 OriginClaim | **implemented** (different shape, 0.6.23) | `{caller, callerUrl, ts}`, bare-zone caller, ±5 min window, no nonce; the transition windows close per #64. See delivery-origin-auth.md. |
+> | C2 hop guard | **implemented in part; the rest retired** | The hop budget is implemented (#57 F2/F3, recursion-guard.md). The `visited[]` set, the deadline comparison and the `hopsConsumed/hopsRemaining` ledger meters are retired: a receiving host never forwards again, so the wire has one forward hop and no cycle can form. Reopen if multi-hop forwarding is added. |
+> | C3 excerpt modes | **implemented** | `exposureExcerpt: full\|masked\|off` (default `full`); no `internalFacts` surface. |
+> | §4.1 abandon / cancel | **implemented** (different naming) | Control routes `/__dsh_a2a/tasks/abandon\|cancel`; archive rows carry `endedBy`; a remote cancel is a stop-notice over `/a2a/direct`. The `ignored` late-settlement state is retired: a late receipt stamps `late`. |
+> | §4.2 `resolve()` predicate | **retired** | No consumer; name reachability is handled by the directory and canvas routing. |
+> | §4.2 probe `thresholds` | **implemented in part** (merged into #61) | `a2a_probe` takes `maxLatencyMs` and returns a four-value `verdict` (`reachable`/`slow`/`rejected`/`unreachable`); `minScore` is retired. See receipt-envelope-v2.md §5. |
+> | §5 `internal-not-routable` | **retired** | There is no `internalFacts` surface. |
 
 - **Status**: submitted for chair adjudication ledger (work-order direct-dc3f67d6 wave, canonical archive of the ROUND-2 submission)
 - **Author**: dsh-open-a2a-net protocol face
