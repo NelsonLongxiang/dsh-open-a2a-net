@@ -200,7 +200,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | `referralLearning` | `true` | `false` 把跟踪集冻结为配置的种子：既不学习也不提供引荐。 |
 | `referralTeamResolution` | `false` | gh#8：团队名只在种子 + 委托上解析；`true` 恢复旧的全 store 基础（含引荐学到的 peers）。 |
 | `exposureExcerpt` | `'full'` | 卡片发布会话活动摘录的程度：`full`、`masked`（仅形状前缀）或 `off`。标题与句柄始终保留。 |
-| `originClaimWindow` | `true` | OriginClaim 过渡窗口：不带信封的投递仍走调用方门（计入 `legacyInbound`）；`false` 则按验签失败拒绝。 |
+| `originClaimWindow` | `false` | OriginClaim 过渡窗口，自 #64 第一步起默认关闭：不带信封的投递按验签失败拒绝。设为 `true` 重新打开，这类投递重新走调用方门，并计入 `legacyInbound`。 |
 | `originClaimUrl` | `''` | 信封 `callerUrl` 的覆盖值（pocket 隧道宿主用）；`''` 自动推导。 |
 | `originClaimUnboundWindow` | `true` | OriginClaim 受众绑定过渡窗口：同时签发并接受不带受众的旧信封（接受数计入 `unboundInbound`；其中绑定形式在本机未命中的另计 `boundMissInbound`）；`false` 只签发、只接受绑定受众的信封。 |
 | `canvasLegacyBareMembers` | `true` | #335 迁移窗口：未暂停历史裸成员保持旧推断；暂停槽位永不路由/授权，迁移与观察完成后仅属主裁定关窗。 |

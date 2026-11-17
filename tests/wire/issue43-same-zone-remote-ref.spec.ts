@@ -50,6 +50,7 @@ async function mount(canvas: Array<{ name: string; members: string[] }>, joined:
   writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: joined }), 'utf8')
   apply(ctx, {
     apiKey: '',
+    originClaimWindow: true, // #64: fixture posts unsigned deliveries (production default is closed)
     session: 'i43-test-node',
     team: 'dsh',
     routeTimeoutMs: 60_000,
