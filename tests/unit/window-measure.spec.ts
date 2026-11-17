@@ -37,7 +37,7 @@ describe('OriginClaim window measure', () => {
     expect(view.days).toEqual([{ day: '2026-11-10', legacy: 0, unbound: 1, boundMiss: 2, invalid: true }])
   })
 
-  it('a short restart keeps the streak; a long gap marks its days invalid', () => {
+  it('a restart, however short, makes its own day unknown; days certified before it keep counting', () => {
     const path = file()
     let now = at('2026-11-01T12:00:00Z')
     const m = new WindowMeasure(path, () => now)
@@ -45,12 +45,31 @@ describe('OriginClaim window measure', () => {
     m.close()
     now += 2 * 60_000
     const restarted = new WindowMeasure(path, () => now)
-    expect(restarted.view().zeroStreakDays).toBe(7)
-    restarted.close()
+    expect(restarted.view().zeroStreakDays).toBe(7) // 11-02..11-08 were certified before the restart
+    expect(restarted.view().days[0]).toMatchObject({ day: '2026-11-09', invalid: true })
     now += DAY
-    const afterGap = new WindowMeasure(path, () => now)
-    expect(afterGap.view().days.slice(0, 2).every(d => d.invalid === true)).toBe(true)
-    expect(afterGap.view().zeroStreakDays).toBe(0)
+    restarted.touch()
+    expect(restarted.view().zeroStreakDays).toBe(0) // the restart day is unknown, so the streak starts again
+  })
+
+  it('re-review R2: a failed run inside a few minutes across UTC midnight still makes its day unknown', () => {
+    const path = file()
+    let now = at('2026-11-01T23:58:00Z')
+    const prior = new WindowMeasure(path, () => now)
+    for (let i = 0; i < 7; i++) { now += DAY; prior.touch() } // 11-02..11-08 valid zero days
+    prior.close()
+    const blocked = `${path}.${String(process.pid)}.tmp`
+    mkdirSync(blocked) // only this test's own temporary-file path
+    now = at('2026-11-08T23:59:00Z')
+    const failed = new WindowMeasure(path, () => now)
+    failed.note('unbound')
+    failed.close()
+    rmdirSync(blocked)
+    now = at('2026-11-09T00:01:00Z')
+    const next = new WindowMeasure(path, () => now)
+    expect(next.view().persisted).toBe(true)
+    expect(next.view().days.find(d => d.day === '2026-11-08')?.invalid).toBe(true)
+    expect(next.view().zeroStreakDays).toBeLessThan(7)
   })
 
   it('re-review R2: a run whose first marker never reached disk cannot leave the previous clean marker vouching for it', () => {
@@ -165,7 +184,7 @@ describe('OriginClaim window measure', () => {
     const next = new WindowMeasure(path, () => now, message => warnings.push(message))
     expect(next.view().zeroStreakDays).toBe(0)
     expect(next.view().days.find(d => d.day === '2026-11-07')?.invalid).toBe(true)
-    expect(warnings.some(w => w.includes('did not end cleanly'))).toBe(true)
+    expect(warnings.some(w => w.includes('did not end cleanly') || w.includes('not fully measured'))).toBe(true)
   })
 
   it('a crashed run (never closed) invalidates its days; days of earlier clean runs keep counting', () => {

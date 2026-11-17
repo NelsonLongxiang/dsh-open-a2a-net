@@ -13,9 +13,11 @@
  *   unwritten. A boot that finds the previous run unclean (a crash, or a write that never landed) marks every day of
  *   that run invalid, because an event of that run may be missing from disk;
  * - a run proves the time it covered only by what reached disk: its start, the hourly touch and its close each record
- *   `lastSeenAt`. A boot more than RESTART_GRACE_MS after the previous run's last recorded moment marks every day of
- *   that gap invalid — the host may have been down, or running without being able to write (#727 re-review R2: a run
- *   whose very first marker never landed leaves the previous run's clean marker behind). A short restart is covered.
+ *   `lastSeenAt`. Every boot marks the days from the previous run's last recorded moment to now invalid, however short
+ *   the gap: in that time the host may have been down, or a run may have come and gone without writing anything —
+ *   a run whose very first marker never landed leaves the previous run's clean marker behind, and a short gap does not
+ *   prove it saw no traffic (#727 re-reviews R2). So a restart always costs the streak; the unbound window closes only
+ *   after 7 whole days of one uninterrupted, fully recorded run.
  * @module window-measure
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -47,8 +49,6 @@ export interface WindowMeasureView {
 /** Buckets kept on disk and shown on the state face. */
 export const WINDOW_KEEP_DAYS = 30
 export const WINDOW_VIEW_DAYS = 14
-/** The longest gap between one run's last recorded moment and the next boot that still counts as a restart. */
-export const RESTART_GRACE_MS = 5 * 60_000
 
 type Bucket = { legacy: number; unbound: number; boundMiss: number; invalid?: true }
 const DAY = /^\d{4}-\d{2}-\d{2}$/
@@ -94,18 +94,18 @@ export class WindowMeasure {
       for (const [day, bucket] of this.days) if (day >= since && bucket.invalid !== true) { bucket.invalid = true; marked++ }
       if (marked > 0) warn(`a2a: OriginClaim window measure: the previous run did not end cleanly; ${String(marked)} of its day(s) marked invalid`)
     }
-    // Coverage: the time from the previous run's last recorded moment to now is unmeasured unless it is a short restart.
-    // No record at all (first boot, or a file without run data) leaves today's earlier hours unmeasured too.
+    // Coverage: the time from the previous run's last recorded moment to now is unmeasured, however short. No record at
+    // all (first boot, or a file without run data) leaves today's earlier hours unmeasured too.
     const nowMs = now()
     const lastSeen = previous !== undefined && typeof previous.lastSeenAt === 'number' && Number.isFinite(previous.lastSeenAt) && previous.lastSeenAt <= nowMs ? previous.lastSeenAt : undefined
-    if (lastSeen === undefined || nowMs - lastSeen > RESTART_GRACE_MS) {
+    {
       let marked = 0
       for (let day = dayOf(lastSeen ?? nowMs); day <= this.runSince; day = dayOf(Date.parse(`${day}T00:00:00Z`) + 86_400_000)) {
         const bucket = this.days.get(day) ?? { legacy: 0, unbound: 0, boundMiss: 0 }
         if (bucket.invalid !== true) { bucket.invalid = true; marked++ }
         this.days.set(day, bucket)
       }
-      if (lastSeen !== undefined && marked > 0) warn(`a2a: OriginClaim window measure: ${String(Math.round((nowMs - lastSeen) / 60_000))} min since the previous run's last record; ${String(marked)} day(s) not fully measured marked invalid`)
+      if (lastSeen !== undefined && marked > 0) warn(`a2a: OriginClaim window measure: restart (${String(Math.round((nowMs - lastSeen) / 60_000))} min after the previous run's last record); ${String(marked)} day(s) not fully measured marked invalid`)
     }
     this.touch()
     this.save()

@@ -148,10 +148,11 @@ state face's `originClaimWindow` holds the three counts per UTC day for the
 last 14 days (30 kept in `<a2a home>/origin-claim-window.json`) and
 `zeroStreakDays`, the whole days before today on which the host ran and all
 three stayed 0. Unknown never counts as zero: a day the host did not run, a
-damaged day record, a run that did not end with everything written, and any
-day overlapping a gap of more than 5 minutes between one run's last record
-and the next boot (the host may have been down, or up but unable to write)
-all end the streak;
+damaged day record, a run that did not end with everything written, and
+every day from one run's last record to the next boot — however short the
+gap, since a run may have come and gone without writing anything — all end
+the streak. A restart therefore costs the streak: the window closes after 7
+whole days of one uninterrupted, fully recorded run;
 `a2a-net status` prints it as the `window` line. The unbound window closes
 once every host reads at least 7. Close
 `originClaimWindow` too: while it is open, a delivery with no envelope at
