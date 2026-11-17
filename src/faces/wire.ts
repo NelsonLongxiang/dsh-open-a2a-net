@@ -446,7 +446,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
       // verification (§8.3) — same window semantics as delivery.
       const logClaim = await verifyOriginClaim(req)
       if (!logClaim.ok) {
-        if (logClaim.reason !== 'absent' || config.originClaimWindow === false) {
+        if (logClaim.reason !== 'absent' || config.originClaimWindow !== true) {
           recordActivity('in', 'log', caller, false)
           send(200, { ok: false, error: `untrusted-origin: OriginClaim verification failed (${logClaim.reason}) — present a signed envelope or upgrade your node`, code: -32000 })
           return
@@ -794,7 +794,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // gh#133: the delivery face is where a deposited CLI identity signs its routes.
           const claim = earlyClaim
           if (!claim.ok) {
-            if (claim.reason !== 'absent' || config.originClaimWindow === false) {
+            if (claim.reason !== 'absent' || config.originClaimWindow !== true) {
               recordActivity('in', team, caller, false)
               const payload = JSON.stringify({ error: `untrusted-origin: OriginClaim verification failed (${claim.reason}) — present a signed envelope (X-A2A-Caller/-Url/-Ts/-Sig with your card key) or upgrade your node`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
               res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })

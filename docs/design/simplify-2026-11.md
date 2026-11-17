@@ -2,6 +2,8 @@
 
 状态：草案，待属主裁定 D1、D2。作者：评审席。跟踪 issue 见文末。
 
+实现核对（2026-11-18，next/0.8 `44907c00`）：以下几项在 0.6.39 前后已经合入：S1 拒绝时必须带 next，S2 `@fp8` 限定 id，S3 同队即授权。S4 只做了第一步，`originClaimWindow` 默认翻成了 false（#725）。其余过渡开关（`originClaimUnboundWindow`、`settlementAuth: observe`）要等 #64、#125 达标后再删，由 #282 跟踪。
+
 ## 0. 一句话
 
 属主 2026-11-04：「去中心化网络不应该要调用方指定 host」。今天线上的问题几乎都出在规则叠加上，而不是缺功能。本稿只做减法：让常见路径不需要任何人知道主机，把多条链接规则收成一条，并在过渡期结束后删掉开关。签名与授权链的校验强度一条都不降。
@@ -43,7 +45,7 @@
 | 开关 | 删除条件（机器判定） | 删后行为 |
 |---|---|---|
 | `originClaimUnboundWindow` | #64：全舰队 `unboundInbound`、`boundMissInbound` 连续 7 天零增量 | 只验绑定形式（Sig2/Sig3） |
-| `originClaimWindow` | 同上，且 `legacyInbound` 连续 7 天为 0 | 无信封即拒 |
+| `originClaimWindow` | 同上，且 `legacyInbound` 连续 7 天为 0。**2026-11-17 属主裁定按 #64 分两步：本项先把默认值翻为 `false`，开关保留供运维回退** | 无信封即拒 |
 | Sig2 单独形式（只对带 body 的请求） | 全舰队 ≥ 0.6.37 且 market 已切严格模式 | 带 body 的请求只认 Sig3，堵住「剥掉 Sig3」的降级 |
 | `settlementAuth: observe` | #125：L10/L13 连续 7 天为绿、`enforceBlockers` 为空、全舰队升级 | 默认 enforce；保留 `observe` 作为应急值但不再是默认 |
 

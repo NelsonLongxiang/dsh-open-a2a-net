@@ -16,6 +16,7 @@
  * @module src/faces/admin
  */
 import type { ScopeHint } from '../scope-hints.ts'
+import type { WindowMeasureView } from '../window-measure.ts'
 import { isRootAction, rootAction, type CanvasRootDeps } from '../canvas-root.ts'
 import { childLabel } from '../superagent/host/root-dispatch.ts'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -131,6 +132,8 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly scopeHints?: () => readonly ScopeHint[]
   readonly remoteRowsCache: RemoteRowsCache
   readonly legacyInboundCount: number
+  /** #64 step 2: the window counters by UTC day, kept across restarts (window-measure.ts). */
+  readonly originClaimWindowMeasure?: () => WindowMeasureView
   readonly unboundInboundCount: number
   readonly boundMissInboundCount: number
   readonly boundMissRecent: ReadonlyArray<{ caller: string; audience: string; count: number; lastAt: number }>
@@ -529,6 +532,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // OriginClaim window — the operator watches this drain to
           // zero before closing the window.
           legacyInbound: d.legacyInboundCount,
+          // #64 step 2: the same counts by UTC day across restarts, and the streak of whole days at zero.
+          ...(d.originClaimWindowMeasure !== undefined ? { originClaimWindow: d.originClaimWindowMeasure() } : {}),
           // Accepted unbound (no-audience) OriginClaim envelopes — the
           // drain gauge for closing originClaimUnboundWindow.
           unboundInbound: d.unboundInboundCount,
