@@ -29,6 +29,19 @@ async function team() {
   return { h, sent, pool, presets, propose, route, cards }
 }
 
+/** #719: invoke the registered production tool, not only the forwarding method. */
+async function proposalTool(h: Awaited<ReturnType<typeof team>>['h']) {
+  const { registerSuperagentTools } = await import('../../src/superagent/host/tools.ts')
+  const registered = new Map<string, { execute(args: unknown, exec: unknown): Promise<Record<string, any>> }>()
+  registerSuperagentTools({ tools: { register: (tool: { name: string }) => { registered.set(tool.name, tool as never) } } } as never,
+    id => h.roleOf(id) !== undefined ? h : undefined)
+  const tool = registered.get('a2a_ticket_request')
+  expect(tool).toBeDefined()
+  return (as: string | undefined, text: string) => tool!.execute({ text }, {
+    ...(as === undefined ? {} : { agent: { id: as } }), signal: new AbortController().signal,
+  })
+}
+
 describe('a member proposes', () => {
   it('without a ticket: the router gets an explicit candidate marked as a member\'s, and nothing runs until it accepts', async () => {
     const m = await team()
@@ -166,6 +179,96 @@ describe('a member host forwards its served member\'s proposal', () => {
     expect(posts).toEqual([['https://team.example', '/a2a/superagent-team', { op: 'ticket-request', member: 'near/session-s', report: { text: '远端发现的问题' } }]])
     expect(await h.forwardProposal('session-x', 'x')).toMatchObject({ ok: false, code: 'not-member' })
     expect(posts).toHaveLength(1)
+  })
+})
+
+describe('#719 registered proposal tool dispatch', () => {
+  async function served(post: (url: string, path: string, body: unknown) => Promise<Record<string, unknown>>, member = REMOTE.ref) {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const h = new SuperagentHost({
+      home: mkdtempSync(join(tmpdir(), 'sa-proposal-tool-')), logger: { info: () => {}, warn: () => {} },
+      deliverToSession: () => true, interval: () => () => {}, signedPost: post,
+      handleOf: () => member.replace(/@[0-9a-f]{8}$/, ''),
+    } as never)
+    const held = h as unknown as { settingsValue: Record<string, unknown> }
+    held.settingsValue = { ...held.settingsValue, serves: { url: 'https://team.example', key: 'team-key', members: ['session-s'] } }
+    return { h, call: await proposalTool(h) }
+  }
+
+  it('routes a served session through signedPost to the pinned team host, preserving its result without local work', async () => {
+    const receiver = await team()
+    const posts: Array<[string, string, unknown]> = []
+    const sender = await served(async (url, path, body) => {
+      posts.push([url, path, body])
+      const request = body as { op: string; member: string; report: { text: string } }
+      return receiver.h.remoteEvent(request.op, request.member, REMOTE.key, request.report) as Record<string, unknown>
+    })
+    const local = vi.spyOn(sender.h, 'requestForMember')
+    try {
+      expect(sender.h.roleOf('session-s')).toBe('member')
+      const text = '工具入口发现的新需求'
+      const filed = await sender.call('session-s', text)
+      expect(filed).toMatchObject({ ok: true, trigger_id: expect.any(String), thread: expect.any(String) })
+      expect(posts).toEqual([['https://team.example', '/a2a/superagent-team', {
+        op: 'ticket-request', member: REMOTE.ref.replace(/@[0-9a-f]{8}$/, ''), report: { text },
+      }]])
+      expect(local).not.toHaveBeenCalled()
+      expect(receiver.h.store.triggers.get(filed.trigger_id)).toMatchObject({
+        human: false, text, actor: { source: 'workbench', id: memberActor(REMOTE.ref) },
+      })
+      expect(await sender.call('session-s', text)).toMatchObject({ ok: true, reused: true, trigger_id: filed.trigger_id })
+      expect(sender.h.store.threads.list()).toEqual([])
+      expect(sender.h.store.tickets.list()).toEqual([])
+      expect(receiver.h.store.tickets.list()).toEqual([])
+      expect(receiver.sent.some(([, value]) => value.startsWith('[superagent assignment]'))).toBe(false)
+    } finally { local.mockRestore(); await sender.h.stop(); await receiver.h.stop() }
+  })
+
+  it.each(['session-a', 'session-o'])('keeps local member or observer %s on its own host and never forwards', async member => {
+    const m = await team(), call = await proposalTool(m.h)
+    const forwarded = vi.spyOn(m.h, 'forwardProposal')
+    try {
+      const filed = await call(member, '只交本机总工判断')
+      expect(filed).toMatchObject({ ok: true, trigger_id: expect.any(String) })
+      expect(m.h.store.triggers.get(filed.trigger_id)).toMatchObject({ human: false, actor: {
+        source: 'workbench', id: member === 'session-o' ? observerActor(member) : memberActor(member),
+      } })
+      expect(forwarded).not.toHaveBeenCalled()
+      expect(m.h.store.tickets.list()).toEqual([])
+      expect(m.sent.some(([, value]) => value.startsWith('[superagent assignment]'))).toBe(false)
+    } finally { forwarded.mockRestore(); await m.h.stop() }
+  })
+
+  it('refuses missing or outside sessions at the registered entry without sending or filing', async () => {
+    const post = vi.fn(async () => ({ ok: true, trigger_id: 'unexpected' }))
+    const m = await served(post)
+    try {
+      expect(await m.call(undefined, 'x')).toMatchObject({ ok: false, code: 'not-member' })
+      expect(await m.call('session-x', 'x')).toMatchObject({ ok: false, code: 'not-member' })
+      expect(post).not.toHaveBeenCalled()
+      expect(m.h.store.threads.list()).toEqual([])
+      expect(m.h.store.tickets.list()).toEqual([])
+    } finally { await m.h.stop() }
+  })
+
+  it.each(['wrong-key', 'pi', 'unreachable'] as const)('preserves %s failure through the served tool without creating work', async failure => {
+    const receiver = await team(), posts: unknown[] = []
+    const sender = await served(async (_url, _path, body) => {
+      posts.push(body)
+      if (failure === 'unreachable') throw new Error('synthetic team unavailable')
+      const request = body as { op: string; member: string; report: { text: string } }
+      return receiver.h.remoteEvent(request.op, request.member, failure === 'pi' ? PI.key : 'wrong-key', request.report, failure === 'pi') as Record<string, unknown>
+    }, failure === 'pi' ? PI.ref : REMOTE.ref)
+    try {
+      expect(await sender.call('session-s', '拒收不变成授权')).toMatchObject({
+        ok: false, code: failure === 'pi' ? 'op' : failure === 'wrong-key' ? 'not-member' : 'unreachable',
+      })
+      expect(posts).toHaveLength(1)
+      expect(sender.h.store.threads.list()).toEqual([])
+      expect(receiver.h.store.threads.list()).toEqual([])
+      expect(receiver.h.store.tickets.list()).toEqual([])
+      expect(receiver.sent.some(([, value]) => value.startsWith('[superagent assignment]'))).toBe(false)
+    } finally { await sender.h.stop(); await receiver.h.stop() }
   })
 })
 
