@@ -131,7 +131,7 @@
       config:
         id: superagent-member
         name: superagent 团队成员
-        description: superagent 团队的成员专用：只做宿主派来的工单，在自己的工作区里干活，用 a2a_ticket_* 汇报。不派活、不开子代理。
+        description: superagent 团队的成员专用：只做宿主派来的工单，在自己的工作区里干活，用 a2a_ticket_* 汇报；发现没人提的工作可以提议，由总工决定。不派活、不开子代理。
         order: 92
         plugins:
           - id: persona

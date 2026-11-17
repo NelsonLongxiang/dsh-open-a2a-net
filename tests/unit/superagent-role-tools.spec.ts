@@ -2,6 +2,7 @@
  * superagent design v4, PR-D: the role tool lists (pinned) and how the host applies them.
  */
 import { describe, expect, it } from 'vitest'
+import { mkdtempSync } from '../temp-dirs.ts'
 import { Config } from '../../src/config.ts'
 import { MEMBER_DENY, MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, TEAM_TOOLS, memberBoundary, roleToolRefusal, type Role, type RoleAgent } from '../../src/superagent/host/role-tools.ts'
 
@@ -14,7 +15,7 @@ describe('role tool lists', () => {
   it('pins what the router and a member may call', () => {
     expect(ROUTER_TOOLS).toEqual(['schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view', 'schedule_update', 'schedule_delete', 'a2a_whoami', 'mcp__ygl__read', 'a2a_tool_request', 'a2a_outbound_request', 'superagent_route', 'superagent_split', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
     expect(MEMBER_TOOLS).toEqual(['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list', 'job_kill',
-      'web_search', 'web_fetch', 'skill', 'todo_write', 'schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view', 'schedule_update', 'schedule_delete', 'a2a_whoami', 'mcp__ygl__read', 'mcp__ygl__write', 'mcp__ygl__verify', 'mcp__ygl__doctor', 'a2a_tool_request', 'a2a_outbound_request', 'a2a_decision_decide', 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch'])
+      'web_search', 'web_fetch', 'skill', 'todo_write', 'schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view', 'schedule_update', 'schedule_delete', 'a2a_whoami', 'mcp__ygl__read', 'mcp__ygl__write', 'mcp__ygl__verify', 'mcp__ygl__doctor', 'a2a_tool_request', 'a2a_outbound_request', 'a2a_decision_decide', 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_ticket_request', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch'])
   })
 
   it('no role may open or reach sessions, or route or report over A2A', () => {
@@ -158,7 +159,10 @@ describe('the team\'s agent presets: shipped in the bundle layer, required of a 
     const member = block(MEMBER_PRESET), observer = block(OBSERVER_PRESET)
     expect(plugins(observer)).toEqual(plugins(member))
     expect(observer).toContain('a2a_ticket_request')
-    expect(member).not.toContain('a2a_ticket_request')
+    // #717: a member may propose too; only the observer raises decision cards of its own.
+    expect(member).toContain('a2a_ticket_request')
+    expect(observer).toContain('a2a_decision_propose')
+    expect(member).not.toContain('a2a_decision_propose')
     expect(observer).not.toContain('dsh-tool-subagent')
   })
 
@@ -196,7 +200,6 @@ describe('the team\'s agent presets: shipped in the bundle layer, required of a 
 
   it('the host refuses such settings', async () => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
-    const { mkdtempSync } = await import('../temp-dirs.ts')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
     const of = (id: string) => ({ 'session-r': 'superagent-router', 'session-m': 'superagent-member', 'session-s': 'standard' } as Record<string, string>)[id]

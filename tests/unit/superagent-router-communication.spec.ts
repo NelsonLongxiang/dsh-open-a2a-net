@@ -44,8 +44,8 @@ it('ships generated inline router text without changing preset ids or compositio
 })
 
 it('adds only the shared boundary to original worker personas and leaves the builder unchanged', () => {
-  // Exact PR707 parent def0342; original worker text is extracted, not rewritten.
-  const originalPrefixes = { member: '36c6a832f2c229a3b344560b899b937d634687299e8acf36b1dfa8244935ce86', observer: '8093867d8c7d5612bc183542093c8ff5026ba74c847dadd1346870d9f83b958f' }
+  // Target next/0.8 78e077c; preserve its member-proposal text and original worker semantics.
+  const originalPrefixes = { member: '94788823990a698e9d29812acd0d97a2f0ed103290bf09fba583e49b0784f611', observer: '8093867d8c7d5612bc183542093c8ff5026ba74c847dadd1346870d9f83b958f' }
   for (const [role, sha] of Object.entries(originalPrefixes)) {
     const original = readFileSync(new URL('src/superagent/prompts/' + role + '.md', root), 'utf8')
     expect(digest(original)).toBe(sha)
@@ -53,6 +53,15 @@ it('adds only the shared boundary to original worker personas and leaves the bui
     expect(presetPrompt(role).startsWith(original.trimEnd() + '\n\n')).toBe(true)
   }
   expect(digest(persona(presets.find(row => row.config?.id === 'superagent-builder')!).prefix)).toBe('f51862d6928b0facc965802135eded05331136b3e6d6b3dc89111f0fd2546f5f')
+})
+
+it('retains upstream member initiative as a proposal, never a self-assignment or an external send', () => {
+  const member = presetPrompt('member')
+  expect(member).toContain('propose it with a2a_ticket_request')
+  expect(member).toContain('it does not become yours or let you start it')
+  expect(member).toContain('including what you propose')
+  expect(member).toContain('a2a_outbound_request')
+  expect(member).toContain('not your permission to run a2a-net route')
 })
 
 describe.each(['router', 'member', 'observer'])('%s host-managed transport contract', role => {

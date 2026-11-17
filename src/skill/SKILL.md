@@ -97,8 +97,9 @@ a2a_route { team: "<zone>/<id8 or canvas name>", message, context_id?, async? }
 - Join provides presence and makes a session discoverable/routable. The
   originating face is exempt from outbound join admission; that exception
   does not grant team-role tools, receiver admission or acceptance of work.
-- Join through the GUI sidebar (A2A 网络) or the join gate prompt; leave
-  through the same surface. Membership is visible; leaving removes you from
+- Join through the workbench planning board (the session row's network
+  join action; the sidebar join toggle was removed with the panel-slim
+  move) or the join gate prompt; leave through the same surface. Membership is visible; leaving removes you from
   discovery too.
 - Inbound deliveries from a caller with no `caller_session` are refused
   (anonymous injection is a closed hole).
