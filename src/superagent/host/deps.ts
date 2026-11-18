@@ -55,6 +55,13 @@ export interface SuperagentHostDeps {
   readonly mcpToolsChanged?: () => void
   /** Make the team's ygl-trees project in the team workspace (design Y1c); idempotent. */
   readonly ensureYglProject?: (name: string) => void
+  /** What the installed ygl-trees can do (design Y1d/Y1e); unknown when absent. */
+  readonly yglCapabilities?: () => import('./ygl-home.ts').YglCapabilities
+  /**
+   * Whether that read has settled (#739 review R1). Until it has, candidates and assignments wait (requests are still taken), so
+   * no card goes out with steps the version would change. Absent: ready.
+   */
+  readonly yglReady?: () => boolean
   readonly stageFiles?: (sessionId: string, paths: readonly string[], canvas: string) => { ok: true; files: DecisionFile[] } | { ok: false; code: string; error: string }
   /** Where this team's state lives instead, when it is not the instance's primary team (design M2). */
   readonly stateDir?: string
