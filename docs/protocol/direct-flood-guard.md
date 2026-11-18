@@ -61,8 +61,10 @@ This summary is not the raw session log. Sender stop order
 
 Real HTTP tests pin sync/async pre-steer refusal, failed query visibility,
 activity records, independent host budgets, admission unchanged, replay 409,
-malformed parts, duplicate coordinates and cross-file limits. Injected-clock
-unit tests pin minute rollover, 24h transfer lifetime and state-cap refusal.
+and the refusal of every JPFILE-PART form (well-formed, oversized, malformed,
+repeated) with no quota spent. A signed cancellation whose text carries a part
+still stops the task, but the session gets the host's own stop notice, never
+the part. Injected-clock unit tests pin minute rollover and state-cap refusal.
 Run pnpm verify with its real exit code captured (never the exit of tail).
 Merge, review/test stamps, deployment authorization, restart consent and
 post-deployment behavioral verification are separate gates. No restart or
