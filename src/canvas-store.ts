@@ -512,13 +512,16 @@ export class CanvasStore {
   /**
    * Create a named team; whitespace trims, duplicates are idempotent, and
    * the cap rejects a team beyond {@link CANVAS_TEAM_CAP}.
+   * #650: with `requireNew` a team of that name already here is refused instead, so a caller that composes a root
+   * from it knows the team is its own (two owners racing for one name: exactly one gets it).
    * @param name - the raw user-supplied name.
+   * @param opts - `requireNew`: refuse an existing team rather than return it.
    * @returns the stored name, or undefined when rejected.
    */
-  create(name: string): string | undefined {
+  create(name: string, opts: { readonly requireNew?: boolean } = {}): string | undefined {
     const clean = validNewName(name)
     if (clean === undefined) return undefined
-    if (this.hasTeam(clean)) return clean
+    if (this.hasTeam(clean)) return opts.requireNew === true ? undefined : clean
     if (this.teams.length >= CANVAS_TEAM_CAP) return undefined
     this.teams.push({ name: clean, members: [] })
     this.persist()
