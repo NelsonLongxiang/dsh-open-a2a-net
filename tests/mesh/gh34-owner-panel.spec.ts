@@ -44,7 +44,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('gh#34 owner-settings face (end-to-end)', () => {
-  it('GET reads, POST writes the patch layer + hot-applies allowlist/teamScopeInfo, announce flags restart', async () => {
+  it('GET reads, POST writes the patch layer + hot-applies allowlist/teamScope, announce flags restart', async () => {
     const home = mkdtempSync(joinPath(tmpdir(), 'gh34-'))
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
@@ -83,15 +83,16 @@ describe('gh#34 owner-settings face (end-to-end)', () => {
       // GET: initial values (the literal config carries no teamScopeInfo —
       // undefined reads as the OPEN plane, same truthiness as the schema
       // default's read site).
-      const before = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/owner-settings`)).json() as { ok: boolean; teamJoinAllowlist: string[]; teamScopeInfo: boolean; announce: boolean }
+      const before = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/owner-settings`)).json() as { ok: boolean; teamJoinAllowlist: string[]; teamScope: boolean; teamScopeInfo: boolean; announce: boolean }
       expect(before.ok).toBe(true)
       expect(before.teamJoinAllowlist).toEqual(['dsh/initial'])
+      expect(before.teamScope).toBe(false)
       expect(before.teamScopeInfo).toBe(false)
       expect(before.announce).toBe(true)
       // POST: allowlist + teamScopeInfo (hot), announce flip (restart).
       const write = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/owner-settings`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ teamJoinAllowlist: ['dsh/initial', 'dsh/review-gate'], teamScopeInfo: true, announce: false }),
+        body: JSON.stringify({ teamJoinAllowlist: ['dsh/initial', 'dsh/review-gate'], teamScope: true, announce: false }),
       })).json() as { ok: boolean; restartNeeded: boolean }
       expect(write.ok).toBe(true)
       expect(write.restartNeeded).toBe(true)
@@ -99,21 +100,32 @@ describe('gh#34 owner-settings face (end-to-end)', () => {
       const patch = readFileSync(joinPath(home, 'cordis.patch.yml'), 'utf8')
       expect(patch).toContain("- id: a2a")
       expect(patch).toContain("teamJoinAllowlist: ['dsh/initial', 'dsh/review-gate']")
-      expect(patch).toContain('teamScopeInfo: true')
+      expect(patch).toContain('teamScope: true')
       expect(patch).toContain('announce: false')
       // GET reflects the hot-applied values without a restart.
-      const after = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/owner-settings`)).json() as { teamJoinAllowlist: string[]; teamScopeInfo: boolean; announce: boolean; announceRestartPending: boolean }
+      const after = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/owner-settings`)).json() as { teamJoinAllowlist: string[]; teamScope: boolean; teamScopeInfo: boolean; announce: boolean; announceRestartPending: boolean }
       expect(after.teamJoinAllowlist).toEqual(['dsh/initial', 'dsh/review-gate'])
+      expect(after.teamScope).toBe(true)
       expect(after.teamScopeInfo).toBe(true)
       expect(after.announce).toBe(true) // boot value until restart
       expect(after.announceRestartPending).toBe(true)
-      // HOT-APPLY ①: the join gate admits the newly allowlisted team.
-      const join = await ctx.tools.get('a2a_team_join')?.execute({ team: 'dsh/review-gate', id: String(agent.id) }, { signal: new AbortController().signal, agent } as never) as { ok: boolean; error?: string }
-      expect(join?.ok).toBe(true)
+      // HOT-APPLY ①: whoami reads the new allowlist without a restart (roster self-join is retired, 2026-11-18).
+      const whoAllow = await ctx.tools.get('a2a_whoami')?.execute({}, { signal: new AbortController().signal, agent } as never) as { allowlist?: { patterns: string[] } }
+      expect(whoAllow?.allowlist?.patterns).toEqual(['dsh/initial', 'dsh/review-gate'])
       // HOT-APPLY ②: the GET now reports scoping ON (the call-time read
       // flipped without a restart).
-      const afterScoped = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/owner-settings`)).json() as { teamScopeInfo: boolean }
-      expect(afterScoped.teamScopeInfo).toBe(true)
+      const afterScoped = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/owner-settings`)).json() as { teamScope: boolean }
+      expect(afterScoped.teamScope).toBe(true)
+      // Owner ruling 2026-11-18: one switch — whoami reports the routing half on too, without a restart.
+      const who = await ctx.tools.get('a2a_whoami')?.execute({}, { signal: new AbortController().signal, agent } as never) as { teamScope?: boolean; teamScopeRouting?: boolean }
+      expect(who.teamScope).toBe(true)
+      expect(who.teamScopeRouting).toBe(true)
+      // A panel from before writes the old name: it now turns the same one switch.
+      const legacy = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/owner-settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ teamScopeInfo: false }) })).json() as { ok: boolean }
+      expect(legacy.ok).toBe(true)
+      const opened = await ctx.tools.get('a2a_whoami')?.execute({}, { signal: new AbortController().signal, agent } as never) as { teamScope?: boolean; teamScopeRouting?: boolean }
+      expect(opened.teamScope).toBe(false)
+      expect(opened.teamScopeRouting).toBe(false)
     } finally {
       await ctx.fiber.dispose()
     }

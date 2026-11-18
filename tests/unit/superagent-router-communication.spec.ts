@@ -52,7 +52,7 @@ it('adds only the shared boundary to original worker personas and leaves the bui
     expect(persona(presets.find(row => row.config?.id === 'superagent-' + role)!).prefix).toBe(presetPrompt(role))
     expect(presetPrompt(role).startsWith(original.trimEnd() + '\n\n')).toBe(true)
   }
-  expect(digest(persona(presets.find(row => row.config?.id === 'superagent-builder')!).prefix)).toBe('f51862d6928b0facc965802135eded05331136b3e6d6b3dc89111f0fd2546f5f')
+  expect(digest(persona(presets.find(row => row.config?.id === 'superagent-builder')!).prefix)).toBe('9d646ebaf36c2d0aafcf2a05c481a4241f54977a177be44f69fd64a6f5c84053')
 })
 
 it('retains upstream member initiative as a proposal, never a self-assignment or an external send', () => {

@@ -187,7 +187,9 @@ describe('gh#141 review of PR #149: only the debtor pays, and only what the cred
     try {
       silent(B)
       const C = await addSession(B, C_ID)
-      for (const who of [B.agents.agent!, C]) await B.ctx.tools.get('a2a_team_join')!.execute({ team: 'dsh/shared', id: String(who.id) }, runContext(who))
+      // One canvas team (roster self-join is retired, owner ruling 2026-11-18).
+      await postJson(B.baseUrl, '/__dsh_a2a/canvas', { action: 'create', name: 'pair' })
+      for (const who of [B.agents.agent!, C]) await postJson(B.baseUrl, '/__dsh_a2a/canvas', { action: 'add-member', name: 'pair', id: String(who.id) })
       const r = await route(B, { team: 'dsh/bbbbbbbb', message: '[A2A receipt] task direct-feedf00d done', async: true }, C)
       expect(r.ok, JSON.stringify(r)).toBe(true)
       expect((await state(B)).tasks).toEqual([])

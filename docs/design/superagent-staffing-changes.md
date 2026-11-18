@@ -2,7 +2,7 @@
 
 Status: **approved by the owner, 2026-11-12** (「都交给你办吧，你都可以的」, handing the review seat the open owner items). Not implemented. Written 2026-11-11.
 
-Implementation check (2026-11-18, next/0.8 `44907c00`): S1a is built (#666, `src/superagent/host/staffing.ts`). It carries out `team.create`, `member.add` and `team.rules.set` from the `owner-local` source, and the builder blueprints use it (#670). Not built yet: S1b (the market entrance), S2 role templates and S3. `team.retire`, `member.retire` and `member.retemplate` are refused as `not-yet`.
+Implementation check (2026-11-18, next/0.8 `44907c00`): S1a is built (#666, `src/superagent/host/staffing.ts`). It carries out `team.create`, `member.add` and `team.rules.set` from the `owner-local` source, and the builder blueprints use it (#670). Since the owner ruling of 2026-11-18 (#741) it also carries out `member.retire` from `owner-local` only (confirm; never the router, a remote member, or a member that owns an open ticket — running, parked or named). Not built yet: S1b (the market entrance), S2 role templates and S3. `team.retire` and `member.retemplate` are refused as `not-yet`, and so is `member.retire` from any other source.
 
 - **Rulings:** the five boundary points below are taken as proposed: the W2 defaults, rules proposed from the market and confirmed on the node, the node's approvers confirming, and a retired member's open ticket finishing.
 - **Next:** S1 is queued behind the root-team work. Each step is high tier and needs a non-self review PASS.
@@ -14,7 +14,7 @@ Implementation check (2026-11-18, next/0.8 `44907c00`): S1a is built (#666, `src
 
 ## Context: what the node already has
 
-- **Canvas teams** (design v5). A superagent team is a canvas team bound to a router. Every other session on the canvas is a member with one worker slot. Members can sit on another DSH instance, under another system user (`docs/ops/superagent-team-user.md`), pinned by card key.
+- **Canvas teams** (design v5). A superagent team is a canvas team bound to a router. Every other session on the canvas is a member with one worker slot. Members can sit on another DSH instance, under another system user (`docs/archive/ops/superagent-team-user.md`), pinned by card key.
 - **Role presets.** `superagent-router`, `superagent-member` and `superagent-observer` (in `cordis.patch.yml`) fix what each role may do. Tool limits, credential audit (#612) and the outbound rules follow the preset, not the session's text.
 - **Node identities** (`docs/design/node-identity.md`, `src/node-store.ts`). A node record is long-lived and human-named, its name is never reused, and it carries a session's workplace: checkout (`cwd`), agent preset and model. A session can carry a node, and a new session can be started for it. This is the natural place for a stable seat and for job templates.
 - **Roster** (#606, `docs/design/superagent-market-progress-roster.md` P3). The node sends a full snapshot of its seats to peers that declare `teamRoster`, every 5 minutes and 30 s after a change.
@@ -120,7 +120,7 @@ It cannot read or move credentials, widen tools, or reach the owner's user.
 1. **S1: entry, ledger, policy and confirmation cards**, with `member.retire` and `team.rules.set`. High tier. About 1.5 days. Split on 2026-11-12 ([superagent-builder](superagent-builder.md) TB6):
    - **S1a, the core:** the executor (host-run), the ledger with parent and child entries, the policy, the confirmation cards, `source` as a field (`owner-local | market:<handle>`), and the W2 extensions. The team builder's first real source.
      - *Built 2026-11-13* (`src/superagent/host/staffing.ts`). It carries out `team.create`, `member.add` (with a profile) and `team.rules.set` (with a scope).
-     - `team.retire`, `member.retire` and `member.retemplate` are refused as `not-yet`: retiring is not in a blueprint, and a template needs S2. They are `off` for `owner-local`.
+     - `team.retire`, `member.retire` and `member.retemplate` were refused as `not-yet` in S1a: retiring was not in a blueprint, and a template needs S2. *(2026-11-18: `member.retire` is now built for `owner-local`, see the implementation check above.)*
      - The owner's route is `/__dsh_a2a/superagent/staffing`: GET lists the ledger; POST `submit` (with `agree: true`) or `agree` needs the GUI login.
    - **S1b, the market's entry:** `staffing.sources`, Sig3, `staffingChanges`, receipts and `rosterSeq`.
 2. **S2: templates and `member.add`/`member.retemplate` on this instance**, with node identities as seats and the roster `templates` catalogue. High tier. About 2 days.

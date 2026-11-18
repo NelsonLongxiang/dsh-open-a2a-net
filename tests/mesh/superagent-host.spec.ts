@@ -467,7 +467,7 @@ describe('superagent engine in the a2a host', () => {
       const memberDeny = scopes.get(M_ID)!.deny ?? []
       expect(scopes.get(M_ID)!.allow).toBeUndefined()
       // #717: a member may propose new work (a2a_ticket_request); its own decision cards stay the observer's.
-      for (const name of ['a2a_route', 'a2a_report', 'a2a_file_send', 'a2a_team_join', 'superagent_route', 'a2a_decision_propose']) expect(memberDeny, name).toContain(name)
+      for (const name of ['a2a_route', 'a2a_report', 'a2a_file_send', 'superagent_route', 'a2a_decision_propose']) expect(memberDeny, name).toContain(name)
       for (const name of ['a2a_teams', 'a2a_tasks', 'a2a_whoami', 'a2a_ticket_report', 'a2a_file_fetch', 'a2a_outbound_request', 'a2a_ticket_request']) expect(memberDeny, name).not.toContain(name)
       expect(await refusedByRole('a2a_ticket_report', m.M, { ticket_id: 'x', state: 'progress', summary: 'x' })).toBe(false)
       expect(await refusedByRole('a2a_file_fetch', m.M, {})).toBe(false)

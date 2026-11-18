@@ -165,7 +165,9 @@ describe('#739 rereview R1: no card goes out before the version read settles, on
     } as never)
     expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
     let resolve!: (v: string) => void
-    startWhenYglKnown(() => { h.start() }, { logger: { warn: () => {} }, read: () => new Promise(r => { resolve = r }) })
+    // As src/index.ts wires it since 2026-11-18: the engine starts at boot; what the ygl barrier holds goes out once the read settles.
+    h.start()
+    startWhenYglKnown(() => { h.resumeHeld() }, { logger: { warn: () => {} }, read: () => new Promise(r => { resolve = r }) })
     // The workbench entry, while the read is pending: the request is taken, no card goes out.
     const asked = h.request('调研一下') as { triggerId: string }
     expect(asked.triggerId).toBeDefined()

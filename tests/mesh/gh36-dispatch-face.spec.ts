@@ -98,7 +98,9 @@ async function mount(): Promise<Mounted> {
     expect((await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/join`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: String(agent.id) }),
     })).status).toBe(200)
-    const joined = await ctx.tools.get('a2a_team_join')?.execute({ team: 'dsh/shared', id: String(agent.id) }, { signal: new AbortController().signal, agent: agent as unknown as Agent } as never) as { ok?: boolean; error?: string }
+    // One canvas team (roster self-join is retired, owner ruling 2026-11-18).
+    await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/canvas`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'create', name: 'pair' }) })).json()
+    const joined = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/canvas`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'add-member', name: 'pair', id: String(agent.id) }) })).json() as { ok?: boolean; error?: string }
     expect(joined?.ok).toBe(true)
   }
   return { ctx, port, a, b, post, dispose: async () => { await ctx.fiber.dispose() } }

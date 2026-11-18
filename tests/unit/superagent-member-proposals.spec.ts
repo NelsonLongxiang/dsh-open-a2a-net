@@ -172,7 +172,7 @@ describe('a member host forwards its served member\'s proposal', () => {
       signedPost: async (url: string, path: string, body: unknown) => { posts.push([url, path, body]); return { ok: true, trigger_id: 'remote-trigger' } },
       handleOf: (id: string) => `near/${id}`,
     } as never)
-    // Serving is set by the serve-team action, which pins the key; here it is put straight in place.
+    // Serving is set by the serve action, which pins the key; here it is put straight in place.
     const held = h as unknown as { settingsValue: Record<string, unknown> }
     held.settingsValue = { ...held.settingsValue, serves: { url: 'https://team.example', key: 'team-key', members: ['session-s'] } }
     expect(await h.forwardProposal('session-s', '远端发现的问题')).toMatchObject({ ok: true, trigger_id: 'remote-trigger' })

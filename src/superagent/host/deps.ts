@@ -62,6 +62,8 @@ export interface SuperagentHostDeps {
    * no card goes out with steps the version would change. Absent: ready.
    */
   readonly yglReady?: () => boolean
+  /** The task ledger's state of a request the team identity received (owner ruling 2026-11-18: one book for receipts owed). */
+  readonly receiptLedger?: (task: string) => import('./receipts.ts').LedgerOwed
   readonly stageFiles?: (sessionId: string, paths: readonly string[], canvas: string) => { ok: true; files: DecisionFile[] } | { ok: false; code: string; error: string }
   /** Where this team's state lives instead, when it is not the instance's primary team (design M2). */
   readonly stateDir?: string

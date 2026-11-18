@@ -72,7 +72,8 @@ export interface Config {
   readonly delegates: DelegateConfig[]
   /**
    * gh#9+gh#10 OriginClaim window (docs/protocol/delivery-origin-auth.md §4):
-   * while true (default), a delivery/log request with NO envelope still
+   * closed by default since #64 step 1 (false). While an operator opens it
+   * (true), a delivery/log request with NO envelope still
    * walks N3 admission and increments the legacyInbound warn metric; when
    * the operator closes it (post fleet flip), an absent envelope rejects
    * `untrusted-origin` — same code as a failed signature (M1: a
@@ -189,7 +190,8 @@ export interface Config {
   readonly wakeReconcileMaxBackoffMs: number
   /**
    * S4 (gh#11 N7, operator directive: team creation is a human act): the
-   * joinable-team curation list for a2a_team_join. ONLY an EXACT entry
+   * roster curation list (roster self-join is retired, 2026-11-18: kept one
+   * version so an existing roster can be shrunk or dissolved). ONLY an EXACT entry
    * authorizes a join; trailing-`*` pattern entries stay readable here
    * (whoami shows them) but carry no mint rights — a pattern that
    * pre-authorized every future name under it would let a model mint teams
@@ -199,17 +201,21 @@ export interface Config {
   /** Human-owned stable display labels keyed by full local session id; never a routing identity. */
   readonly seatNames: Record<string, unknown>
   /**
-   * S3 (phase-2 default-ON, owner ruling 2026-09-01): route dispatch checks
-   * caller↔target shared team membership before addressing; set false to
-   * restore the open outbound seam. (Kept in sync with the schema comment.)
+   * Team scope (owner ruling 2026-11-18, simplify D3): ONE switch for both
+   * halves — route dispatch checks caller↔target shared team membership
+   * (S3), and the information tools disclose only joined teams (S5). Set
+   * false for the open plane on both. Hot-applied by the owner panel.
+   * Absent: the deprecated per-half keys below decide (one version only).
+   */
+  readonly teamScope?: boolean
+  /**
+   * @deprecated 2026-11-18 — use `teamScope`. Read only while `teamScope` is
+   * absent. S3: route dispatch checks shared team membership.
    */
   readonly teamScopeRouting: boolean
   /**
-   * S5 (owner directive 2026-10-20): information-plane scoping — the
-   * read-only fleet tools (a2a_teams / a2a_status / a2a_probe) disclose
-   * only teams joined by this host's nodes (the union of local roster
-   * declarations). [this host] rows stay visible; a2a_tasks (this host's
-   * own ledger) stays unscoped. Set false for the open plane.
+   * @deprecated 2026-11-18 — use `teamScope`. Read only while `teamScope` is
+   * absent. S5: the information tools disclose only joined teams.
    */
   readonly teamScopeInfo: boolean
   /**
@@ -300,8 +306,8 @@ export const Config: s<Config> = s.object({
   wakeReconcileBackoffBaseMs: s.number().default(5_000),
   wakeReconcileMaxBackoffMs: s.number().default(600_000),
   /**
-   * S4 (gh#11 N7): the joinable-team curation list. A model calling
-   * a2a_team_join may only declare membership in a team with an EXACT
+   * S4 (gh#11 N7): the roster curation list (roster self-join retired
+   * 2026-11-18). A roster could only declare membership in a team with an EXACT
    * entry here — trailing-`*` patterns are readable but authorize nothing
    * (no mint rights: a pattern pre-authorizing every future name under it
    * would let a model mint teams nobody created). Default empty: the
@@ -318,6 +324,9 @@ export const Config: s<Config> = s.object({
    * roster capability flag (0.5.44 cards advertise roster:true; older
    * peers read as legacy). Set false to restore the open outbound seam.
    */
+  /** One team-scope switch for routing and information (owner ruling 2026-11-18); absent: the two deprecated keys. */
+  teamScope: s.boolean(),
+  /** @deprecated 2026-11-18: use teamScope. */
   teamScopeRouting: s.boolean().default(true),
   /**
    * S5 (default-on, owner directive 2026-10-20): the information-plane
@@ -330,6 +339,7 @@ export const Config: s<Config> = s.object({
    * teams keeps host-internal facts only. Set false to restore
    * fleet-wide disclosure.
    */
+  /** @deprecated 2026-11-18: use teamScope. */
   teamScopeInfo: s.boolean().default(true),
 
   /**

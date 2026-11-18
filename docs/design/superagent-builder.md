@@ -60,7 +60,7 @@ A blueprint is a #626 staffing change with a source of `owner-local`. It is one 
   - `member.add` gains an optional `profile` (role, intake rules, repository). It defaults to the template's rules once templates exist.
   - These two extensions apply to the market's entry too.
 - **A team in the same blueprint** is named by its canvas. A team that exists is named by its `teamId`. Members are named by `seatId` (named dispatch B1), never by session id, except in the `session` that `member.add` puts on the team.
-- **Never in a blueprint:** anything in #626 W3's list, approvers, models, prompt supplements, sources, root-team links across hosts, and `team.retire` or `member.retire`. The executor refuses a body that names any of them with `not-allowed`. Retiring, approvers and the rest stay on the team page in this version.
+- **Never in a blueprint:** anything in #626 W3's list, approvers, models, prompt supplements, sources, root-team links across hosts, and `team.retire` (`member.retire` joined the blueprint on 2026-11-18, TB7). The executor refuses a body that names any of them with `not-allowed`. Retiring a whole team, approvers and the rest stay on the team page in this version.
 
 ### TB4. The owner agrees in the builder's conversation; the host carries it out
 
@@ -123,3 +123,5 @@ The owner approved the four points below on 2026-11-13 (「是的 可以」), an
 
 - Starting sessions (until #626 S2), child teams across hosts, retiring teams or members, approvers, models, prompt supplements, and the market's side.
 - Changing what a router, member or observer may do. The builder only puts existing roles together.
+
+- **TB7 Members can leave (2026-11-18).** Roster self-join is retired, so the team builder is where membership changes: a blueprint may `member.retire {team, seatId}` a local member (never the router, never one working on a ticket; the owner agrees, and the team's card confirms, as for any change to an existing team). Undo puts the member back on the canvas. Retiring a whole team (`team.retire`) stays out of blueprints.
