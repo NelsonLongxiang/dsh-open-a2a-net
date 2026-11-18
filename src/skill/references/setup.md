@@ -106,8 +106,9 @@ Do section 1 on both hosts first. Then the **owner**, on BOTH hosts:
    `/__dsh_a2a/fleet-canvas-op`; your host's link gate decides.
 
 **Agent, verify on each host:**
-- `a2a_probe`: the peer is reachable. A miss is classified as `unreachable`
-  (network, port, tunnel) or `rejected` (key, signature, clock).
+- `a2a_probe`: the peer is reachable. Each row has a `verdict`: `reachable`,
+  `slow` (answered, but slower than `maxLatencyMs`, default 2000), `rejected`
+  (key, signature, clock) or `unreachable` (network, port, tunnel).
 - State face `remote` rows: the peer's sessions appear, with `via` set to
   the peer URL. `a2a_teams` shows peer rows only for teams in this host's
   joined scope (S5, `teamScopeInfo`), so an empty list is not proof that the

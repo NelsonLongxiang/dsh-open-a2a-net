@@ -26,6 +26,17 @@ describe('CanvasStore', () => {
     expect(store.hasTeam('alpha')).toBe(true)
   })
 
+  it('#650 requireNew: an existing team is refused, a new one is created and persisted; plain create stays idempotent', () => {
+    const file = tmpFile()
+    const store = new CanvasStore(file)
+    expect(store.create('alpha', { requireNew: true })).toBe('alpha')
+    expect(new CanvasStore(file).hasTeam('alpha')).toBe(true)
+    expect(store.create(' alpha ', { requireNew: true })).toBeUndefined()
+    expect(store.create('alpha')).toBe('alpha')
+    expect(store.list()).toEqual(['alpha'])
+    expect(store.create('a/b', { requireNew: true })).toBeUndefined()
+  })
+
   it('enforces the team cap', () => {
     const store = new CanvasStore(tmpFile())
     for (let i = 0; i < CANVAS_TEAM_CAP; i++) expect(store.create(`team-${String.fromCharCode(97 + (i % 26))}${i}`)).toBeDefined()

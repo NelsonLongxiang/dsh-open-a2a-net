@@ -43,7 +43,7 @@ class FakeAgentsService extends Service {
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
-    apiKey: '', session: 'sess-1', team: 'home-zone', routeTimeoutMs: 60_000, flushTimeoutMs: 300_000,
+    apiKey: '', originClaimWindow: true /* #64: unsigned fixture deliveries */, session: 'sess-1', team: 'home-zone', routeTimeoutMs: 60_000, flushTimeoutMs: 300_000,
     announce: false, agentName: 'test node', peers: [], delegates: [], sessionNodes: false,
     wakeJoinedOnBoot: false, stateColdRowsTtlMs: 5_000,
     cardCacheTtlMs: 60_000, cardCacheNegativeTtlMs: 30_000, cardTtlMs: 172_800_000,

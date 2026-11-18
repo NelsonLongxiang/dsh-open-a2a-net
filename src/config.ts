@@ -370,8 +370,11 @@ export const Config: s<Config> = s.object({
    * gh#9+gh#10 OriginClaim window: absent envelopes still walk N3 during
    * the window (counted as legacyInbound); closing it rejects them like
    * failed signatures. See docs/protocol/delivery-origin-auth.md §4.
+   * #64 (owner ruling 2026-11-17, step 1 of 2): closed by default — every
+   * CLI signs since #135 and legacyInbound has read 0 since 2026-11-04. An
+   * operator reopens it with `originClaimWindow: true`.
    */
-  originClaimWindow: s.boolean().default(true),
+  originClaimWindow: s.boolean().default(false),
   /**
    * OriginClaim unbound window: also sign/accept the legacy envelope that
    * names no audience (counted as unboundInbound); closing it leaves the

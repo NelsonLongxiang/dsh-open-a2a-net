@@ -1611,6 +1611,9 @@ async function main() {
     // the address it dials is missing from the host's originClaimAudiences.
     if (typeof s.unboundInbound === 'number') {
       console.log(`claims      unboundInbound=${String(s.unboundInbound)}  boundMissInbound=${String(s.boundMissInbound ?? 0)}  (dialled as ${claimTarget(home())?.audience ?? home()}${claimAudienceOverride() !== undefined ? `, signed for ${claimAudienceOverride()}` : ''})`)
+      // #64 step 2: the restart-proof measure — whole days at zero (legacy, unbound, boundMiss) up to yesterday.
+      const w = s.originClaimWindow
+      if (w !== null && typeof w === 'object' && typeof w.zeroStreakDays === 'number') console.log(`window      zero-days=${String(w.zeroStreakDays)}  measuring since ${String(w.since)}  (unbound window closes after 7, #64)`)
       // Who missed and by which origin: add that origin to the host's originClaimAudiences.
       for (const m of (Array.isArray(s.boundMissRecent) ? s.boundMissRecent : []).slice(0, 5)) {
         console.log(`  miss      ${String(m.caller)} dialled ${String(m.audience) || '(no origin)'} ×${String(m.count)}`)

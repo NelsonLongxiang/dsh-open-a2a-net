@@ -16,6 +16,7 @@
  * @module src/faces/admin
  */
 import type { ScopeHint } from '../scope-hints.ts'
+import type { WindowMeasureView } from '../window-measure.ts'
 import { isRootAction, rootAction, type CanvasRootDeps } from '../canvas-root.ts'
 import { childLabel } from '../superagent/host/root-dispatch.ts'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -83,6 +84,8 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly teamCanvasRefusal?: (canvas: string, member: string) => string | undefined
   /** docs/design/superagent-root-team.md R7: the root operations on the canvas route. */
   readonly canvasRoot?: CanvasRootDeps
+  /** #650: the agent preset a live session runs (undefined when unknown), shown on its state row. */
+  readonly sessionPresetOf?: (id: string) => string | undefined
   /** superagent-root-team R8 (S3): the root tickets each child of a root canvas holds now, for the board's state. */
   readonly rootChildrenOpen?: (canvas: string) => ReadonlyMap<string, number>
   /** The root team identity's handle bound to this canvas (its A2A address), for the registration check. */
@@ -131,6 +134,8 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly scopeHints?: () => readonly ScopeHint[]
   readonly remoteRowsCache: RemoteRowsCache
   readonly legacyInboundCount: number
+  /** #64 step 2: the window counters by UTC day, kept across restarts (window-measure.ts). */
+  readonly originClaimWindowMeasure?: () => WindowMeasureView
   readonly unboundInboundCount: number
   readonly boundMissInboundCount: number
   readonly boundMissRecent: ReadonlyArray<{ caller: string; audience: string; count: number; lastAt: number }>
@@ -247,6 +252,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               // #19 D3: the session's exposure tier (linked floor /
               // fleet opt-up) — readable on the state face.
               exposure: exposureStore.tierOf(String(agent.id)),
+              // #650: the agent preset it runs, so the board's router picker offers only what a team binding accepts.
+              ...(d.sessionPresetOf?.(String(agent.id)) !== undefined ? { preset: d.sessionPresetOf(String(agent.id)) } : {}),
               ...(canvasTeams.length > 0 ? { canvasTeams } : {}),
               ...(groupOf(String(agent.id)) !== undefined ? { group: groupOf(String(agent.id)) } : {}),
             }
@@ -329,6 +336,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
                 }
                 return rows
               })(),
+              // #650: a superagent team taking requests here (the card's canvasOrg marker of the same name): a root may take it as a child.
+              ...(d.canvasRoot?.localSuperagentCanvas(name) === true ? { superagentTeam: true as const } : {}),
               // superagent-root-team R8 (S3): the board reads a root and its children from the state.
               ...(canvasStore.isRoot(name) ? { root: true as const } : {}),
               ...(canvasStore.isRoot(name) ? {
@@ -519,7 +528,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             const unreachable = card !== undefined && entry?.missAt !== undefined ? { unreachable: true } : {}
             return Array.isArray(org)
               ? { url, ...unreachable, org: org.filter((e): e is { name: unknown; team: unknown; members: unknown } => e !== null && typeof e === 'object')
-                  .map(e => ({ name: typeof e.name === 'string' ? e.name : '', team: typeof e.team === 'string' ? e.team : '', id: typeof e.team === 'string' ? qualifiedCanvasId(e.team, card?.publicKey) : '', members: Array.isArray(e.members) ? e.members.filter((m): m is string => typeof m === 'string') : [] }))
+                  .map(e => ({ name: typeof e.name === 'string' ? e.name : '', team: typeof e.team === 'string' ? e.team : '', id: typeof e.team === 'string' ? qualifiedCanvasId(e.team, card?.publicKey) : '', members: Array.isArray(e.members) ? e.members.filter((m): m is string => typeof m === 'string') : [],
+                    // #650: the card's own markers, so the board can tell a child candidate (superagent team, no root) before a write.
+                    ...((e as { superagentTeam?: unknown }).superagentTeam === true ? { superagentTeam: true as const } : {}), ...((e as { root?: unknown }).root === true ? { root: true as const } : {}) }))
                   .filter(e => e.team !== '') }
               : { url, ...unreachable, org: [] }
           }),
@@ -527,6 +538,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // OriginClaim window — the operator watches this drain to
           // zero before closing the window.
           legacyInbound: d.legacyInboundCount,
+          // #64 step 2: the same counts by UTC day across restarts, and the streak of whole days at zero.
+          ...(d.originClaimWindowMeasure !== undefined ? { originClaimWindow: d.originClaimWindowMeasure() } : {}),
           // Accepted unbound (no-audience) OriginClaim envelopes — the
           // drain gauge for closing originClaimUnboundWindow.
           unboundInbound: d.unboundInboundCount,
@@ -953,8 +966,13 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             payload = JSON.stringify({ ...await rootAction(action, body as Record<string, unknown>, d.canvasRoot), ...canvasStore.state() })
           } else if (action === 'create') {
             const name = typeof body.name === 'string' ? body.name : ''
-            const stored = canvasNameReserved(name) ? undefined : canvasStore.create(name)
-            payload = JSON.stringify(stored === undefined ? { ok: false, error: 'invalid, roster-reserved name or team cap reached' } : { ok: true, name: stored, teams: canvasStore.list() })
+            // #650: requireNew refuses a team that is already here; `created` says whether this call made the team.
+            const requireNew = (body as { requireNew?: unknown }).requireNew === true
+            const before = new Set(canvasStore.list())
+            const stored = canvasNameReserved(name) ? undefined : canvasStore.create(name, { requireNew })
+            payload = JSON.stringify(stored !== undefined ? { ok: true, name: stored, created: !before.has(stored), teams: canvasStore.list() }
+              : requireNew && before.has(name.trim()) ? { ok: false, created: false, error: `a canvas team named ${name.trim()} already exists: pick another name`, teams: canvasStore.list() }
+              : { ok: false, created: false, error: 'invalid, roster-reserved name or team cap reached' })
           } else if (action === 'remove') {
             const name = typeof body.name === 'string' ? body.name : ''
             payload = JSON.stringify({ ok: canvasStore.remove(name), teams: canvasStore.list() })
