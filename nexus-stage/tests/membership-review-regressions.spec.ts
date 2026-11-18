@@ -224,3 +224,60 @@ describe('F1–F5 required-fix boundaries and positive controls', () => {
   expect(v.root.querySelector('.p-dialog-error')?.textContent ?? v.root.querySelector('.p-dialog')?.textContent).toContain('重新选择')
  })
 })
+
+
+describe('F6 local membership eligibility (independent b3 review)', () => {
+ it.each([false, undefined])('does not offer an initially unjoined/unknown source (joined=%s)', joined => {
+  const { v, state, form } = mount()
+  v.update({ ...state, sessions: [{ ...session, joined }] })
+  expect(Array.from(form().querySelector<HTMLSelectElement>('select')!.options).filter(o => o.value === session.id && !o.disabled)).toHaveLength(0)
+ })
+ it.each(['left', 'unknown', 'removed'])('refuses a focused local source after it is %s without losing selection or focus', async change => {
+  const { v, state, form, canvasOp } = mount()
+  const f = form(), pick = f.querySelector<HTMLSelectElement>('select')!
+  const option = Array.from(pick.options).find(o => o.value === session.id)!
+  expect(option).toBeDefined(); expect(option.disabled).toBe(false)
+  pick.value = option.value; expect(pick.selectedOptions[0]).toBe(option); pick.focus()
+  v.update({ ...state, sessions: change === 'removed' ? [] : [{ ...session, joined: change === 'left' ? false : undefined }] })
+  expect(document.activeElement).toBe(pick); expect(pick.isConnected).toBe(true)
+  submit(f); await tick()
+  expect(canvasOp).not.toHaveBeenCalled()
+  expect(f.isConnected).toBe(true); expect(document.activeElement).toBe(pick)
+  expect(pick.selectedOptions[0]).toBe(option); expect(pick.value).toBe(session.id)
+  expect(f.querySelector('[role=alert]')?.textContent).toContain('重新选择')
+  expect(f.querySelector('[role=alert]')!.children).toHaveLength(0)
+  expect(f.querySelector<HTMLButtonElement>('button[type=submit]')!.disabled).toBe(false)
+ })
+ it.each([true, false])('still sends a currently joined source (live=%s)', async live => {
+  const { v, state, form, canvasOp } = mount()
+  v.update({ ...state, sessions: [{ ...session, joined: true, live }] })
+  const f = form(), pick = f.querySelector<HTMLSelectElement>('select')!
+  const option = Array.from(pick.options).find(o => o.value === session.id)!
+  expect(option).toBeDefined(); expect(option.disabled).toBe(false)
+  pick.value = option.value; expect(pick.selectedOptions[0]).toBe(option); submit(f)
+  await vi.waitFor(() => expect(canvasOp).toHaveBeenCalledWith('add-member', 'A', session.id, undefined, undefined))
+  expect(canvasOp).toHaveBeenCalledTimes(1)
+ })
+ it('does not automatically reselect an idle ineligible choice after its session rejoins', () => {
+  const { v, state, form, canvasOp } = mount()
+  let pick = form().querySelector<HTMLSelectElement>('select')!
+  pick.value = session.id
+  v.update({ ...state, sessions: [{ ...session, joined: false }] })
+  pick = form().querySelector<HTMLSelectElement>('select')!
+  expect(Array.from(pick.options).some(o => o.value === session.id)).toBe(false)
+  expect(pick.value).toBe(''); submit(form()); expect(canvasOp).not.toHaveBeenCalled()
+  v.update({ ...state, sessions: [{ ...session, joined: true, live: false }] })
+  pick = form().querySelector<HTMLSelectElement>('select')!
+  expect(Array.from(pick.options).find(o => o.value === session.id)?.disabled).toBe(false)
+  expect(pick.value).toBe('')
+ })
+ it('keeps manual remote input independent of a stale local choice', async () => {
+  const { v, state, form, canvasOp } = mount()
+  const f = form(), pick = f.querySelector<HTMLSelectElement>('select')!
+  pick.value = session.id; pick.focus()
+  v.update({ ...state, sessions: [{ ...session, joined: false }] })
+  f.querySelector<HTMLInputElement>('input')!.value = 'peer/aaaaaaaa'; submit(f)
+  await vi.waitFor(() => expect(canvasOp).toHaveBeenCalledWith('add-member', 'A', 'peer/aaaaaaaa', undefined, undefined))
+  expect(canvasOp).toHaveBeenCalledTimes(1)
+ })
+})

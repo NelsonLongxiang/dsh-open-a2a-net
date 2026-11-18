@@ -1155,8 +1155,8 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
               note.setAttribute('role', 'alert'); note.textContent = '添加失败：所选远端来源已变化或不可核实，请重新选择。'; return
             }
             requestPeer = matches[0]!.via // The current linked endpoint's exact spelling belongs on the wire.
-          } else if (handle === '' && !last?.sessions?.some(s => s.id === id)) {
-            note.setAttribute('role', 'alert'); note.textContent = '添加失败：所选会话已离开目录，请重新选择。'; return
+          } else if (handle === '' && !last?.sessions?.some(s => s.id === id && s.joined === true)) {
+            note.setAttribute('role', 'alert'); note.textContent = '添加失败：所选会话已离开目录或不再入网，请重新选择。'; return
           }
           const request = { busy: true, message: '正在添加…', failed: false }
           memberAddRequests.set(current.name, request)
@@ -1187,7 +1187,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       pick.appendChild(new Option('本机会话（现场/冷启动）…', '', true, true))
       const memberIds = new Set(fresh.members.map(member => member.id))
       for (const session of last?.sessions ?? []) {
-        if (memberIds.has(session.id)) continue
+        if (session.joined !== true || memberIds.has(session.id)) continue
         pick.appendChild(new Option(`${displayName(session)} — 本机`, session.id))
       }
       let remoteLabeled = false
