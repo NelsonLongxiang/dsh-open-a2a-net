@@ -86,16 +86,28 @@ export async function refreshYglCapabilities(d: { readonly logger: { warn(format
   return capabilities
 }
 
+/**
+ * Run `start` once the version read has settled (#739 review R1): every card the team engines send depends on it, so they
+ * must not start on the unknown default. The read is bounded (15 s), and a failed read settles as unknown. The returned
+ * function cancels a start that has not happened yet.
+ */
+export function startWhenYglKnown(start: () => void, d: { readonly logger: { warn(format: string, ...args: unknown[]): void }; readonly read?: YglVersionRead }): () => void {
+  let live = true
+  void refreshYglCapabilities(d).finally(() => { if (live) start() })
+  return () => { live = false }
+}
+
 /** For tests: set what the host knows about ygl-trees. */
 export const setYglCapabilitiesForTest = (next: YglCapabilities): void => { capabilities = next }
 
 /**
  * A team's kb scope (design Y1e): `bench:team-<canvas>`. ygl-trees takes ids of [A-Za-z0-9._-]{1,64}; a canvas name outside
- * that becomes a short hash of itself, so the same canvas always gets the same scope.
+ * that becomes `bench:teamh-<hash>`, so the same canvas always gets the same scope. The two forms never meet (#739 review R2):
+ * a literal id always has `-` right after `team`, a hashed one `h`, so no canvas name can take another canvas's hashed scope.
  */
 export function teamYglScope(canvas: string): string {
   const id = `team-${canvas}`
-  return `bench:${/^[A-Za-z0-9._-]{1,64}$/.test(id) ? id : `team-${createHash('sha256').update(canvas).digest('hex').slice(0, 16)}`}`
+  return `bench:${/^[A-Za-z0-9._-]{1,64}$/.test(id) ? id : `teamh-${createHash('sha256').update(canvas).digest('hex').slice(0, 16)}`}`
 }
 
 /**

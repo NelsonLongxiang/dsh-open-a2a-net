@@ -151,7 +151,7 @@ import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiri
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
 import { touchesRules } from './superagent/host/owner-proof.ts'
-import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, refreshYglCapabilities, yglCapabilities } from './superagent/host/teams.ts'
+import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, startWhenYglKnown, yglCapabilities } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { IntakeOrigins } from './intake-origins.ts'
 import { redeliverLost, TaskBodies } from './task-bodies.ts'
@@ -2194,7 +2194,13 @@ export function apply(ctx: Context, config: Config): void {
   let superagentHomeUrl: string | undefined
   if (superagentHost !== undefined) {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
-    ctx.effect(() => { superagentTeams!.start(); void ensureTeamYglHome({ logger }); void refreshYglCapabilities({ logger }); return () => { void superagentTeams!.stop() } }, 'a2a: superagent engine passes')
+    ctx.effect(() => {
+      void ensureTeamYglHome({ logger })
+      // Design Y1d (#739 review R1): the cards a team sends depend on the installed ygl-trees, so its engines start once the
+      // bounded version read has settled; a card sent before would keep the oldest steps for its whole ticket.
+      const cancel = startWhenYglKnown(() => { superagentTeams!.start() }, { logger })
+      return () => { cancel(); void superagentTeams!.stop() }
+    }, 'a2a: superagent engine passes')
     registerSuperagentTools(ctx, id => superagentTeams!.ofSession(id))
     // superagent-builder BS1: the team builder's inventory and rule templates (read-only).
     registerBuilderTools(ctx, id => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET, () => ({

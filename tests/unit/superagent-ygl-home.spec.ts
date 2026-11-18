@@ -99,9 +99,14 @@ describe('Y1e: a team kb scope (owner 2026-11-18)', () => {
   it('is bench:team-<canvas>, or a stable hash when the canvas name has other characters', () => {
     expect(teamYglScope('ops')).toBe('bench:team-ops')
     const hashed = teamYglScope('运维')
-    expect(hashed).toMatch(/^bench:team-[0-9a-f]{16}$/)
+    expect(hashed).toMatch(/^bench:teamh-[0-9a-f]{16}$/)
     expect(teamYglScope('运维')).toBe(hashed)
-    expect(teamYglScope('x'.repeat(80))).toMatch(/^bench:team-[0-9a-f]{16}$/)
+    expect(teamYglScope('x'.repeat(80))).toMatch(/^bench:teamh-[0-9a-f]{16}$/)
+    // #739 review R2: a literal canvas named after another canvas's digest does not get that canvas's scope.
+    const digest = hashed.slice('bench:teamh-'.length)
+    expect(teamYglScope(digest)).toBe(`bench:team-${digest}`)
+    expect(teamYglScope(digest)).not.toBe(hashed)
+    expect(teamYglScope(`h-${digest}`)).not.toBe(hashed)
   })
   it('the member card keeps today\'s steps on an old or unknown ygl-trees', () => {
     const old = yglCardLines('team-ops', { scope: 'bench:team-ops', caps: yglCapabilitiesOf('0.122.0') })

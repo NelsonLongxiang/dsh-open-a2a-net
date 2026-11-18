@@ -4,7 +4,7 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { yglCapabilitiesOf } from '../../src/superagent/host/ygl-home.ts'
+import { yglCapabilities, yglCapabilitiesOf } from '../../src/superagent/host/ygl-home.ts'
 
 async function team(ygl: boolean, made: string[] = [], version?: string) {
   const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
@@ -15,7 +15,8 @@ async function team(ygl: boolean, made: string[] = [], version?: string) {
     deliverToSession: (id: string, text: string) => { sent.push([id, text]); return true }, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id,
     hasTool: (id: string, name: string) => ygl && ((id === 'session-m' && name === 'mcp__ygl__write') || (id === 'session-r' && name === 'mcp__ygl__read')),
     ensureYglProject: (name: string) => { made.push(name) },
-    ...(version !== undefined ? { yglCapabilities: () => yglCapabilitiesOf(version) } : {}),
+    // Without a version, the host reads what the start-up probe learned (the module state), as src/index.ts wires it.
+    yglCapabilities: version !== undefined ? () => yglCapabilitiesOf(version) : yglCapabilities,
   } as never)
   expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
   h.start()
@@ -109,5 +110,42 @@ describe('the cards follow the installed ygl-trees (Y1d/Y1e, owner 2026-11-18)',
     expect(m.card).not.toContain('bench:team-')
     expect(m.h.state().ygl).toEqual({ version: '0.122.0', briefHonorsProject: false, kbScope: false, project: 'team-team' })
     await m.h.stop()
+  })
+})
+
+describe('#739 review R1: the team engines start only after the ygl-trees version read settles', () => {
+  it('a start waits for a pending read; the first card then carries the 0.126 steps', async () => {
+    const { startWhenYglKnown, yglCapabilities, setYglCapabilitiesForTest, YGL_UNKNOWN } = await import('../../src/superagent/host/ygl-home.ts')
+    setYglCapabilitiesForTest(YGL_UNKNOWN)
+    let resolve!: (v: string) => void
+    const read = () => new Promise<string | undefined>(r => { resolve = r })
+    let seen: unknown
+    const start = vi.fn(() => { seen = yglCapabilities() })
+    startWhenYglKnown(start, { logger: { warn: () => {} }, read })
+    await Promise.resolve()
+    expect(start).not.toHaveBeenCalled()
+    resolve('0.126.0')
+    await vi.waitFor(() => { expect(start).toHaveBeenCalledTimes(1) })
+    expect(seen).toMatchObject({ version: '0.126.0', kbScope: true, briefHonorsProject: true })
+    // The host started then sends the scoped steps on its first card.
+    const m = await team(true, [], undefined)
+    expect(m.h.state().ygl).toMatchObject({ kbScope: true, scope: 'bench:team-team' })
+    expect(m.card).toContain('with scope "bench:team-team"')
+    await m.h.stop()
+    setYglCapabilitiesForTest(YGL_UNKNOWN)
+  })
+  it('a failed read settles as unknown and still starts; a cancelled start never runs', async () => {
+    const { startWhenYglKnown, yglCapabilities, setYglCapabilitiesForTest, YGL_UNKNOWN } = await import('../../src/superagent/host/ygl-home.ts')
+    const failed = vi.fn()
+    startWhenYglKnown(failed, { logger: { warn: () => {} }, read: async () => { throw new Error('no ygl-trees') } })
+    await vi.waitFor(() => { expect(failed).toHaveBeenCalledTimes(1) })
+    expect(yglCapabilities()).toEqual(YGL_UNKNOWN)
+    let resolve!: (v: string) => void
+    const cancelled = vi.fn()
+    const cancel = startWhenYglKnown(cancelled, { logger: { warn: () => {} }, read: () => new Promise(r => { resolve = r }) })
+    cancel(); resolve('0.126.0')
+    await new Promise(r => setTimeout(r, 10))
+    expect(cancelled).not.toHaveBeenCalled()
+    setYglCapabilitiesForTest(YGL_UNKNOWN)
   })
 })
