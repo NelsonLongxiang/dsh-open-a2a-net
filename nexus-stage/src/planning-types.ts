@@ -81,6 +81,8 @@ export interface PlanningDeps {
   onNodePick?(id: string): void
   /** Wall clock for the inFlight age labels (tests pin it; default Date.now). */
   now?(): number
+  /** #650: the owner routes 组成 root 团队 writes and reads through; absent, ≥2 selected frames fall back to 建队. */
+  compose?: import('./planning-root-compose').ComposeIo
 }
 
 /** Pointer-like event surface the handlers consume (real events satisfy it). */

@@ -95,6 +95,8 @@ export interface PeerOrgRow {
 /** One session row from /state `sessions` (live or cold joined). */
 export interface SessionRow {
   readonly memberRef?: string
+  /** #650: the agent preset a live local session runs (absent when unknown). */
+  readonly preset?: string
   readonly id: string
   readonly label: string
   readonly team: string
@@ -149,6 +151,9 @@ export interface CanvasTeamRow {
   readonly name: string
   readonly team: string
   readonly members: readonly CanvasMemberRow[]
+  /** #650: the team's address `<zone>/canvas/<name>@<fp8>`, and whether it is a superagent team taking requests. */
+  readonly id?: string
+  readonly superagentTeam?: boolean
 }
 
 /** One activity-ring entry. */

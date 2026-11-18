@@ -8,7 +8,7 @@
     "src/canvas-store.ts": "ce935c601af66a524949ccb006310c6b106be159718c0a7839c41fd210c20826",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
     "src/cli-deposit.ts": "18170d50ecace54e2cd5210909cad38ef6b66f0b349499c9b6c918ffc913f62a",
-    "nexus-stage/src/workbench.ts": "84a423a2d6c94199f1ba11c2c346401465e9a9084f5ead7374f3949f902b9b99",
+    "nexus-stage/src/workbench.ts": "dee7b3a1a2c07c793e171e8aa8d3cf81b9d14a8b905edc1f596784bee162050b",
     "nexus-stage/src/federation.ts": "0ad1e9e077ebaee592e055a9aa56053ef50963bd5e2a47b27b63c2944daafed9",
     "nexus-stage/src/planning-relayout.ts": "7ce77ba2bc95fcbee62af752f22969b726511d8988133e74123a5e04a7a6a571",
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
@@ -213,7 +213,7 @@
     {
       "page": "p1-arch",
       "cell": "e1",
-      "ref": "nexus-stage/src/workbench.ts:598",
+      "ref": "nexus-stage/src/workbench.ts:603",
       "expect": "function renderHosts(): void {"
     },
     {
