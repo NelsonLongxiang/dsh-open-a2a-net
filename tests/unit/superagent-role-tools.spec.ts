@@ -8,12 +8,12 @@ import { MEMBER_DENY, MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, TEAM_TOOLS, memberB
 
 describe('role tool lists', () => {
   it('the team\'s own tools are the router\'s, the member\'s ticket tools and the builder\'s inventory', () => {
-    expect(TEAM_TOOLS).toEqual([...ROUTER_TOOLS.filter(name => !name.startsWith('schedule_') && name !== 'a2a_whoami' && !name.startsWith('mcp__ygl__')), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw'])
+    expect(TEAM_TOOLS).toEqual([...ROUTER_TOOLS.filter(name => !name.startsWith('schedule_') && name !== 'a2a_whoami' && !name.startsWith('mcp__ygl__') && !['read', 'glob', 'grep', 'skill'].includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw'])
     for (const name of ['a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback']) expect(MEMBER_TOOLS).toContain(name)
   })
 
   it('pins what the router and a member may call', () => {
-    expect(ROUTER_TOOLS).toEqual(['schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view', 'schedule_update', 'schedule_delete', 'a2a_whoami', 'mcp__ygl__read', 'a2a_tool_request', 'a2a_outbound_request', 'superagent_route', 'superagent_split', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
+    expect(ROUTER_TOOLS).toEqual(['schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view', 'schedule_update', 'schedule_delete', 'a2a_whoami', 'mcp__ygl__read', 'read', 'glob', 'grep', 'skill', 'a2a_tool_request', 'a2a_outbound_request', 'superagent_route', 'superagent_split', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
     expect(MEMBER_TOOLS).toEqual(['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list', 'job_kill',
       'web_search', 'web_fetch', 'skill', 'todo_write', 'schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view', 'schedule_update', 'schedule_delete', 'a2a_whoami', 'mcp__ygl__read', 'mcp__ygl__write', 'mcp__ygl__verify', 'mcp__ygl__doctor', 'a2a_tool_request', 'a2a_outbound_request', 'a2a_decision_decide', 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_ticket_request', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch'])
   })
@@ -31,6 +31,9 @@ describe('role tool lists', () => {
       expect(roleToolRefusal(role, 'gitbash', {}, [], ['gitbash'])).toContain('blocked')
     }
     expect(roleToolRefusal('router', 'bash')).toBeDefined()
+    // Owner 2026-11-18: the router reads files and loads skills, and still writes nothing.
+    for (const name of ['read', 'glob', 'grep', 'skill']) expect(roleToolRefusal('router', name), `router ${name}`).toBeUndefined()
+    for (const name of ['write', 'edit', 'pwsh', 'job_output']) expect(roleToolRefusal('router', name), `router ${name}`).toBeDefined()
     expect(roleToolRefusal('router', 'a2a_ticket_report')).toBeDefined()
     expect(roleToolRefusal('member', 'superagent_route')).toBeDefined()
     // The runtime's transport is not a capability: each call it makes is guarded on its own.
@@ -105,7 +108,7 @@ describe('RoleTools', () => {
     roles.p = 'router'
     tools.sync(plain)
     // The fake registry has no schedule tools, no a2a_whoami and no MCP tools, and a restriction names only the tools the scope has.
-    expect(log.slice(1)).toEqual(['p lift', `p restrict ${ROUTER_TOOLS.filter(name => !name.startsWith('schedule_') && name !== 'a2a_whoami' && !name.startsWith('mcp__')).join(',')}`])
+    expect(log.slice(1)).toEqual(['p lift', `p restrict ${ROUTER_TOOLS.filter(name => !name.startsWith('schedule_') && name !== 'a2a_whoami' && !name.startsWith('mcp__') && !['read', 'glob', 'grep', 'skill'].includes(name)).join(',')}`])
     expect(tools.list()).toEqual({ p: 'router' })
   })
 
@@ -172,16 +175,20 @@ describe('the team\'s agent presets: shipped in the bundle layer, required of a 
     const layer = readFileSync(new URL('../../cordis.patch.yml', import.meta.url), 'utf8')
     const block = (id: string): string => { const start = layer.indexOf(`        id: ${id}\n`); expect(start).toBeGreaterThan(0); const next = layer.indexOf('\n    - id: ', start); return layer.slice(start, next < 0 ? undefined : next) }
     const router = block(ROUTER_PRESET), member = block(MEMBER_PRESET)
-    // The role lives in the composition: a persona each; the router reads only and waits at most 5 s; no subagents anywhere.
+    // The role lives in the composition: a persona each; the router reads only (files, search, skills), with no shell or jobs; no subagents anywhere.
     for (const preset of [router, member]) { expect(preset).toContain("name: '@deepseek-ai/dsh-persona'"); expect(preset).not.toContain('dsh-tool-subagent') }
     expect(router).toMatch(/dsh-tool-fs'\n\s+config:\n\s+write: false\n\s+edit: false/)
+    expect(router).toContain("name: '@deepseek-ai/dsh-tool-fs-search'")
+    for (const absent of ['dsh-tool-bash', 'dsh-tool-pwsh', 'dsh-bash-sandbox', 'dsh-tool-jobs']) expect(router).not.toContain(absent)
+    // Owner 2026-11-18: members get the standard preset's goal and present tools.
+    for (const plugin of ['dsh-command-goal', 'dsh-tool-goal', 'dsh-tool-present']) expect(member).toContain(`name: '@deepseek-ai/${plugin}'`)
     expect(router).toContain('superagent_route')
     expect(member).toContain('a2a_ticket_report')
     expect(member).toContain('reasonable defaults for routine steps')
     expect(member).toContain("name: '@deepseek-ai/dsh-tool-fs'\n")
     // Both wait at most 5 s in the foreground, as upstream's executor: a long command moves to a background job, so a stop
     // notice or a person's answer is taken at the next step, and a job wait ends after 5 s too.
-    for (const preset of [router, member]) {
+    for (const preset of [member]) {
       expect(preset).toMatch(/isolate:\n\s+shell: true/)
       expect(preset.match(/maxTimeoutMs: 5000/g)).toHaveLength(2)
       expect(preset).toMatch(/dsh-tool-jobs'\n\s+config:\n\s+waitTimeoutMs: 5000\n\s+maxWaitTimeoutMs: 5000/)

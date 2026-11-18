@@ -28,7 +28,7 @@
       config:
         id: superagent-router
         name: superagent 总工
-        description: superagent 团队的总工专用：只决定接不接、交给谁，不动手；需求明确要求分项时才拆单。文件只读，命令与等待最多 5 秒。
+        description: superagent 团队的总工专用：只决定接不接、交给谁，不动手；需求明确要求分项时才拆单。可以读文件、搜文件、加载技能来判断交给谁，不写文件、不跑命令。
         order: 91
         plugins:
           - id: persona
@@ -42,40 +42,16 @@
               maxBytes: 65536
           - id: time-context
             name: '@deepseek-ai/dsh-time-context'
-          - id: shell
-            name: cordis:group
-            group: true
-            isolate:
-              shell: true
-            config:
-              - id: bash-sandbox
-                name: '@deepseek-ai/dsh-bash-sandbox'
-                disabled: !!js process.platform === 'win32'
-                config:
-                  timeoutMs: 5000
-                  maxTimeoutMs: 5000
-              - id: pwsh-sandbox
-                name: '@deepseek-ai/dsh-pwsh-sandbox'
-                disabled: !!js process.platform !== 'win32'
-                config:
-                  timeoutMs: 5000
-                  maxTimeoutMs: 5000
-              - id: tool-bash
-                name: '@deepseek-ai/dsh-tool-bash'
-                disabled: !!js process.platform === 'win32'
-              - id: tool-pwsh
-                name: '@deepseek-ai/dsh-tool-pwsh'
-                disabled: !!js process.platform !== 'win32'
+          # Reads only (owner 2026-11-18): files and search to see where a request fits; no writes, no shell, no jobs.
           - id: tool-fs
             name: '@deepseek-ai/dsh-tool-fs'
             config:
               write: false
               edit: false
-          - id: tool-jobs
-            name: '@deepseek-ai/dsh-tool-jobs'
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
             config:
-              waitTimeoutMs: 5000
-              maxWaitTimeoutMs: 5000
+              sampleOverCapGlobResults: false
           - id: skill-filesystem
             name: '@deepseek-ai/dsh-skill-filesystem'
           - id: tool-skill
@@ -233,6 +209,13 @@
                   thresholdChars: 8192
                   headChars: 4096
                   tailChars: 1024
+          # As DSH's standard preset (owner 2026-11-18): the session's own goal, and presenting files to the person who reads it.
+          - id: command-goal
+            name: '@deepseek-ai/dsh-command-goal'
+          - id: tool-goal
+            name: '@deepseek-ai/dsh-tool-goal'
+          - id: present
+            name: '@deepseek-ai/dsh-tool-present'
           - id: tool-todo
             name: '@deepseek-ai/dsh-tool-todo'
             config:
@@ -349,6 +332,13 @@
                   thresholdChars: 8192
                   headChars: 4096
                   tailChars: 1024
+          # As DSH's standard preset (owner 2026-11-18): the session's own goal, and presenting files to the person who reads it.
+          - id: command-goal
+            name: '@deepseek-ai/dsh-command-goal'
+          - id: tool-goal
+            name: '@deepseek-ai/dsh-tool-goal'
+          - id: present
+            name: '@deepseek-ai/dsh-tool-present'
           - id: tool-todo
             name: '@deepseek-ai/dsh-tool-todo'
             config:
