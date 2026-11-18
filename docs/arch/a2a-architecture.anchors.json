@@ -279,8 +279,7 @@
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2635",
-      "expect": "void retryReceiptDelivery({"
+      "ref": "src/index.ts:2722", "expect": "const result=await receiptOutbox.send(record.taskId)"
     },
     {
       "page": "p1-arch",
