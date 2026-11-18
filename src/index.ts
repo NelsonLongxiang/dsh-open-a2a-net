@@ -2120,11 +2120,7 @@ export function apply(ctx: Context, config: Config): void {
     yglReady: yglSettled,
     // Owner ruling 2026-11-18: what the team still owes a requester is read from this one ledger (the team identity publishes
     // with --owes, so each request it receives has an inbound row here); its own memory is only the fallback without a row.
-    receiptLedger: task => {
-      const row = taskLedger.find(task)
-      if (row !== undefined && row.direction === 'inbound') return row.acknowledgedAt !== undefined ? 'acknowledged' : 'owed'
-      return taskLedger.archive().some(entry => entry.taskId === task) ? 'settled' : undefined
-    },
+    receiptLedger: task => taskLedger.inboundReceiptState(task),
     // Design v5: the team is a canvas team this host owns. Its local sessions in canvas order, and its remote session slots
     // with the key the canvas pinned and the base URL of the linked peer whose signed card carries that key.
     // Pi platform P1/P2/P3: whether a CLI handle is a Pi seat deposited here, and the mailbox delivery to one.

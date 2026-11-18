@@ -31,7 +31,7 @@ export function createStaffing(w: StaffingWiring): StaffingExecutor {
     get settings() { return team.settings },
     saveSettings: (raw, by) => team.saveSettings(raw, w.sessionValid, w.presetOf, by),
     memberOfSeat: seatId => team.named.memberOfSeat(seatId),
-    ticketOf: session => team.executor.bindingOf(session)?.ticketId,
+    ticketOf: session => team.executor.ticketsOf(session)[0],
     proposeStaffingCard: (changeId, question, reason, level) => team.proposeStaffingCard(changeId, question, reason, level),
     ruleRevision: scope => team.ruleChanges.revision(scope as never),
     recordRuleChange: (scope, change) => { team.ruleChanges.applied(scope as never, { at: new Date().toISOString(), by: change.by, reason: change.reason }) },

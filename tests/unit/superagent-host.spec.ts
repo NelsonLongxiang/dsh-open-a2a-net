@@ -605,6 +605,21 @@ describe('a member\'s turn: silent ends, failures, handoffs and stale reports', 
     } finally { await m.h.stop() }
   })
 
+  it('#741 review R2: a member whose ticket is parked waiting on a person still owns it (retirement checks ticketsOf)', async () => {
+    const m = await team()
+    try {
+      const one = m.accept('第一', '一')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      expect(m.h.report('session-a', { state: 'waiting', summary: '要问一下', question: '用哪种格式？' }, one.ticket)).toMatchObject({ ok: true })
+      m.h.memberIdle('session-a')
+      await m.tick()
+      // Parked: no active binding, yet the ticket is open and still the member's.
+      expect(m.h.executor.bindingOf('session-a')).toBeUndefined()
+      expect(m.h.store.tickets.get(one.ticket)!.ended).toBeUndefined()
+      expect(m.h.executor.ticketsOf('session-a')).toEqual([one.ticket])
+    } finally { await m.h.stop() }
+  })
+
   it('a ticket waiting on a person holds no member; the answer brings it back to that member first', async () => {
     const m = await team()
     try {

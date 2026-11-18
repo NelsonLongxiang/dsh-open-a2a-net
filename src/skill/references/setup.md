@@ -155,4 +155,3 @@ a mailbox, no wake. The home can forward eligible requests one hop under section
 | `a2a_probe` → `unreachable` | §2.1 reachability (bind address, firewall, tunnel) |
 | peer reachable but its sessions never appear | §2.3: seeding is one-sided, or the peer did not `announce` |
 | `No live DSH session node accepts team X` | X is on another host and nothing forwards (§3), or X is not joined/live there |
-| `[PATTERN_NO_MINT]` / `[ALLOWLIST_DENY]` | §1.4: add the EXACT team name to the allowlist |

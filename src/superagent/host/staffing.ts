@@ -83,7 +83,7 @@ export interface StaffingTeam {
   saveSettings(raw: unknown, by: string): { ok: true } | { ok: false; error: string }
   /** The session a seat stands for now, or undefined. */
   memberOfSeat(seatId: string): string | undefined
-  /** The ticket a member works on now, or undefined (owner ruling 2026-11-18: a member on a ticket is not retired). */
+  /** An open ticket a member owns now — running, parked, or named for it — or undefined (a member with one is not retired). */
   ticketOf?(session: string): string | undefined
   /** A confirmation card on this team for one change; its id. */
   proposeStaffingCard(changeId: string, question: string, reason: string, level: 'P0' | 'P1'): string | undefined
