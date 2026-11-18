@@ -152,6 +152,7 @@ export class SuperagentHost {
       memberNotes: (member, ticket) => this.memberNotes(member, ticket),
       deliver: (member, text, kind, ticketId, run) => this.deliverToMember(member, text, kind, ticketId, run), engine: () => this.engine,
       paused: () => this.settingsValue.paused,
+      ready: () => this.yglReady(),
       cancelTurn: member => this.d.cancelTurn?.(member) === true,
       reportFor: (ticketId, member, state, summary) => { this.engine.report(ticketId, { state, summary: clip(summary, 2_000) }); this.relayReport(ticketId, state, summary); this.pass(); void member },
       ticket: id => this.store.tickets.get(id), trigger: id => this.store.triggers.get(id), logger: d.logger,
@@ -309,6 +310,8 @@ export class SuperagentHost {
     // initialized yet (a TDZ crash took the plugin down on hosts with models set - review of #566). A microtask runs
     // after apply() finishes; the catch inside applyModels is the second fence.
     queueMicrotask(() => { this.applyModels() })
+    // #739 review R1: what waited on the ygl-trees version read (a request taken before the engines started) goes out now.
+    queueMicrotask(() => { this.flushCandidates(); this.executor.launch() })
     this.started = true
     this.syncA2a()
     this.pass()
@@ -780,6 +783,8 @@ export class SuperagentHost {
   /** This team's kb scope (design Y1e); none while the team has no canvas, or the installed ygl-trees has no kb scopes. */
   yglScope(): string | undefined { return this.settingsValue.canvas === undefined || this.yglCaps().kbScope !== true ? undefined : teamYglScope(this.settingsValue.canvas) }
   private yglCaps() { return this.d.yglCapabilities?.() ?? YGL_UNKNOWN }
+  /** Whether cards that depend on the installed ygl-trees may go out yet (#739 review R1). */
+  private yglReady(): boolean { return this.d.yglReady?.() !== false }
   private ensureYglProject(): void { const project = this.yglProject(); if (project !== undefined) { try { this.d.ensureYglProject?.(project) } catch { /* best effort */ } } }
   private yglRouterLines(router: string): string[] {
     const project = this.yglProject()
@@ -1483,7 +1488,8 @@ export class SuperagentHost {
 
   private flushCandidates(): void {
     const router = this.settingsValue.router
-    if (router === undefined || this.settingsValue.paused) return
+    // #739 review R1: a candidate card names the team's kb scope, which waits on the ygl-trees version read.
+    if (router === undefined || this.settingsValue.paused || !this.yglReady()) return
     for (const [evalId, entry] of this.candidates) {
       if (entry.delivered) continue
       const open = this.store.tickets.list().filter(t => !t.ended)

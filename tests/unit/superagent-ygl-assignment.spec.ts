@@ -149,3 +149,42 @@ describe('#739 review R1: the team engines start only after the ygl-trees versio
     setYglCapabilitiesForTest(YGL_UNKNOWN)
   })
 })
+
+describe('#739 rereview R1: no card goes out before the version read settles, on any entry', () => {
+  it('a request taken while the read is pending yields only scoped cards once it settles (every assignment, not just one)', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const { startWhenYglKnown, yglSettled, setYglCapabilitiesForTest, YGL_UNKNOWN } = await import('../../src/superagent/host/ygl-home.ts')
+    setYglCapabilitiesForTest(YGL_UNKNOWN, false)
+    const sent: Array<[string, string]> = []
+    const h = new SuperagentHost({
+      canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', 'session-m'], remote: [] } : undefined, home: mkdtempSync(join(tmpdir(), 'sa-ygl-')), logger: { info: () => {}, warn: () => {} },
+      deliverToSession: (id: string, text: string) => { sent.push([id, text]); return true }, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id,
+      hasTool: (id: string, name: string) => (id === 'session-m' && name === 'mcp__ygl__write') || (id === 'session-r' && name === 'mcp__ygl__read'),
+      ensureYglProject: () => {}, yglCapabilities, yglReady: yglSettled,
+    } as never)
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    let resolve!: (v: string) => void
+    startWhenYglKnown(() => { h.start() }, { logger: { warn: () => {} }, read: () => new Promise(r => { resolve = r }) })
+    // The workbench entry, while the read is pending: the request is taken, no card goes out.
+    const asked = h.request('调研一下') as { triggerId: string }
+    expect(asked.triggerId).toBeDefined()
+    h.pass()
+    await new Promise(r => setTimeout(r, 10))
+    expect(sent.filter(([, t]) => t.startsWith('[superagent candidate]') || t.startsWith('[superagent assignment]'))).toEqual([])
+    resolve('0.126.0')
+    await vi.waitFor(() => { expect(sent.some(([id, t]) => id === 'session-r' && t.startsWith('[superagent candidate]'))).toBe(true) })
+    const candidate = sent.find(([id, t]) => id === 'session-r' && t.startsWith('[superagent candidate]'))![1]
+    expect(candidate).toContain('scope "bench:team-team"')
+    const ticket = (routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: '调研', scope: 's', reason: 'r' } as never) as { ticket_id: string }).ticket_id
+    await vi.waitFor(() => { expect(h.executor.bindingOf('session-m')?.ticketId).toBe(ticket) })
+    const assignments = sent.filter(([id, t]) => id === 'session-m' && t.startsWith('[superagent assignment]')).map(([, t]) => t)
+    expect(assignments.length).toBeGreaterThan(0)
+    for (const card of assignments) {
+      expect(card).toContain('with scope "bench:team-team"')
+      expect(card).not.toContain('domain project action use')
+    }
+    await h.stop()
+    setYglCapabilitiesForTest(YGL_UNKNOWN)
+  })
+})

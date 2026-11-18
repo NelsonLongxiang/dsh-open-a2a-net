@@ -71,6 +71,10 @@ export const defaultYglVersionRead: YglVersionRead = () => new Promise(resolve =
 })
 
 let capabilities: YglCapabilities = YGL_UNKNOWN
+let settled = false
+
+/** Whether the start-up version read has settled (#739 review R1): until then no card that depends on it goes out. */
+export const yglSettled = (): boolean => settled
 
 /** What the host last learned about the installed ygl-trees (YGL_UNKNOWN until the start-up read finishes). */
 export const yglCapabilities = (): YglCapabilities => capabilities
@@ -82,6 +86,7 @@ export const yglCapabilities = (): YglCapabilities => capabilities
 export async function refreshYglCapabilities(d: { readonly logger: { warn(format: string, ...args: unknown[]): void }; readonly read?: YglVersionRead }): Promise<YglCapabilities> {
   const version = await (d.read ?? defaultYglVersionRead)().catch(() => undefined)
   capabilities = yglCapabilitiesOf(version)
+  settled = true
   if (version !== undefined && !capabilities.kbScope) d.logger.warn('superagent: ygl-trees %s is older than 0.126.0: team kb notes are not scoped by team%s', version, capabilities.briefHonorsProject ? '' : ', and the cards keep the project-use step (0.123.0 fixes it)')
   return capabilities
 }
@@ -98,7 +103,7 @@ export function startWhenYglKnown(start: () => void, d: { readonly logger: { war
 }
 
 /** For tests: set what the host knows about ygl-trees. */
-export const setYglCapabilitiesForTest = (next: YglCapabilities): void => { capabilities = next }
+export const setYglCapabilitiesForTest = (next: YglCapabilities, isSettled = true): void => { capabilities = next; settled = isSettled }
 
 /**
  * A team's kb scope (design Y1e): `bench:team-<canvas>`. ygl-trees takes ids of [A-Za-z0-9._-]{1,64}; a canvas name outside

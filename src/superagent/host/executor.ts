@@ -42,6 +42,8 @@ export interface MemberExecutorDeps {
   readonly engine: () => Engine
   /** The owner paused the team (upstream: evaluation, dispatch and outbound delivery hold). */
   readonly paused?: () => boolean
+  /** False while what the assignment cards depend on is not known yet (#739 review R1): launches wait, nothing else does. */
+  readonly ready?: () => boolean
   /** Stop a member's running turn (upstream cancels the worker on stop). True when a turn was running, and an idle event will follow. */
   readonly cancelTurn?: (member: string) => boolean
   /** The ticket's report made on the member's behalf (a turn that ended silently, or failed), told to the router as a report is. */
@@ -275,7 +277,7 @@ export class MemberExecutor implements Executor {
 
   /** Launch waiting Assignments on free members, oldest first, while both exist. */
   launch(): void {
-    if (this.d.paused?.() === true) return
+    if (this.d.paused?.() === true || this.d.ready?.() === false) return
     if (this.launching) { this.launchAgain = true; return }
     this.launching = true
     void this.launchLoop().catch(error => { this.d.logger.warn('superagent: launch failed: %s', String(error)) }).finally(() => {
