@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** Compose the package's A2A agent presets; usage: node scripts/build-agent-presets.mjs --write|--check. */
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -41,7 +41,8 @@ export function renderPresetPatch(template = readFileSync(TEMPLATE, 'utf8')) {
   return GENERATED + output
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Compare real paths: a symlinked directory (macOS /var -> /private/var) would otherwise skip the CLI and exit 0.
+if (process.argv[1] && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))) {
   const [mode, ...extra] = process.argv.slice(2)
   if (!['--write', '--check'].includes(mode) || extra.length) throw Error('usage: node scripts/build-agent-presets.mjs --write|--check')
   const rendered = renderPresetPatch()
