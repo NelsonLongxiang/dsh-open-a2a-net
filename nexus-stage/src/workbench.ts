@@ -231,7 +231,7 @@ export interface WorkbenchDeps {
   abandon(taskId: string, reason: string): Promise<boolean>
   /** Canvas team member change via the control route (0.6.6): `id` is a
    *  local session id or a zone-qualified remote handle. True on success. */
-  canvasOp(action: 'add-member' | 'remove-member', name: string, id: string, home?: string, peer?: string): Promise<boolean>
+  canvasOp(action: 'add-member' | 'remove-member', name: string, id: string, home?: string, peer?: string): Promise<boolean | { ok: boolean; error?: string }>
   cliHomeOptions?(name: string, id: string): Promise<CliHomeOptions>
   confirmMember?(name: string, id: string, replacement: string, revision: number, expectedOwner: string | null, peer?: string): Promise<{ ok: boolean; error?: string }>
   regulateSuspended?(action: 'restore-suspended' | 'delete-suspended', name: string, id: string, revision: number, expected: readonly unknown[]): Promise<{ ok: boolean; error?: string }>
@@ -359,7 +359,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   let dirFilter: DirFilter = 'all'
   // Canvas add-member form cache (static DOM re-mounted across polls; keyed
   // by team name — same trick as draftForm so inputs survive the 3s poll).
-  let canvasForm: { name: string; form: HTMLFormElement; pick: HTMLSelectElement; manual: HTMLInputElement } | null = null
+  let canvasForm: { name: string; form: HTMLFormElement; pick: HTMLSelectElement; manual: HTMLInputElement; busy: boolean } | null = null
   const cliHomeForms = new Map<string, HTMLFormElement>()
   const provenanceForms = new Map<string, HTMLElement>()
   // Quick-dispatch form (0.6.9), cached per target routing team the same
@@ -374,6 +374,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
    *  when the chat drawer loads it (the list face carries no titles). */
   const logTitles = loadLogTitles()
   let logRowsBusy = false
+  let directoryDragging = false
 
   const root = el('div', 'wb')
   root.setAttribute('data-testid', 'wb-root')
@@ -425,6 +426,14 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   const rail = railTabs.root
 
   const directoryBody = el('div', 'wb-directory')
+  directoryBody.addEventListener('dragstart', event => {
+    const target = event.target as HTMLElement | null
+    if (target?.closest('[draggable=true]')) directoryDragging = true
+  })
+  directoryBody.addEventListener('dragend', () => {
+    directoryDragging = false
+    queueMicrotask(() => renderSidebar())
+  })
   // Directory toolbar: unified search + category filter chips (0.6.6). Built
   // once above the re-rendered list so the input keeps focus and its text
   // across polls; filtering is pure frontend over /state.
@@ -566,6 +575,8 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
 
   // ── Directory section ──
   function renderSidebar(): void {
+    // Keep the native source connected until drop/dragend, including async log-list refreshes.
+    if (directoryDragging) return
     // Filter chips reflect the live view state (built once, toggled here).
     for (let i = 0; i < filterRow.children.length; i++) {
       const node = filterRow.children[i] as HTMLElement
@@ -979,7 +990,22 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     box.appendChild(card)
   }
 
+  async function memberChange(action: 'add-member' | 'remove-member', name: string, id: string, home?: string, peer?: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const result = action === 'remove-member' ? await deps.canvasOp(action, name, id)
+        : home !== undefined && peer === undefined ? await deps.canvasOp(action, name, id, home)
+        : await deps.canvasOp(action, name, id, home, peer)
+      return typeof result === 'boolean' ? { ok: result } : { ok: result.ok === true, error: result.error }
+    } catch (error) { return { ok: false, error: String(error) } }
+  }
+
   function renderInspector(): void {
+    // A select popover, keyboard focus or pending submit must not be detached by a poll.
+    const focused = document.activeElement
+    const sameTeam = selection?.kind === 'canvas' && canvasForm?.name === selection.row.name
+    if (!ownerPanelOpen && sameTeam && canvasForm?.form.isConnected
+      && (canvasForm.busy || (focused !== null && canvasForm.form.contains(focused)))) return
+    const scroll = inspector.scrollTop
     const box = clear(inspectorBody)
     // gh#34: the owner panel owns the inspector when open (selection cards
     // yield; the gear closes it back).
@@ -995,9 +1021,17 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       // Re-resolve the team from the freshest state: membership changes here
       // must be visible on the next render even though the click-time row is
       // a stale snapshot.
-      const fresh = (last?.canvas?.teams ?? []).find(t => t.name === sel.row.name) ?? sel.row
+      const fresh = (last?.canvas?.teams ?? []).find(t => t.name === sel.row.name)
+      if (!fresh) {
+        const note = el('div', 'wb-hint'); note.setAttribute('role', 'status')
+        note.textContent = '该队已不在当前目录，请重新选择团队。'
+        box.appendChild(note); return
+      }
       textRow(card, 'Canvas 队', fresh.name)
       textRow(card, '路由队', fresh.team)
+      // Keep the action before arbitrarily long member/retained-slot lists.
+      const controls = el('div', 'wb-member-controls')
+      card.appendChild(controls)
       const head = el('div', 'wb-side-head')
       head.textContent = `成员 · ${fresh.members.length}`
       card.appendChild(head)
@@ -1020,7 +1054,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         remove.textContent = '移除'
         remove.addEventListener('click', async () => {
           remove.disabled = true
-          if (!(await deps.canvasOp('remove-member', fresh.name, member.id))) remove.disabled = false
+          if (!(await memberChange('remove-member', fresh.name, member.id)).ok) remove.disabled = false
         })
         row.appendChild(remove)
         card.appendChild(row)
@@ -1033,7 +1067,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
           const key = JSON.stringify([fresh.name, member.id])
           let form = cliHomeForms.get(key)
           if (form === undefined) {
-            form = createCliHomePicker(() => deps.cliHomeOptions!(fresh.name, member.id), home => deps.canvasOp('add-member', fresh.name, member.id, home))
+            form = createCliHomePicker(() => deps.cliHomeOptions!(fresh.name, member.id), async home => (await memberChange('add-member', fresh.name, member.id, home)).ok)
             cliHomeForms.set(key, form)
           }
           card.appendChild(form)
@@ -1070,8 +1104,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         if(!form){form=createMemberProvenancePicker(choices,choice=>deps.confirmMember!(fresh.name,slot.member,choice.replacement,revision,slot.ownerKey,choice.peer));provenanceForms.set(formKey,form)}
         card.appendChild(form)
       }
-      // Add-member form: static DOM re-mounted per poll (draftForm trick) —
-      // rebuilt only when the inspected team changes.
+      // Cache draft and outcome by team; while focused or pending it stays mounted.
       if (canvasForm?.name !== fresh.name) {
         const form = el('form', 'wb-member-add')
         const pick = document.createElement('select')
@@ -1088,18 +1121,35 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         form.appendChild(pick)
         form.appendChild(manual)
         form.appendChild(submit)
+        const note = el('div', 'wb-member-result'); note.setAttribute('role', 'status'); note.setAttribute('aria-live', 'polite')
+        form.appendChild(note)
+        const current = { name: fresh.name, form, pick, manual, busy: false }
         form.addEventListener('submit', async ev => {
           ev.preventDefault()
+          if (current.busy) return
           const handle = manual.value.trim()
-          const selected=handle!==''?undefined:pick.selectedOptions[0]
+          const selected = handle !== '' ? undefined : pick.selectedOptions[0]
           const id = handle !== '' ? handle : selected?.dataset.member ?? pick.value
           if (id === '') return
-          submit.disabled = true
-          const ok = await deps.canvasOp('add-member', fresh.name, id, undefined, selected?.dataset.peer)
-          submit.disabled = false
-          if (ok) manual.value = ''
+          const latest = last?.canvas?.teams?.find(t => t.name === current.name)
+          if (!latest) { note.setAttribute('role', 'alert'); note.textContent = '添加失败：该队已不在当前目录。'; return }
+          if (handle === '' && !selected?.dataset.peer && !last?.sessions?.some(s => s.id === id)) {
+            note.setAttribute('role', 'alert'); note.textContent = '添加失败：所选会话已离开目录，请重新选择。'; return
+          }
+          current.busy = true; submit.disabled = true; pick.disabled = true; manual.disabled = true
+          note.setAttribute('role', 'status'); note.textContent = '正在添加…'
+          try {
+            const result = await memberChange('add-member', current.name, id, undefined, selected?.dataset.peer)
+            note.setAttribute('role', result.ok ? 'status' : 'alert')
+            note.textContent = result.ok ? '添加请求已确认，成员列表以主机最新状态为准。' : '添加失败：' + (result.error ?? '主机未确认，请核对权限、成员资格或连接后再重试。')
+            if (result.ok) manual.value = ''
+          } finally {
+            current.busy = false; submit.disabled = false; pick.disabled = false; manual.disabled = false
+          }
         })
-        canvasForm = { name: fresh.name, form, pick, manual }
+        // Leave focus transfer alone: a microtask remount here can swallow the native submit click.
+        // The next idle poll refreshes the options and member facts.
+        canvasForm = current
       }
       // Refresh the picker's options from the freshest state, preserving the
       // current choice (sessions/remote rows churn across polls).
@@ -1136,7 +1186,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         pick.appendChild(new Option('（暂无可拉入的远端会话队——见下方说明）', '', true, false))
       }
       if (keep !== '' && Array.from(pick.options).some(option => option.value === keep)) pick.value = keep
-      card.appendChild(canvasForm.form)
+      controls.appendChild(canvasForm.form)
       const hint = el('div', 'wb-hint')
       hint.textContent =
         '成员由人类明确分配。本机写完整会话；远端必须通过已链接主机的有效名片核实并记录完整公钥来源。最小卡、离线或第三方无法验证时保留待确认，不能手输裸句柄绕过来源校验。来源确认不恢复暂停；默认兼容窗口不自动关闭。'
@@ -1146,6 +1196,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       if (deps.dispatchQuick !== undefined) card.appendChild(dispatchCard(fresh.team))
     }
     box.appendChild(card)
+    inspector.scrollTop = scroll
   }
 
   // ── Quick dispatch (0.6.9) ──

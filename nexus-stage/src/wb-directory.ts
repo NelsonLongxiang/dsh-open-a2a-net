@@ -87,31 +87,53 @@ function dayBucket(ms: number, now: number): '今天' | '昨天' | '更早' {
 
 /** Render the directory into `box`; returns the tab badge text. */
 export function renderDirectory(box: HTMLElement, ctx: DirectoryContext): string {
-  box.replaceChildren()
+  // Reuse keyed groups/rows: a poll must not detach a button under a pointer or native drag.
+  const oldGroups = new Map(Array.from(box.querySelectorAll<HTMLElement>(':scope > .wb-dir-group')).map(g => [g.dataset.directoryGroup, g]))
+  const oldRows = new Map(Array.from(box.querySelectorAll<HTMLButtonElement>('.wb-item[data-directory-key]')).map(row => [row.dataset.directoryKey, row]))
+  const wanted = new Map<HTMLElement, Set<Node>>([[box, new Set<Node>()]])
+  const offsets = new Map<HTMLElement, number>()
+  const place = (parent: HTMLElement, node: HTMLElement): void => {
+    const keep = wanted.get(parent) ?? new Set<Node>(); keep.add(node); wanted.set(parent, keep)
+    const offset = offsets.get(parent) ?? 0
+    if (parent.children[offset] !== node) parent.insertBefore(node, parent.children[offset] ?? null)
+    offsets.set(parent, offset + 1)
+  }
+  const text = (node: HTMLElement, value: string): void => { if (node.textContent !== value) node.textContent = value }
   const { state, search, filter } = ctx
   const filtering = search !== '' || filter !== 'all'
   const admit = (cat: DirFilter, hay: string): boolean => (filter === 'all' || filter === cat) && (search === '' || hay.includes(search))
 
   const group = (label: string, count: number, extra?: string): HTMLElement => {
-    const g = el('div', 'wb-dir-group')
-    const head = el('div', 'wb-dir-head')
-    head.appendChild(el('span', 'wb-dir-head-label')).textContent = `${label} · ${count}`
-    if (extra !== undefined) head.appendChild(el('span', 'wb-dir-head-note')).textContent = extra
-    g.appendChild(head)
-    box.appendChild(g)
+    const g = oldGroups.get(label) ?? el('div', 'wb-dir-group')
+    g.dataset.directoryGroup = label
+    let head = g.querySelector<HTMLElement>(':scope > .wb-dir-head')
+    if (!head) { head = el('div', 'wb-dir-head'); head.appendChild(el('span', 'wb-dir-head-label')) }
+    text(head.querySelector<HTMLElement>('.wb-dir-head-label')!, `${label} · ${count}`)
+    let note = head.querySelector<HTMLElement>('.wb-dir-head-note')
+    if (extra === undefined) note?.remove()
+    else { if (!note) { note = el('span', 'wb-dir-head-note'); head.appendChild(note) }; text(note, extra) }
+    place(g, head); place(box, g)
     return g
   }
-  const row = (parent: HTMLElement, dotClass: string, glyph: string, label: string, sub: string, onClick: () => void, tip?: string): HTMLButtonElement => {
-    const item = el('button', 'wb-item')
-    item.type = 'button'
-    item.appendChild(el('span', `wb-dot ${dotClass}`)).textContent = glyph
-    const text = el('span', 'wb-item-text')
-    text.appendChild(el('span', 'wb-item-label')).textContent = label
-    if (sub !== '') text.appendChild(el('span', 'wb-item-sub')).textContent = sub
-    item.appendChild(text)
-    if (tip !== undefined) item.title = tip
-    item.addEventListener('click', onClick)
-    parent.appendChild(item)
+  const row = (parent: HTMLElement, key: string, dotClass: string, glyph: string, label: string, sub: string, onClick: () => void, tip?: string): HTMLButtonElement => {
+    const item = oldRows.get(key) ?? el('button', 'wb-item')
+    item.dataset.directoryKey = key; item.type = 'button'
+    if (!item.firstElementChild) {
+      item.appendChild(el('span', 'wb-dot'))
+      const copy = el('span', 'wb-item-text'); copy.appendChild(el('span', 'wb-item-label')); item.appendChild(copy)
+    }
+    const dot = item.querySelector<HTMLElement>('.wb-dot')!
+    dot.className = `wb-dot ${dotClass}`; text(dot, glyph)
+    const copy = item.querySelector<HTMLElement>('.wb-item-text')!
+    text(copy.querySelector<HTMLElement>('.wb-item-label')!, label)
+    let detail = copy.querySelector<HTMLElement>('.wb-item-sub')
+    if (!sub) detail?.remove()
+    else { if (!detail) { detail = el('span', 'wb-item-sub'); copy.appendChild(detail) }; text(detail, sub) }
+    // Remove obsolete decorations before the current facts below add their own.
+    item.querySelectorAll('.wb-item-badge,.wb-node-warning,.wb-unreachable-note').forEach(n => n.remove())
+    item.classList.remove('is-node-prompt-missing', 'is-unreachable', 'is-untitled')
+    item.title = tip ?? ''; item.onclick = onClick
+    place(parent, item)
     return item
   }
   const badges = (item: HTMLElement, teams: readonly string[] | undefined): void => {
@@ -132,7 +154,7 @@ export function renderDirectory(box: HTMLElement, ctx: DirectoryContext): string
     for (const s of [...live, ...cold]) {
       const isLive = s.live === true
       const missing = s.nodePromptMissing === true
-      const item = row(g, isLive ? 'wb-dot-live' : 'wb-dot-cold', isLive ? '●' : '○', displayName(s), isLive ? s.team : `冷 · ${s.team}`,
+      const item = row(g, 'session:' + s.id, isLive ? 'wb-dot-live' : 'wb-dot-cold', isLive ? '●' : '○', displayName(s), isLive ? s.team : `冷 · ${s.team}`,
         () => ctx.openChat({ kind: 'session', id: s.id, title: displayName(s), sub: s.team, team: s.team, live: s.live }), s.id)
       if (missing) {
         item.classList.add('is-node-prompt-missing')
@@ -151,7 +173,7 @@ export function renderDirectory(box: HTMLElement, ctx: DirectoryContext): string
     const g = group('画布队', canvases.length)
     for (const t of canvases) {
       const remote = t.members.filter(m => m.remote === true).length
-      row(g, 'wb-dot-canvas', '▤', t.name, `${t.members.length} 成员${remote > 0 ? ` · ${remote} 远端` : ''}`, () => ctx.selectCanvas(t), t.team)
+      row(g, 'canvas:' + t.team, 'wb-dot-canvas', '▤', t.name, `${t.members.length} 成员${remote > 0 ? ` · ${remote} 远端` : ''}`, () => ctx.selectCanvas(t), t.team)
     }
   }
 
@@ -160,7 +182,7 @@ export function renderDirectory(box: HTMLElement, ctx: DirectoryContext): string
   if (remote.length > 0) {
     const g = group('远端节点', remote.length)
     for (const r of remote) {
-      const item = row(g, 'wb-dot-remote', '◇', displayName(r), r.origin !== undefined && r.origin !== '' ? r.origin : r.team,
+      const item = row(g, 'remote:' + (r.memberRef ?? r.team), 'wb-dot-remote', '◇', displayName(r), r.origin !== undefined && r.origin !== '' ? r.origin : r.team,
         () => ctx.openChat({ kind: 'remote', team: r.team, title: displayName(r), sub: r.team, row: r }), r.team)
       if (r.unreachable === true) {
         item.classList.add('is-unreachable')
@@ -185,10 +207,10 @@ export function renderDirectory(box: HTMLElement, ctx: DirectoryContext): string
       const b = dayBucket(l.mtimeMs, ctx.now)
       if (b !== bucket) {
         bucket = b
-        g.appendChild(el('div', 'wb-dir-day')).textContent = b
+        const day = el('div', 'wb-dir-day'); day.textContent = b; place(g, day)
       }
       const title = ctx.titles.get(l.id)
-      const item = row(g, 'wb-dot-log', '❐', title ?? `会话 …${l.id.slice(-12)}`, `${ago(l.mtimeMs, ctx.now)} · ${fmtSize(l.sizeBytes)}`,
+      const item = row(g, 'log:' + l.id, 'wb-dot-log', '❐', title ?? `会话 …${l.id.slice(-12)}`, `${ago(l.mtimeMs, ctx.now)} · ${fmtSize(l.sizeBytes)}`,
         () => ctx.openChat({ kind: 'log', id: l.id, title: title ?? `…${l.id.slice(-12)}`, sub: '本机日志' }),
         `${l.id}\n${new Date(l.mtimeMs).toLocaleString()} · ${fmtSize(l.sizeBytes)}`)
       if (title === undefined) item.classList.add('is-untitled')
@@ -196,8 +218,9 @@ export function renderDirectory(box: HTMLElement, ctx: DirectoryContext): string
   }
 
   if (sessions.length + canvases.length + remote.length + logs.length === 0) {
-    box.appendChild(el('div', 'wb-dir-empty')).textContent = filtering ? '无匹配条目' : '目录为空'
+    const empty = el('div', 'wb-dir-empty'); empty.textContent = filtering ? '无匹配条目' : '目录为空'; place(box, empty)
   }
+  for (const [parent, keep] of wanted) for (const node of Array.from(parent.childNodes)) if (!keep.has(node)) node.remove()
   const allSessions = state.sessions ?? []
   const liveAll = allSessions.filter(s => s.live === true).length
   return `${liveAll}/${allSessions.length}`
