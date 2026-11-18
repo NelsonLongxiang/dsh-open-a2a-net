@@ -18,7 +18,7 @@
     "nexus-stage/src/world.ts": "8191581b4551b3b5ea3658a4a640fcb68cea0311d500743884de666441501cd0",
     "nexus-stage/src/planning-overlap.ts": "f4e7ecf5af229f6107191f35be2b5a10ebab921b175ba0950f577458dacc5019",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
-    "src/flood-guard.ts": "b4f92c9ce3237019ab3c7ab71f0624c3306e8c316cb15d119d4e7c57f65e604f",
+    "src/flood-guard.ts": "5aa2646647229114617859b0e1f0f5db504a25063a2cc0af833a46547da725df",
     "src/faces/wire.ts": "3df02247be3307b4db5e581b1204365e13bd22640b6894d4e3b2f649b2ac0a39",
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
     "src/task-auth.ts": "b10b771f157e337d8cafb3ad8f12e3e08a7b23d96fd3b82939561be84c1f8541",
@@ -339,7 +339,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/flood-guard.ts:90",
+      "ref": "src/flood-guard.ts:55",
       "expect": "export function createFloodGuard("
     },
     {
