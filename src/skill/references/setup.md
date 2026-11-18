@@ -38,7 +38,7 @@ The owner can open the workbench header ⚙, select a local session under “会
    out of the sidebar).
    An unjoined session is invisible and refused (see
    [membership.md](membership.md)).
-4. Give the sessions a shared team (`teamScopeRouting` is on by default, so a
+4. Give the sessions a shared team (`teamScope` is on by default, so a
    teamless session has no network). Pick ONE of:
    - **Canvas team (recommended):** workbench `/__dsh_a2a_nexus/` → select
      the session cards → 建队. Canvas membership is assigned by hand.
@@ -111,7 +111,7 @@ Do section 1 on both hosts first. Then the **owner**, on BOTH hosts:
   (key, signature, clock) or `unreachable` (network, port, tunnel).
 - State face `remote` rows: the peer's sessions appear, with `via` set to
   the peer URL. `a2a_teams` shows peer rows only for teams in this host's
-  joined scope (S5, `teamScopeInfo`), so an empty list is not proof that the
+  joined scope (S5, `teamScope`), so an empty list is not proof that the
   link failed.
 - One async round with a receipt:
   `a2a_route { team: "<remote handle>", message: "...", async: true }`,

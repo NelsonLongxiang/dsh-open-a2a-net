@@ -200,17 +200,21 @@ export interface Config {
   /** Human-owned stable display labels keyed by full local session id; never a routing identity. */
   readonly seatNames: Record<string, unknown>
   /**
-   * S3 (phase-2 default-ON, owner ruling 2026-09-01): route dispatch checks
-   * caller↔target shared team membership before addressing; set false to
-   * restore the open outbound seam. (Kept in sync with the schema comment.)
+   * Team scope (owner ruling 2026-11-18, simplify D3): ONE switch for both
+   * halves — route dispatch checks caller↔target shared team membership
+   * (S3), and the information tools disclose only joined teams (S5). Set
+   * false for the open plane on both. Hot-applied by the owner panel.
+   * Absent: the deprecated per-half keys below decide (one version only).
+   */
+  readonly teamScope?: boolean
+  /**
+   * @deprecated 2026-11-18 — use `teamScope`. Read only while `teamScope` is
+   * absent. S3: route dispatch checks shared team membership.
    */
   readonly teamScopeRouting: boolean
   /**
-   * S5 (owner directive 2026-10-20): information-plane scoping — the
-   * read-only fleet tools (a2a_teams / a2a_status / a2a_probe) disclose
-   * only teams joined by this host's nodes (the union of local roster
-   * declarations). [this host] rows stay visible; a2a_tasks (this host's
-   * own ledger) stays unscoped. Set false for the open plane.
+   * @deprecated 2026-11-18 — use `teamScope`. Read only while `teamScope` is
+   * absent. S5: the information tools disclose only joined teams.
    */
   readonly teamScopeInfo: boolean
   /**
@@ -319,6 +323,9 @@ export const Config: s<Config> = s.object({
    * roster capability flag (0.5.44 cards advertise roster:true; older
    * peers read as legacy). Set false to restore the open outbound seam.
    */
+  /** One team-scope switch for routing and information (owner ruling 2026-11-18); absent: the two deprecated keys. */
+  teamScope: s.boolean(),
+  /** @deprecated 2026-11-18: use teamScope. */
   teamScopeRouting: s.boolean().default(true),
   /**
    * S5 (default-on, owner directive 2026-10-20): the information-plane
@@ -331,6 +338,7 @@ export const Config: s<Config> = s.object({
    * teams keeps host-internal facts only. Set false to restore
    * fleet-wide disclosure.
    */
+  /** @deprecated 2026-11-18: use teamScope. */
   teamScopeInfo: s.boolean().default(true),
 
   /**

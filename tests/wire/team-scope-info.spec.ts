@@ -149,7 +149,7 @@ describe('S5 information-plane scoping (teamScopeInfo)', () => {
     const remote = listed.teams.filter(row => row.local !== true)
     expect(remote.map(row => row.team).sort()).toEqual(['zone-a/cargo', 'zone-a/dock', 'zone-b/hub'])
     expect(listed.teams.some(row => row.local === true)).toBe(true)
-    expect(listed.note).toContain('teamScopeInfo on')
+    expect(listed.note).toContain('teamScope on')
     await ctx.fiber.dispose()
   })
 

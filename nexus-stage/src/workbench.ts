@@ -220,9 +220,9 @@ export interface WorkbenchDeps {
   /** gh#41 fleet planning: each tracked peer's published canvas org. */
   peerOrg?: readonly PeerOrgRow[]
   /** gh#34: read the owner three-key panel state (GET /__dsh_a2a/owner-settings). */
-  ownerSettingsRead?(): Promise<{ ok: boolean; seatNames?: Record<string, string>; teamJoinAllowlist?: string[]; teamScopeInfo?: boolean; announce?: boolean; announceRestartPending?: boolean; error?: string }>
+  ownerSettingsRead?(): Promise<{ ok: boolean; seatNames?: Record<string, string>; teamJoinAllowlist?: string[]; teamScope?: boolean; teamScopeInfo?: boolean; announce?: boolean; announceRestartPending?: boolean; error?: string }>
   /** gh#34: write owner panel changes; true on success (POST the same face). */
-  ownerSettingsWrite?(changes: { seatNames?: Record<string, string>; teamJoinAllowlist?: string[]; teamScopeInfo?: boolean; announce?: boolean }): Promise<{ ok: boolean; restartNeeded?: boolean; error?: string }>
+  ownerSettingsWrite?(changes: { seatNames?: Record<string, string>; teamJoinAllowlist?: string[]; teamScope?: boolean; announce?: boolean }): Promise<{ ok: boolean; restartNeeded?: boolean; error?: string }>
   /** gh#41 fleet planning: regulate a REMOTE peer's canvas team (this host
    *  signs the envelope and forwards; the peer's link gate authorizes). */
   fleetCanvasOp?(peer: string, op: 'create' | 'add-member' | 'remove-member' | 'remove', name: string, id?: string): Promise<{ ok: boolean; members?: string[]; error?: string }>
@@ -392,7 +392,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   title.appendChild(versionBadge)
   header.appendChild(title)
   // gh#34 owner three-key panel: the header gear opens the inspector panel
-  // (teamJoinAllowlist / teamScopeInfo / announce) — 远程建联三件不再翻配置文件。
+  // (teamJoinAllowlist / teamScope / announce) — 远程建联三件不再翻配置文件。
   const ownerBtn = el('button', 'wb-icon-btn wb-owner-btn')
   ownerBtn.type = 'button'
   ownerBtn.dataset.testid = 'wb-owner-btn'
@@ -858,7 +858,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // gh#34 owner panel state + render (the gear toggles; the inspector hosts).
   let seatEditor: HTMLElement | undefined
   let ownerPanelOpen = false
-  let ownerState: { seatNames: Record<string, string>; teamJoinAllowlist: string[]; teamScopeInfo: boolean; announce: boolean; announceRestartPending: boolean } | null = null
+  let ownerState: { seatNames: Record<string, string>; teamJoinAllowlist: string[]; teamScope: boolean; announce: boolean; announceRestartPending: boolean } | null = null
   function renderOwnerPanel(): void {
     renderInspector()
     if (!ownerPanelOpen) return
@@ -869,7 +869,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       ownerState = {
         seatNames: result.seatNames ?? {},
         teamJoinAllowlist: result.teamJoinAllowlist ?? [],
-        teamScopeInfo: result.teamScopeInfo !== false,
+        teamScope: (result.teamScope ?? result.teamScopeInfo) !== false,
         announce: result.announce === true,
         announceRestartPending: result.announceRestartPending === true,
       }
@@ -943,19 +943,19 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     card.appendChild(addForm)
     // ② 可见性开关 + 精度固化文案
     const tsHead = el('div', 'wb-side-head')
-    tsHead.textContent = '目录可见性（teamScopeInfo）'
+    tsHead.textContent = '团队范围（teamScope）'
     card.appendChild(tsHead)
     const tsRow = el('div', 'wb-member-row')
     const tsBtn = el('button', 'wb-member-submit')
     tsBtn.type = 'button'
-    tsBtn.textContent = st.teamScopeInfo ? '已开：仅显示已加入团队（点击放开为全舰队可见）' : '已关：全舰队可见（点击收窄为已加入团队）'
+    tsBtn.textContent = st.teamScope ? '已开：只能看见、只能发给同队（点击放开为全舰队）' : '已关：全舰队可见、可发（点击收窄为同队）'
     tsBtn.addEventListener('click', () => {
-      void deps.ownerSettingsWrite?.({ teamScopeInfo: !st.teamScopeInfo }).then(() => renderOwnerPanel())
+      void deps.ownerSettingsWrite?.({ teamScope: !st.teamScope }).then(() => renderOwnerPanel())
     })
     tsRow.appendChild(tsBtn)
     card.appendChild(tsRow)
     const tsNote = el('div', 'wb-hint')
-    tsNote.textContent = '精度说明：teamScopeInfo 只管「目录显示范围」。关上它不会解锁任何通信准入——会话入网（S3）与目标级路由（F5）规则原样生效。'
+    tsNote.textContent = '一个开关管两件事（属主 2026-11-18）：目录只显示同队，路由也只允许发给同队。关上它，两件一起放开；入网（S3）与签名校验不受影响。'
     card.appendChild(tsNote)
     // ③ 发布开关（重启生效）
     const anHead = el('div', 'wb-side-head')

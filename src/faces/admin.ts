@@ -145,6 +145,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   ownerSeatNames: Record<string, string>
   ownerAllowlist: string[]
   ownerTeamScopeInfo: boolean
+  ownerTeamScopeRouting: boolean
   ownerAnnounceRestartPending: boolean
 }
 
@@ -809,7 +810,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
   // surfaced as a control face instead of "翻配置文件". GET reads the
   // effective values; POST writes the HOME patch layer (the
   // authoritative surface) AND hot-applies the two call-time keys
-  // (teamJoinAllowlist / teamScopeInfo); announce is boot-time
+  // (teamJoinAllowlist / teamScope, which covers routing and information);
+  // announce is boot-time
   // publishing, so its change lands on the next host restart and the
   // reply says so. Same key gate as every write face.
   ctx.effect(() => webServer.register({
@@ -821,7 +823,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           ok: true,
           seatNames: { ...d.ownerSeatNames },
           teamJoinAllowlist: [...d.ownerAllowlist],
-          teamScopeInfo: d.ownerTeamScopeInfo,
+          teamScope: d.ownerTeamScopeRouting && d.ownerTeamScopeInfo,
+          // A panel from before 2026-11-18 reads this name; it is the same one switch now.
+          teamScopeInfo: d.ownerTeamScopeRouting && d.ownerTeamScopeInfo,
           announce: config.announce === true,
           announceRestartPending: d.ownerAnnounceRestartPending,
         })
@@ -845,10 +849,12 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           const list = (body.teamJoinAllowlist as unknown[]).filter((name): name is string => typeof name === 'string' && name !== '' && name.length <= 128)
           changes.teamJoinAllowlist = [...new Set(list)]
         }
-        if (typeof body.teamScopeInfo === 'boolean') changes.teamScopeInfo = body.teamScopeInfo
+        // One switch (owner ruling 2026-11-18); a panel from before writes the old name, which now means the same switch.
+        if (typeof body.teamScope === 'boolean') changes.teamScope = body.teamScope
+        else if (typeof body.teamScopeInfo === 'boolean') changes.teamScope = body.teamScopeInfo
         if (typeof body.announce === 'boolean') changes.announce = body.announce
         if (Object.keys(changes).length === 0) {
-          const payload = JSON.stringify({ ok: false, error: 'no recognized keys: teamJoinAllowlist (string[]), teamScopeInfo (bool), announce (bool)' })
+          const payload = JSON.stringify({ ok: false, error: 'no recognized keys: teamJoinAllowlist (string[]), teamScope (bool), announce (bool)' })
           res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
           res.end(payload)
           return
@@ -862,7 +868,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // Hot-apply the call-time owner keys.
           if (changes.seatNames !== undefined) d.ownerSeatNames = changes.seatNames
           if (changes.teamJoinAllowlist !== undefined) d.ownerAllowlist = [...changes.teamJoinAllowlist]
-          if (changes.teamScopeInfo !== undefined) d.ownerTeamScopeInfo = changes.teamScopeInfo
+          if (changes.teamScope !== undefined) { d.ownerTeamScopeInfo = changes.teamScope; d.ownerTeamScopeRouting = changes.teamScope }
           if (changes.announce !== undefined && changes.announce !== (config.announce === true)) d.ownerAnnounceRestartPending = true
           if (changes.announce !== undefined && changes.announce === (config.announce === true)) d.ownerAnnounceRestartPending = false
           logger.info(`a2a: owner settings updated (${Object.keys(changes).join(', ')}${restartNeeded ? ' — restart pending for announce' : ''})`)

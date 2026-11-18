@@ -29,7 +29,7 @@
 ## Admission (S3, default on)
 
 - Outbound: a session with no declared team has no network
-  (`teamScopeRouting`, default true; explicit false restores the open seam).
+  (`teamScope`, default true; explicit false opens routing and information together).
 - Inbound, same-zone caller (`<this zone>/<id8>`): `/a2a/direct` requires a
   SHARED team, judged at the TARGET level (F5, gh#26) — the caller's declared
   set (roster ∪ canvas memberships) must intersect the target session's own
@@ -47,7 +47,7 @@
 ## Information-plane scoping (S5, default on)
 
 - The read-only fleet tools answer from the joined-team scope only
-  (`teamScopeInfo`, default true; the union of this host's roster
+  (`teamScope`, default true; the union of this host's roster
   declarations): `a2a_teams` lists `[this host]` rows plus peer rows
   serving a joined team (own name or roster declaration — the `note`
   field explains the scope), `a2a_status` narrows peers/routes/activity
@@ -56,7 +56,7 @@
 - `a2a_tasks` (this host's own dispatch ledger) stays unscoped — it is
   the receipt-reconciliation surface for this host's own dispatches.
 - A host whose nodes declare no teams keeps host-internal facts only;
-  explicit `teamScopeInfo: false` restores the open plane.
+  explicit `teamScope: false` restores the open plane (routing too).
 
 ## Exposure tiers (#19)
 

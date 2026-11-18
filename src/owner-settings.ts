@@ -1,6 +1,6 @@
 /**
  * Owner-settings persistence (gh#34): the three unlock knobs a remote
- * build-out needs — teamJoinAllowlist / teamScopeInfo / announce — written
+ * build-out needs — teamJoinAllowlist / teamScope / announce — written
  * into the HOME patch layer (DSH_HOME/cordis.patch.yml), the authoritative
  * config surface (the 3081 lesson: the home-level patch wins over the
  * profile layer). A conservative line editor: it locates the a2a entry's
@@ -11,7 +11,8 @@
 
 export interface OwnerSettings {
   teamJoinAllowlist?: string[]
-  teamScopeInfo?: boolean
+  /** One switch for routing and information scope (owner ruling 2026-11-18); a stale teamScopeInfo line stays, ignored. */
+  teamScope?: boolean
   announce?: boolean
   seatNames?: Record<string, string>
 }
@@ -42,7 +43,7 @@ export function loadSeatNames(value: unknown, warn: (reason: string) => void): R
 }
 
 /** The exact keys this module may touch, in wire order. */
-const KEYS = ['teamJoinAllowlist', 'teamScopeInfo', 'announce', 'seatNames'] as const
+const KEYS = ['teamJoinAllowlist', 'teamScope', 'announce', 'seatNames'] as const
 
 export function applyOwnerSettings(patchYaml: string, changes: OwnerSettings): { yaml: string; restartNeeded: boolean } {
   const lines = patchYaml.split('\n')
@@ -60,7 +61,7 @@ export function applyOwnerSettings(patchYaml: string, changes: OwnerSettings): {
       ? '    teamJoinAllowlist: []'
       : `    teamJoinAllowlist: [${changes.teamJoinAllowlist.map(name => `'${name.replace(/'/g, "''")}'`).join(', ')}]`)
   }
-  if (changes.teamScopeInfo !== undefined) writes.push(`    teamScopeInfo: ${changes.teamScopeInfo ? 'true' : 'false'}`)
+  if (changes.teamScope !== undefined) writes.push(`    teamScope: ${changes.teamScope ? 'true' : 'false'}`)
   if (changes.announce !== undefined) writes.push(`    announce: ${changes.announce ? 'true' : 'false'}`)
   if (changes.seatNames !== undefined) writes.push(`    seatNames: ${JSON.stringify(changes.seatNames)}`)
   if (writes.length === 0) return { yaml: patchYaml, restartNeeded }

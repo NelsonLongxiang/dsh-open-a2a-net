@@ -636,7 +636,11 @@ export function apply(ctx: Context, config: Config): void {
   // Truthiness matches the ORIGINAL read site (`if (config.teamScopeInfo)`):
   // literal compositions without the schema default carry undefined, which
   // reads as the OPEN plane — `!== false` would silently scope them.
-  let ownerTeamScopeInfo = config.teamScopeInfo === true
+  // Owner ruling 2026-11-18 (simplify D3): one `teamScope` switch for both halves, hot-applied; while it is absent the two
+  // deprecated per-half keys decide, each for its own half, so an existing configuration keeps its meaning for one version.
+  let ownerTeamScopeInfo = (config.teamScope ?? config.teamScopeInfo) === true
+  let ownerTeamScopeRouting = (config.teamScope ?? config.teamScopeRouting) === true
+  if (config.teamScope === undefined && (config.teamScopeInfo === false || config.teamScopeRouting === false)) logger.warn('a2a: teamScopeInfo / teamScopeRouting are deprecated; set teamScope (one switch for routing and information)')
   let ownerAnnounceRestartPending = false
   // S2: node-declared team memberships — the roster half of the
   // team-roster iteration. Joins ride the allowlist-gated tools; the store
@@ -1877,6 +1881,8 @@ export function apply(ctx: Context, config: Config): void {
         set ownerAllowlist(v) { ownerAllowlist = v },
         get ownerTeamScopeInfo() { return ownerTeamScopeInfo },
         set ownerTeamScopeInfo(v) { ownerTeamScopeInfo = v },
+        get ownerTeamScopeRouting() { return ownerTeamScopeRouting },
+        set ownerTeamScopeRouting(v) { ownerTeamScopeRouting = v },
         get ownerAnnounceRestartPending() { return ownerAnnounceRestartPending },
         set ownerAnnounceRestartPending(v) { ownerAnnounceRestartPending = v },
       })
@@ -3017,7 +3023,7 @@ export function apply(ctx: Context, config: Config): void {
   // disagree. Records are read at decision time, never copied.
   const admissionRecords: AdmissionRecords = {
     zone: config.team,
-    get teamScopeRouting() { return config.teamScopeRouting },
+    get teamScopeRouting() { return ownerTeamScopeRouting },
     id8,
     canvasTeamOf,
     memberships: () => teamMemberships.list(),
@@ -3195,7 +3201,7 @@ export function apply(ctx: Context, config: Config): void {
     const handle = (session: string): string => `${config.team}/${id8(session)}`
     return {
       zone: config.team,
-      scope: [config.teamScopeRouting, config.originClaimWindow === true],
+      scope: [ownerTeamScopeRouting, config.originClaimWindow === true],
       joined: joinedSessions.list().map(handle),
       roster: teamMemberships.list().flatMap(entry => entry.teams.map(team => [handle(entry.session), team] as const)),
       // Local members by their handle (design §2.3), remote refs as they are stored.
@@ -3309,6 +3315,7 @@ export function apply(ctx: Context, config: Config): void {
 
   whenWebServerSettled((webServer) => {
     registerWireFaces(webServer, {
+      teamScopeRouting: () => ownerTeamScopeRouting,
       ctx,
       logger,
       config,
@@ -3873,6 +3880,7 @@ export function apply(ctx: Context, config: Config): void {
     // disables owner-settings hot-apply (whoami allowlist / teams scoping).
     get ownerAllowlist() { return ownerAllowlist },
     get ownerTeamScopeInfo() { return ownerTeamScopeInfo },
+    get ownerTeamScopeRouting() { return ownerTeamScopeRouting },
     teamAuditRing, reportRing, a2aJoinGateRefusal, observeAuthorization,
     settlePeerCard, client, listDirectoryTeams, canvasTeamsOfSession, localHandleResolver, canvasMigrationState,
     SWEEP_CONCURRENCY,
@@ -4119,7 +4127,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     if (caller !== undefined && cliDeposits.get(caller) !== undefined) {
       if (!config.forwardDirect) missing.push('home forwardDirect is off')
       if (config.isolated) missing.push('home is isolated')
-      const scope = config.teamScopeRouting ? await outboundScope(senderScopeRecords, caller, caller, team) : { ok: true as const }
+      const scope = ownerTeamScopeRouting ? await outboundScope(senderScopeRecords, caller, caller, team) : { ok: true as const }
       if (!scope.ok) missing.push('sender scope: ' + scope.error)
       for (const owner of owners.filter(row => row.team === team && !row.local)) {
         if (!owner.members.includes(caller)) missing.push(owner.owner + ': caller is not an advertised canvas member')
@@ -4132,7 +4140,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const forwardDirect = createDirectForward({
     births: forwardingBirths,
     enabled: () => config.forwardDirect === true, isolated: () => config.isolated, deposited: handle => cliDeposits.get(handle) !== undefined,
-    scope: (handle, team) => config.teamScopeRouting ? forwardScope(cardAuthorizedSend, () => outboundScope(senderScopeRecords, handle, handle, team), handle, team) : Promise.resolve({ ok: true as const }),
+    scope: (handle, team) => ownerTeamScopeRouting ? forwardScope(cardAuthorizedSend, () => outboundScope(senderScopeRecords, handle, handle, team), handle, team) : Promise.resolve({ ok: true as const }),
     candidates: async (team, failures, caller) => { const fetch = memoizedCardFetch(); return { urls: await directoryPeerCandidates(fetch, team, failures, { id: caller, handle: caller }), card: fetch } },
     dispatch: (url, request, guard) => dispatchPeerCandidate(url, request.team, request.message, request.contextId, new AbortController().signal, request.caller, request.noWait, request.taskId, request.caller, guard),
     ledger: taskLedger, activity: (team, peer, ok) => recordActivity('fwd', team, peer, ok),
@@ -4210,7 +4218,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // and the initiator face stay exempt, like the join gate; discovery
       // (a2a_teams) stays open so a teamless node can still see what to join.
       let scopedCanvasCaller: { id: string; handle: string } | undefined
-      if (config.teamScopeRouting && agent !== undefined) {
+      if (ownerTeamScopeRouting && agent !== undefined) {
         const scopeCaller = String(agent.id)
         let initiator = false
         try {

@@ -96,6 +96,8 @@ export interface InfoToolsDeps {
   // destructured copy would freeze the boot value.
   readonly ownerAllowlist: readonly string[]
   readonly ownerTeamScopeInfo: boolean
+  /** The routing half of the one `teamScope` switch, read at call time. */
+  readonly ownerTeamScopeRouting: boolean
   readonly id8: (id: string) => string
   readonly sessionTeamOf: (agent: Agent) => string
   readonly nodeMetadataOf: (agent: Agent) => { name: string; seatName?: string; description: string; workspace?: string }
@@ -149,7 +151,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
     // too. This host's canvas teams — and every member handle they name
     // (remote zone-qualified handles as-is, local session ids as their
     // session-team handle) — belong to the scope, so canvas teammates stay
-    // visible to each other under teamScopeInfo instead of the roster-only
+    // visible to each other under teamScope instead of the roster-only
     // reading splitting them apart.
     for (const name of canvasStore.list()) {
       joined.add(canvasTeamOf(name))
@@ -220,7 +222,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
       description:
         'One-call self-introspection on this host\'s A2A network: the calling session\'s node id, joined/live '
         + 'state, routable team handle, declared team memberships (roster + canvas), the owner\'s teamJoinAllowlist, '
-        + 'the teamScopeRouting switch, and this node\'s most recent refused join/leave attempts with reasons. '
+        + 'the teamScope switch (routing and information), and this node\'s most recent refused join/leave attempts with reasons. '
         + 'Note: outbound routing never requires join — the originating session is always exempt (initiator face); '
         + 'join buys presence, discovery, and being routed to.',
       parameters: {},
@@ -246,6 +248,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
               additionalProperties: true,
               description: 'The owner-curated teamJoinAllowlist: exact entries (the only join authority, gh#11) plus pattern entries kept readable but carrying no mint rights (deny-all / curated; allow-all only via explicit exact entries).',
             },
+            teamScope: { type: 'boolean' },
             teamScopeRouting: { type: 'boolean' },
             note: { type: 'string', description: 'What join does and does not gate, in one sentence.' },
             lastRefusals: {
@@ -269,6 +272,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         node?: Record<string, JsonValue>
         teams?: Record<string, JsonValue>
         allowlist?: Record<string, JsonValue>
+        teamScope?: boolean
         teamScopeRouting?: boolean
         lastRefusals?: Array<Record<string, JsonValue>>
         note?: string
@@ -312,7 +316,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
             patterns,
             effect: patterns.length === 0 ? 'deny-all (empty allowlist refuses every join)' : patterns.includes('*') ? 'allow-all' : 'curated',
           },
-          teamScopeRouting: config.teamScopeRouting === true,
+          teamScope: deps.ownerTeamScopeRouting && deps.ownerTeamScopeInfo,
+          teamScopeRouting: deps.ownerTeamScopeRouting,
           ...(refusals.length > 0 ? { lastRefusals: refusals } : {}),
           note: joined
             ? 'join buys presence + being routed to; outbound routing needs no join (initiator face is exempt)'
@@ -336,7 +341,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         + 'the first live member or wakes the first cold one; the dispatching session itself is skipped on the local tiers '
         + '(issue #41: routing to its own group never loops home). Remote candidates still require the existing peer-link and '
         + 'receiver admission checks; a served-fresh canvasOrg is not itself a signature over membership. '
-        + 'While teamScopeInfo is on (default), the listing follows YOUR collaboration circle: remote canvas rows name a joined session of this host, remote roster rows serve a joined team, and [this host] session rows show only your own row, your canvas teams, and sessions sharing a team with you — an exposed node id invites mis-routing, so the directory does not advertise strangers. The owner\'s GUI panel keeps the full plane; teamScopeInfo: false opens it for tools too. '
+        + 'While teamScope is on (default), the listing follows YOUR collaboration circle: remote canvas rows name a joined session of this host, remote roster rows serve a joined team, and [this host] session rows show only your own row, your canvas teams, and sessions sharing a team with you — an exposed node id invites mis-routing, so the directory does not advertise strangers. The owner\'s GUI panel keeps the full plane; teamScopeInfo: false opens it for tools too. '
         + 'Call this before a2a_route to pick a target team.',
       parameters: {
         query: { type: 'string', description: 'Optional keyword filter (case-insensitive substring over team/name/description).' },
@@ -377,7 +382,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
                 },
               },
             },
-            note: { type: 'string', description: 'Present while teamScopeInfo scoping is on: the joined-team scope plus how many rows outside YOUR collaboration circle were withheld (remote/local split; the process team, your own row, and your canvas teams always show).' },
+            note: { type: 'string', description: 'Present while teamScope is on: the joined-team scope plus how many rows outside YOUR collaboration circle were withheld (remote/local split; the process team, your own row, and your canvas teams always show).' },
           },
         },
         render: (args, value) => [{
@@ -449,7 +454,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
             hiddenLocal = before - teams.length
           }
           const hidden = hiddenRemote + hiddenLocal
-          note = `teamScopeInfo on: ${String(joined.size)} joined team${joined.size === 1 ? '' : 's'} on this host — ${String(hidden)} row${hidden === 1 ? '' : 's'} outside your collaboration circle withheld (${String(hiddenRemote)} remote, ${String(hiddenLocal)} local [this host] session rows; the process team, your own row, and your canvas teams always show). A remote session shows when this host declares it (a canvas member ref or a shared roster team) or when its own host's canvas holds it beside one of this host's joined sessions [shared via]. ${SCOPE_WIDEN} The owner can also add the EXACT team name to teamJoinAllowlist (patterns carry no mint rights, gh#11), or set teamScopeInfo: false for the open plane`
+          note = `teamScope on: ${String(joined.size)} joined team${joined.size === 1 ? '' : 's'} on this host — ${String(hidden)} row${hidden === 1 ? '' : 's'} outside your collaboration circle withheld (${String(hiddenRemote)} remote, ${String(hiddenLocal)} local [this host] session rows; the process team, your own row, and your canvas teams always show). A remote session shows when this host declares it (a canvas member ref or a shared roster team) or when its own host's canvas holds it beside one of this host's joined sessions [shared via]. ${SCOPE_WIDEN} The owner can also add the EXACT team name to teamJoinAllowlist (patterns carry no mint rights, gh#11), or set teamScopeInfo: false for the open plane`
         }
         // Canvas members are a private scope hint, not part of the tool schema.
         // Production feedback 2026-11-14: only the fields the output schema declares leave the tool (its additionalProperties is
@@ -473,7 +478,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         + '(who is waiting on whom), and the recent routing activity ring (inbound and outbound outcomes). '
         + 'Includes the idempotency window occupancy (claims, replays, conflicts) behind the UNIQUE-ization '
         + 'traffic watch. '
-        + 'While teamScopeInfo is on (default), peers / in-flight / activity narrow to the joined-team scope — local traffic and idempotency aggregates stay. '
+        + 'While teamScope is on (default), peers / in-flight / activity narrow to the joined-team scope — local traffic and idempotency aggregates stay. '
         + 'Use it to observe an ongoing collaboration or diagnose delivery instead of re-routing.',
       parameters: {},
       output: {
@@ -811,7 +816,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         'Probe the tracked peer fleet for reachability and round-trip latency: one verified-card fetch per peer '
         + '(the same fetch discovery uses), reporting reachable peers with their team and latency and unreachable '
         + 'ones with the failure reason. Pass url to probe one target instead of the whole fleet. '
-        + 'While teamScopeInfo is on (default), the sweep covers only peers serving a joined team, and a single URL is refused unless its verified card proves service. '
+        + 'While teamScope is on (default), the sweep covers only peers serving a joined team, and a single URL is refused unless its verified card proves service. '
         + 'Each probed row carries a verdict: reachable, slow (answered, but slower than maxLatencyMs), rejected (answered with a card that does not verify) or unreachable. The verdict covers the host card only, not whether a session there accepts work. '
         + 'Use it before dispatching verification work or when routes fail over, instead of guessing which node is down.',
       parameters: {
@@ -903,8 +908,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
               return { ok: true, results: await Promise.all([args.url].map(probeOne)) }
             }
             return { ok: true, results: [{ url: args.url, reachable: false, ms: 0, error: stale === undefined
-              ? `refused (not probed): teamScopeInfo on — no verified card for this URL proves service to a joined team. ${SCOPE_FIRST_READ} ${SCOPE_WIDEN}`
-              : `refused (not probed): teamScopeInfo on — this URL's verified card shows no team joined by this host's nodes. ${SCOPE_NEITHER_SIDE} ${SCOPE_WIDEN}` }] }
+              ? `refused (not probed): teamScope on — no verified card for this URL proves service to a joined team. ${SCOPE_FIRST_READ} ${SCOPE_WIDEN}`
+              : `refused (not probed): teamScope on — this URL's verified card shows no team joined by this host's nodes. ${SCOPE_NEITHER_SIDE} ${SCOPE_WIDEN}` }] }
           }
           return { ok: true, results: await Promise.all([args.url].map(probeOne)) }
         }

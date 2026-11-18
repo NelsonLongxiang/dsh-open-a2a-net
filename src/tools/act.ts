@@ -111,7 +111,7 @@ export function createActTools(deps: ActToolsDeps) {
         + 'member declarations). Gated by the owner\'s teamJoinAllowlist — an empty list denies every join; '
         + 'patterns are exact names or trailing-`*` prefixes. Canvas teams are out of scope here: their '
         + 'membership is assigned by hand in the A2A workbench, and the tool refuses `/canvas/` names. '
-        + 'Collaboration itself stays within teams (team-scoped routing is the separate teamScopeRouting switch).',
+        + 'Collaboration itself stays within teams (team-scoped routing and information follow the teamScope switch).',
       parameters: {
         team: { type: 'string', description: 'The routable team to join (full form, e.g. dsh/review-gate).' },
         id: { type: 'string', description: 'The joined session node id on this host that declares the membership.' },
