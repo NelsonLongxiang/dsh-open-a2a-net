@@ -7,6 +7,7 @@
  * the workspace has no database. Without the `ygl-trees` command on the host's PATH it does nothing: the tools are absent too.
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/ygl-home
  */
+import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -21,15 +22,81 @@ export const YGL_DB_FILE = 'ygl-trees.db'
 export const teamYglHome = (env: NodeJS.ProcessEnv = process.env): string =>
   env.SUPERAGENT_YGL_HOME ?? join(env.HOME ?? env.USERPROFILE ?? homedir(), '.ygl-trees-superagent')
 
-/** Runs the ygl-trees CLI; rejects with the error when it cannot be started or exits non-zero. */
-export type YglRun = (args: readonly string[], env: NodeJS.ProcessEnv) => Promise<void>
+/** Runs the ygl-trees CLI and resolves its stdout; rejects with the error when it cannot be started or exits non-zero. */
+export type YglRun = (args: readonly string[], env: NodeJS.ProcessEnv) => Promise<string | void>
 
 export const defaultYglRun: YglRun = (args, env) => new Promise((resolve, reject) => {
   // On Windows the npm install is a `.cmd` shim, which only a shell starts; the arguments are fixed words.
-  execFile(YGL_CLI, [...args], { env, timeout: 60_000, shell: process.platform === 'win32', windowsHide: true }, error => { if (error) reject(error); else resolve() })
+  execFile(YGL_CLI, [...args], { env, timeout: 60_000, shell: process.platform === 'win32', windowsHide: true }, (error, stdout) => { if (error) reject(error); else resolve(String(stdout)) })
 })
 
 export type YglHomeOutcome = 'present' | 'created' | 'unavailable' | 'failed'
+
+/**
+ * What the installed ygl-trees can do, from its version (owner 2026-11-18, design Y1d/Y1e). Unknown (not installed, or the
+ * version could not be read) counts as the oldest: the cards keep the steps that work on every version.
+ */
+export interface YglCapabilities {
+  /** `ygl-trees --version`, when it could be read. */
+  readonly version?: string
+  /** 0.123.0+: MCP `read agent brief` honours an explicit project (ygl-trees#260), so no `project use` step is needed. */
+  readonly briefHonorsProject: boolean
+  /** 0.126.0+: kb notes carry a scope, and `kb add`/`kb search` take one (ygl-trees#276). */
+  readonly kbScope: boolean
+}
+
+export const YGL_UNKNOWN: YglCapabilities = { briefHonorsProject: false, kbScope: false }
+
+const atLeast = (version: string, floor: readonly [number, number, number]): boolean => {
+  const parts = /^(\d+)\.(\d+)\.(\d+)/.exec(version.trim())
+  if (parts === null) return false
+  const [a, b, c] = [Number(parts[1]), Number(parts[2]), Number(parts[3])]
+  return a !== floor[0] ? a > floor[0] : b !== floor[1] ? b > floor[1] : c >= floor[2]
+}
+
+/** The capabilities a `ygl-trees --version` answer stands for. */
+export function yglCapabilitiesOf(version: string | undefined): YglCapabilities {
+  if (version === undefined || !/^\d+\.\d+\.\d+/.test(version.trim())) return YGL_UNKNOWN
+  const v = version.trim()
+  return { version: v, briefHonorsProject: atLeast(v, [0, 123, 0]), kbScope: atLeast(v, [0, 126, 0]) }
+}
+
+/** Reads `ygl-trees --version`; undefined when it cannot be started or answers nothing usable. */
+export type YglVersionRead = () => Promise<string | undefined>
+
+export const defaultYglVersionRead: YglVersionRead = () => new Promise(resolve => {
+  execFile(YGL_CLI, ['--version'], { timeout: 15_000, shell: process.platform === 'win32', windowsHide: true }, (error, stdout) => {
+    resolve(error ? undefined : String(stdout).trim().split(/\s+/)[0] || undefined)
+  })
+})
+
+let capabilities: YglCapabilities = YGL_UNKNOWN
+
+/** What the host last learned about the installed ygl-trees (YGL_UNKNOWN until the start-up read finishes). */
+export const yglCapabilities = (): YglCapabilities => capabilities
+
+/**
+ * Read the installed version once at start. Below 0.123.0 (or unreadable while the workspace exists) the host says so: the
+ * cards then keep the `project use` step, and kb notes are not scoped by team.
+ */
+export async function refreshYglCapabilities(d: { readonly logger: { warn(format: string, ...args: unknown[]): void }; readonly read?: YglVersionRead }): Promise<YglCapabilities> {
+  const version = await (d.read ?? defaultYglVersionRead)().catch(() => undefined)
+  capabilities = yglCapabilitiesOf(version)
+  if (version !== undefined && !capabilities.kbScope) d.logger.warn('superagent: ygl-trees %s is older than 0.126.0: team kb notes are not scoped by team%s', version, capabilities.briefHonorsProject ? '' : ', and the cards keep the project-use step (0.123.0 fixes it)')
+  return capabilities
+}
+
+/** For tests: set what the host knows about ygl-trees. */
+export const setYglCapabilitiesForTest = (next: YglCapabilities): void => { capabilities = next }
+
+/**
+ * A team's kb scope (design Y1e): `bench:team-<canvas>`. ygl-trees takes ids of [A-Za-z0-9._-]{1,64}; a canvas name outside
+ * that becomes a short hash of itself, so the same canvas always gets the same scope.
+ */
+export function teamYglScope(canvas: string): string {
+  const id = `team-${canvas}`
+  return `bench:${/^[A-Za-z0-9._-]{1,64}$/.test(id) ? id : `team-${createHash('sha256').update(canvas).digest('hex').slice(0, 16)}`}`
+}
 
 /**
  * Create the team's workspace when it has no database.
@@ -67,8 +134,19 @@ export async function ensureTeamYglProject(name: string, d: { readonly logger: {
   if (madeProjects.has(key)) return 'present'
   const workspace = await ensureTeamYglHome(d)
   if (workspace === 'unavailable' || workspace === 'failed') return workspace
+  // A3 (owner 2026-11-18): look before making. `project new` is idempotent, but every host start ran it again and each run
+  // is an event in the team's workspace (161 runs for 10 projects on the owner's host).
+  const env = { ...process.env, YGL_HOME: home, YGL_SESSION: 'superagent-host' }
+  // `project show` ignores a name (it shows the selected project), so the list is the check.
   try {
-    await (d.run ?? defaultYglRun)(['project', 'new', name, '-q', `superagent team ${name}: what the team learned, the evidence behind it and the decisions made`], { ...process.env, YGL_HOME: home, YGL_SESSION: 'superagent-host' })
+    const listed = JSON.parse(String(await (d.run ?? defaultYglRun)(['project', 'list', '--json'], env) ?? '')) as unknown
+    if (Array.isArray(listed) && listed.some(row => row !== null && typeof row === 'object' && (row as { name?: unknown }).name === name)) {
+      madeProjects.add(key)
+      return 'present'
+    }
+  } catch { /* the read failed: make it, as before */ }
+  try {
+    await (d.run ?? defaultYglRun)(['project', 'new', name, '-q', `superagent team ${name}: what the team learned, the evidence behind it and the decisions made`], env)
   } catch (error) {
     d.logger.warn('superagent: creating the team ygl-trees project %s failed: %s', name, String(error).slice(0, 300))
     return 'failed'

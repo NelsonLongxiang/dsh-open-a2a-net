@@ -151,7 +151,7 @@ import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiri
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
 import { touchesRules } from './superagent/host/owner-proof.ts'
-import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject } from './superagent/host/teams.ts'
+import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, refreshYglCapabilities, yglCapabilities } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { IntakeOrigins } from './intake-origins.ts'
 import { redeliverLost, TaskBodies } from './task-bodies.ts'
@@ -2116,6 +2116,7 @@ export function apply(ctx: Context, config: Config): void {
     localSessionOf: handle => localSessionOfHandle(handle),
     onRolesChanged: () => { syncRoleTools() },
     ensureYglProject: name => { void ensureTeamYglProject(name, { logger }) },
+    yglCapabilities,
     // Design v5: the team is a canvas team this host owns. Its local sessions in canvas order, and its remote session slots
     // with the key the canvas pinned and the base URL of the linked peer whose signed card carries that key.
     // Pi platform P1/P2/P3: whether a CLI handle is a Pi seat deposited here, and the mailbox delivery to one.
@@ -2193,7 +2194,7 @@ export function apply(ctx: Context, config: Config): void {
   let superagentHomeUrl: string | undefined
   if (superagentHost !== undefined) {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
-    ctx.effect(() => { superagentTeams!.start(); void ensureTeamYglHome({ logger }); return () => { void superagentTeams!.stop() } }, 'a2a: superagent engine passes')
+    ctx.effect(() => { superagentTeams!.start(); void ensureTeamYglHome({ logger }); void refreshYglCapabilities({ logger }); return () => { void superagentTeams!.stop() } }, 'a2a: superagent engine passes')
     registerSuperagentTools(ctx, id => superagentTeams!.ofSession(id))
     // superagent-builder BS1: the team builder's inventory and rule templates (read-only).
     registerBuilderTools(ctx, id => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET, () => ({

@@ -45,7 +45,7 @@ export { END_RECEIPT_GRACE_MS } from './receipts.ts'
 /** How long a declined tool request stays declined before the tool may be asked about again (design tool-requests T4). */
 export const TOOL_ASK_AGAIN_MS = 24 * 3_600_000
 import { agentLedEnd, clip, TEXT_CAP, presetRefusal, notTakenText, OTHER_TICKETS_SHOWN, ORIGIN_LINE_NOTE, OBSERVER_LINE, candidateCard, YGL_WRITE, yglCardLines, yglRouterLine } from './cards.ts'
-import { teamYglProject } from './ygl-home.ts'
+import { teamYglProject, teamYglScope, YGL_UNKNOWN } from './ygl-home.ts'
 import { NamedDispatch, WAIT, SWAP } from './named-dispatch.ts'
 import { RootDispatch, childLabel, isChildTeam } from './root-dispatch.ts'
 import { splitTeamRef } from '../../canvas-member.ts'
@@ -777,12 +777,15 @@ export class SuperagentHost {
   /** This team's ygl-trees project (design Y1c), named after its canvas; none while the team has no canvas. */
   yglProject(): string | undefined { return this.settingsValue.canvas === undefined ? undefined : teamYglProject(this.settingsValue.canvas) }
   /** Ask the host to make the team's project (idempotent, cached there); never in the way of the work. */
+  /** This team's kb scope (design Y1e); none while the team has no canvas, or the installed ygl-trees has no kb scopes. */
+  yglScope(): string | undefined { return this.settingsValue.canvas === undefined || this.yglCaps().kbScope !== true ? undefined : teamYglScope(this.settingsValue.canvas) }
+  private yglCaps() { return this.d.yglCapabilities?.() ?? YGL_UNKNOWN }
   private ensureYglProject(): void { const project = this.yglProject(); if (project !== undefined) { try { this.d.ensureYglProject?.(project) } catch { /* best effort */ } } }
   private yglRouterLines(router: string): string[] {
     const project = this.yglProject()
     if (project === undefined || this.d.hasTool?.(router, 'mcp__ygl__read') !== true) return []
     this.ensureYglProject()
-    return [yglRouterLine(project)]
+    return [yglRouterLine(project, this.yglScope())]
   }
 
   private teamCardLines(): string[] {
@@ -812,7 +815,7 @@ export class SuperagentHost {
     for (const rule of (profile?.rules ?? []).filter(r => r.enabled)) lines.push(`your rule ${rule.name}: ${clip(rule.text, 600)}`)
     if (profile !== undefined) lines.push('If this ticket does not fit your role and rules, report blocked and say why; the router will choose again.')
     // The team's memory, in the card the member acts on (owner 2026-11-10: a persona line alone was not followed).
-    if (this.d.hasTool?.(member, YGL_WRITE) === true) { this.ensureYglProject(); lines.push(...yglCardLines(this.yglProject())) }
+    if (this.d.hasTool?.(member, YGL_WRITE) === true) { this.ensureYglProject(); lines.push(...yglCardLines(this.yglProject(), { scope: this.yglScope(), caps: this.yglCaps() })) }
     for (const name of ticket.mandate.basis.rules ?? []) {
       const rule = this.settingsValue.rules.find(r => r.name === name)
       if (rule !== undefined) lines.push(`accepted on team rule ${rule.name}: ${clip(rule.text, 600)}`)
@@ -1729,6 +1732,8 @@ export class SuperagentHost {
     const repliesOf = (thread: string): StoredMessage[] => messages.filter(row => row.message.channel.source === 'workbench' && row.message.channel.thread === thread)
     return {
       health: this.health(),
+      // Design Y1d/Y1e: what the installed ygl-trees can do, and this team's project and kb scope.
+      ygl: { ...this.yglCaps(), ...(this.yglProject() !== undefined ? { project: this.yglProject() } : {}), ...(this.yglScope() !== undefined ? { scope: this.yglScope() } : {}) },
       settings: this.settings,
       ...(this.canvasProblem() !== undefined ? { canvasProblem: this.canvasProblem() } : {}),
       ...(this.servesProblem() !== undefined ? { servesProblem: this.servesProblem() } : {}),

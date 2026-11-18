@@ -4,8 +4,9 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { yglCapabilitiesOf } from '../../src/superagent/host/ygl-home.ts'
 
-async function team(ygl: boolean, made: string[] = []) {
+async function team(ygl: boolean, made: string[] = [], version?: string) {
   const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
   const { routeItem, registerSuperagentTools } = await import('../../src/superagent/host/tools.ts')
   const sent: Array<[string, string]> = []
@@ -14,6 +15,7 @@ async function team(ygl: boolean, made: string[] = []) {
     deliverToSession: (id: string, text: string) => { sent.push([id, text]); return true }, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id,
     hasTool: (id: string, name: string) => ygl && ((id === 'session-m' && name === 'mcp__ygl__write') || (id === 'session-r' && name === 'mcp__ygl__read')),
     ensureYglProject: (name: string) => { made.push(name) },
+    ...(version !== undefined ? { yglCapabilities: () => yglCapabilitiesOf(version) } : {}),
   } as never)
   expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
   h.start()
@@ -86,6 +88,26 @@ describe('the reminder at ready', () => {
   it('refuses more than 40 ids', async () => {
     const m = await team(true)
     expect(await m.report({ ticket_id: m.ticket, state: 'ready', summary: 's', ygl: Array.from({ length: 41 }, (_, i) => `k${String(i)}`) })).toMatchObject({ ok: false, code: 'ygl' })
+    await m.h.stop()
+  })
+})
+
+describe('the cards follow the installed ygl-trees (Y1d/Y1e, owner 2026-11-18)', () => {
+  it('0.126.0: no project-use step, the team scope on kb add and searches, on both cards and the state', async () => {
+    const m = await team(true, [], '0.126.0')
+    expect(m.card).not.toContain('domain project action use')
+    expect(m.card).toContain('domain agent action brief with project "team-team"')
+    expect(m.card).toContain('with scope "bench:team-team" (this team\'s notes), then again with scope ""')
+    expect(m.card).toContain('kb add what the next session should reuse, with scope "bench:team-team"')
+    expect(m.candidate).toContain('search its kb notes with scope "bench:team-team", then with scope ""')
+    expect(m.h.state().ygl).toEqual({ version: '0.126.0', briefHonorsProject: true, kbScope: true, project: 'team-team', scope: 'bench:team-team' })
+    await m.h.stop()
+  })
+  it('0.122.0: today\'s steps, and no scope', async () => {
+    const m = await team(true, [], '0.122.0')
+    expect(m.card).toContain('mcp__ygl__write domain project action use name "team-team"')
+    expect(m.card).not.toContain('bench:team-')
+    expect(m.h.state().ygl).toEqual({ version: '0.122.0', briefHonorsProject: false, kbScope: false, project: 'team-team' })
     await m.h.stop()
   })
 })
