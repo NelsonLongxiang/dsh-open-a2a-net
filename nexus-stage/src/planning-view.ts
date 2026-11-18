@@ -42,6 +42,7 @@ import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt
 import { dropDispatch, localXY } from './planning-drop'
 import { buildChildChip, childChipTitle } from './planning-root'
 import { createFrameSelection } from './planning-frame-selection'
+import { createRootCompose } from './planning-root-compose'
 import { boardBounds, fitBelowHud, hudBottomOf } from './planning-fit'
 import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters, NODE_W, NODE_H } from './world'
 import { applyAction, settleAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
@@ -161,7 +162,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     zoomLabel,
     mkButton('＋', '放大', () => zoomCenter(1.2)),
     sep(),
-    mkButton('建队', '组成团队（G）：先框选至少 2 个节点', () => menus.startCreateFromSelection()),
+    mkButton('建队', '组成团队（G）：先框选至少 2 个节点；选中至少 2 个团队框（Shift 点框头）则组成 root 团队', () => buildTeam()),
     // gh#48 (owner order, review-seat spec): one-click tidy — inside every
     // team frame, the members that belong to EXACTLY that one team re-seat
     // into a padded grid flow (the frame grows downward, bounded); members
@@ -432,7 +433,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     for (const [name, el] of [...frameEls]) {
       if (!seen.has(name)) { el.remove(); frameEls.delete(name) }
     }
-    frameSelection.sync()
+    frameSelection.sync(); compose.paint()
   }
 
   // ── keyed diff: nodes ──
@@ -653,7 +654,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     anchorFor: (t) => (t.kind === 'node' ? nodeEls.get(t.id) : frameEls.get(t.name)) ?? null,
     emit: emitAction,
     notice,
+    frameItems: name => compose.menuItems(name, menus.menuItem),
   })
+  // #650: ≥2 selected team frames make 建队 (G) compose a root team; otherwise it is the session team as before.
+  const compose = createRootCompose({ root, signal, io: deps.compose, notice, frames: () => frameEls, composed: () => frameSelection.clear() })
+  const buildTeam = (): void => { if (!compose.open(frameSelection.names())) menus.startCreateFromSelection() }
 
   // ── 节点列表 drawer (planning-nodelist) ──
   let lastSessions: ReadonlyArray<PlanningSession> = []
@@ -753,6 +758,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       // Selecting a frame keeps its resize handles visible (hover-only
       // handles vanished the moment the pointer left).
       frameSelection.select(name, ev.shiftKey)
+      if (ev.shiftKey) return // #650: a Shift press only toggles the selection, never starts a drag (no layout write)
       const snap = model.beginFrameDrag(name)
       if (snap === undefined) return
       gesture = { kind: 'frame', name, snap, origin: screenToWorld(vp, p.x, p.y), moved: false }
@@ -1009,7 +1015,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
     if (ev.key === 'Delete' || ev.key === 'Backspace') { ev.preventDefault(); deleteFocused(); return }
     if (ev.altKey && (ev.key === 'ArrowUp' || ev.key === 'ArrowDown')) { ev.preventDefault(); altMove(ev.key === 'ArrowUp'); return }
-    if (ev.key === 'g' || ev.key === 'G') { menus.startCreateFromSelection(); return }
+    if (ev.key === 'g' || ev.key === 'G') { buildTeam(); return }
     if (ev.key === '0') { fitToContent(); return }
     if (ev.key === '=' || ev.key === '+') { zoomCenter(1.2); return }
     if (ev.key === '-') { zoomCenter(1 / 1.2); return }
@@ -1106,6 +1112,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   function reconcile(input: PlanningInput): void {
     // gh#41: remote-frame registry shared with serverAction (drop fork).
     lastTeams = input.teams
+    compose.update(input)
     rosterFramesRef = new Set([...input.teams.filter(t => t.kind === 'roster').map(t => t.name), ...[...rosterFramesRef].filter(n => pendingTeams.has(n))])
     lastPeers = input.peers ?? []
     federation.setInFlight(input.inFlight ?? [])

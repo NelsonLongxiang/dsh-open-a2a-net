@@ -31,6 +31,8 @@ export interface MenusDeps {
   anchorFor(target: MenuTarget): HTMLElement | null
   emit(a: CanvasAction): void
   notice(kind: 'error' | 'info', text: string): void
+  /** #650: extra frame-menu items (「加入 root「R」」, the keyboard twin of dropping a frame on a root). */
+  frameItems?(frame: string): HTMLButtonElement[]
 }
 
 export interface PlanningMenus {
@@ -305,6 +307,7 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
       // superagent-root-team S3: the owner marks a team as a root (or unmarks it) right where the team lives.
       const root = d.isRoot(target.name)
       items.push(menuItem(root ? `取消根团队「${titleOf(target.name)}」` : `设为根团队「${titleOf(target.name)}」`, true, () => d.emit({ type: 'set-root', name: target.name, root: !root })))
+      items.push(...d.frameItems?.(target.name) ?? [])
     } else {
       const id = target.id
       if (level === 'root') {
