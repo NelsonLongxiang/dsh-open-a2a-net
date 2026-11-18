@@ -107,7 +107,8 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
       canvas: 'canvas 队：画布上的协作组，可以加入远端成员。',
       roster: 'roster 网络队：只收本机已入网的会话；队名会写进属主的精确允许名单。',
     } as const
-    const kindButtons = (['canvas', 'roster'] as const).map(value => {
+    // Roster teams are retired (owner ruling 2026-11-18): the board builds canvas teams only.
+    const kindButtons = (['canvas'] as const).map(value => {
       const b = document.createElement('button')
       b.type = 'button'
       b.dataset.kind = value

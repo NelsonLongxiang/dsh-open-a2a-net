@@ -1907,7 +1907,7 @@ export function apply(ctx: Context, config: Config): void {
         // async: wait:false is honored (steer + delivered, no final hold);
         // the signed capability turns async dialing into a deterministic
         // check instead of a timeout race against pre-0.5.2 peers.
-        // roster: the team-roster face (a2a_team_join/leave, card
+        // roster: the team-roster face (card
         // teamMemberships, team-scope routing admission) ships — peers read
         // its absence as a pre-roster legacy node (0.5.43 and older).
         // superagent named dispatch: a host running superagent teams reads a request's [A2A dispatch] line (for, rework), so a
@@ -3895,10 +3895,6 @@ export function apply(ctx: Context, config: Config): void {
     // module's call-time read live instead of snapshotting at construction.
     get ownerAllowlist() { return ownerAllowlist },
   })
-  actTools.registerTeamJoin()
-
-  actTools.registerTeamLeave()
-
   actTools.registerExposure()
 
   actTools.registerReport()
@@ -4159,7 +4155,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const senderScopeRecords: OutboundScopeRecords = {
     zone: config.team, id8, teamsOf: id => teamMemberships.teamsOf(id), membersOf: team => teamMemberships.membersOf(team),
     canvasNames: () => canvasStore.list(), canvasMembers: name => canvasStore.membersOf(name), canvasTeam: canvasTeamOf,
-    memberHandle: ref => splitQualifiedMember(ref)?.handle ?? ref,
+    // A local member sits by its session id: map it to its handle too, as inbound admission does (sameZoneAdmission matches
+    // either shape), so two canvas teammates on this host can route to each other's handle — what a shared roster used to
+    // cover before roster self-join was retired (owner ruling 2026-11-18).
+    memberHandle: ref => splitQualifiedMember(ref)?.handle ?? (ref.includes('/') ? ref : `${config.team}/${id8(ref)}`),
     peerOrgs: function* () { for (const hit of cardCache.values()) if (hit.card?.canvasOrg) yield hit.card.canvasOrg.map(row=>({...row,members:row.members.map(ref=>splitQualifiedMember(ref)&&localHandleResolver()(ref)!==undefined?splitQualifiedMember(ref)!.handle:ref)})) },
     warmPeers: () => mapBounded(resolutionPeers(), SWEEP_CONCURRENCY, cachedCardFetch),
   }

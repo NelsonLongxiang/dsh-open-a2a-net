@@ -11,7 +11,7 @@
  *   a2a probe     ↔ a2a_probe      可达性：peer 评分/链接/验证状态
  *   a2a report    ↔ a2a_report     离网单向报告（CLI 形态：投给进程队信箱）
  *   a2a exposure  ↔ a2a_exposure   会话暴露档 —— CLI 无会话面，见 N/A 说明
- *   a2a team join/leave ↔ a2a_team_join/leave 会话手势 —— CLI 以「拉卡入队」
+ *   入队 —— 名册自入队已退役（2026-11-18）；CLI 以「拉卡入队」
  *                                  等价：属主把 CLI 成员卡拖进 canvas 队
  *   a2a skills    （插件面无此工具）加载本机技能目录并输出
  *   a2a init / publish / inbox / revoke / tools —— CLI 户口制自有命令
@@ -337,8 +337,6 @@ async function state(optional = false) {
 // ── the plugin's core a2a tools, one line each (mirrors src registration; the team-only superagent tools are not mirrored) ─────
 const TOOL_CATALOG = [
   ['a2a_whoami', '身份自省：节点 id、joined 状态、可路由句柄、roster/canvas 队、allowlist 效应'],
-  ['a2a_team_join', '声明会话节点为某可路由队成员（allowlist 精确名门控；人建队而非模型自组）'],
-  ['a2a_team_leave', '撤销一次队成员声明（只能缩不能扩）'],
   ['a2a_report', '离网单向报告入监督读的报表环（无在场权——不带来发现/路由权）'],
   ['a2a_teams', '列/搜可达队：本机行+远端 peer 行（teamScopeInfo 开时跟随协作圈）'],
   ['a2a_route', '向远端队发消息并等回复（长任务用 async；context_id 续谈）'],
@@ -368,7 +366,6 @@ function printAlignment() {
     ['a2a file send/fetch', 'a2a_file_send/fetch', '文件通道（CLI 只能从自己的 home 宿主拉取）'],
     ['a2a file grants/revoke', 'a2a_file_grants/revoke', '管理自己在 home 宿主上的文件授权（签名证明身份）'],
     ['（N/A）', 'a2a_exposure', '暴露档是会话面概念——CLI 无会话；户口即其可见性'],
-    ['（拖卡入队）', 'a2a_team_join/leave', '入队是会话手势——等价物：属主把 CLI 成员卡拖进 canvas 队（画布手势=运营者链接）'],
     ['a2a skills', '（插件无）', '加载本机技能目录输出（CLI 专有）'],
     ['a2a init/publish/inbox/revoke/tools', '（插件无）', '户口制自有：建钥/落户/收信箱/撤户/本表'],
   ]

@@ -39,13 +39,9 @@ The owner can open the workbench header ⚙, select a local session under “会
    An unjoined session is invisible and refused (see
    [membership.md](membership.md)).
 4. Give the sessions a shared team (`teamScope` is on by default, so a
-   teamless session has no network). Pick ONE of:
-   - **Canvas team (recommended):** workbench `/__dsh_a2a_nexus/` → select
-     the session cards → 建队. Canvas membership is assigned by hand.
-   - **Roster team:** add the EXACT name (for example `dsh/review`) to
-     `teamJoinAllowlist` in the workbench owner panel (header ⚙). Each
-     session then declares it with `a2a_team_join { team: "dsh/review" }`.
-     A `*`/prefix entry authorizes nothing (`[PATTERN_NO_MINT]`).
+   teamless session has no network): a canvas team. In the workbench
+   `/__dsh_a2a_nexus/` select the session cards → 建队, or ask the team
+   builder (组队顾问). Roster teams are retired (owner ruling 2026-11-18).
 
 **Agent, verify:**
 - `a2a_whoami`: `node.joined: true`, the handle `<zone>/<id8>`, and the
@@ -160,4 +156,3 @@ a mailbox, no wake. The home can forward eligible requests one hop under section
 | peer reachable but its sessions never appear | §2.3: seeding is one-sided, or the peer did not `announce` |
 | `No live DSH session node accepts team X` | X is on another host and nothing forwards (§3), or X is not joined/live there |
 | `[PATTERN_NO_MINT]` / `[ALLOWLIST_DENY]` | §1.4: add the EXACT team name to the allowlist |
-| `[CANVAS_TEAM]` from `a2a_team_join` | canvas teams are built in the workbench, not joined by tool |

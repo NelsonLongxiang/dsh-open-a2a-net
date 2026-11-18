@@ -109,9 +109,9 @@ describe('gh#34 owner-settings face (end-to-end)', () => {
       expect(after.teamScopeInfo).toBe(true)
       expect(after.announce).toBe(true) // boot value until restart
       expect(after.announceRestartPending).toBe(true)
-      // HOT-APPLY ①: the join gate admits the newly allowlisted team.
-      const join = await ctx.tools.get('a2a_team_join')?.execute({ team: 'dsh/review-gate', id: String(agent.id) }, { signal: new AbortController().signal, agent } as never) as { ok: boolean; error?: string }
-      expect(join?.ok).toBe(true)
+      // HOT-APPLY ①: whoami reads the new allowlist without a restart (roster self-join is retired, 2026-11-18).
+      const whoAllow = await ctx.tools.get('a2a_whoami')?.execute({}, { signal: new AbortController().signal, agent } as never) as { allowlist?: { patterns: string[] } }
+      expect(whoAllow?.allowlist?.patterns).toEqual(['dsh/initial', 'dsh/review-gate'])
       // HOT-APPLY ②: the GET now reports scoping ON (the call-time read
       // flipped without a restart).
       const afterScoped = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/owner-settings`)).json() as { teamScope: boolean }

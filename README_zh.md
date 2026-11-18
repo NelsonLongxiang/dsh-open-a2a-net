@@ -111,8 +111,6 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 | `a2a_task_read` | 那条任务的正文到底写了什么？ | 按任务号返回投递给**本会话**的 A2A 任务原文。适用于 `a2a_tasks` 里只看得到标题（`delivered-unconsumed`）、送达时本会话正忙、正文没进对话的任务。只有当初接收的会话能读，别的会话一律按“不存在”答复；原文保留 72 小时，单条按 UTF-8 计 64 KiB，超出部分截断。读取即算已消费，结果算对端内容。对宿主从未登记过的插话投递（原文整个丢了的那种），会话空闲时还会以原任务的身份走排队补送一次；领取、撤回、状态未知都按普通排队任务对账，绝不盲目重发。 |
 | `a2a_tasks` | 哪些异步任务还欠回执？ | 三层：欠账行保留续聊 `context_id`；过 TTL 的行自动转死信（仍可结清）；结局落入有界归档；跨重启持久化。 |
 | `a2a_probe` | 舰队健康吗？ | 每个作用域内 peer 一次验签取卡（或指定一个 url）；`N reachable, M down`；失败分为 `unreachable` 与 `rejected`。 |
-| `a2a_team_join` | 把一个已加入节点声明为某团队成员。 | 白名单门禁：只有 `teamJoinAllowlist` 里的**精确名**才授权加入（空列表拒绝一切加入）。通配/前缀条目会在 `a2a_whoami` 里显示，但不授权任何加入（`[PATTERN_NO_MINT]`）；画布队伍在工作台分配，从不经此工具（`[CANVAS_TEAM]`）。尝试记录进状态面的 `registry.teamAudit`。模型工具只能为调用会话自己的节点声明（否则 `[NOT_SELF]`），且该节点须已入网（否则 `[NOT_JOINED]`）。 |
-| `a2a_team_leave` | 撤回一个团队成员关系。 | 不受白名单门禁——退出只会缩小暴露面；仍只能撤回调用会话自己节点已声明过的成员关系（`[NOT_SELF]`、`[NOT_JOINED]`，未声明过则无事可退）。 |
 | `a2a_exposure` | 本会话有多可见？ | 设置会话自己的暴露档：`linked`（默认下限）或 `fleet`（自愿上调），可随时升降；需会话已加入网络。**目前档位只持久化（`a2a/exposure.json`）并在状态面会话行的 `exposure` 字段展示，尚不改变卡片或目录的可见性**；「组的可见性取最严成员」是已成文的规则，v1 既无组级接口也无执行点。 |
 | `a2a_report` | 不在网时向本宿主监督面报告。 | 唯一能在未入网时向本宿主写入的入口（只读的 `a2a_whoami` 同样不受加入门约束）：单向，落入状态面的 reports 环（保留最近 64 条），不授予在场或路由权。每会话 30s 一次、≤4000 字；同会话同文在 10 分钟内已上报 3 次后，第 4 次起按循环熔断拒绝。 |
 | `a2a_status` | 本节点此刻在做什么？ | 作用域内受跟踪 peers 及质量分、在途路由、近期路由活动，以及幂等窗口汇总（占用 + claim/replay/conflict 计数）。 |
@@ -193,7 +191,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | `wakeBootStaggerMs` | `3000` | 启动预热串行唤醒之间的停顿（压住重启后的日志解码饱和；路由唤醒不排此队）。 |
 | `wakeReconcile` | `true` | 持续的期望态对账：每个 tick 重新推导到期的冷加入意图，每轮唤醒一个（覆盖启动后漂移、唤醒失败、晚挂载的网关）。由 `wakeReconcileIntervalMs`（`60000`）、`wakeReconcileBackoffBaseMs`（`5000`）、`wakeReconcileMaxBackoffMs`（`600000`）调节。 |
 | `seatNames` | `{}` | 按完整本机会话 id（`session-…` 形式，至多 1024 条）保存的人工席位展示名（≤64 字）；拒绝 Cc/Cf 控制/格式字符、行段分隔符、无可见内容的名字，以及形似路由地址的名字（如 `dsh/66abc2cf`、`zone/canvas/x`）。启动配置逐条丢弃非法项并警告，不拖垮插件；属主写入仍整次校验。工作台主人设置中选择会话、输入并显式保存；留空保存清除。即时用于卡面、whoami、CLI teams 和画布，不改标题、句柄或准入；A2A 模型工具携带命名字段会被拒。 |
-| `teamJoinAllowlist` | `[]` | `a2a_team_join` 可声明的团队：**只认精确名**（`*`/前缀条目不授权任何加入）。空列表拒绝一切加入。属主也可在工作台属主面板（`/__dsh_a2a/owner-settings`）编辑。 |
+| `teamJoinAllowlist` | `[]` | 名册名（名册团队已退役，2026-11-18：保留一个版本，只用于缩减或解散已有名册）。名册可声明的团队：**只认精确名**（`*`/前缀条目不授权任何加入）。空列表拒绝一切加入。属主也可在工作台属主面板（`/__dsh_a2a/owner-settings`）编辑。 |
 | `teamScope` | `true` | 团队范围的一个开关（属主 2026-11-18）：路由检查调用方与目标是否同队（S3，未声明任何团队的会话没有网络），`a2a_teams` / `a2a_status` / `a2a_probe` 只在已加入团队范围内作答（S5）。`false` 两者一起放开。属主面板改后立即生效。旧的 `teamScopeRouting` / `teamScopeInfo` 在没有 `teamScope` 时再读一个版本。 |
 | `teamScopeRouting` | `true` | 已弃用（2026-11-18）：路由那一半，只在没有 `teamScope` 时读取。请用 `teamScope`。 |
 | `teamScopeInfo` | `true` | 已弃用（2026-11-18）：信息那一半，只在没有 `teamScope` 时读取。请用 `teamScope`。 |

@@ -123,3 +123,5 @@ The owner approved the four points below on 2026-11-13 (「是的 可以」), an
 
 - Starting sessions (until #626 S2), child teams across hosts, retiring teams or members, approvers, models, prompt supplements, and the market's side.
 - Changing what a router, member or observer may do. The builder only puts existing roles together.
+
+- **TB7 Members can leave (2026-11-18).** Roster self-join is retired, so the team builder is where membership changes: a blueprint may `member.retire {team, seatId}` a local member (never the router, never one working on a ticket; the owner agrees, and the team's card confirms, as for any change to an existing team). Undo puts the member back on the canvas. Retiring a whole team (`team.retire`) stays out of blueprints.

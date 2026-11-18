@@ -780,7 +780,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
       })
     }),
   }), 'a2a: fleet-canvas-op relay route')
-  // A roster owner gesture writes the same teams.json declarations as a2a_team_join; it cannot admit remote or unjoined ids.
+  // A roster owner gesture on the board (roster teams retired 2026-11-18: only remove-member and dissolve still apply).
   ctx.effect(() => webServer.register({
     kind: 'exact', path: '/__dsh_a2a/roster-op',
     handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {

@@ -213,7 +213,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
 
   function registerWhoami(): void {
     // K3 feedback P0 (2026-10-20): a session could appear in a2a_teams, route
-    // fine, and still be refused by a2a_team_join — with no way to ask "what am
+    // fine, and still be refused a team join — with no way to ask "what am
     // I, actually?". whoami is that one-call answer. Deliberately NOT gated by
     // a2aJoinGateRefusal: the unjoined session is precisely the caller that
     // needs it.
@@ -241,7 +241,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
             teams: {
               type: 'object',
               additionalProperties: true,
-              description: 'roster: allowlisted teams declared via a2a_team_join; canvas: local workbench-assigned names (compatibility); canvasDetails: local/remote membership with qualified team, owner URL and memberCount.',
+              description: 'roster: roster teams declared before roster self-join was retired (2026-11-18); canvas: local workbench-assigned names (compatibility); canvasDetails: local/remote membership with qualified team, owner URL and memberCount.',
             },
             allowlist: {
               type: 'object',

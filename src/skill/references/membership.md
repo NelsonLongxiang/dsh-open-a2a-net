@@ -12,16 +12,12 @@
 
 ## Teaming
 
-- `a2a_team_join { team }` — declare a membership in `a2a/teams.json`
-  (roster store, restored at construction). Gated by the owner's
-  `teamJoinAllowlist`: an empty list denies every join, and only an EXACT
-  name joins. A wildcard or prefix entry matches nothing at join time
-  (`[PATTERN_NO_MINT]`, gh#11/N7) — adding the exact name IS the act of
-  creating the team, which is a human act. The owner edits the list in the
-  workbench owner panel (header ⚙, gh#34) or in the profile patch.
-- A canvas team (`/canvas/` in the name) cannot be joined through the roster
-  tool (`[CANVAS_TEAM]`): canvas membership is assigned by hand.
-- `a2a_team_leave { team }` — retract one declaration.
+- A team is a canvas team (owner ruling 2026-11-18). There is no tool that
+  joins or leaves one: the owner composes it on the workbench board, or the
+  team builder (组队顾问) drafts a blueprint the owner agrees to.
+- Roster teams (`a2a/teams.json`) are retired: no session can declare one
+  any more. A roster declared before still counts for one version, and the
+  owner can still remove a member from it or dissolve it on the board.
 - Canvas teams (`<zone>/canvas/<name>`) are user-composed groups created in
   the planning view (建队) — any joined node can be a member; a node may sit
   in multiple teams.
@@ -73,6 +69,7 @@
 
 ## Leaving
 
-- `a2a_team_leave` per team; the network-level leave (退网) removes the
+- A canvas team member leaves when the owner removes it on the board (or
+  through a builder blueprint); the network-level leave (退网) removes the
   session from discovery and the join gate grants. Rejoining later is cheap —
   there is no penalty for cycling membership around task boundaries.

@@ -190,7 +190,8 @@ export interface Config {
   readonly wakeReconcileMaxBackoffMs: number
   /**
    * S4 (gh#11 N7, operator directive: team creation is a human act): the
-   * joinable-team curation list for a2a_team_join. ONLY an EXACT entry
+   * roster curation list (roster self-join is retired, 2026-11-18: kept one
+   * version so an existing roster can be shrunk or dissolved). ONLY an EXACT entry
    * authorizes a join; trailing-`*` pattern entries stay readable here
    * (whoami shows them) but carry no mint rights — a pattern that
    * pre-authorized every future name under it would let a model mint teams
@@ -305,8 +306,8 @@ export const Config: s<Config> = s.object({
   wakeReconcileBackoffBaseMs: s.number().default(5_000),
   wakeReconcileMaxBackoffMs: s.number().default(600_000),
   /**
-   * S4 (gh#11 N7): the joinable-team curation list. A model calling
-   * a2a_team_join may only declare membership in a team with an EXACT
+   * S4 (gh#11 N7): the roster curation list (roster self-join retired
+   * 2026-11-18). A roster could only declare membership in a team with an EXACT
    * entry here — trailing-`*` patterns are readable but authorize nothing
    * (no mint rights: a pattern pre-authorizing every future name under it
    * would let a model mint teams nobody created). Default empty: the
