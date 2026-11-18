@@ -9,7 +9,7 @@
  *   a2a status    ↔ a2a_status     网络健康：peers/在途/活动环 + 户口状态
  *   a2a tasks     ↔ a2a_tasks      账本三层：pending/dead/archived
  *   a2a probe     ↔ a2a_probe      可达性：peer 评分/链接/验证状态
- *   a2a report    ↔ a2a_report     离网单向报告（CLI 形态：投给进程队信箱）
+ *   a2a tell-host                  投给宿主进程队信箱的单向消息（旧名 report 保留一个版本；与 a2a_report 的报告环不是一回事）
  *   a2a exposure  ↔ a2a_exposure   会话暴露档 —— CLI 无会话面，见 N/A 说明
  *   入队 —— 名册自入队已退役（2026-11-18）；CLI 以「拉卡入队」
  *                                  等价：属主把 CLI 成员卡拖进 canvas 队
@@ -49,7 +49,7 @@ const USAGE = `a2a-net CLI — aligned with the plugin's model tools ('a2a tools
 usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 
 户口制:   init <name> [--uuid 16hex] [--force] · publish [--owes] [--declare progressReceipts,directedSeats,reworkReturns,teamRoster] · inbox [--new|--wait|--hook] · thread <context_id> · receipt <task_id> <result…> · admission <caller> [--local] · revoke
-对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…> [--task ID]
+对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · tell-host <msg…> [--task ID]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
 文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR] · file grants · file revoke <sha256> <to>   (#91: bytes never ride a message)
@@ -362,7 +362,7 @@ function printAlignment() {
     ['a2a status', 'a2a_status', '网络健康（peers/在途/活动环）+ 户口状态'],
     ['a2a tasks', 'a2a_tasks', '账本三层（pending/dead/archived）'],
     ['a2a probe', 'a2a_probe', 'peer 可达性（评分/链接/验证，读暖态）'],
-    ['a2a report', 'a2a_report', '离网报告（CLI 形态：投给宿主进程队信箱）'],
+    ['a2a tell-host', '（无对应工具）', '投给宿主进程队信箱的单向消息；a2a_report 写的是宿主的报告环，二者不同（旧名 a2a report 保留一个版本）'],
     ['a2a file send/fetch', 'a2a_file_send/fetch', '文件通道（CLI 只能从自己的 home 宿主拉取）'],
     ['a2a file grants/revoke', 'a2a_file_grants/revoke', '管理自己在 home 宿主上的文件授权（签名证明身份）'],
     ['（N/A）', 'a2a_exposure', '暴露档是会话面概念——CLI 无会话；户口即其可见性'],
@@ -1628,9 +1628,12 @@ async function main() {
   if (cmd === 'superagent') { await cmdSuperagent(); return }
   if (cmd === 'ticket') { await cmdTicket(); return }
   if (cmd === 'pi') { await cmdPi(); return }
-  if (cmd === 'report') {
+  if (cmd === 'tell-host' || cmd === 'report') {
+    // Redundancy review 2026-11-18: `report` shared its name with the a2a_report tool, which writes the host's report ring;
+    // this command is a one-way message into the host's process-team mailbox. The old name works for one more version.
+    if (cmd === 'report') console.error('[report] deprecated: use a2a tell-host (same command; report is the a2a_report tool, a different thing)')
     const text = positionals().join(' ')
-    if (text === '') usage('usage: a2a report <message…> — one-way report into the host process-team mailbox')
+    if (text === '') usage('usage: a2a tell-host <message…> — one-way message into the host process-team mailbox')
     // A report is a fresh task into the home mailbox, wrapped in a prefix, so a receipt
     // sent this way never reads as one: the caller's row stays owed. Point at `receipt`.
     if (/^\s*\[A2A receipt\]/.test(text)) usage('report: this text is a receipt — a report wraps it so it never settles the task; send it with: a2a receipt <task_id> [--outcome O] <one line…>')
