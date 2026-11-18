@@ -100,5 +100,7 @@ export class SuperagentTeams {
   }
 
   start(): void { this.started = true; for (const team of this.all()) team.start() }
+  /** What waited on the ygl-trees version read (candidates, launches) goes out now (#739 R1 barrier). */
+  resumeHeld(): void { if (this.started) for (const team of this.all()) team.resumeHeld() }
   async stop(): Promise<void> { this.started = false; await Promise.all(this.all().map(team => team.stop())) }
 }

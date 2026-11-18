@@ -2204,9 +2204,11 @@ export function apply(ctx: Context, config: Config): void {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
     ctx.effect(() => {
       void ensureTeamYglHome({ logger })
-      // Design Y1d (#739 review R1): the cards a team sends depend on the installed ygl-trees, so its engines start once the
-      // bounded version read has settled; a card sent before would keep the oldest steps for its whole ticket.
-      const cancel = startWhenYglKnown(() => { superagentTeams!.start() }, { logger })
+      // Design Y1d (#739 review R1): the engines start at boot, as before #739 (a late start's recovery restarted assignments
+      // the team had already begun, 2026-11-18); the ygl barrier holds candidates and launches until the bounded version
+      // read settles, and what it held goes out then.
+      superagentTeams!.start()
+      const cancel = startWhenYglKnown(() => { superagentTeams!.resumeHeld() }, { logger })
       return () => { cancel(); void superagentTeams!.stop() }
     }, 'a2a: superagent engine passes')
     registerSuperagentTools(ctx, id => superagentTeams!.ofSession(id))

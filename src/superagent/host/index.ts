@@ -310,8 +310,8 @@ export class SuperagentHost {
     // initialized yet (a TDZ crash took the plugin down on hosts with models set - review of #566). A microtask runs
     // after apply() finishes; the catch inside applyModels is the second fence.
     queueMicrotask(() => { this.applyModels() })
-    // #739 review R1: what waited on the ygl-trees version read (a request taken before the engines started) goes out now.
-    queueMicrotask(() => { this.flushCandidates(); this.executor.launch() })
+    // #739 review R1: what waited on the ygl-trees version read goes out once it settles (resumeHeld), or now if it has.
+    queueMicrotask(() => { this.resumeHeld() })
     this.started = true
     this.syncA2a()
     this.pass()
@@ -785,6 +785,8 @@ export class SuperagentHost {
   private yglCaps() { return this.d.yglCapabilities?.() ?? YGL_UNKNOWN }
   /** Whether cards that depend on the installed ygl-trees may go out yet (#739 review R1). */
   private yglReady(): boolean { return this.d.yglReady?.() !== false }
+  /** Send what the ygl-trees barrier held: undelivered candidates and waiting launches. */
+  resumeHeld(): void { if (!this.yglReady()) return; this.flushCandidates(); this.executor.launch() }
   private ensureYglProject(): void { const project = this.yglProject(); if (project !== undefined) { try { this.d.ensureYglProject?.(project) } catch { /* best effort */ } } }
   private yglRouterLines(router: string): string[] {
     const project = this.yglProject()

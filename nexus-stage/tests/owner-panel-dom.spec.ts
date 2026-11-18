@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /**
  * gh#34 owner three-key panel: the header gear opens the inspector with the
- * three unlock knobs; the precision note is part of the contract (closing
- * teamScopeInfo NEVER unlocks communication admission).
+ * three unlock knobs; the note is part of the contract: one teamScope switch
+ * covers routing and information (owner ruling 2026-11-18), and admission (S3)
+ * and signature checks are not affected by it.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { createWorkbench, type StateBody } from '../src/workbench.ts'
@@ -38,10 +39,11 @@ describe('gh#34 owner three-key panel', () => {
       expect(panel?.classList.contains('is-open')).toBe(true)
       expect(panel?.textContent).toContain('入网白名单')
       expect(panel?.textContent).toContain('dsh/review-gate')
-      expect(panel?.textContent).toContain('目录可见性')
+      expect(panel?.textContent).toContain('团队范围（teamScope）')
       expect(panel?.textContent).toContain('节点发布')
-      // ② Precision note: closing teamScopeInfo does NOT unlock admission.
-      expect(panel?.textContent).toContain('不会解锁任何通信准入')
+      // ② The note: one switch for both halves; admission and signatures stay.
+      expect(panel?.textContent).toContain('一个开关管两件事')
+      expect(panel?.textContent).toContain('入网（S3）与签名校验不受影响')
     })
   })
 
