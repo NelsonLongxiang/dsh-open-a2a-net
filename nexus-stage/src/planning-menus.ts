@@ -169,6 +169,7 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
       if (kind.value === 'roster' && model.getFrame(rosterFrameName(name)) !== undefined && !d.isRoster(rosterFrameName(name))) return 'roster 框名已被 canvas 或镜像队占用'
       if (kind.value === 'canvas' && model.getFrame(rosterFrameName(name)) !== undefined) return '同名 roster 队已存在，不能创建 canvas 队'
       if (kind.value === 'roster' && ids.some(id => model.getNode(id)?.remote === true || !d.joined(id))) return 'roster 仅接受本机已入网的会话'
+      if (ids.some(id => model.getNode(id)?.remote !== true && !d.joined(id))) return '本机会话已离开网络或目录，请重新选择后组建团队'
       return null
     }
     const confirm = (): void => {

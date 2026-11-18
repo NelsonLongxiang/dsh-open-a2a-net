@@ -559,6 +559,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     if (roster && (a.type === 'create-team' || a.type === 'add-member') && a.ids.some(id => model.getNode(id)?.remote === true || !lastSessions.some(s => s.id === id && s.joined === true))) {
       notice('error', 'roster 只接受本机已入网会话，远端或未入网成员未写入'); return
     }
+    if (a.type === 'create-team' && a.ids.some(id => model.getNode(id)?.remote !== true && !lastSessions.some(s => s.id === id && s.joined === true))) {
+      notice('error', '本机会话已离开网络或目录，请重新选择后组建团队'); return
+    }
     // gh#20 W-B: the SERVER sees zone/id8 remote handles where the model
     // keeps its peer-<host> node id — the canvas member contract is
     // session-id-or-remote-ref. Translation happens here, one boundary;

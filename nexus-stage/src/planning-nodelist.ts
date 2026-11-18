@@ -46,6 +46,7 @@ export function createNodeList(d: NodeListDeps): PlanningNodeList {
 
   // ── 节点列表 drawer（组队节点上画布；单一节点按 host/对等节点在列表管理）──
   let nodePanel: HTMLDivElement | null = null
+  let hostSelector: HTMLSelectElement | null = null
   let nodeHost = '' // '' = 本机；否则为 d.facts().remoteTeams 的 host:port 键
   let nodeJoinMenu: HTMLDivElement | null = null
   let joiningId: string | undefined
@@ -82,6 +83,7 @@ export function createNodeList(d: NodeListDeps): PlanningNodeList {
     dragging = false
     nodePanel?.remove()
     nodePanel = null
+    hostSelector = null
     renderedFacts = ''
   }
   function toggleNodePanel(): void {
@@ -116,33 +118,40 @@ export function createNodeList(d: NodeListDeps): PlanningNodeList {
     if (stamp === renderedFacts && el.firstElementChild !== null) return
     renderedFacts = stamp
     const scroll = el.querySelector('.p-nodelist-body')?.scrollTop ?? 0
-    el.textContent = ''
-    const head = document.createElement('div')
-    head.className = 'p-nodelist-head'
-    const headLabel = document.createElement('span')
-    headLabel.className = 'p-nodelist-title'
-    headLabel.textContent = '节点'
-    const sel = document.createElement('select')
-    sel.className = 'p-nodesel'
-    sel.setAttribute('aria-label', '选择 host 或对等节点')
-    const localOpt = document.createElement('option')
-    localOpt.value = ''
-    localOpt.textContent = '本机'
-    sel.appendChild(localOpt)
-    for (const [host, rows] of d.facts().remoteTeams) {
-      if (host === '') continue
-      const opt = document.createElement('option')
-      opt.value = host
-      opt.textContent = rows[0]?.origin !== undefined && rows[0].origin !== '' ? `${rows[0].origin}（${host}）` : host
-      sel.appendChild(opt)
+    let head = el.querySelector<HTMLElement>('.p-nodelist-head')
+    let body = el.querySelector<HTMLDivElement>('.p-nodelist-body')
+    if (head === null || hostSelector === null || body === null) {
+      head = document.createElement('div')
+      head.className = 'p-nodelist-head'
+      const headLabel = document.createElement('span')
+      headLabel.className = 'p-nodelist-title'
+      headLabel.textContent = '节点'
+      const sel = document.createElement('select')
+      sel.className = 'p-nodesel'
+      sel.setAttribute('aria-label', '选择 host 或对等节点')
+      hostSelector = sel
+      sel.addEventListener('change', () => { closeNodeJoinMenu(); nodeHost = sel.value; renderNodePanel() })
+      head.append(headLabel, sel)
+      body = document.createElement('div')
+      body.className = 'p-nodelist-body'
+      el.append(head, body)
     }
-    if (nodeHost !== '' && !d.facts().remoteTeams.has(nodeHost)) nodeHost = ''
-    sel.value = nodeHost
-    sel.addEventListener('change', () => { closeNodeJoinMenu(); nodeHost = sel.value; renderNodePanel() })
-    head.append(headLabel, sel)
-    const body = document.createElement('div')
-    body.className = 'p-nodelist-body'
-    el.append(head, body)
+    // Keep the native selector and existing options connected even when row facts change.
+    const sel = hostSelector!
+    const oldOptions = new Map(Array.from(sel.options).map(option => [option.value, option]))
+    const choices = new Map<string, string>([['', '本机']])
+    for (const [host, rows] of latest.remoteTeams) if (host !== '') {
+      choices.set(host, rows[0]?.origin ? `${rows[0].origin}（${host}）` : host)
+    }
+    for (const [value, label] of choices) {
+      const option = oldOptions.get(value) ?? new Option(label, value)
+      if (option.textContent !== label) option.textContent = label
+      if (option.parentElement !== sel) sel.appendChild(option)
+    }
+    for (const option of Array.from(sel.options)) if (!choices.has(option.value)) option.remove()
+    if (!choices.has(nodeHost)) nodeHost = ''
+    if (sel.value !== nodeHost) sel.value = nodeHost
+    body!.replaceChildren()
     if (nodeHost === '') renderLocalNodeGroups(body)
     else renderRemoteNodeGroups(body, d.facts().remoteTeams.get(nodeHost) ?? [])
     body.scrollTop = scroll

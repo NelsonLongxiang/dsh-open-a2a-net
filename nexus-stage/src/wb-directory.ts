@@ -16,6 +16,7 @@ import type { CanvasTeamRow, StateBody } from './workbench'
 import type { ChatTarget } from './wb-chat'
 import { displayName } from './stage-name'
 import { makeSessionDraggable } from './session-drag'
+import { remoteSourceKey } from './remote-source'
 
 export type DirFilter = 'all' | 'local' | 'canvas' | 'remote' | 'logs'
 
@@ -181,13 +182,24 @@ export function renderDirectory(box: HTMLElement, ctx: DirectoryContext): string
   const remote = (state.remote ?? []).filter(r => admit('remote', haystack(displayName(r), r.team, r.origin, r.workspace, r.canvasTeams)))
   if (remote.length > 0) {
     const g = group('远端节点', remote.length)
+    const counts = new Map<string, number>()
+    for (const r of remote) { const key = remoteSourceKey(r); counts.set(key, (counts.get(key) ?? 0) + 1) }
+    const occurrence = new Map<string, number>()
     for (const r of remote) {
-      const item = row(g, 'remote:' + (r.memberRef ?? r.team), 'wb-dot-remote', '◇', displayName(r), r.origin !== undefined && r.origin !== '' ? r.origin : r.team,
+      const key = remoteSourceKey(r), index = occurrence.get(key) ?? 0
+      occurrence.set(key, index + 1)
+      const item = row(g, 'remote:' + JSON.stringify([key, index]), 'wb-dot-remote', '◇', displayName(r), r.origin !== undefined && r.origin !== '' ? r.origin : r.team,
         () => ctx.openChat({ kind: 'remote', team: r.team, title: displayName(r), sub: r.team, row: r }), r.team)
       if (r.unreachable === true) {
         item.classList.add('is-unreachable')
         const note = el('span', 'wb-unreachable-note')
         note.textContent = '对端未应答（显示的是最后已知状态）'
+        item.querySelector('.wb-item-text')?.appendChild(note)
+      }
+      if ((counts.get(key) ?? 0) > 1) {
+        item.classList.add('is-node-prompt-missing')
+        const note = el('span', 'wb-node-warning')
+        note.textContent = '目录身份重复，来源待核实（保留各条记录）'
         item.querySelector('.wb-item-text')?.appendChild(note)
       }
       badges(item, r.canvasTeams)

@@ -27,6 +27,7 @@ import { createSuperagentPane, type SaState, type SuperagentPaneDeps } from './w
 import { DIRECTORY_FILTERS, learnLogTitle, loadLogTitles, renderDirectory, type DirFilter } from './wb-directory'
 import { ledgerFacts, renderLedger as paintLedger } from './wb-ledger'
 import { nameInto, teamLabel } from './wb-names'
+import { remoteMember, remotePeer, remoteSourceKey } from './remote-source'
 
 /** One pending ledger row from /state `tasks`. */
 export interface PendingRow {
@@ -362,6 +363,8 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   let canvasForm: { name: string; form: HTMLFormElement; pick: HTMLSelectElement; manual: HTMLInputElement; busy: boolean } | null = null
   const cliHomeForms = new Map<string, HTMLFormElement>()
   const provenanceForms = new Map<string, HTMLElement>()
+  // Request lifetime belongs to this workbench, never to a mounted inspector form.
+  const memberAddRequests = new Map<string, { busy: boolean; message: string; failed: boolean }>()
   // Quick-dispatch form (0.6.9), cached per target routing team the same
   // draftForm way: a textarea's draft must survive the 3s poll remount.
   let dispatchForm: { team: string; form: HTMLFormElement; text: HTMLTextAreaElement; note: HTMLElement } | null = null
@@ -999,6 +1002,16 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     } catch (error) { return { ok: false, error: String(error) } }
   }
 
+  function syncMemberRequest(name: string): void {
+    if (canvasForm?.name !== name) return
+    const state = memberAddRequests.get(name)
+    const busy = state?.busy === true
+    canvasForm.busy = busy
+    for (const input of Array.from(canvasForm.form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input,select,button'))) input.disabled = busy
+    const note = canvasForm.form.querySelector<HTMLElement>('.wb-member-result')!
+    if (state) { note.setAttribute('role', state.failed ? 'alert' : 'status'); note.textContent = state.message }
+  }
+
   function renderInspector(): void {
     // A select popover, keyboard focus or pending submit must not be detached by a poll.
     const focused = document.activeElement
@@ -1126,25 +1139,40 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         const current = { name: fresh.name, form, pick, manual, busy: false }
         form.addEventListener('submit', async ev => {
           ev.preventDefault()
-          if (current.busy) return
+          if (current.busy || memberAddRequests.get(current.name)?.busy === true) {
+            note.setAttribute('role', 'status'); note.textContent = '该队仍有添加请求在途，请等待原请求结果。'; return
+          }
           const handle = manual.value.trim()
           const selected = handle !== '' ? undefined : pick.selectedOptions[0]
           const id = handle !== '' ? handle : selected?.dataset.member ?? pick.value
+          let requestPeer = selected?.dataset.peer
           if (id === '') return
           const latest = last?.canvas?.teams?.find(t => t.name === current.name)
           if (!latest) { note.setAttribute('role', 'alert'); note.textContent = '添加失败：该队已不在当前目录。'; return }
-          if (handle === '' && !selected?.dataset.peer && !last?.sessions?.some(s => s.id === id)) {
+          if (handle === '' && selected?.dataset.remoteSource !== undefined) {
+            const matches = (last?.remote ?? []).filter(remote => remoteSourceKey(remote) === selected.dataset.remoteSource)
+            if (matches.length !== 1 || remoteMember(matches[0]!) !== id || remotePeer(matches[0]!.via) !== remotePeer(selected.dataset.peer)) {
+              note.setAttribute('role', 'alert'); note.textContent = '添加失败：所选远端来源已变化或不可核实，请重新选择。'; return
+            }
+            requestPeer = matches[0]!.via // The current linked endpoint's exact spelling belongs on the wire.
+          } else if (handle === '' && !last?.sessions?.some(s => s.id === id)) {
             note.setAttribute('role', 'alert'); note.textContent = '添加失败：所选会话已离开目录，请重新选择。'; return
           }
+          const request = { busy: true, message: '正在添加…', failed: false }
+          memberAddRequests.set(current.name, request)
           current.busy = true; submit.disabled = true; pick.disabled = true; manual.disabled = true
           note.setAttribute('role', 'status'); note.textContent = '正在添加…'
           try {
-            const result = await memberChange('add-member', current.name, id, undefined, selected?.dataset.peer)
+            const result = await memberChange('add-member', current.name, id, undefined, requestPeer)
+            request.failed = !result.ok
+            request.message = result.ok ? '添加请求已确认，成员列表以主机最新状态为准。' : '添加失败：' + (result.error ?? '主机未确认，请核对权限、成员资格或连接后再重试。')
             note.setAttribute('role', result.ok ? 'status' : 'alert')
-            note.textContent = result.ok ? '添加请求已确认，成员列表以主机最新状态为准。' : '添加失败：' + (result.error ?? '主机未确认，请核对权限、成员资格或连接后再重试。')
+            note.textContent = request.message
             if (result.ok) manual.value = ''
           } finally {
+            request.busy = false
             current.busy = false; submit.disabled = false; pick.disabled = false; manual.disabled = false
+            syncMemberRequest(current.name)
           }
         })
         // Leave focus transfer alone: a microtask remount here can swallow the native submit click.
@@ -1163,6 +1191,8 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         pick.appendChild(new Option(`${displayName(session)} — 本机`, session.id))
       }
       let remoteLabeled = false
+      const remoteCounts = new Map<string, number>()
+      for (const remote of last?.remote ?? []) { const key = remoteSourceKey(remote); remoteCounts.set(key, (remoteCounts.get(key) ?? 0) + 1) }
       for (const remote of last?.remote ?? []) {
         // gh#37: only zone/id8 HANDLES are addable members — a bare zone row
         // (the peer's own team card, e.g. 'dsh') fails the backend shape
@@ -1177,15 +1207,20 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
           pick.appendChild(new Option('远端会话队（目录卡片）…', '', true, false))
           remoteLabeled = true
         }
-        const option=new Option(`${displayName(remote)} — ${remote.via ?? '来源未确认'}`, JSON.stringify([remote.team,remote.via]))
-        option.dataset.member=remote.team
-        if(remote.via)option.dataset.peer=remote.via
+        const member = remoteMember(remote), peer = remotePeer(remote.via), key = remoteSourceKey(remote)
+        const option = new Option(`${displayName(remote)} — ${remote.memberRef ?? remote.team} — ${remote.via ?? '来源未确认'}`, key)
+        option.dataset.member = member ?? remote.memberRef ?? remote.team
+        option.dataset.remoteSource = key
+        if (peer) option.dataset.peer = remote.via
+        option.disabled = member === undefined || (remoteCounts.get(key) ?? 0) !== 1
+        if (option.disabled) option.textContent += '（来源待核实）'
         pick.appendChild(option)
       }
       if (!remoteLabeled) {
         pick.appendChild(new Option('（暂无可拉入的远端会话队——见下方说明）', '', true, false))
       }
       if (keep !== '' && Array.from(pick.options).some(option => option.value === keep)) pick.value = keep
+      syncMemberRequest(fresh.name)
       controls.appendChild(canvasForm.form)
       const hint = el('div', 'wb-hint')
       hint.textContent =
