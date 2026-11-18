@@ -1,6 +1,6 @@
 import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, copyFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, copyFileSync, realpathSync } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
@@ -110,7 +110,8 @@ describe('new-mode admission binds the actual snapshot, manifest and submission 
   it('accepts one genuinely consistent run and reports what was verified', async () => {
     const f = await boundRun(sample)
     const result = submissionFromProbe(f.summary, f.snapshot, f.head)
-    expect(result).toMatchObject({ ok: true, path: f.submission, verified: { files: 2 } })
+    // macOS tmpdir is a /var -> /private/var link; admission reports the real path.
+    expect(result).toMatchObject({ ok: true, path: realpathSync(f.submission), verified: { files: 2 } })
   })
   it('rejects a readable snapshot that records a different candidate', async () => {
     const f = await boundRun(sample, { git_head: 'd'.repeat(40) })
