@@ -3,7 +3,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/types
  */
 
-import type { RECEIPT_RETRYABLE, RECEIPT_NOT_INSERTED, RECEIPT_CONFIRMED } from './receipt-retry.ts'
+import type { RECEIPT_RETRYABLE, RECEIPT_NOT_INSERTED, RECEIPT_CONFIRMED, RECEIPT_PRECONNECT_REFUSED } from './receipt-retry.ts'
 
 /** One peer node's agent card — the decentralized discovery record. */
 export interface A2aPeerCard {
@@ -160,6 +160,7 @@ export interface A2aRouteError {
   readonly acceptance?:'unknown'
   readonly [RECEIPT_RETRYABLE]?:true
   readonly [RECEIPT_NOT_INSERTED]?:true
+  readonly [RECEIPT_PRECONNECT_REFUSED]?:true
   /** A forwarded receipt never promises another receipt, including uncertain waits. */
   readonly receipt?: 'none'
   readonly ok: false

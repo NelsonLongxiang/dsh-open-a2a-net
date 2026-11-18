@@ -73,7 +73,8 @@ describe('ledger errors stay inside the real host event boundary',()=>{
    const key=createPrivateKey(readFileSync(join(b.home,'a2a/node-key.pem'),'utf8')),target=au+'/a2a/direct'
    const receipt=async(transportId:string)=>{const body=JSON.stringify({team:'alpha/01234567',caller_session:'beta/01234567',task_id:transportId,message:'[A2A receipt] task '+task+' completed',wait:false});return fetch(target,{method:'POST',signal:AbortSignal.timeout(3000),headers:{'Content-Type':'application/json',...signOriginClaim({url:target,method:'POST',body},{caller:'beta',callerUrl:bu,privateKey:key,unbound:false,now:Date.now()})},body})}
    denied.prefix=file+'.';denied.remaining=1
-   const failed=await receipt('disk-sender-receipt-1');expect(failed.status).toBe(503);expect(await failed.json()).toMatchObject({delivered:false,error:expect.stringContaining('settlement was not committed')})
+   const failed=await receipt('disk-sender-receipt-1');expect(failed.status).toBe(503);// #708 R2: the receipt is inserted before it settles, so the failed ledger write now refuses the insertion itself: not-inserted, retryable on the same id.
+   expect(await failed.json()).toMatchObject({delivered:false,receipt_delivery:'not-inserted',task_status:'TASK_STATE_FAILED'})
    expect(readFileSync(file)).toEqual(before);expect((await state(au)).tasks.some((r:any)=>r.taskId===task)).toBe(true);expect(a.steered).toHaveLength(0)
    expect((await state(au)).ledgerPersistence).toMatchObject({ok:false,lastError:{code:'EACCES'}});expect(escaped).toEqual([])
    denied.remaining=0;const good=await receipt('disk-sender-receipt-2');expect(good.status).toBe(200);expect((await good.json()).delivered).toBe(true)

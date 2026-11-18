@@ -8,7 +8,7 @@ import {ACCEPTANCE_UNKNOWN_NOTE,ACCEPTANCE_INSERTED_NOTE} from './followup-admis
  */
 
 import { ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
-import { RECEIPT_RETRYABLE, RECEIPT_NOT_INSERTED, RECEIPT_CONFIRMED } from './receipt-retry.ts'
+import { RECEIPT_RETRYABLE, RECEIPT_NOT_INSERTED, RECEIPT_CONFIRMED, RECEIPT_PRECONNECT_REFUSED } from './receipt-retry.ts'
 import { verifyCard, type CardRejection } from './card.ts'
 import { MAX_ROUTE_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
 import type { A2aPeerCard, A2aRouteResult } from './types.ts'
@@ -335,6 +335,7 @@ export class A2aClient {
       const failure: Extract<A2aRouteResult, { ok: false }> = {
         ...(transient?{[RECEIPT_RETRYABLE]:true as const}:{}),
         ...(notInserted&&status===503?{[RECEIPT_NOT_INSERTED]:true as const}:{}),
+        ...(status===undefined&&preconnectRefusal?{[RECEIPT_PRECONNECT_REFUSED]:true as const}:{}),
         ...(uncertain&&taskIdFromCaller!==undefined?{acceptance:'unknown' as const,task_id:taskIdFromCaller}:{}),
         ok: false,
         error: `direct route to peer failed: ${String(error)}`,

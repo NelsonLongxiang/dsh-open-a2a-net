@@ -80,6 +80,8 @@ export interface WireDeps {
   readonly superagentIntake: (team: string) => boolean
   /** A receipt for a request a person sent from the team tab as `team`: kept for the tab, never steered into the session. */
   readonly sidebarReceipt?: (team: string, message: string, caller: string, settled: boolean) => boolean
+  /** Whether the team tab would take this receipt (no side effect). */
+  readonly sidebarClaims?: (team: string, message: string) => boolean
   /** Design v5 (D2): the team mailbox a route to the bound team canvas lands in; undefined for any other target. */
   readonly teamMailboxOf?: (team: string) => string | undefined
   /** Design v5 (D2): why a route straight to the team identity's handle is refused, if it is. */
@@ -880,8 +882,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // The response can race a fast peer receipt. Wait for this exact forwarding birth before judging or acknowledging it.
           await waitForForwardBirth(message)
           let refusedSettlement: SettlementRefusal | undefined
+          const settler = { caller, proof: callerProof, ...settlerClaimFields(claim, originOf), ingress: 'wire' as const }
+          // #708 review R2: a receipt for a session settles only once it is in that session, as the CLI mailbox path does.
+          // A definite refusal to insert then leaves the caller's task owed and the sender's retained receipt retryable,
+          // never ended on this side while the sender's copy is blocked for good.
+          const deferSessionReceipt = noWait && parseReceipt(message) !== null && cliDeposits.get(mailTeam) === undefined && d.sidebarClaims?.(mailTeam, message) !== true
           try {
-            if(parseReceipt(message)===null||cliDeposits.get(mailTeam)===undefined)refusedSettlement = settleAndAnnounce(message, { caller, proof: callerProof, ...settlerClaimFields(claim, originOf), ingress: 'wire' })
+            if(!deferSessionReceipt&&(parseReceipt(message)===null||cliDeposits.get(mailTeam)===undefined))refusedSettlement = settleAndAnnounce(message, settler)
           } catch {
             // A failed receipt settlement did not deliver: keep its fixed transport identity retryable.
             if(parseReceipt(message)!==null)idempotencyStore.releaseUncompleted(taskId,idemFingerprint)
@@ -893,6 +900,25 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           }
           // #139 (design §4.4): every answer this delivery gets carries the refusal.
           if (refusedSettlement !== undefined) withSettlementField(res, refusedSettlement)
+          let deferredSettled = false
+          /** #708 R2: settle a deferred session receipt; false when it already answered (the ledger write failed). */
+          const settleDeferred = (inserted: boolean): boolean => {
+            if (!deferSessionReceipt || deferredSettled) return true
+            deferredSettled = true
+            try {
+              refusedSettlement = settleAndAnnounce(message, settler)
+              if (refusedSettlement !== undefined) withSettlementField(res, refusedSettlement)
+              return true
+            } catch {
+              if (!inserted) idempotencyStore.releaseUncompleted(taskId, idemFingerprint)
+              const payload = JSON.stringify(inserted
+                ? { error: 'receipt is in the session but local settlement commit failed; reconcile original transport', code: -32011, task_id: taskId, task_status: 'TASK_STATE_FAILED', acceptance: 'unknown' }
+                : { error: 'task ledger write failed; settlement was not committed', code: -32000, task_id: taskId, task_status: 'TASK_STATE_FAILED', delivered: false, receipt_delivery: 'not-inserted' })
+              res.writeHead(503, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+              res.end(payload)
+              return false
+            }
+          }
           // A request sent from the team tab is the person's: its receipt settles above and goes to the tab, not to the
           // session it went out as (owner ruling 2026-11-13: a sidebar send must not turn into a new message that wakes it).
           if (cliDeposits.get(mailTeam)===undefined&&d.sidebarReceipt?.(mailTeam, message, caller, refusedSettlement === undefined) === true) {
@@ -973,6 +999,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // quiet window around it.
           d.touchWakeDemand()
           const forwardMiss = async (original: string): Promise<void> => {
+            if (!settleDeferred(false)) return
             // #282 S2 review P1: forward with the id the caller sent — our own `@fp8` must find no other owner.
             const result = await d.forwardDirect({ team: typeof body.team === 'string' && ownerQualified.owner !== undefined ? body.team : team, message, caller, taskId, contextId, noWait,
               auth: buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget: caller, receivedAt: admittedAt.at }),
@@ -1000,6 +1027,14 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             // caller is told an undelivered message already landed.
             const refuseNoWait = (error: string, activity = true): void => {
               if (activity) recordActivity('in', team, caller, false)
+              if (deferSessionReceipt && !deferredSettled) {
+                // #708 R2: nothing was inserted and nothing settled — the sender may resend this exact transport later.
+                idempotencyStore.releaseUncompleted(taskId, idemFingerprint)
+                const payload = JSON.stringify({ error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED', delivered: false, receipt_delivery: 'not-inserted' })
+                res.writeHead(503, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+                res.end(payload)
+                return
+              }
               idempotencyStore.recordOutcome(taskId, { status: 'failed', error })
               const payload = JSON.stringify({ error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED' })
               res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
@@ -1045,6 +1080,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 d.keepTaskBody?.(taskId, target, from, message)
                 const acceptance=followupRelay(target, `${directHeader(from)}\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from, undefined, taskId, claim.ok?claim.card.publicKey:undefined, !deliveredReceipt)
                 steered = true
+                if (deliveredReceipt && !settleDeferred(true)) return
                 if(deliveredReceipt&&acceptance!=='inserted'&&['enqueued','claimed'].includes(taskLedger.deliveryFor(taskId)?.state??''))idempotencyStore.recordOutcome(taskId,{status:'completed',reply:'receipt delivered',receiptDelivery:refusedSettlement===undefined?'delivered':'refused'})
                 recordActivity('in', team, caller, true)
                 // v0.5.23 (async-stall): "delivered" only proves the steer call

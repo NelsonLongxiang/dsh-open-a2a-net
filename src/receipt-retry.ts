@@ -12,6 +12,8 @@ export function receiptRetryWait(ctx:Pick<Context,'effect'>,ms:number):Promise<b
 export const RECEIPT_RETRYABLE:unique symbol=Symbol('a2a.receipt-retryable')
 export const RECEIPT_NOT_INSERTED:unique symbol=Symbol('a2a.receipt-not-inserted')
 export const RECEIPT_CONFIRMED:unique symbol=Symbol('a2a.receipt-confirmed')
+/** #708 R1: the connection was refused before it opened (no request bytes left this host), so nothing was inserted. */
+export const RECEIPT_PRECONNECT_REFUSED:unique symbol=Symbol('a2a.receipt-preconnect-refused')
 export const RECEIPT_RETRY_DELAYS_MS=[1000,2000,4000,8000,16000,30000] as const
 export class ReceiptDeliveryError extends Error {constructor(message:string,readonly transient:boolean){super(message)}}
 export function transientReceiptFailure(error:unknown):boolean{return error instanceof ReceiptDeliveryError&&error.transient}

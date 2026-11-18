@@ -66,7 +66,7 @@ import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
 import {FollowupAcceptanceUnknown,ACCEPTANCE_UNKNOWN_NOTE,ACCEPTANCE_INSERTED_NOTE} from './followup-admission.ts'
 import { ReceiptOutbox, receiptBirth, receiptTransportId, receiptPayloadHash, type ReceiptOutboxRecord, type ReceiptLane, type ReceiptAttemptResult } from './receipt-outbox.ts'
-import { receiptFailure, readReceiptReplay, RECEIPT_RETRYABLE, RECEIPT_NOT_INSERTED, RECEIPT_CONFIRMED } from './receipt-retry.ts'
+import { receiptFailure, readReceiptReplay, RECEIPT_RETRYABLE, RECEIPT_NOT_INSERTED, RECEIPT_CONFIRMED, RECEIPT_PRECONNECT_REFUSED } from './receipt-retry.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard } from './flood-guard.ts'
@@ -2695,6 +2695,8 @@ export function apply(ctx: Context, config: Config): void {
         return prior?.found&&prior.status==='completed'&&prior.receiptDelivery==='delivered'?{confirmed:true}:fail('RECEIPT_REPLAY_UNCONFIRMED',true,true)
       }
       if(!result.ok&&result[RECEIPT_NOT_INSERTED]===true)return fail('RECEIPT_NOT_INSERTED',true)
+      // #708 R1: a connection refused before it opened inserted nothing; the same frozen transport is resent when due, never queried forever.
+      if(!result.ok&&result[RECEIPT_PRECONNECT_REFUSED]===true&&result.acceptance!=='unknown')return fail('RECEIPT_PRECONNECT_REFUSED',true)
       if(result.ok&&result.settlementRefused===true)return fail('RECEIPT_SETTLEMENT_REFUSED',false)
       if(result.ok&&(result[RECEIPT_CONFIRMED]!==true||result.acceptance==='inserted'||result.receiverBookkeeping==='failed'))return fail('RECEIPT_ACCEPTANCE_UNKNOWN',true,true)
       if(result.ok)return result.task_id!==record.transportId?fail('RECEIPT_TRANSPORT_ID_MISMATCH',false,true):result.settlementRefused===true?fail('RECEIPT_SETTLEMENT_REFUSED',false):{confirmed:true}
@@ -3458,6 +3460,7 @@ export function apply(ctx: Context, config: Config): void {
       superagentInbound: team => superagentRouterRefusal(undefined, team),
       superagentIntake: team => superagentTeams?.all().some(host => host.a2aAddress === team) === true,
       sidebarReceipt: (team, message, caller, settled) => sidebarSends.take(team, message, caller, settled),
+      sidebarClaims: (team, message) => sidebarSends.claims(team, message),
       teamMailboxOf: team => teamMailboxOf(team),
       teamAddressRefusal: (team, message) => teamAddressRefusal(team, message),
       canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
