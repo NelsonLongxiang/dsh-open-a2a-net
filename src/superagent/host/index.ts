@@ -200,7 +200,7 @@ export class SuperagentHost {
       logger: d.logger,
     })
     this.receipts = new A2aReceipts({ store: this.store, a2a: this.a2a, a2aOn: () => this.settingsValue.sources.a2a, now: () => this.now(), seatOf: ticketId => this.seatOf(ticketId),
-      parentOf: ticketId => this.splits.parentOf(ticketId), splitView: ticketId => this.splitView(ticketId), senderHold: triggerId => this.senderHold(triggerId), logger: d.logger })
+      parentOf: ticketId => this.splits.parentOf(ticketId), splitView: ticketId => this.splitView(ticketId), senderHold: triggerId => this.senderHold(triggerId), ...(d.receiptLedger !== undefined ? { ledger: d.receiptLedger } : {}), logger: d.logger })
     this.prs = new PrFollower({
       path: join(dir, 'pr-follow.json'), tickets: () => this.store.tickets.list(), engine: () => this.engine, gh: d.gh ?? defaultGh,
       allowed: () => this.settingsValue.allowed.github, paused: () => this.settingsValue.paused, logger: d.logger,
