@@ -23,7 +23,7 @@
 | 无 TLS | 节点只讲 HTTP。`apiKey` 放在 `X-API-Key` 头里明文传输，在公网可被截获。所有互联主机共用同一把 key，泄露一次就是全网。 |
 | 无失败限流 | key 比对是常数时间，但连续猜错不会被限速，也不会被锁定。 |
 | 信封可重放 | [#137](https://github.com/NelsonLongxiang/dsh-open-a2a-net/issues/137)：OriginClaim 无状态信封在 ±5 分钟内可重放。 |
-| 过渡窗口默认开 | `originClaimWindow`、`originClaimUnboundWindow` 默认 `true`，无签名的旧式投递仍会进入调用方门。 |
+| 未绑定窗口默认开 | `originClaimUnboundWindow` 默认 `true`，只带旧版 v1 签名（不绑定收件地址）的投递仍被接受；`originClaimWindow` 自 #64 第一步起默认 `false`，无签名投递直接拒绝。 |
 | 名片公开 | `/.well-known/agent-card.json` 不需要 key，内容含会话名、zone、公钥、版本和 `peers`。`peers` 列出你其他主机的地址，等于公开内网拓扑。 |
 | 未审计 | 0.6.x，未经独立安全审计；`settlementAuth` 默认 `observe`。 |
 | 反代泄露 key（≤ 0.6.39） | 本机回环访问时，工作台页面会把 apiKey 写进 HTML。同机反代（Caddy、nginx）以 `127.0.0.1` 连接节点，每个公网请求都会被当成本机，**任何人打开工作台都能拿到 key**。0.6.40 起，带 `X-Forwarded-For`、`Forwarded` 或 `X-Real-IP` 的请求不再享受本机信任；0.6.39 及更早版本要按下面的做法绕开。 |
@@ -35,7 +35,7 @@
 1. 前面放 TLS 反向代理，由代理对外，节点端口不直接暴露。具体做法见下面的“公网 HTTPS 前置”。
 2. 用强随机、专用的 `apiKey`（例如 `openssl rand -hex 32`），不要复用别处的密钥。
 3. 在代理层加来源 IP 白名单和请求限流。
-4. `node.json` 里设 `"originClaimWindow": false`，拒绝无签名投递。
+4. 确认 `node.json` 没有把 `originClaimWindow` 设成 `true`（默认已是 `false`，拒绝无签名投递）。
 5. 跟踪 #137，修复前认清重放风险。
 6. 对外节点用**专用 key**，不要与内网舰队共用。互联要求同一把 key，所以对外节点暂不与内网 DSH 宿主互联，或单独起一个对外节点。
 

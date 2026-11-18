@@ -257,7 +257,7 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `referralLearning` | `true` | `false` freezes the tracked set to the configured seeds: referrals are neither learned nor offered. |
 | `referralTeamResolution` | `false` | gh#8: team names resolve over seeds + delegates only; `true` restores the legacy whole-store basis (referral-learned peers included). |
 | `exposureExcerpt` | `'full'` | How much of a session's activity excerpt the card publishes: `full`, `masked` (shape-only prefix) or `off`. Titles and handles stay. |
-| `originClaimWindow` | `true` | OriginClaim transition window: deliveries without an envelope still walk the caller gate (counted as `legacyInbound`); `false` rejects them like failed signatures. |
+| `originClaimWindow` | `false` | OriginClaim transition window, closed by default since #64 step 1: a delivery without an envelope is rejected like a failed signature. `true` reopens it — such deliveries walk the caller gate again, counted as `legacyInbound`. |
 | `originClaimUrl` | `''` | Override for the envelope's `callerUrl` (pocket-tunneled hosts); `''` derives it. |
 | `originClaimUnboundWindow` | `true` | OriginClaim audience-binding window: also sign and accept the legacy envelope that names no audience (accepted ones counted as `unboundInbound`; those whose bound form missed here also as `boundMissInbound`); `false` signs and accepts the audience-bound form only. |
 | `canvasLegacyBareMembers` | `true` | #335 migration window: unsuspended historical bare canvas members retain legacy inference; suspended slots never route or authorize. Close only by owner decision after migration and observation. |
