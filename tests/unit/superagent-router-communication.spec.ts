@@ -31,9 +31,9 @@ it('ships generated inline router text without changing preset ids or compositio
   expect(presets.map(row => row.config!.id)).toEqual(['superagent-router', 'superagent-member', 'superagent-observer', 'superagent-builder'])
   expect(prompt).toBe(presetPrompt('router'))
   const expectedComposition = {
-    'superagent-router': 'ad75e44b5141e0d73f84516495e3dda385a554dc40ae28b27d0ac8cf34ed10a6',
-    'superagent-member': 'e2fcd4dfb9ef22e5afc14b73a7288df0bad6e74d3752f28d4ab5b9fea97dd3a7',
-    'superagent-observer': 'e2fcd4dfb9ef22e5afc14b73a7288df0bad6e74d3752f28d4ab5b9fea97dd3a7',
+    'superagent-router': '0b7ca64fa013e3e8295f5bb7c963d25b757e7a3abbff26828dd679f0cde1d814',
+    'superagent-member': '1477a0c3e1638c155175563b01ce0a0b31fe33b8afb39404a27a3abea984d87e',
+    'superagent-observer': '1477a0c3e1638c155175563b01ce0a0b31fe33b8afb39404a27a3abea984d87e',
     'superagent-builder': '04658b48dfdf35e0c2dea710a6f58e4efca5f0ffaca3dfa5c566dfab76175390',
   }
   for (const row of presets) {
@@ -88,13 +88,15 @@ describe('generated router communication contract (not a model-behaviour verdict
     expect(section).toBeDefined()
     for (const clause of clauses) expect(section).toContain(clause)
   })
-  it('separates receipt facts and forbids role/tool bypasses without granting document tools', () => {
-    expect(prompt).toContain('do not assume read or skill is available')
+  it('separates receipt facts and forbids role/tool bypasses; the router reads files but writes and runs nothing', () => {
+    expect(prompt).toContain('you do not need read or skill to fetch them')
+    expect(prompt).toContain('you never write files or run commands')
     expect(prompt).toContain('delivered or acknowledged is not completed')
     expect(prompt).toContain('not permission to switch channels, use shell/HTTP or another session')
     expect(prompt).toContain('Do not use a2a_route or other sessions')
-    for (const name of ['read', 'skill', 'a2a_route', 'a2a_decision_decide', 'bash']) expect(roleToolRefusal('router', name)).toBeDefined()
-    for (const name of ['superagent_route', 'superagent_assign', 'superagent_read', 'a2a_outbound_request']) expect(roleToolRefusal('router', name)).toBeUndefined()
+    for (const name of ['write', 'edit', 'a2a_route', 'a2a_decision_decide', 'bash']) expect(roleToolRefusal('router', name)).toBeDefined()
+    // Owner 2026-11-18: reading files and loading a skill help the router see where a request fits.
+    for (const name of ['read', 'glob', 'grep', 'skill', 'superagent_route', 'superagent_assign', 'superagent_read', 'a2a_outbound_request']) expect(roleToolRefusal('router', name)).toBeUndefined()
   })
   it('renders the model variable and pins the actual model-facing text', () => {
     const rendered = renderPrompt({ sections: [{ name: 'a2a:router', text: prompt }], contexts: [], tools: [], variables: { model: 'test-model' } })
