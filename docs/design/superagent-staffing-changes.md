@@ -14,7 +14,7 @@ Implementation check (2026-11-18, next/0.8 `44907c00`): S1a is built (#666, `src
 
 ## Context: what the node already has
 
-- **Canvas teams** (design v5). A superagent team is a canvas team bound to a router. Every other session on the canvas is a member with one worker slot. Members can sit on another DSH instance, under another system user (`docs/ops/superagent-team-user.md`), pinned by card key.
+- **Canvas teams** (design v5). A superagent team is a canvas team bound to a router. Every other session on the canvas is a member with one worker slot. Members can sit on another DSH instance, under another system user (`docs/archive/ops/superagent-team-user.md`), pinned by card key.
 - **Role presets.** `superagent-router`, `superagent-member` and `superagent-observer` (in `cordis.patch.yml`) fix what each role may do. Tool limits, credential audit (#612) and the outbound rules follow the preset, not the session's text.
 - **Node identities** (`docs/design/node-identity.md`, `src/node-store.ts`). A node record is long-lived and human-named, its name is never reused, and it carries a session's workplace: checkout (`cwd`), agent preset and model. A session can carry a node, and a new session can be started for it. This is the natural place for a stable seat and for job templates.
 - **Roster** (#606, `docs/design/superagent-market-progress-roster.md` P3). The node sends a full snapshot of its seats to peers that declare `teamRoster`, every 5 minutes and 30 s after a change.

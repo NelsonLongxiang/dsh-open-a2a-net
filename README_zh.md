@@ -241,7 +241,6 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | `POST /__dsh_a2a/join` · `/leave` | 加入或退出一个会话节点。 |
 | `/__dsh_a2a/canvas` · `/canvas-layout` | 画布队伍（create/remove/add-member/remove-member，另有属主的 confirm-member / restore-suspended / delete-suspended / cli-home-options）与规划板布局。 |
 | `POST /__dsh_a2a/roster-op` | 属主在规划板创建（至少两个已加入的本机会话）、加减成员、解散 roster 队（`op`：create / add-member / remove-member / dissolve），并同步维护 `teamJoinAllowlist` 里的精确名；不能接纳远端或未加入的会话。 |
-| `/__dsh_a2a/groups` | 手工会话分组——自 0.6.6 起弃用（被画布队伍取代），为旧面板保留。 |
 | `POST /__dsh_a2a/dispatch` | 工作台快速派单到一个团队。 |
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | 从调用方一侧结清一个欠账任务（cancel 还会尽力向目标转达停止通知：本机目标直接 steer，远端目标经 wire 投递，卡片声明 `queuedTaskCancellation` 时另带 `cancel_task_id` 撤回队列中的原任务；回复里带 `steered`、`removed`）；该行落入 `archived[]`。 |
 | `GET`/`POST /__dsh_a2a/superagent` | 未配 `superagent: false` 时：引擎状态（线程、决定、回复、带阶段的工单、绑定的画布及绑定问题），以及属主操作 `settings`（绑定 `canvas` 与 `router`） · `sync-github-allowed`（把仓库有推送权限的协作者加入 `allowed.github`，需要界面登录；`settings` 里的 `sources.github` 与 `github: { repos, intake }` 让 GitHub Issue 成为需求来源，同样需要界面登录）· `request`（工作台 Source）· `serve`（按画布 id 为其他主机的团队服务）· `stop` · `retry`。 |

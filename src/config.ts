@@ -72,7 +72,8 @@ export interface Config {
   readonly delegates: DelegateConfig[]
   /**
    * gh#9+gh#10 OriginClaim window (docs/protocol/delivery-origin-auth.md §4):
-   * while true (default), a delivery/log request with NO envelope still
+   * closed by default since #64 step 1 (false). While an operator opens it
+   * (true), a delivery/log request with NO envelope still
    * walks N3 admission and increments the legacyInbound warn metric; when
    * the operator closes it (post fleet flip), an absent envelope rejects
    * `untrusted-origin` — same code as a failed signature (M1: a

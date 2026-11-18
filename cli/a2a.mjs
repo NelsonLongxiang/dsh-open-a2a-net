@@ -334,7 +334,7 @@ async function state(optional = false) {
   return await replyOf(res)
 }
 
-// ── the plugin's ten tools, one line each (mirrors src registration) ─────
+// ── the plugin's core a2a tools, one line each (mirrors src registration; the team-only superagent tools are not mirrored) ─────
 const TOOL_CATALOG = [
   ['a2a_whoami', '身份自省：节点 id、joined 状态、可路由句柄、roster/canvas 队、allowlist 效应'],
   ['a2a_team_join', '声明会话节点为某可路由队成员（allowlist 精确名门控；人建队而非模型自组）'],

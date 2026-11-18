@@ -57,7 +57,7 @@ export interface TeamSettings {
   readonly remoteMembers: readonly RemoteMember[]
   /**
    * This host serving another team host: that host's base URL and pinned key, and the local sessions that work for it.
-   * Only that key may assign them work. Written only by the `serve-team` control action.
+   * Only that key may assign them work. Written only by the `serve` control action.
    */
   readonly serves?: { readonly url: string; readonly key: string; readonly members: readonly string[]; /** Design v5: the team's canvas id, `<zone>/canvas/<name>@<fp8>`. */ readonly team?: string }
   /**
@@ -357,7 +357,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
     rules = parsed
   }
   if ('members' in r || 'remoteMembers' in r) return { ok: false, error: 'the team is a canvas team: add or remove members on the canvas (planning view 建队), then bind it here with canvas and router' }
-  if ('serves' in r) return { ok: false, error: 'serving a team is set by its own action (serve-team), which pins the peer key' }
+  if ('serves' in r) return { ok: false, error: 'serving a team is set by its own action (serve), which pins the peer key' }
   // The pool is the bound canvas's, which the host derives; a settings write never names members.
   const members = current.members
   // A member's repository: named explicitly here, or kept from the current settings while it is still a member.

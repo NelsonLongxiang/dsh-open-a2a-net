@@ -35,7 +35,6 @@ export function resolveCallerLabel(input: {
   return input.sessionLabel
 }
 import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
-import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef, legacyBareMember } from './canvas-store.ts'
 import { childRegistration, linkRootRequester } from './canvas-root.ts'
 import { inactiveContextError } from './context-live.ts'
@@ -687,11 +686,6 @@ export function apply(ctx: Context, config: Config): void {
    */
   const lanIp = selectLanIPv4(networkInterfaces())
 
-  // Session groups: user-named buckets for the panel's session listing,
-  // persisted beside the join intents so they survive restarts.
-  // Deprecated as of 0.6.6 — canvas teams are the grouping face now; this
-  // store only stays readable for old panels.
-  const groupStore = new GroupStore(join(home, 'a2a', 'groups.json'))
   // Canvas teams: user-composed multi-member routing groups. A session node
   // may sit in many teams; routing to <team>/canvas/<name> resolves the
   // first live member or wakes the first cold one (member order = priority).
@@ -1838,7 +1832,7 @@ export function apply(ctx: Context, config: Config): void {
       registerAdminFaces(webServer, {
         reminderDiagnostics:()=>({...idleReminders.diagnostics}),
         nudgeEscalations:()=>nudgeObservations.snapshot(),
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
+        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
         sessionPresetOf,

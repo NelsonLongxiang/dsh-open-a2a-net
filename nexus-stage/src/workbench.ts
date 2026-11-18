@@ -12,7 +12,8 @@
  * - Pure DOM, no WebGL, no three, no framework: every row is a textContent
  *   write, so attacker-shaped labels stay text.
  * - The workbench never fabricates capability: dead-letter rows act through
- *   the real abandon seam (deps), dispatch only DRAFTS a pasteable brief.
+ *   the real abandon seam (deps); quick dispatch POSTs through the host's
+ *   own /__dsh_a2a/dispatch face (since 0.6.9), never a fabricated route.
  * - update() re-renders data regions wholesale but never touches the
  *   dispatch textarea (user input survives polls); rail collapse, section
  *   state, and the active mode are view state kept across updates.
@@ -111,8 +112,6 @@ export interface SessionRow {
   readonly teams?: readonly string[]
   /** Canvas teams this session is a member of (0.6.6 roster annotation). */
   readonly canvasTeams?: readonly string[]
-  /** @deprecated 0.6.6 — display-only taxonomy superseded by canvas teams. */
-  readonly group?: string
 }
 
 /** One remote team row from /state `remote`. */

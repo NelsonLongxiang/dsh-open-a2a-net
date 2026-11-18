@@ -135,6 +135,10 @@ describe('asking by name (T3)', () => {
     expect(card!.reason).toContain('想看有哪些团队')
     expect(await ask('session-m', { name: 'a2a_route', why: 'x' })).toMatchObject({ ok: false, code: 'not-grantable' })
     expect(await ask('session-m', { name: 'bash', why: 'x' })).toMatchObject({ ok: true, granted: true })
+    // Redundancy review 2026-11-18: a member never raises a card — a grant would not apply to it (its guard reads no grants).
+    const before = m.h.decisionCards().filter(c => c.source === 'tool').length
+    expect(await ask('session-m', { name: 'send_message', why: 'x' })).toMatchObject({ ok: false, code: 'not-grantable' })
+    expect(m.h.decisionCards().filter(c => c.source === 'tool').length).toBe(before)
     expect(await ask('session-x', { name: 'a2a_teams', why: 'x' })).toMatchObject({ ok: false, code: 'not-team' })
     await m.h.stop()
   })
