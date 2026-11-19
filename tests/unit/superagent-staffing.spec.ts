@@ -11,7 +11,7 @@ import { StaffingExecutor, type StaffingChange, type StaffingDeps, type Staffing
 
 const R = 'session-11111111-aaaa', M = 'session-22222222-bbbb', M2 = 'session-33333333-cccc'
 
-function world(options: { failAdd?: string; failUndo?: boolean } = {}) {
+function world(options: { failAdd?: string; failUndo?: boolean; busy?: string } = {}) {
   // eslint-disable-next-line prefer-const
   const calls: string[] = []
   const canvases = new Map<string, string[]>()
@@ -26,6 +26,7 @@ function world(options: { failAdd?: string; failUndo?: boolean } = {}) {
       get settings() { return { ...(t.canvas !== undefined ? { canvas: t.canvas } : {}), ...(t.router !== undefined ? { router: t.router } : {}), members: [], rules: t.rules, dispatch: t.dispatch, profiles: t.profiles } },
       saveSettings: (raw) => { const r = raw as Record<string, unknown>; calls.push(`save:${id}:${Object.keys(r).join(',')}`); if ('rules' in r) t.rules = r.rules as never; if ('dispatch' in r) t.dispatch = r.dispatch as string; if ('profiles' in r) t.profiles = r.profiles as never; return { ok: true } },
       memberOfSeat: seat => t.seats[seat],
+      ticketOf: session => options.busy === session ? 'ticket-busy' : undefined,
       proposeStaffingCard: (change, question, _reason, level) => { t.cards.push({ change, question, level }); return `card-${String(t.cards.length)}` },
     }
   }
@@ -87,7 +88,6 @@ describe('what a change may not carry', () => {
   it('refuses W3 fields, retiring, templates and an unknown team', async () => {
     const w = world()
     expect(await w.x.submit({ id: 'a', source: 'owner-local', by: {}, ops: [{ op: 'member.add', params: { team: 't-old', session: M, tools: ['bash'] } }] })).toMatchObject({ ok: false, code: 'not-allowed' })
-    expect(await w.x.submit({ id: 'b', source: 'owner-local', by: {}, ops: [{ op: 'member.retire', params: { team: 't-old', seatId: 'seat-0000abcd' } }] })).toMatchObject({ ok: false, code: 'off' })
     expect(await w.x.submit({ id: 'c', source: 'market:market/0123456789abcdef', by: {}, ops: [{ op: 'member.retire', params: { team: 't-old', seatId: 'seat-0000abcd' } }] })).toMatchObject({ ok: false, code: 'not-yet' })
     expect(await w.x.submit({ id: 'd', source: 'owner-local', by: {}, ops: [{ op: 'member.add', params: { team: 't-old', session: 'template:writer' } }] })).toMatchObject({ ok: false, code: 'invalid' })
     expect(await w.x.submit({ id: 'e', source: 'owner-local', by: {}, ops: [{ op: 'member.add', params: { team: 't-none', session: M } }] })).toMatchObject({ ok: false, code: 'unknown-team' })
@@ -241,5 +241,33 @@ describe('BS2: the blueprint tools and the D10 gate', () => {
     const fresh = await tools({ id: 'm-2', atMs: Date.now() + 60_000, text: '可以，照这个建' })
     const p2 = await fresh.call('superagent_blueprint_propose', { summary: 's', ops: blueprint().ops })
     expect(await fresh.call('superagent_blueprint_apply', { id: p2.id })).toMatchObject({ ok: true, state: 'done' })
+  })
+})
+
+describe('member.retire: the team builder takes a member off a team (owner ruling 2026-11-18)', () => {
+  const retire = (id: string, seatId = 'seat-0000abcd'): StaffingChange => ({ id, source: 'owner-local', by: { session: 'session-builder-0000' }, summary: '请成员离开', ops: [{ op: 'member.retire', params: { team: 't-old', seatId } }] })
+  it('waits for the owner and the team card, then takes the member off the canvas', async () => {
+    const w = world()
+    expect(await w.x.submit(retire('r-1'))).toMatchObject({ ok: true, entry: { state: 'awaiting' } })
+    expect(w.teams.get('t-old')!.cards).toHaveLength(1)
+    expect(w.calls).toEqual([])
+    const agreed = await w.x.agree('r-1', 'test')
+    // The existing team's card is still open: agreeing alone does not run it.
+    expect(agreed.ok).toBe(true)
+    await w.x.cardDecided('r-1', 't-old', true)
+    expect(w.x.get('r-1')!.state).toBe('done')
+    expect(w.calls).toContain(`member-:old:${M2}`)
+    expect(w.canvases.get('old')).not.toContain(M2)
+  })
+  it('refuses the router, a seat not on the team, and a member working on a ticket; a market source cannot retire', async () => {
+    const w = world({ busy: M2 })
+    w.teams.get('t-old')!.seats['seat-router'] = 'session-99999999-zzzz'
+    const run = async (id: string, seatId: string) => { await w.x.submit(retire(id, seatId)); await w.x.agree(id, 'test'); await w.x.cardDecided(id, 't-old', true); return w.x.get(id)! }
+    for (const [id, seat] of [['r-router', 'seat-router'], ['r-gone', 'seat-ffff0000'], ['r-busy', 'seat-0000abcd']] as const) {
+      const entry = await run(id, seat)
+      expect(entry.state, id).not.toBe('done')
+    }
+    expect(w.calls.filter(c => c.startsWith('member-:'))).toEqual([])
+    expect(await w.x.submit({ id: 'mk', source: 'market:market/0123456789abcdef', by: {}, ops: [{ op: 'member.retire', params: { team: 't-old', seatId: 'seat-0000abcd' } }] })).toMatchObject({ ok: false, code: 'not-yet' })
   })
 })

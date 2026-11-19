@@ -21,20 +21,19 @@ function fixture() {
 }
 
 describe('#199 owner roster operation', () => {
-  it('creates an exact name and two declarations; joins/leaves and dissolution share teams.json and audit', () => {
+  it('roster teams are retired (owner ruling 2026-11-18): create and add-member are refused; an existing roster shrinks and dissolves', () => {
     const m = fixture()
-    expect(rosterOp(m.deps, { op: 'create', name: '生产服务组', ids: ['session-a', 'session-b'] })).toEqual({ ok: true, team: 'dsh/生产服务组', members: ['session-a', 'session-b'] })
-    expect(m.allowlist()).toEqual(['dsh/生产服务组'])
-    expect(readFileSync(join(m.home, 'cordis.patch.yml'), 'utf8')).toContain('dsh/生产服务组')
-    expect(new TeamMembershipStore(join(m.home, 'a2a', 'teams.json')).membersOf('dsh/生产服务组')).toEqual(['session-a', 'session-b'])
-    m.joined.add('session-c')
-    expect(rosterOp(m.deps, { op: 'add-member', name: '生产服务组', id: 'session-c' })).toMatchObject({ ok: true, members: ['session-a', 'session-b', 'session-c'] })
+    expect(rosterOp(m.deps, { op: 'create', name: '生产服务组', ids: ['session-a', 'session-b'] })).toMatchObject({ ok: false, error: expect.stringContaining('retired') })
+    expect(m.store.list()).toEqual([])
+    // A roster declared before the retirement (as an old host has it on disk).
+    m.store.add('session-a', 'dsh/生产服务组'); m.store.add('session-b', 'dsh/生产服务组'); m.store.add('session-c', 'dsh/生产服务组')
+    m.deps.setAllowlist(['dsh/生产服务组'])
+    m.joined.add('session-d')
+    expect(rosterOp(m.deps, { op: 'add-member', name: '生产服务组', id: 'session-d' })).toMatchObject({ ok: false, error: expect.stringContaining('retired') })
     expect(rosterOp(m.deps, { op: 'remove-member', name: '生产服务组', id: 'session-b' })).toMatchObject({ ok: true, members: ['session-a', 'session-c'] })
     expect(rosterOp(m.deps, { op: 'dissolve', name: '生产服务组' })).toMatchObject({ ok: true, members: [] })
     expect(m.store.membersOf('dsh/生产服务组')).toEqual([])
     expect(m.allowlist()).toEqual([])
-    expect(readFileSync(join(m.home, 'cordis.patch.yml'), 'utf8')).not.toContain('dsh/生产服务组')
-    expect(m.audit.every(row => row.ok)).toBe(true)
     expect(m.audit.some(row => row.id === 'human:owner' && row.reason.includes('dissolved'))).toBe(true)
   })
 
@@ -60,7 +59,7 @@ describe('#199 owner roster operation', () => {
 
   it('permits withdrawing and dissolving an existing roster despite a later canvas-name collision', () => {
     const m = fixture()
-    expect(rosterOp(m.deps, { op: 'create', name: '生产服务组', ids: ['session-a', 'session-b'] }).ok).toBe(true)
+    m.store.add('session-a', 'dsh/生产服务组'); m.store.add('session-b', 'dsh/生产服务组')
     m.deps.canvasExists = () => true
     m.deps.setAllowlist([])
     expect(rosterOp(m.deps, { op: 'add-member', name: '生产服务组', id: 'session-b' }).ok).toBe(false)

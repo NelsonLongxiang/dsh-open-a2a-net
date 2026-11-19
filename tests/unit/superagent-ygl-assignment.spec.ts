@@ -4,8 +4,9 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { yglCapabilities, yglCapabilitiesOf } from '../../src/superagent/host/ygl-home.ts'
 
-async function team(ygl: boolean, made: string[] = []) {
+async function team(ygl: boolean, made: string[] = [], version?: string) {
   const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
   const { routeItem, registerSuperagentTools } = await import('../../src/superagent/host/tools.ts')
   const sent: Array<[string, string]> = []
@@ -14,6 +15,8 @@ async function team(ygl: boolean, made: string[] = []) {
     deliverToSession: (id: string, text: string) => { sent.push([id, text]); return true }, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id,
     hasTool: (id: string, name: string) => ygl && ((id === 'session-m' && name === 'mcp__ygl__write') || (id === 'session-r' && name === 'mcp__ygl__read')),
     ensureYglProject: (name: string) => { made.push(name) },
+    // Without a version, the host reads what the start-up probe learned (the module state), as src/index.ts wires it.
+    yglCapabilities: version !== undefined ? () => yglCapabilitiesOf(version) : yglCapabilities,
   } as never)
   expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
   h.start()
@@ -87,5 +90,103 @@ describe('the reminder at ready', () => {
     const m = await team(true)
     expect(await m.report({ ticket_id: m.ticket, state: 'ready', summary: 's', ygl: Array.from({ length: 41 }, (_, i) => `k${String(i)}`) })).toMatchObject({ ok: false, code: 'ygl' })
     await m.h.stop()
+  })
+})
+
+describe('the cards follow the installed ygl-trees (Y1d/Y1e, owner 2026-11-18)', () => {
+  it('0.126.0: no project-use step, the team scope on kb add and searches, on both cards and the state', async () => {
+    const m = await team(true, [], '0.126.0')
+    expect(m.card).not.toContain('domain project action use')
+    expect(m.card).toContain('domain agent action brief with project "team-team"')
+    expect(m.card).toContain('with scope "bench:team-team" (this team\'s notes), then again with scope ""')
+    expect(m.card).toContain('kb add what the next session should reuse, with scope "bench:team-team"')
+    expect(m.candidate).toContain('search its kb notes with scope "bench:team-team", then with scope ""')
+    expect(m.h.state().ygl).toEqual({ version: '0.126.0', briefHonorsProject: true, kbScope: true, project: 'team-team', scope: 'bench:team-team' })
+    await m.h.stop()
+  })
+  it('0.122.0: today\'s steps, and no scope', async () => {
+    const m = await team(true, [], '0.122.0')
+    expect(m.card).toContain('mcp__ygl__write domain project action use name "team-team"')
+    expect(m.card).not.toContain('bench:team-')
+    expect(m.h.state().ygl).toEqual({ version: '0.122.0', briefHonorsProject: false, kbScope: false, project: 'team-team' })
+    await m.h.stop()
+  })
+})
+
+describe('#739 review R1: the team engines start only after the ygl-trees version read settles', () => {
+  it('a start waits for a pending read; the first card then carries the 0.126 steps', async () => {
+    const { startWhenYglKnown, yglCapabilities, setYglCapabilitiesForTest, YGL_UNKNOWN } = await import('../../src/superagent/host/ygl-home.ts')
+    setYglCapabilitiesForTest(YGL_UNKNOWN)
+    let resolve!: (v: string) => void
+    const read = () => new Promise<string | undefined>(r => { resolve = r })
+    let seen: unknown
+    const start = vi.fn(() => { seen = yglCapabilities() })
+    startWhenYglKnown(start, { logger: { warn: () => {} }, read })
+    await Promise.resolve()
+    expect(start).not.toHaveBeenCalled()
+    resolve('0.126.0')
+    await vi.waitFor(() => { expect(start).toHaveBeenCalledTimes(1) })
+    expect(seen).toMatchObject({ version: '0.126.0', kbScope: true, briefHonorsProject: true })
+    // The host started then sends the scoped steps on its first card.
+    const m = await team(true, [], undefined)
+    expect(m.h.state().ygl).toMatchObject({ kbScope: true, scope: 'bench:team-team' })
+    expect(m.card).toContain('with scope "bench:team-team"')
+    await m.h.stop()
+    setYglCapabilitiesForTest(YGL_UNKNOWN)
+  })
+  it('a failed read settles as unknown and still starts; a cancelled start never runs', async () => {
+    const { startWhenYglKnown, yglCapabilities, setYglCapabilitiesForTest, YGL_UNKNOWN } = await import('../../src/superagent/host/ygl-home.ts')
+    const failed = vi.fn()
+    startWhenYglKnown(failed, { logger: { warn: () => {} }, read: async () => { throw new Error('no ygl-trees') } })
+    await vi.waitFor(() => { expect(failed).toHaveBeenCalledTimes(1) })
+    expect(yglCapabilities()).toEqual(YGL_UNKNOWN)
+    let resolve!: (v: string) => void
+    const cancelled = vi.fn()
+    const cancel = startWhenYglKnown(cancelled, { logger: { warn: () => {} }, read: () => new Promise(r => { resolve = r }) })
+    cancel(); resolve('0.126.0')
+    await new Promise(r => setTimeout(r, 10))
+    expect(cancelled).not.toHaveBeenCalled()
+    setYglCapabilitiesForTest(YGL_UNKNOWN)
+  })
+})
+
+describe('#739 rereview R1: no card goes out before the version read settles, on any entry', () => {
+  it('a request taken while the read is pending yields only scoped cards once it settles (every assignment, not just one)', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const { startWhenYglKnown, yglSettled, setYglCapabilitiesForTest, YGL_UNKNOWN } = await import('../../src/superagent/host/ygl-home.ts')
+    setYglCapabilitiesForTest(YGL_UNKNOWN, false)
+    const sent: Array<[string, string]> = []
+    const h = new SuperagentHost({
+      canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', 'session-m'], remote: [] } : undefined, home: mkdtempSync(join(tmpdir(), 'sa-ygl-')), logger: { info: () => {}, warn: () => {} },
+      deliverToSession: (id: string, text: string) => { sent.push([id, text]); return true }, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id,
+      hasTool: (id: string, name: string) => (id === 'session-m' && name === 'mcp__ygl__write') || (id === 'session-r' && name === 'mcp__ygl__read'),
+      ensureYglProject: () => {}, yglCapabilities, yglReady: yglSettled,
+    } as never)
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+    let resolve!: (v: string) => void
+    // As src/index.ts wires it since 2026-11-18: the engine starts at boot; what the ygl barrier holds goes out once the read settles.
+    h.start()
+    startWhenYglKnown(() => { h.resumeHeld() }, { logger: { warn: () => {} }, read: () => new Promise(r => { resolve = r }) })
+    // The workbench entry, while the read is pending: the request is taken, no card goes out.
+    const asked = h.request('调研一下') as { triggerId: string }
+    expect(asked.triggerId).toBeDefined()
+    h.pass()
+    await new Promise(r => setTimeout(r, 10))
+    expect(sent.filter(([, t]) => t.startsWith('[superagent candidate]') || t.startsWith('[superagent assignment]'))).toEqual([])
+    resolve('0.126.0')
+    await vi.waitFor(() => { expect(sent.some(([id, t]) => id === 'session-r' && t.startsWith('[superagent candidate]'))).toBe(true) })
+    const candidate = sent.find(([id, t]) => id === 'session-r' && t.startsWith('[superagent candidate]'))![1]
+    expect(candidate).toContain('scope "bench:team-team"')
+    const ticket = (routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: '调研', scope: 's', reason: 'r' } as never) as { ticket_id: string }).ticket_id
+    await vi.waitFor(() => { expect(h.executor.bindingOf('session-m')?.ticketId).toBe(ticket) })
+    const assignments = sent.filter(([id, t]) => id === 'session-m' && t.startsWith('[superagent assignment]')).map(([, t]) => t)
+    expect(assignments.length).toBeGreaterThan(0)
+    for (const card of assignments) {
+      expect(card).toContain('with scope "bench:team-team"')
+      expect(card).not.toContain('domain project action use')
+    }
+    await h.stop()
+    setYglCapabilitiesForTest(YGL_UNKNOWN)
   })
 })

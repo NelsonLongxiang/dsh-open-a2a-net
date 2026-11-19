@@ -45,6 +45,7 @@ class FakeAgentsService extends Service {
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
     apiKey: '',
+    originClaimWindow: true, // #64: fixture posts unsigned deliveries (production default is closed)
     session: 'sess-cap',
     team: 'dsh',
     routeTimeoutMs: 60_000,
