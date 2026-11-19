@@ -551,6 +551,9 @@ export function apply(ctx: Context, config: Config): void {
   const peerStore = new PeerStore(config.peers, join(home, 'a2a', 'peers.json'))
   // Node identity (docs/design/node-identity.md, N1): human-named nodes and their prompt versions.
   const nodeStore = new NodeStore(join(home, 'a2a'))
+  // Restored live sessions synchronize role tools during apply. Their canvas lookup reads this cache through both
+  // localHandleResolver (seeded peers) and remote-member resolution, before the later discovery faces are registered.
+  const cardCache = new Map<string, CardCacheEntry>()
   // Peer boundary model (docs/design/peer-boundary-model.md) — connection
   // layer. referralLearning off freezes the seed set: referrals are neither
   // learned nor offered. A non-empty peerAllowlist admits a referral only
@@ -3595,7 +3598,6 @@ export function apply(ctx: Context, config: Config): void {
    * writes rare. Concurrent callers for one URL join a single in-flight
    * fetch (single-flight) instead of racing N requests.
    */
-  const cardCache = new Map<string, CardCacheEntry>()
   // superagent's HTTP faces live in src/faces/superagent.ts (#570 line ratchet); registered after cardCache exists: whenWebServerSettled may run its callback at once.
   if (superagentHost !== undefined && superagentTeams !== undefined) whenWebServerSettled((webServer) => {
     registerSuperagentFaces(webServer, {
