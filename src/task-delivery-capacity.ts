@@ -5,7 +5,7 @@
 import { parseTaskDelivery, TASK_DELIVERY_CAP, TASK_DELIVERY_RETENTION_MS, type TaskDelivery } from './task-delivery.ts'
 
 const STATES = ['reserved', 'enqueued', 'claimed', 'cancelled', 'failed'] as const
-const UNAVAILABLE_REASONS = ['health-unavailable', 'ledger-damaged', 'correspondence-damaged', 'persistence-failed', 'invalid-clock', 'invalid-entries'] as const
+const UNAVAILABLE_REASONS = ['health-unavailable', 'ledger-damaged', 'not-conserved', 'correspondence-damaged', 'persistence-failed', 'invalid-clock', 'invalid-entries'] as const
 export type DeliveryCapacityUnavailableReason = typeof UNAVAILABLE_REASONS[number]
 export type DeliveryCapacitySnapshot =
   | { status: 'unavailable'; reason: DeliveryCapacityUnavailableReason }
@@ -30,7 +30,8 @@ export interface DeliveryCapacityInput {
   /** All still-stored tasks, including dead rows, not just unanswered receipt debt. */
   taskIds: ReadonlySet<string>
   now: number
-  health: { ledgerDamaged: boolean; deliveryRestoreError: boolean; persistenceOK: boolean }
+  /** `conserved`: the ledger's read-only conservation verdict (#746 review R2): a failed one is not a healthy window. */
+  health: { ledgerDamaged: boolean; deliveryRestoreError: boolean; persistenceOK: boolean; conserved: boolean }
 }
 
 /** Exact existing retention predicate, shared with TaskLedger.reserveDelivery; no state-based early eviction. */
@@ -43,8 +44,9 @@ const unavailable = (reason: DeliveryCapacityUnavailableReason): DeliveryCapacit
 
 export function deliveryCapacitySnapshot(input: DeliveryCapacityInput): DeliveryCapacitySnapshot {
   const { health, now, deliveries, taskIds } = input
-  if (!health || typeof health.ledgerDamaged !== 'boolean' || typeof health.deliveryRestoreError !== 'boolean' || typeof health.persistenceOK !== 'boolean') return unavailable('health-unavailable')
+  if (!health || typeof health.ledgerDamaged !== 'boolean' || typeof health.deliveryRestoreError !== 'boolean' || typeof health.persistenceOK !== 'boolean' || typeof health.conserved !== 'boolean') return unavailable('health-unavailable')
   if (health.ledgerDamaged) return unavailable('ledger-damaged')
+  if (!health.conserved) return unavailable('not-conserved')
   if (health.deliveryRestoreError) return unavailable('correspondence-damaged')
   if (!health.persistenceOK) return unavailable('persistence-failed')
   if (!integer(now)) return unavailable('invalid-clock')
@@ -75,6 +77,15 @@ export function deliveryCapacitySnapshot(input: DeliveryCapacityInput): Delivery
     stored: deliveries.length, retained, expiredUntracked: deliveries.length - retained, taskBound,
     saturated: retained >= TASK_DELIVERY_CAP, retainedByState, earliestPossibleExpiryAt,
   }
+}
+
+/**
+ * #746 review R1: a possible-expiry time as text, total over every accepted value. A safe-integer millisecond count past
+ * what a Date can hold is shown as that number, never thrown on and never clamped (a far-future record stays retained).
+ */
+export function formatPossibleExpiry(ms: number): string {
+  const date = new Date(ms)
+  return Number.isFinite(date.getTime()) ? date.toISOString() : `${String(ms)} ms since the epoch (beyond a calendar date)`
 }
 
 const object = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null)

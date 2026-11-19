@@ -3,7 +3,7 @@ import { TASK_DELIVERY_CAP as CAP, TASK_DELIVERY_RETENTION_MS as TTL, type TaskD
 import { deliveryRetainedByRule, deliveryCapacitySnapshot, parseDeliveryCapacitySnapshot, type DeliveryCapacitySnapshot, type DeliveryCapacityInput } from '../../src/task-delivery-capacity.ts'
 
 const NOW = TTL * 2
-const healthy = { ledgerDamaged: false, deliveryRestoreError: false, persistenceOK: true }
+const healthy = { ledgerDamaged: false, deliveryRestoreError: false, persistenceOK: true, conserved: true }
 const row = (n = 0, createdAt = NOW, state: TaskDelivery['state'] = 'cancelled'): TaskDelivery => ({
   version: 1, taskId: 'private-task-' + n, sessionId: 'private-session', messageId: 'private-message-' + n,
   fingerprint: 'a'.repeat(64), createdAt, state,
@@ -76,10 +76,10 @@ describe('#713 pure correspondence-capacity observation (not admission)', () => 
   })
 
   it.each([
-    ['ledgerDamaged', 'ledger-damaged'], ['deliveryRestoreError', 'correspondence-damaged'], ['persistenceOK', 'persistence-failed'],
+    ['ledgerDamaged', 'ledger-damaged'], ['conserved', 'not-conserved'], ['deliveryRestoreError', 'correspondence-damaged'], ['persistenceOK', 'persistence-failed'],
   ] as const)('preserves %s unavailability and never advertises a free/healthy table', (key, reason) => {
     const value = input(Array.from({ length: CAP }, (_, n) => row(n)))
-    value.health[key] = key === 'persistenceOK' ? false : true
+    value.health[key] = key === 'persistenceOK' || key === 'conserved' ? false : true
     expect(deliveryCapacitySnapshot(value)).toEqual({ status: 'unavailable', reason })
   })
 

@@ -91,7 +91,7 @@ export class TaskLedger {
    */
   deliveryCapacityState(): DeliveryCapacitySnapshot { return this.capacityAt(this.now()) }
   private capacityAt(now:number): DeliveryCapacitySnapshot {
-    return deliveryCapacitySnapshot({deliveries:this.deliveries,taskIds:new Set(this.tasks.map(t=>t.taskId)),now,health:{ledgerDamaged:this.counters.damaged!==undefined,deliveryRestoreError:this.deliveryRestoreError,persistenceOK:this.writeFailure===undefined}})
+    return deliveryCapacitySnapshot({deliveries:this.deliveries,taskIds:new Set(this.tasks.map(t=>t.taskId)),now,health:{ledgerDamaged:this.counters.damaged!==undefined,deliveryRestoreError:this.deliveryRestoreError,persistenceOK:this.writeFailure===undefined,conserved:this.conservation().conserved}})
   }
   updateDelivery(taskId:string, state:TaskDelivery['state']): void {
     const row=this.deliveries.find(r=>r.taskId===taskId);if(!row)throw Error('unknown task delivery correspondence')

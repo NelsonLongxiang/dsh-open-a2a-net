@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { readFileSync, statSync, writeFileSync } from 'node:fs'
 import { TaskLedger } from '../../src/task-ledger.ts'
 import { TASK_DELIVERY_CAP as CAP, TASK_DELIVERY_RETENTION_MS as TTL, type TaskDelivery } from '../../src/task-delivery.ts'
-import { DeliveryCapacityError, parseDeliveryCapacitySnapshot } from '../../src/task-delivery-capacity.ts'
+import { DeliveryCapacityError, parseDeliveryCapacitySnapshot, formatPossibleExpiry } from '../../src/task-delivery-capacity.ts'
 import { deliveryCapacityLine } from '../../src/tools/info.ts'
 
 const fault = vi.hoisted(() => ({ fail: false }))
@@ -116,5 +116,39 @@ describe('#713 A1 ledger correspondence capacity', () => {
     expect(deliveryCapacityLine({ status: 'unavailable', reason: 'ledger-damaged' })).toBe('Delivery correspondence: unavailable (ledger-damaged)')
     expect(deliveryCapacityLine(parseDeliveryCapacitySnapshot({ status: 'observed', capacity: -1 }))).toBe('Delivery correspondence: unknown')
     expect(line).not.toMatch(/task-\d|session-a|message-\d/)
+  })
+
+  it('#746 R1: a far-future record round-trips producer → strict decode → status text without throwing', () => {
+    const { ledger } = setup()
+    const future = 8_640_000_000_000_000 // the largest Date; its expiry is past what a Date can hold
+    ledger.reserveDelivery(row(0, future))
+    const view = parseDeliveryCapacitySnapshot(JSON.parse(JSON.stringify(ledger.deliveryCapacityState())))
+    expect(view).toMatchObject({ status: 'observed', retained: 1, earliestPossibleExpiryAt: future + TTL + 1 })
+    let line = ''
+    expect(() => { line = deliveryCapacityLine(view) }).not.toThrow()
+    expect(line).toContain(`earliest possible expiry=${String(future + TTL + 1)} ms since the epoch`)
+    // A normal time still renders as a date.
+    expect(formatPossibleExpiry(T0 + TTL + 1)).toBe(new Date(T0 + TTL + 1).toISOString())
+  })
+
+  it('#746 R2: a ledger that fails its conservation check reads not-conserved, read-only; a legacy one stays observed', () => {
+    const { ledger, file } = setup()
+    ledger.trackInbound('task-x', 'alpha/aaaaaaaa', 'beta/bbbbbbbb')
+    expect(ledger.conservation().conserved).toBe(true)
+    const snap = JSON.parse(readFileSync(file, 'utf8'))
+    expect(snap.conservation).toBeDefined()
+    // The missing-row failure class: counters say one task was tracked, the row is gone.
+    writeFileSync(file, JSON.stringify({ ...snap, tasks: [] }))
+    const reopened = new TaskLedger(file, { warn: () => {} })
+    expect(reopened.conservation()).toMatchObject({ conserved: false })
+    const bytes = readFileSync(file, 'utf8'), mtime = statSync(file).mtimeMs
+    expect(reopened.deliveryCapacityState()).toEqual({ status: 'unavailable', reason: 'not-conserved' })
+    expect(readFileSync(file, 'utf8')).toBe(bytes)
+    expect(statSync(file).mtimeMs).toBe(mtime)
+    expect(reopened.conservation()).toMatchObject({ conserved: false })
+    // Positive control: a legacy snapshot with no conservation block is not reported as damaged.
+    const { conservation: _dropped, ...legacy } = snap
+    writeFileSync(file, JSON.stringify({ ...legacy, tasks: [] }))
+    expect(new TaskLedger(file, { warn: () => {} }).deliveryCapacityState()).toMatchObject({ status: 'observed' })
   })
 })
