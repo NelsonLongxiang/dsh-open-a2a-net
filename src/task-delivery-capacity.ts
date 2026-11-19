@@ -1,6 +1,6 @@
 /** #713: pure, detached observations, not delivery admission or retry authority.
  * The caller must provide its actual ledger health; this module never reads or mutates a ledger.
- * Runtime/schema/CLI integration is a separate slice with its own effect-boundary tests.
+ * TaskLedger.reserveDelivery and deliveryCapacityState use it (#713 A1); a full window throws DeliveryCapacityError.
  */
 import { parseTaskDelivery, TASK_DELIVERY_CAP, TASK_DELIVERY_RETENTION_MS, type TaskDelivery } from './task-delivery.ts'
 
@@ -33,7 +33,7 @@ export interface DeliveryCapacityInput {
   health: { ledgerDamaged: boolean; deliveryRestoreError: boolean; persistenceOK: boolean }
 }
 
-/** Exact existing retention predicate; no state-based early eviction. Wire this into reserve only in the integration slice. */
+/** Exact existing retention predicate, shared with TaskLedger.reserveDelivery; no state-based early eviction. */
 export function deliveryRetainedByRule(row: Pick<TaskDelivery, 'taskId' | 'createdAt'>, taskIds: ReadonlySet<string>, now: number): boolean {
   return taskIds.has(row.taskId) || now - row.createdAt <= TASK_DELIVERY_RETENTION_MS
 }
@@ -100,5 +100,17 @@ export function parseDeliveryCapacitySnapshot(raw: unknown): DeliveryCapacitySna
     stored, retained, expiredUntracked, taskBound, saturated: raw.saturated as boolean,
     retainedByState: { reserved: counts.reserved as number, enqueued: counts.enqueued as number, claimed: counts.claimed as number, cancelled: counts.cancelled as number, failed: counts.failed as number },
     earliestPossibleExpiryAt: expiry as number | null,
+  }
+}
+
+/**
+ * #713: the host-wide retained correspondence window is full. Thrown by reserve before anything is enqueued for this
+ * occurrence; the message is unchanged for existing readers, `code` and the bounded `capacity` view are the typed part.
+ */
+export class DeliveryCapacityError extends Error {
+  readonly code = 'correspondence-capacity' as const
+  constructor(readonly capacity: DeliveryCapacitySnapshot) {
+    super('task delivery correspondence capacity reached; refusing untracked delivery')
+    this.name = 'DeliveryCapacityError'
   }
 }
