@@ -62,6 +62,16 @@ describe('1 · mode is observe or reply; observe never sends', () => {
 })
 
 describe('2 · trust is a host proof plus an operator link (S36), then loop, then receipt', () => {
+  it('records one-request recovery admission without treating it as a standing operator link', async () => {
+    const translated = translate(row({ admission: 'request-recovery' }), 'e1')
+    expect(translated.kind).toBe('trigger'); if (translated.kind !== 'trigger') throw Error('missing trigger')
+    expect(translated.trigger.meta.admission).toBe('request-recovery')
+    expect(LINK_RULES.has('request-recovery')).toBe(false)
+    expect(scope(translated.trigger)).toEqual({ listened: false, reason: 'unlinked' })
+    const f = fake(() => page([row({ admission: 'request-recovery' })])); f.ctx.receive = async () => 'filtered'
+    await pollMailbox(f.ctx, new AbortController().signal)
+    expect((f.state.get(KV.rows) as RowRecord[])[0]).toMatchObject({ admission: 'request-recovery', outcome: 'filtered:unlinked' })
+  })
   it('the trusted proofs and the link rules are exactly the ruled sets', () => {
     expect([...TRUSTED_PROOFS].sort()).toEqual(['cli-identity', 'in-process', 'origin-claim'])
     expect([...LINK_RULES].sort()).toEqual(['canvas-shared', 'cli-deposit', 'remote-ref-cli', 'remote-ref-foreign', 'remote-ref-samezone', 'superagent-intake'])  // superagent-intake: owner ruling 2026-11-14 (option B)
