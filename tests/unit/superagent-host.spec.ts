@@ -11,7 +11,7 @@ import { Engine, MemoryRepositories, ticketStage, type Candidate, type EngineOpt
 import { JsonRepositories } from '../../src/superagent/host/store.ts'
 import { DEFAULT_SETTINGS, parseSettings, policyEffects, policyVersion, teamPolicy, teamScope, type TeamSettings } from '../../src/superagent/host/policy.ts'
 import { policyChangedLines } from '../../src/superagent/host/executor.ts'
-import { ORIGIN_LINE_NOTE, OTHER_TICKETS_SHOWN, candidateCard } from '../../src/superagent/host/index.ts'
+import { ORIGIN_LINE_NOTE, OTHER_TICKETS_SHOWN, SENDER_HOLD_MAX_AGE_MS, candidateCard } from '../../src/superagent/host/index.ts'
 import { SAID_CAP, attentionText, registerSuperagentTools } from '../../src/superagent/host/tools.ts'
 
 /** Design v5: the team is a canvas team; tests give the host one canvas, `team`, with these sessions (router first). */
@@ -605,6 +605,21 @@ describe('a member\'s turn: silent ends, failures, handoffs and stale reports', 
     } finally { await m.h.stop() }
   })
 
+  it('#741 review R2: a member whose ticket is parked waiting on a person still owns it (retirement checks ticketsOf)', async () => {
+    const m = await team()
+    try {
+      const one = m.accept('第一', '一')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      expect(m.h.report('session-a', { state: 'waiting', summary: '要问一下', question: '用哪种格式？' }, one.ticket)).toMatchObject({ ok: true })
+      m.h.memberIdle('session-a')
+      await m.tick()
+      // Parked: no active binding, yet the ticket is open and still the member's.
+      expect(m.h.executor.bindingOf('session-a')).toBeUndefined()
+      expect(m.h.store.tickets.get(one.ticket)!.ended).toBeUndefined()
+      expect(m.h.executor.ticketsOf('session-a')).toEqual([one.ticket])
+    } finally { await m.h.stop() }
+  })
+
   it('a ticket waiting on a person holds no member; the answer brings it back to that member first', async () => {
     const m = await team()
     try {
@@ -860,9 +875,12 @@ describe('ops team ledger: every A2A message to the team address gets a formal o
     const bot = 'reporter/0123456789abcdef', stranger = 'stranger/0123456789abcdef'
     expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'observe', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
     const settle = async () => { h.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
-    const receive = (n: string, from: string, ctx = `ctx-${n}`) => {
+    // Clock-independent stamps (the test went red on 2026-11-15 when wb()'s fixed 2026-11-07 date crossed the host's
+    // 8-day END_RECEIPT_HORIZON_MS): requests are stamped now, and the stranger's explicitly older than the 24h
+    // SENDER_HOLD_MAX_AGE_MS, past which an unlisted sender's request is refused instead of held for the owner.
+    const receive = (n: string, from: string, ctx = `ctx-${n}`, at = new Date().toISOString()) => {
       const task = `direct-${n.padStart(12, '0')}`
-      h.engine.receive({ ...wb(n, ctx), source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: from }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: from, task, context: ctx } }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } })
+      h.engine.receive({ ...wb(n, ctx), at, source: 'a2a', threads: [{ source: 'a2a', id: ctx }], actor: { source: 'a2a', id: from }, human: false, channel: { source: 'a2a', thread: `a2a:${ctx}`, address: { caller: from, task, context: ctx } }, meta: { proof: 'cli-identity', admission: 'cli-deposit', taskId: task } })
       h.pass()
       return task
     }
@@ -872,7 +890,7 @@ describe('ops team ledger: every A2A message to the team address gets a formal o
     const observed = receive('1', bot)
     expect(routeItem(h, { trigger_id: '1', kind: 'accept', title: 't', scope: 's', reason: 'matches deps', rules: ['deps'] })).toMatchObject({ ok: true, decision: 'ignore' })
     // A sender not on the list is refused at the gate.
-    const refused = receive('2', stranger)
+    const refused = receive('2', stranger, 'ctx-2', new Date(Date.now() - SENDER_HOLD_MAX_AGE_MS - 3_600_000).toISOString())
     await settle()
     expect(outcome(receiptFor(observed))).toBe('rejected')
     expect(receiptFor(observed)!.at(-1)).toContain('观察模式')
@@ -1427,5 +1445,62 @@ describe('seatOf at boot reads no canvas (regression of #611 on the test host)',
     expect(host.seatOf(routed.ticket_id)).toEqual({ seat: 'session-o', seatId: expect.stringMatching(/^seat-/), role: 'observer' })
     booting = false
     await host.stop()
+  })
+})
+
+describe('receipts owed are read from the task ledger (owner ruling 2026-11-18: one book)', () => {
+  it('the ledger decides: acknowledged is not sent again, an owed request gets its ending receipt however old, settled gets none', async () => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const { END_RECEIPT_HORIZON_MS } = await import('../../src/superagent/host/receipts.ts')
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const caller = { caller: 'reporter/0123456789abcdef' }
+    let clock = Date.parse('2026-11-07T10:00:00.000Z')
+    const calls: string[][] = []
+    const ledger = new Map<string, 'owed' | 'acknowledged' | 'settled'>()
+    const host = new SuperagentHost({ canvasTeam: canvasOf(['session-r', 'session-m']),
+      home: mkdtempSync(join(tmpdir(), 'sa-ledger-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
+      homeUrl: () => 'http://127.0.0.1:1', now: () => new Date(clock).toISOString(),
+      runCli: async args => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' },
+      receiptLedger: task => ledger.get(task),
+    } as never)
+    expect(host.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [caller.caller] }, rules: [{ name: 'deps', text: 'Upgrade a pinned dependency.' }] }, () => true)).toMatchObject({ ok: true })
+    const settle = async () => { host.pass(); for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5)) }
+    const open = (n: string) => {
+      const channel = { source: 'a2a', thread: `a2a:ctx-${n}`, address: { caller: caller.caller, task: `direct-${n.padStart(12, '0')}`, context: `ctx-${n}` } }
+      host.engine.receive({ ...wb(n, `ctx-${n}`), source: 'a2a', threads: [{ source: 'a2a', id: `ctx-${n}` }], actor: { source: 'a2a', id: caller.caller }, human: false, channel, meta: { proof: 'cli-identity', admission: 'cli-deposit' } } as never)
+      host.pass()
+      const routed = routeItem(host, { trigger_id: n, kind: 'accept', title: `t${n}`, scope: 's', reason: 'r', rules: ['deps'] }) as { ok: boolean; ticket_id: string }
+      expect(routed).toMatchObject({ ok: true })
+      return { ticketId: routed.ticket_id, task: channel.address.task }
+    }
+    const acks = (task: string) => calls.filter(a => a[0] === 'receipt' && a[1] === task && a.includes('--acknowledged'))
+    const endings = (task: string) => calls.filter(a => a[0] === 'receipt' && a[1] === task && !a.includes('--acknowledged'))
+    // Acknowledged in the ledger (an earlier run of this host): no second acknowledgement after a restart.
+    const a = { task: 'direct-000000000081' }
+    ledger.set(a.task, 'acknowledged')
+    const opened = open('81')
+    expect(opened.task).toBe(a.task)
+    await settle()
+    expect(acks(a.task)).toEqual([])
+    // Owed in the ledger, ended long past the old horizon: the ending receipt still goes.
+    const b = open('82')
+    ledger.set(b.task, 'owed')
+    await settle()
+    host.engine.stopTicket(b.ticketId, 'owner stop')
+    clock += END_RECEIPT_HORIZON_MS + 86_400_000
+    await settle()
+    expect(endings(b.task)).toHaveLength(1)
+    // Settled in the ledger: no ending receipt.
+    const c = open('83')
+    ledger.set(c.task, 'settled')
+    host.engine.stopTicket(c.ticketId, 'owner stop')
+    await settle()
+    expect(endings(c.task)).toEqual([])
+    // No row in the ledger: the old horizon still applies (the fallback) — ended past it, no ending receipt.
+    const d = open('84')
+    host.engine.stopTicket(d.ticketId, 'owner stop')
+    clock += END_RECEIPT_HORIZON_MS + 86_400_000
+    await settle()
+    expect(endings(d.task)).toEqual([])
   })
 })

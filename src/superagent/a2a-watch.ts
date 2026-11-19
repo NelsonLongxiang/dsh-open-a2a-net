@@ -1,5 +1,5 @@
 /**
- * superagent a2a Source (plan nodes p2a-source-code and p3-source-explicit; designs: docs/design/superagent-a2a-p2-source-design.md,
+ * superagent a2a Source (plan nodes p2a-source-code and p3-source-explicit; designs: docs/archive/design/superagent-a2a-p2-source-design.md,
  * docs/design/superagent-a2a-watch.md).
  *
  * Reads one dedicated a2a-net CLI identity's mailbox through `a2a-net inbox --after` and turns each message into a superagent

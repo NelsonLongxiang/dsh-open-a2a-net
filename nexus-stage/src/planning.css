@@ -62,9 +62,11 @@
 #dsh-plan .p-frame-head{pointer-events:auto}
 /* superagent-root-team S3: a root frame's child-team chips and the slots stepper. */
 #dsh-plan .p-root-children{position:absolute; left:4px; right:4px; bottom:4px; display:flex; flex-wrap:wrap; gap:4px; pointer-events:auto}
-#dsh-plan .p-root-chip{display:inline-flex; align-items:center; gap:4px; border:1px solid var(--frame-line, #888); background:var(--frame-bg, rgba(255,255,255,.75)); border-radius:8px; padding:1px 6px; font-size:11px; line-height:1.5; max-width:100%}
-#dsh-plan .p-root-chip .planning-root-chip-label{white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-#dsh-plan .p-root-step{border:none; background:transparent; font-size:12px; line-height:1; padding:0 3px; cursor:pointer}
+/* #650: the chips carry .planning-root-chip (planning-root.ts buildChildChip); the old .p-root-chip selector never matched. */
+#dsh-plan .planning-root-chip{display:inline-flex; align-items:center; gap:4px; border:1px solid var(--card-line); background:var(--uupm-bg-1); color:var(--ink); border-radius:8px; padding:1px 6px; font-size:11px; line-height:1.5; max-width:100%}
+#dsh-plan .planning-root-chip .planning-root-chip-label{white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer}
+#dsh-plan .p-root-step{border:none; background:transparent; color:inherit; font-size:12px; line-height:1; padding:0 3px; cursor:pointer}
+#dsh-plan .p-root-step:focus-visible, #dsh-plan .planning-root-chip-label:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
 #dsh-plan .p-root-step:disabled{opacity:.35; cursor:default}
 #dsh-plan .p-node{pointer-events:auto}
 #dsh-plan .e-member{stroke:var(--uupm-edge-member); stroke-opacity:.38; stroke-width:1.5}
@@ -371,3 +373,13 @@
 #dsh-plan .p-hint:last-child{border-bottom:none}
 #dsh-plan .p-hint p{margin:0; font-size:12px; line-height:1.5; color:var(--ink)}
 #dsh-plan .p-hint .p-hint-none{color:var(--ink-muted)}
+/* #650 组成 root 团队: the dialog's child list and progress, and a stopped compose's reason on the frame it concerns. */
+#dsh-plan .p-root-compose-children, #dsh-plan .p-root-compose-progress{margin:0; padding-left:18px; font-size:11.5px; color:var(--ink-muted); max-width:340px}
+#dsh-plan .p-root-compose-progress:empty{display:none}
+#dsh-plan .p-root-compose select.p-dialog-input{min-height:28px}
+#dsh-plan .p-root-compose-err{position:absolute; left:6px; right:6px; bottom:6px; display:flex; gap:6px; align-items:flex-start;
+  padding:4px 6px; font-size:11px; line-height:1.35; color:var(--uupm-error); background:var(--uupm-bg-0);
+  border:1px solid color-mix(in srgb,var(--uupm-error) 55%,transparent); border-radius:6px; pointer-events:auto}
+#dsh-plan .p-root-compose-err .msg{flex:1; overflow-wrap:anywhere}
+#dsh-plan .p-root-compose-err button{font:inherit; color:inherit; background:transparent; border:0; cursor:pointer; padding:0 2px}
+#dsh-plan .p-root-compose-err button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}

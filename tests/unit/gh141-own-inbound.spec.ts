@@ -32,3 +32,22 @@ describe('gh#141 own-inbound settlement filter', () => {
     expect(ledger.archive().find(r => r.taskId === 'direct-in2')?.summary).toBe('first')
   })
 })
+
+describe('inboundReceiptState: what the superagent team reads of the receipts it owes (owner ruling 2026-11-18)', () => {
+  it('owed while open; settled only by a receipt; an evicted row says nothing (#741 review R1)', () => {
+    const ledger = new TaskLedger('', { now: () => 1_000 })
+    ledger.trackInbound('direct-owed1', 'dsh/bbbbbbbb', 'dsh/aaaaaaaa', undefined, true, 'job')
+    expect(ledger.inboundReceiptState('direct-owed1')).toBe('owed')
+    ledger.resolveFromMessage('[A2A receipt] task direct-owed1 done', undefined, owedTo('dsh/aaaaaaaa'))
+    expect(ledger.inboundReceiptState('direct-owed1')).toBe('settled')
+    // The mailbox cap evicts a row: it is archived, but no result went out — the ledger has no word on it.
+    ledger.trackInbound('direct-evict1', 'dsh/bbbbbbbb', 'dsh/aaaaaaaa', undefined, true, 'job')
+    expect(ledger.evictInbound('direct-evict1', 'dsh/bbbbbbbb')).toBe(true)
+    expect(ledger.archive().find(r => r.taskId === 'direct-evict1')).toMatchObject({ direction: 'inbound', endedBy: 'evicted' })
+    expect(ledger.inboundReceiptState('direct-evict1')).toBeUndefined()
+    // An outbound row of the same shape is not this host's debt.
+    ledger.track('direct-out9', 'dsh/aaaaaaaa', 'http://peer:1')
+    expect(ledger.inboundReceiptState('direct-out9')).toBeUndefined()
+    expect(ledger.inboundReceiptState('direct-none')).toBeUndefined()
+  })
+})

@@ -107,10 +107,11 @@ async function mountTwoSessions(): Promise<Mounted> {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: String(agent.id) }),
     })
     expect(res.status).toBe(200)
-    // W1 shared-team admission: both declare one shared team so the local
-    // route between them clears the joined-face gate.
-    const joined = await ctx.tools.get('a2a_team_join')?.execute({ team: 'dsh/shared', id: String(agent.id) }, execAs(agent))
-    expect((joined as { ok?: boolean } | undefined)?.ok).toBe(true)
+    // W1 shared-team admission: both sit in one canvas team so the local route between them clears the joined-face gate
+    // (roster self-join is retired, owner ruling 2026-11-18).
+    const canvas = async (body: Record<string, unknown>) => await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/canvas`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json() as { ok?: boolean }
+    expect((await canvas({ action: 'create', name: 'pair' })).ok).toBe(true)
+    expect((await canvas({ action: 'add-member', name: 'pair', id: String(agent.id) })).ok).toBe(true)
   }
   return { ctx, port, a, b, dispose: async () => { await ctx.fiber.dispose() } }
 }

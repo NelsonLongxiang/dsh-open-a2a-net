@@ -187,7 +187,9 @@ function collectOriginClaimAnchors() {
   return [
     { name: 'verify-fn', ok: /verifyOriginClaim/.test(src) ? 1 : 0, detail: '三面共享验签入口' },
     { name: 'bare-zone-shape', ok: /originClaimCallerShape\s*=\s*\/\^\[a-z0-9-\]\+\$\//.test(src) ? 1 : 0, detail: '信封 shape 收窄 bare zone（M2 第三轮裁决）' },
-    { name: 'window-config', ok: /originClaimWindow/.test(src) ? 1 : 0, detail: 'M1 窗口态配置（默认开=legacyInbound 计量）' },
+    { name: 'window-config', ok: /originClaimWindow/.test(src) ? 1 : 0, detail: 'M1 窗口态配置' },
+    // #64 step 1 (owner ruling 2026-11-17): the 「窗口已关」 anchor — the schema ships the envelope-absent window closed.
+    { name: 'window-closed', ok: /originClaimWindow:\s*s\.boolean\(\)\.default\(false\)/.test(readFileSync(join(REPO, 'src/config.ts'), 'utf8')) ? 1 : 0, detail: '#64 第一步：无信封窗口默认关（originClaimWindow 默认 false）' },
     { name: 'fail-closed-minimal', ok: /untrusted-origin/.test(src) ? 1 : 0, detail: '验签败/关窗→untrusted-origin 与最小卡同码' },
   ]
 }

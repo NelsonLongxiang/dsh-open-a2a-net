@@ -140,12 +140,6 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
               send(200, sa.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined, fields.via === 'cli' ? 'cli' : undefined))
             } else if (fields.action === 'answer') {
               send(200, sa.answer(typeof fields.ticket_id === 'string' ? fields.ticket_id : '', typeof fields.text === 'string' ? fields.text : ''))
-            } else if (fields.action === 'add-remote-member' || fields.action === 'remove-remote-member') {
-              // Design v5: a remote member is a remote slot of the bound canvas team — added on the canvas, which pins its key.
-              send(200, { ok: false, error: 'the team is a canvas team: add or remove a remote member on the canvas (/__dsh_a2a/canvas add-member / remove-member)' })
-            } else if (fields.action === 'serve-team') {
-              // Design v5 (D4): a team is served by its canvas id, which names its owner by key fingerprint.
-              send(200, { ok: false, error: "serve a team by its canvas id: POST { action: 'serve', team: '<zone>/canvas/<name>@<fp8>', members: [<local session ids>] } (team: null leaves)" })
             } else if (fields.action === 'serve') {
               // Design v5 (D4): serve another host's team — the canvas team `<zone>/canvas/<name>@<fp8>`. The fingerprint picks
               // the linked peer whose signed card key it names and which advertises that canvas; that key is pinned, so only it

@@ -1,6 +1,6 @@
 # superagent v5: the team is a canvas team
 
-Status: implemented on next/0.8 (#441, #442, #443, #444, #445, and the upgrade-path fixes found in acceptance). It builds on design v4 ([superagent-a2a-adr](superagent-a2a-adr.md), [superagent-a2a-spec](superagent-a2a-spec.md)); v4's domain model, its two-layer split and its role isolation are unchanged.
+Status: implemented on next/0.8 (#441, #442, #443, #444, #445, and the upgrade-path fixes found in acceptance). It builds on design v4 ([superagent-a2a-adr](../archive/design/superagent-a2a-adr.md), [superagent-a2a-spec](superagent-a2a-spec.md)); v4's domain model, its two-layer split and its role isolation are unchanged.
 
 ## Context
 

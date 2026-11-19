@@ -1,29 +1,92 @@
-# @nelsonlongxiang/dsh-open-a2a-net
+# Open A2A Net · Superagent teams and A2A collaboration
 
 English | [中文](README_zh.md)
 
 [![npm](https://img.shields.io/npm/v/@nelsonlongxiang/dsh-open-a2a-net?label=npm)](https://www.npmjs.com/package/@nelsonlongxiang/dsh-open-a2a-net)
 
-Open A2A network plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH): turns a DSH
-deployment into one node of a decentralized agent network — no central server, no registry.
+**New in the preview: Superagent turns requests into team tickets—a router accepts work, fixed members execute it, progress stays visible, and owner decisions arrive as option-based cards.**
 
-Each node publishes a **signed, expiring agent card** at `/.well-known/agent-card.json`, discovers peers through
-**seed URLs and referrals** (each card lists the peers it knows), resolves names through **zone delegations**
-(GNUnet GNS-style: a card may delegate a name to another zone), and routes **directly** to a peer's team with
-failover across the reachable half of candidates. Every main session can additionally be exposed as a **session
-node** other hosts can discover and join from the web sidebar.
+> **Version boundary: Superagent teams belong to the opt-in 0.8 preview.** On 2026-11-14 npm `latest` was still 0.7.0 and `preview` was 0.8.1-preview.25. The default install does not imply the new capabilities below.
 
-| The sidebar network panel | Context message display |
+An open-source plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). The A2A foundation handles discovery, addressing, routing and receipts between sessions and hosts. **Superagent** adds requests, scoped tickets, fixed members and human decisions on top—not just messages between multiple chats.
+
+## Preview highlight: Superagent turns routing into a visible workflow
+
+### Follow one request through the team
+
+```text
+Your request (scope, deliverable, completion criteria)
+                      ↓
+Router assesses and accepts → scoped ticket → assigned member
+                      ↑                           ↓
+        Your input and decisions ← progress / waiting / reviewable result
+```
+
+This is a workflow illustration, not a completed case study or a promise to accept every request.
+
+| What matters to you | How Superagent helps |
 | --- | --- |
-| ![Sidebar network panel](images/image-01.png) | ![Context message display](images/image-02.png) |
+| Submit a request instead of relaying it to every chat | Use the workbench or right-bar request view. The router checks source admission and team rules, then creates a scoped ticket for accepted work. |
+| See who is working and what is waiting | Tickets expose the assignee, stage and latest report. Members report progress, waiting, blocked, failed or ready-for-review work. Busy fixed members queue work; the executor does not open new sessions. |
+| Keep follow-ups and reviews with the work | Input on the same ticket thread reaches its member. When a PR is attached, review comments return to the ticket and merge/close state continues to be followed. |
+| Receive actionable choices when a person must decide | Decision cards carry a question, 2–6 options and a recommendation. The owner decides in the pending-decisions view and the answer returns to the ticket. |
+| Use fixed members across hosts | Linked-host members are supported with explicit consent and identity pins on both sides—not remote takeover of arbitrary sessions. |
 
-## Install
+### People control rules, sources and significant decisions
+
+- **Form a team before taking work.** The operator names the router, fixed members, roles/rules and permitted sources, then binds the team. The engine stays idle until it is bound. Each member executes one ticket at a time; other tickets wait.
+- **Observe does not mean auto-accept.** `off / observe / auto` governs work inferred from agent messages. The default `observe` records “would accept” without taking the work. Explicit human requests still require admitted sources.
+- **Ready is not independently accepted.** A `ready` report means reviewable work; an attached PR remains followed until merge or close. Project tests, independent acceptance and release authority remain separate.
+- **External intake is opt-in.** A2A intake is controlled by the bot list and accept mode. GitHub Issue intake is off by default and requires owner-configured repositories and allowed users; this is not automatic monitoring of every issue.
+- **No silent expansion of authority.** Rule changes need human confirmation. Members cannot widen tickets, open sessions or directly dispatch to other teams; outbound team requests follow the configured approval flow.
+
+See the [released preview Superagent guide](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/6ca847560f9bc90c17be64e9558f830a4abf5113/src/skill/references/superagent.md). Root teams are still marked in progress and are not represented here as a mature capability.
+
+### How is this different from an ordinary canvas team?
+
+| Ordinary A2A collaboration | Superagent team (0.8 preview) |
+| --- | --- |
+| Which sessions are reachable, where does this message go, and has a receipt arrived? | Is this request accepted, who owns the ticket, where does it stand, and what needs a person’s decision? |
+| Discover routable teams; the caller organizes the work | The router accepts and assigns work, fixed members execute it, and reports and follow-ups remain attached to tickets |
+
+## The A2A foundation still matters
+
+- Session discovery, direct routing and visual canvas teams on one host or across linked hosts.
+- Signed agent cards, seeds and referrals without a central registry service.
+- Async tasks followed by task id through pending receipts, dead letters and the archive. **Delivered is not completed.**
+- Model tools for ordinary session collaboration; a CLI with its own identity, home and mailbox for callers outside a session.
+
+## Superagent, illustrated
+
+The following artwork is **original hand-drawn-style functional illustration with a simulated example—not a product UI capture, interface layout or evidence of completed work**. The illustrations explain the opt-in preview workflow.
+
+![Original Superagent workflow illustration; simulated example, not a product UI](images/market/01-superagent-flow.png)
+
+![Original ticket-progress illustration; simulated example, not a product UI](images/market/02-ticket-progress.png)
+
+![Original owner-decision illustration; simulated example, not a product UI](images/market/03-owner-decisions.png)
+
+## Install and try one request
+
+**For the Superagent preview highlight described here, explicitly opt in:**
+
+```sh
+dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net@preview
+```
+
+For the 0.7.0 default release’s ordinary A2A network capabilities first:
 
 ```sh
 dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 ```
 
-Restart `dsh web`, then open the sidebar network panel (footer action).
+Tags move. Record the actual plugin and DSH versions when reporting issues. These commands target the `web` profile of regular `dsh web`; replace it for a custom profile and use the application’s plugin manager on Desktop. Restart and open the workbench as documented for your chosen release.
+
+1. Bind a test team: choose the router, members, permitted sources and rules. Cross-host members require links and consent on both sides.
+2. Submit one bounded request, for example: “Investigate this failing test and propose a fix PR. Do not deploy. Explain the result with test evidence.”
+3. Follow the ticket’s member, stage and reports. Decide cards that need your judgement, then review the deliverable under your project’s acceptance process rather than treating self-reported `ready` as done.
+
+**Trust boundaries:** cross-host operation requires setup; `announce` is off by default. Configure authentication before exposing a listener beyond loopback. Listing is not a security audit or a promise of universal A2A interoperability.
 
 (As a package name, a local path, or a Git URL; the argument is handed to pnpm unchanged. The package's `prepare`
 script is `pnpm build`, but only a Git URL install triggers it, and pnpm 11 blocks a Git package's build script:
@@ -38,7 +101,7 @@ tool runtime; the card route `/.well-known/agent-card.json` is registered only w
 
 ## What you get
 
-- **Model tools** (twelve, see the table below) — `a2a_teams` lists the teams this node can see (its own rows
+- **Model tools** (see the table below) — `a2a_teams` lists the teams this node can see (its own rows
   plus peer teams inside the joined-team scope); `a2a_route`
   sends one message to a team, reuses `context_id` to continue a remote conversation, and fails over across
   candidates when a peer is unreachable. `a2a_tasks` reconciles the receipt contract across three tiers: every route that leaves a
@@ -84,20 +147,18 @@ tool runtime; the card route `/.well-known/agent-card.json` is registered only w
 
 ## Model tools at a glance
 
-Twelve tools. With `teamScopeInfo` on (the default), `a2a_teams`, `a2a_status` and `a2a_probe` answer from
+With `teamScope` on (the default), `a2a_teams`, `a2a_status` and `a2a_probe` answer from
 this host's joined-team scope: `[this host]` rows plus peers serving a team this host's nodes declared.
 `a2a_tasks` (this host's own dispatch ledger) stays unscoped.
 
 | Tool | Answers | Notes |
 | --- | --- | --- |
-| `a2a_whoami` | Who am I on this network? | The calling session's node id, joined/live state, routable handle, roster + canvas memberships, the owner's `teamJoinAllowlist`, the `teamScopeRouting` switch, and recent refused join/leave attempts. |
+| `a2a_whoami` | Who am I on this network? | The calling session's node id, joined/live state, routable handle, roster + canvas memberships, the owner's `teamJoinAllowlist`, the `teamScope` switch, and recent refused join/leave attempts. |
 | `a2a_teams` | Which teams can I route to? | `[this host]` rows plus in-scope peer teams, with activity excerpts. |
 | `a2a_route` | Send a message to a team. | `context_id` continues a conversation; `async: true` delivers without waiting; fails over across candidates. |
 | `a2a_task_read` | What did that task actually say? | Returns the full original text of an A2A task delivered to THIS session, by task id — for a task `a2a_tasks` shows (brief only, `delivered-unconsumed`) whose message reached the session while it was busy and never entered its conversation. Only the receiving session reads it (anyone else is answered as for a missing task); texts are kept 72 hours (64 KiB of UTF-8 each, clipped beyond). Reading consumes the delivery; the result is peer content. A delivery whose text was lost outright (a steer the host never tracked) is also redelivered when the session is idle, as a queued delivery of the original task, so its claim, withdrawal or unknown outcome is reconciled like any queued task and never resent blindly. |
 | `a2a_tasks` | Which async tasks still owe a receipt? | Three tiers: owed rows keep the follow-up `context_id`; past-TTL rows auto-dead-letter (still settleable); outcomes land in the bounded archive; persisted across restarts. |
 | `a2a_probe` | Is the fleet healthy? | One verified-card fetch per in-scope peer (or one given url); `N reachable, M down`; misses classified `unreachable` vs `rejected`. |
-| `a2a_team_join` | Declare one joined node a member of a team. | Allowlist-gated: only an **exact** name in `teamJoinAllowlist` authorizes a join (empty list denies every join). A wildcard/prefix entry is shown by `a2a_whoami` but authorizes nothing (`[PATTERN_NO_MINT]`); canvas teams are assigned in the workbench, never here (`[CANVAS_TEAM]`). Attempts land in the state face's `registry.teamAudit`. A model tool may only declare membership for the calling session's own node (else `[NOT_SELF]`), and that node must already be joined (else `[NOT_JOINED]`). |
-| `a2a_team_leave` | Retract a team membership. | Not subject to the allowlist — leaving only shrinks exposure; it still can only retract a membership the calling session's own node declared (`[NOT_SELF]`, `[NOT_JOINED]`; nothing to retract if it never declared one). |
 | `a2a_exposure` | How visible is this session? | Sets the session's own tier: `linked` (the default floor) or `fleet` (a voluntary opt-up), changeable at any time; requires a joined session. **Today the tier is only persisted (`a2a/exposure.json`) and shown in the `exposure` field of the state face's session rows; it does not yet change what the card or the directory exposes** — "a group's visibility follows its strictest member" is a written rule with neither a group-level API nor an enforcement point in v1 (owner ruling 2026-11-08, #449: documented as is). |
 | `a2a_report` | Tell this host's supervision something while off the network. | The one write-ingress to this host that works while unjoined (the read-only `a2a_whoami` is exempt from the join gate too): one-way, lands in the state face's reports ring (newest 64 kept), grants no presence or routing. One report per 30s per session, ≤4000 chars; once the same session has reported the same text 3 times within 10 min, the 4th is refused as a loop. |
 | `a2a_status` | What is this node doing right now? | In-scope tracked peers with quality scores, in-flight routes, recent routing activity, and the idempotency window aggregate (occupancy + claim/replay/conflict counters). |
@@ -187,14 +248,15 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `wakeBootStaggerMs` | `3000` | Pause between serial boot-prewarm wakes (caps log-decode saturation after a restart; wake-on-route never waits on it). |
 | `wakeReconcile` | `true` | Continuous desired-state reconciliation: each tick re-derives the cold joined intents due and wakes one per pass (post-boot drift, failed wakes, late gateways). Tuned by `wakeReconcileIntervalMs` (`60000`), `wakeReconcileBackoffBaseMs` (`5000`) and `wakeReconcileMaxBackoffMs` (`600000`). |
 | `seatNames` | `{}` | Human-owned stable display labels (≤64 characters, at most 1024 entries) keyed by full local session id (`session-…` form); controls/format characters (Cc/Cf), line/paragraph separators, names without visible content, and address-shaped names (`dsh/66abc2cf`, `zone/canvas/x`) are rejected. Invalid boot entries are dropped individually with warnings; owner writes remain all-or-nothing. Set/clear through the workbench owner panel; labels hot-apply to cards, whoami, CLI teams and the board, without changing titles, handles or admission. A2A model-tool naming arguments are refused. |
-| `teamJoinAllowlist` | `[]` | Teams `a2a_team_join` may declare: **exact names only** (a `*`/prefix entry authorizes nothing). Empty denies every join. The owner can also edit it from the workbench owner panel (`/__dsh_a2a/owner-settings`). |
-| `teamScopeRouting` | `true` | S3 admission: routing checks caller↔target shared team membership; a session with no declared team has no network. `false` restores the open outbound seam. |
-| `teamScopeInfo` | `true` | S5 information-plane scope for `a2a_teams` / `a2a_status` / `a2a_probe` (see the tools section). `false` restores fleet-wide disclosure. |
+| `teamJoinAllowlist` | `[]` | Roster names (roster teams are retired, 2026-11-18: kept for one version so an existing roster can be shrunk or dissolved). Teams a roster could declare: **exact names only** (a `*`/prefix entry authorizes nothing). Empty denies every join. The owner can also edit it from the workbench owner panel (`/__dsh_a2a/owner-settings`). |
+| `teamScope` | `true` | One switch for team scope (owner ruling 2026-11-18): routing checks caller↔target shared team membership (S3; a session with no declared team has no network), and `a2a_teams` / `a2a_status` / `a2a_probe` answer from the joined-team scope (S5). `false` opens both. Hot-applied by the owner panel. The old `teamScopeRouting` / `teamScopeInfo` keys are read for one more version while `teamScope` is absent. |
+| `teamScopeRouting` | `true` | Deprecated (2026-11-18): the routing half, read only while `teamScope` is absent. Use `teamScope`. |
+| `teamScopeInfo` | `true` | Deprecated (2026-11-18): the information half, read only while `teamScope` is absent. Use `teamScope`. |
 | `peerAllowlist` | `[]` | Non-empty: a referral is admitted only when its host matches an entry (exact `host[:port]`, bare domain suffix, or full URL). Seeds are never filtered. |
 | `referralLearning` | `true` | `false` freezes the tracked set to the configured seeds: referrals are neither learned nor offered. |
 | `referralTeamResolution` | `false` | gh#8: team names resolve over seeds + delegates only; `true` restores the legacy whole-store basis (referral-learned peers included). |
 | `exposureExcerpt` | `'full'` | How much of a session's activity excerpt the card publishes: `full`, `masked` (shape-only prefix) or `off`. Titles and handles stay. |
-| `originClaimWindow` | `true` | OriginClaim transition window: deliveries without an envelope still walk the caller gate (counted as `legacyInbound`); `false` rejects them like failed signatures. |
+| `originClaimWindow` | `false` | OriginClaim transition window, closed by default since #64 step 1: a delivery without an envelope is rejected like a failed signature. `true` reopens it — such deliveries walk the caller gate again, counted as `legacyInbound`. |
 | `originClaimUrl` | `''` | Override for the envelope's `callerUrl` (pocket-tunneled hosts); `''` derives it. |
 | `originClaimUnboundWindow` | `true` | OriginClaim audience-binding window: also sign and accept the legacy envelope that names no audience (accepted ones counted as `unboundInbound`; those whose bound form missed here also as `boundMissInbound`); `false` signs and accepts the audience-bound form only. |
 | `canvasLegacyBareMembers` | `true` | #335 migration window: unsuspended historical bare canvas members retain legacy inference; suspended slots never route or authorize. Close only by owner decision after migration and observation. |
@@ -240,7 +302,6 @@ Set an `apiKey` before exposing the listener beyond loopback.
 | `POST /__dsh_a2a/join` · `/leave` | Join or leave one session node. |
 | `/__dsh_a2a/canvas` · `/canvas-layout` | Canvas teams (create/remove/add-member/remove-member, plus the owner's confirm-member / restore-suspended / delete-suspended / cli-home-options) and the board layout. |
 | `POST /__dsh_a2a/roster-op` | Owner-controlled roster teams on the planning board (`op`: create — at least two joined local sessions — / add-member / remove-member / dissolve), with the exact names in `teamJoinAllowlist` maintained alongside; it cannot admit remote or unjoined sessions. |
-| `/__dsh_a2a/groups` | Manual session grouping — deprecated since 0.6.6 (canvas teams supersede it), kept for old panels. |
 | `POST /__dsh_a2a/dispatch` | Workbench quick dispatch into a team. |
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | Settle an owed task from the caller side (cancel also makes a best-effort stop notice to the target: a steered notice for a local one, a wire delivery for a remote one — which also carries `cancel_task_id` when the peer's card declares `queuedTaskCancellation`, withdrawing the original task if it is still queued; the reply carries `steered` and `removed`); the row lands in `archived[]`. |
 | `POST /__dsh_a2a/request-recovery` | Browser-owner-only grant/revoke for one reconciled legacy request. Binds the exact signed sender proposal, original attempts, payload and receiver session; creates no standing membership. See the [one-request recovery contract](docs/design/superagent-outbound-requests.md#one-request-continuation-for-reconciled-legacy-failures). |
@@ -251,7 +312,7 @@ Set an `apiKey` before exposing the listener beyond loopback.
 | `GET`/`POST /__dsh_a2a/superagent/teams` | Unless `superagent: false`: this instance's teams; POST `{ canvas, router }` adds one. The list also has the teams linked instances advertise; POST `{ action: 'send', address, session, text }` sends one a request as that session (design M9). `teamId` in a POST body or `?teamId=` on a GET of `/__dsh_a2a/superagent` picks a team by id (design M3). |
 | `GET`/`POST /__dsh_a2a/superagent/staffing` | Staffing changes (S1a): GET lists the ledger; POST `{ action: 'submit', change: { id, summary?, ops }, agree?: true }` or `{ action: 'agree', id }`, from the signed-in DSH interface only. Operations: `team.create`, `member.add` (with an optional profile), `team.rules.set` (scope team / dispatch / member:<seatId>); existing sessions only; a failure is undone in reverse. |
 | `/__dsh_a2a/session-log` · `/remote-session-log` | Session log reads for the workbench. |
-| `/__dsh_a2a/owner-settings` | The owner panel: read (GET) or write (POST) `teamJoinAllowlist`, `teamScopeInfo`, `seatNames` and `announce` into the home patch layer (all but `announce` apply immediately; `announce` needs a restart, and GET reports `announceRestartPending`). `seatNames` is a validated full map; omit a session id to clear its label. This owner-authenticated control face is not a model naming tool; local shell/config writers remain inside the existing operator trust boundary. |
+| `/__dsh_a2a/owner-settings` | The owner panel: read (GET) or write (POST) `teamJoinAllowlist`, `teamScope`, `seatNames` and `announce` into the home patch layer (all but `announce` apply immediately; `announce` needs a restart, and GET reports `announceRestartPending`). `seatNames` is a validated full map; omit a session id to clear its label. This owner-authenticated control face is not a model naming tool; local shell/config writers remain inside the existing operator trust boundary. |
 | `/__dsh_a2a/fleet-canvas-op` | Relay a canvas operation (`create`, `add-member`, `remove-member`, `remove`) to a peer's `/a2a/canvas-op`, stamped with this node's OriginClaim; the peer's link gate decides. |
 | `/__dsh_a2a/cli-deposit` | Deposit, list, revoke, mailbox reads and admission queries (`admission`, which must be signed by the identity itself) for `a2a-net` CLI identities. |
 | `GET /__dsh_a2a/nodes` · `POST` | Node identities (docs/design/node-identity.md): GET reads the roster or one node (`?name=`); POST is an identity write and needs the `X-API-Key` even on loopback; a host with no `apiKey` refuses every identity write. |

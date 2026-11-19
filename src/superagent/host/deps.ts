@@ -57,6 +57,15 @@ export interface SuperagentHostDeps {
   readonly mcpToolsChanged?: () => void
   /** Make the team's ygl-trees project in the team workspace (design Y1c); idempotent. */
   readonly ensureYglProject?: (name: string) => void
+  /** What the installed ygl-trees can do (design Y1d/Y1e); unknown when absent. */
+  readonly yglCapabilities?: () => import('./ygl-home.ts').YglCapabilities
+  /**
+   * Whether that read has settled (#739 review R1). Until it has, candidates and assignments wait (requests are still taken), so
+   * no card goes out with steps the version would change. Absent: ready.
+   */
+  readonly yglReady?: () => boolean
+  /** The task ledger's state of a request the team identity received (owner ruling 2026-11-18: one book for receipts owed). */
+  readonly receiptLedger?: (task: string) => import('./receipts.ts').LedgerOwed
   readonly stageFiles?: (sessionId: string, paths: readonly string[], canvas: string) => { ok: true; files: DecisionFile[] } | { ok: false; code: string; error: string }
   /** Where this team's state lives instead, when it is not the instance's primary team (design M2). */
   readonly stateDir?: string
@@ -144,6 +153,6 @@ export interface SuperagentHostDeps {
 /** The candidate card the router reads: bounded facts and the ids its decision names, never authority. */
 /** A message a person typed into a session: only the host can mark one. */
 /** Who a workbench request is from, when it is not the owner at the page: their terminal, or an observer. */
-export type WorkbenchVia = 'cli' | { readonly observer: string }
+export type WorkbenchVia = 'cli' | { readonly observer: string } | { readonly member: string }
 
 export interface PersonMessage { readonly id: string; readonly atMs: number; readonly text: string }

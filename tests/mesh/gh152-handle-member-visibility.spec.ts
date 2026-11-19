@@ -31,7 +31,7 @@ function ownSession(node: MeshNode, id: string): void {
 
 async function pairAB(tag: string) {
   const [pa, pb] = [await reservePort(), await reservePort()]
-  // teamScopeInfo on: P3-b's symptom is the SCOPED plane hiding the canvas.
+  // teamScope on: P3-b's symptom is the SCOPED plane hiding the canvas.
   const a = await bootNode({ name: 'A', session: `mesh-152-${tag}-a`, team: 'dsh', sessionNodes: true, teamScopeInfo: true, port: pa, peers: [url(pb)] } as never)
   const b = await bootNode({ name: 'B', session: `mesh-152-${tag}-b`, team: 'dsh', sessionNodes: true, port: pb, peers: [url(pa)] } as never)
   ownSession(a, IDS.a)

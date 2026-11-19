@@ -4,6 +4,7 @@
  * row. Loopback hosts prove listing, routing and the boundary around that
  * claim without any production node, membership, key or state mutation.
  */
+import { TeamMembershipStore } from '../../src/team-store.ts'
 import { generateKeyPairSync } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -11,7 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { signCard } from '../../src/card.ts'
 import { canvasOwnerFingerprint } from '../../src/canvas-id.ts'
-import { bootNode, ghostNode, reservePort, runContext, type MeshNode } from './harness.ts'
+import { bootNode, ghostNode, reservePort, runContext, tmpHome, type MeshNode } from './harness.ts'
+import { join } from 'node:path'
 
 beforeEach(() => { vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('no socket') }) })
 afterEach(() => { vi.unstubAllGlobals() })
@@ -553,11 +555,12 @@ describe('gh#159 remote canvas discovery and routing', () => {
       canvasOrg: [{ name: 'ops', team, members: ['other/cccccccc'] }],
       teamMemberships: [{ node: team, team: 'team/shared' }],
     })
-    const a = await bootNode({ name: 'A', session: 'gh159-roster-scope', team: 'home', agentId: A_ID, sessionNodes: true, teamScopeInfo: true, teamJoinAllowlist: ['team/shared'], peers: [peer.baseUrl] })
+    // A's roster line was declared before roster self-join was retired (owner ruling 2026-11-18): seeded on disk.
+    const rosterHome = tmpHome()
+    new TeamMembershipStore(join(rosterHome, 'a2a', 'teams.json')).add(A_ID, 'team/shared')
+    const a = await bootNode({ name: 'A', session: 'gh159-roster-scope', team: 'home', agentId: A_ID, sessionNodes: true, teamScopeInfo: true, teamJoinAllowlist: ['team/shared'], peers: [peer.baseUrl], home: rosterHome })
     try {
       await post(a, '/__dsh_a2a/join', { id: A_ID })
-      const joined = await a.ctx.tools.get('a2a_team_join')!.execute({ team: 'team/shared', id: A_ID }, runContext(a.agents.agent)) as { ok: boolean }
-      expect(joined.ok).toBe(true)
       const listed = await a.ctx.tools.get('a2a_teams')!.execute({ query: team }, runContext(a.agents.agent)) as Directory
       expect(listed.teams.some(row => row.team === team)).toBe(false)
     } finally { await a.dispose(); await peer.close() }

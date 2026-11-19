@@ -42,7 +42,7 @@ export async function outboundScope(r: OutboundScopeRecords, id: string, handle:
   // teamless one still has no network (S3).
   const declared = teams.length > 0 || r.canvasNames().some(name => r.canvasMembers(name).some(ref => ref === id || ref === handle || r.memberHandle?.(ref) === handle))
   if (openTeam && declared) return { ok: true }
-  if (teams.length === 0 && !sharedRoster && !sharedCanvas && !orgShared) return { ok: false, error: `team-scoped routing is on and this session (${r.id8(id)}) has declared no team membership — a teamless node has no network. Declare one with a2a_team_join (subject to the owner's teamJoinAllowlist)` }
-  if (!teams.includes(team) && !sharedRoster && !sharedCanvas && !orgShared) return { ok: false, error: `team-scoped routing is on: routing to "${team}" requires declared membership. This session's teams: ${teams.join(', ')}. a2a_team_join can declare it (subject to the owner's teamJoinAllowlist)` }
+  if (teams.length === 0 && !sharedRoster && !sharedCanvas && !orgShared) return { ok: false, error: `team-scoped routing is on and this session (${r.id8(id)}) has declared no team membership — a teamless node has no network. Ask the owner to put this session in a canvas team (the workbench board, or the team builder)` }
+  if (!teams.includes(team) && !sharedRoster && !sharedCanvas && !orgShared) return { ok: false, error: `team-scoped routing is on: routing to "${team}" requires declared membership. This session's teams: ${teams.join(', ')}. The owner puts both sessions in one canvas team (the workbench board, or the team builder)` }
   return { ok: true }
 }

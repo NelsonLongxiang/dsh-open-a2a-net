@@ -1,7 +1,6 @@
 /**
  * CanvasStore unit tests: name validation, caps, member ordering (routing
- * priority), cross-team drop, and persistence round-trip — the same contract
- * family as group-store.spec.ts.
+ * priority), cross-team drop, and persistence round-trip.
  */
 import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
@@ -24,6 +23,17 @@ describe('CanvasStore', () => {
     expect(store.create('x'.repeat(41))).toBeUndefined()
     expect(store.create('123')).toBeUndefined()
     expect(store.hasTeam('alpha')).toBe(true)
+  })
+
+  it('#650 requireNew: an existing team is refused, a new one is created and persisted; plain create stays idempotent', () => {
+    const file = tmpFile()
+    const store = new CanvasStore(file)
+    expect(store.create('alpha', { requireNew: true })).toBe('alpha')
+    expect(new CanvasStore(file).hasTeam('alpha')).toBe(true)
+    expect(store.create(' alpha ', { requireNew: true })).toBeUndefined()
+    expect(store.create('alpha')).toBe('alpha')
+    expect(store.list()).toEqual(['alpha'])
+    expect(store.create('a/b', { requireNew: true })).toBeUndefined()
   })
 
   it('enforces the team cap', () => {

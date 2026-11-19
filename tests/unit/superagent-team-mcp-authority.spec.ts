@@ -4,7 +4,7 @@
  * real registered tool wrapper; generated node key, fake market and MCP transport.
  */
 import { generateKeyPairSync, sign as edSign } from 'node:crypto'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'

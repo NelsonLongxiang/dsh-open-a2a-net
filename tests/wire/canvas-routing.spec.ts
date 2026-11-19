@@ -79,6 +79,7 @@ async function mount(seeds: { joined?: string[]; canvas?: Array<{ name: string; 
   }
   apply(ctx, {
     apiKey: '',
+    originClaimWindow: true, // #64: fixture posts unsigned deliveries (production default is closed)
     session: 'canvas-test',
     team: 'dsh',
     routeTimeoutMs: 60_000,
