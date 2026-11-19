@@ -126,8 +126,24 @@ export class ReconciliationReminders {
     if(!this.idle(agent)||chosen.some(row=>{const current=this.d.ledger.find(row.taskId);return !current||!deliveryBlocked(current)})){this.d.ledger.saveReminders(old,{id,at});return}
     const lines=chosen.map(row=>{const observation=this.d.ledger.receiptObservation(row.taskId);return 'task '+row.taskId+'; receipt-to '+safe(row.auth?.receipt_target??row.sender?.id??row.peer.replace(/^local:/,''),256)+'; state '+(observation.receiptRecovery?.state??'legacy-unknown')})
     // #709 merge: through the session's reconciliation inbox (one unconsumed item per session); refused → retried later.
-    const sent=this.d.followup(agent,'[A2A receipt delivery blocked] 工作已有答复，但原回执尚未确认交付；这不是新任务或普通催办，不需要回执。可靠保存的回执由宿主沿原投递ID对账/补送；旧记录缺载荷或身份/准入已变时停核账，不据摘要重造回执。不要重做业务、再次发布、换ID重发、改投owner或自行恢复目标presence。请由原发送方/有权运维恢复原返回通道；此提示每条只发一次。\n'+lines.join('\n'),{kind:'blocked',taskIds:chosen.map(row=>row.taskId),requestId:next.map(update=>update.state.requestId).join(':')})
+    let sent:boolean|void
+    try {
+      sent=this.d.followup(agent,'[A2A receipt delivery blocked] 工作已有答复，但原回执尚未确认交付；这不是新任务或普通催办，不需要回执。可靠保存的回执由宿主沿原投递ID对账/补送；旧记录缺载荷或身份/准入已变时停核账，不据摘要重造回执。不要重做业务、再次发布、换ID重发、改投owner或自行恢复目标presence。请由原发送方/有权运维恢复原返回通道；此提示每条只发一次。\n'+lines.join('\n'),{kind:'blocked',taskIds:chosen.map(row=>row.taskId),requestId:next.map(update=>update.state.requestId).join(':')})
+    } catch(error) {
+      // #709 review R1: only an unknown acceptance (a throw after a possible insertion) keeps the once-only marker; any
+      // earlier failure (unreadable inbox, scope, taint) inserted nothing, so the notice stays eligible for a later scan.
+      if(!(error instanceof FollowupAcceptanceUnknown))this.d.ledger.saveReminders(old,{id,at})
+      throw error
+    }
     if(sent===false)this.d.ledger.saveReminders(old,{id,at})
+  }
+  /**
+   * #709 review R2: a queued blocked notice was invalidated unconsumed while these debts are still blocked. Their
+   * once-only marker is released so the next scan can tell them; nothing else of their state changes.
+   */
+  releaseBlockedNotice(taskIds:readonly string[]):void {
+    const updates=taskIds.flatMap(taskId=>{const state=this.d.ledger.reminderState(taskId);if(!state||state.deliveryNoticeAt===undefined)return [];const {deliveryNoticeAt:_spent,...rest}=state;return [{taskId,state:rest}]})
+    if(updates.length)this.d.ledger.saveReminders(updates)
   }
   private notify(rows:TaskRecord[]):void {
     const now=this.now(),groups=new Map<ReminderAgent,TaskRecord[]>()

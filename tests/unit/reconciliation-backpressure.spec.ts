@@ -16,8 +16,9 @@ function fixture() {
     agent.followup = (message: any) => agent.inbox.nextTurn.push(message)
     agent.inbox.remove = (id: string) => { for (const name of ['nextTurn', 'nextStep']) { const index = agent.inbox[name].findIndex((m: any) => m.id === id); if (index >= 0) { agent.inbox[name].splice(index, 1); return true } }; return false }
   }
-  const delivery = new ReconciliationInbox({ rows: () => ledger.list(), sender: 'beta', taint: () => {} })
-  const controller = new ReconciliationReminders({ ledger, agents: () => [target, sender], resolve: () => target, sender: () => sender,
+  let controller: ReconciliationReminders
+  const delivery = new ReconciliationInbox({ rows: () => ledger.list(), sender: 'beta', taint: () => {}, invalidated: (kind, ids) => { if (kind === 'blocked') controller.releaseBlockedNotice(ids) } })
+  controller = new ReconciliationReminders({ ledger, agents: () => [target, sender], resolve: () => target, sender: () => sender,
     available: agent => delivery.available(agent as any), followup: (agent, text, scope) => delivery.send(agent as any, text, scope), now: () => now, warn: vi.fn() })
   ledger.track('job', 'beta/aaaaaaaa', 'local', undefined, 'original', { kind: 'session', id: 'alpha/bbbbbbbb' })
   return { ledger, target, sender, controller, delivery, advance: (ms: number) => { now += ms } }
@@ -286,4 +287,68 @@ describe('reconciliation reminder queue backpressure', () => {
     expect(originalInbox.nextTurn).toHaveLength(0)
   })
 
+
+  describe('#709 review: blocked-notice lifecycle', () => {
+    const blockedTexts = (f: ReturnType<typeof fixture>): string[] => f.target.inbox.nextTurn.map((m: any) => String(m.content?.[0]?.text)).filter((t: string) => t.startsWith('[A2A receipt delivery blocked]'))
+
+    it('R1: an inbox that fails after the notice is reserved inserts nothing; the reservation is rolled back and a later scan sends it once', () => {
+      const f = fixture()
+      expect(f.ledger.markAnswered('job', 'beta/aaaaaaaa')).toBe(true)
+      const queue = f.target.inbox.nextTurn
+      // Break the inbox exactly when the blocked-notice reservation is written (before the inbox is asked to insert).
+      const save = f.ledger.saveReminders.bind(f.ledger)
+      const spy = vi.spyOn(f.ledger, 'saveReminders').mockImplementation((updates: any, session?: any) => {
+        const out = save(updates, session)
+        if (updates.some((u: any) => u.state?.deliveryNoticeAt !== undefined)) f.target.inbox.nextTurn = undefined
+        return out
+      })
+      const followup = vi.spyOn(f.target, 'followup')
+      f.controller.scan()
+      spy.mockRestore()
+      expect(followup).not.toHaveBeenCalled()
+      expect(f.ledger.reminderState('job')?.deliveryNoticeAt).toBeUndefined()
+      f.target.inbox.nextTurn = queue
+      f.advance(REMINDER_LONG_MS); f.controller.scan()
+      expect(blockedTexts(f)).toHaveLength(1)
+      expect(f.ledger.reminderState('job')?.deliveryNoticeAt).toBeDefined()
+      f.advance(REMINDER_LONG_MS); f.controller.scan()
+      expect(blockedTexts(f)).toHaveLength(1)
+    })
+
+    it('R1 control: a followup that throws after inserting keeps one notice and the marker; no duplicate later', () => {
+      const f = fixture()
+      expect(f.ledger.markAnswered('job', 'beta/aaaaaaaa')).toBe(true)
+      const original = f.target.followup
+      f.target.followup = (message: any) => { original(message); throw Error('reply lost after insertion') }
+      f.controller.scan()
+      f.target.followup = original
+      expect(blockedTexts(f)).toHaveLength(1)
+      expect(f.ledger.reminderState('job')?.deliveryNoticeAt).toBeDefined()
+      f.advance(REMINDER_LONG_MS); f.controller.scan()
+      expect(blockedTexts(f)).toHaveLength(1)
+    })
+
+    it('R2: when one debt of a two-debt blocked notice settles, the other is told again in a new notice', () => {
+      const f = fixture()
+      f.ledger.track('job2', 'beta/aaaaaaaa', 'local', undefined, 'second', { kind: 'session', id: 'alpha/bbbbbbbb' })
+      expect(f.ledger.markAnswered('job', 'beta/aaaaaaaa')).toBe(true)
+      expect(f.ledger.markAnswered('job2', 'beta/aaaaaaaa')).toBe(true)
+      f.controller.scan()
+      expect(blockedTexts(f)).toHaveLength(1)
+      expect(blockedTexts(f)[0]).toContain('job2')
+      // Only the first debt ends; the queued two-debt notice is stale and is removed unconsumed.
+      f.ledger.cancel('job', 'settled elsewhere')
+      f.advance(REMINDER_LONG_MS); f.controller.scan()
+      const texts = blockedTexts(f)
+      expect(texts).toHaveLength(1)
+      expect(texts[0]).toContain('job2')
+      expect(texts[0]).not.toContain('task job;')
+      expect(f.ledger.find('job2')?.status).toBe('pending')
+      expect(f.ledger.reminderState('job2')?.attempts ?? 0).toBe(0)
+      // Consumed now: nothing more for it.
+      f.target.inbox.nextTurn.length = 0
+      f.advance(REMINDER_LONG_MS); f.controller.scan()
+      expect(blockedTexts(f)).toHaveLength(0)
+    })
+  })
 })

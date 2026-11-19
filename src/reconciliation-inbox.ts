@@ -24,7 +24,11 @@ const liveFor = (kind: unknown, rows: readonly TaskRecord[]): Set<string> => new
 
 export class ReconciliationInbox {
   private readonly sending = new Set<string>()
-  constructor(private readonly d: { sender: string; rows: () => readonly TaskRecord[]; taint: (agent: Agent) => void }) {}
+  /**
+   * `invalidated` (#709 review R2): a stale summary was removed while some of its debts are still live; those are reported
+   * so a once-only notice (`blocked`) can be selected again instead of being lost unseen.
+   */
+  constructor(private readonly d: { sender: string; rows: () => readonly TaskRecord[]; taint: (agent: Agent) => void; invalidated?: (kind: ReconciliationScope['kind'], liveTaskIds: string[]) => void }) {}
   private prefix(agent: Agent): string { return 'a2a-reconciliation-' + taskKey(this.d.sender + ':' + String(agent.id)) + '-' }
   private pending(agent: Agent): readonly UserMessage[] {
     if (!agent.inbox || !Array.isArray(agent.inbox.nextTurn) || !Array.isArray(agent.inbox.nextStep)) throw Object.assign(Error('reconciliation requires a readable host inbox'), { code: 'REMINDER_INBOX_UNAVAILABLE' })
@@ -55,7 +59,10 @@ export class ReconciliationInbox {
         if (scope.t.every(key => live.has(key))) continue
         // One of the summary's debts ended or was answered: invalidate the summary, not the debt.
         if (typeof agent.inbox.remove !== 'function') throw Object.assign(Error('host inbox cannot invalidate a stale reconciliation summary'), { code: 'REMINDER_REMOVE_UNAVAILABLE' })
-        agent.inbox.remove(message.id)
+        const removed = agent.inbox.remove(message.id)
+        // The summary was never consumed: its still-live debts have not been told, so they may be selected again.
+        const scoped = scope.t as string[], survivors = rows.filter(row => scoped.includes(taskKey(row.taskId)) && live.has(taskKey(row.taskId))).map(row => row.taskId)
+        if (removed !== false && survivors.length > 0) this.d.invalidated?.(scope.k as ReconciliationScope['kind'], survivors)
       }
       return !this.pending(agent).some(message => this.ours(agent, message))
     } finally { this.sending.delete(id) }
