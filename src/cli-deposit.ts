@@ -373,6 +373,8 @@ export class CliDepositStore {
       const parsed=parseReceiptMailbox(commit),old=retained.find(r=>r.transportId===thread.taskId)
       if(!parsed||parsed.transportId!==thread.taskId||parsed.handle!==handle||parsed.from!==from||parsed.targetKey!==this.heldKey(handle))throw Error('receipt mailbox commit binding mismatch')
       if(old&&(old.fingerprint!==parsed.fingerprint||old.handle!==parsed.handle||old.from!==parsed.from||old.message!==parsed.message||old.targetKey!==parsed.targetKey||old.originalBirth!==parsed.originalBirth||JSON.stringify(old.settler)!==JSON.stringify(parsed.settler)))throw Error('receipt mailbox commit identity conflict')
+      // #708 R2: slots held for session receipts in flight are not this mailbox write's to take.
+      if(!old&&retained.filter(r=>r.phase==='pending').length+this.sessionReceiptSlots>=RECEIPT_MAILBOX_CAP)throw Error('receipt mailbox journal capacity full')
       if(!old){while(retained.length>=RECEIPT_MAILBOX_CAP){const i=retained.findLastIndex(r=>r.phase!=='pending');if(i<0)throw Error('receipt mailbox journal capacity full');retained.splice(i,1)}retained.unshift(parsed)}
     }
     const seq=this.nextSeq.get(handle)??1
@@ -389,7 +391,24 @@ export class CliDepositStore {
    * #708 R2: journal a receipt already inserted into a SESSION whose local settlement commit failed, so the same
    * recovery scan finishes only that settlement later (never a second insertion). `targetKey` is `session:<id>`.
    */
-  journalSessionReceipt(commit:ReceiptMailboxCommit):void {
+  /** #708 R2: pending-journal slots held for session receipts being inserted right now (in memory; nothing is inserted across a restart). */
+  private sessionReceiptSlots=0
+  /**
+   * #708 R2 (capacity): hold one pending-journal slot for a session receipt BEFORE it is inserted, so a later settlement
+   * failure can always be journaled. Undefined when the journal is full of pending records (or corrupt): the caller then
+   * refuses before insertion. The returned release is idempotent.
+   */
+  reserveSessionReceiptSlot():(()=>void)|undefined {
+    if(this.receiptCommitsCorrupt)return undefined
+    if(this.receiptCommits.filter(r=>r.phase==='pending').length+this.sessionReceiptSlots>=RECEIPT_MAILBOX_CAP)return undefined
+    this.sessionReceiptSlots++
+    let held=true
+    return ()=>{if(held){held=false;this.sessionReceiptSlots--}}
+  }
+
+  /** `slot` is the reservation this receipt holds; it is released before the slot is counted, then the record takes it. */
+  journalSessionReceipt(commit:ReceiptMailboxCommit,slot?:()=>void):void {
+    slot?.()
     if(this.receiptCommitsCorrupt)throw Error('receipt mailbox journal is corrupt')
     const parsed=parseReceiptMailbox(commit)
     if(!parsed||parsed.phase!=='pending'||!parsed.targetKey.startsWith('session:'))throw Error('session receipt commit is invalid')
@@ -398,6 +417,8 @@ export class CliDepositStore {
       if(old.fingerprint!==parsed.fingerprint||old.handle!==parsed.handle||old.from!==parsed.from||old.message!==parsed.message||old.targetKey!==parsed.targetKey||old.originalBirth!==parsed.originalBirth||JSON.stringify(old.settler)!==JSON.stringify(parsed.settler))throw Error('receipt mailbox commit identity conflict')
       return
     }
+    // Other receipts' held slots stay theirs; this one's slot was released above and is taken by this record.
+    if(retained.filter(r=>r.phase==='pending').length+this.sessionReceiptSlots>=RECEIPT_MAILBOX_CAP)throw Error('receipt mailbox journal capacity full')
     while(retained.length>=RECEIPT_MAILBOX_CAP){const i=retained.findLastIndex(r=>r.phase!=='pending');if(i<0)throw Error('receipt mailbox journal capacity full');retained.splice(i,1)}
     retained.unshift(parsed)
     const snapshot:Snapshot={receiptCommits:retained,deposits:[...this.deposits.values()],mailbox:Object.fromEntries(this.mailbox),epoch:this.epoch,nextSeq:Object.fromEntries(this.nextSeq),dropped:Object.fromEntries(this.dropped),truncated:Object.fromEntries(this.truncated)}

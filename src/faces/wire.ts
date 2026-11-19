@@ -907,6 +907,20 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           }
           // #139 (design §4.4): every answer this delivery gets carries the refusal.
           if (refusedSettlement !== undefined) withSettlementField(res, refusedSettlement)
+          // #708 R2 (capacity): a deferred session receipt holds a recovery-journal slot before it is inserted, so a
+          // settlement failure after insertion can always be journaled. No free slot: refuse before insertion — the sender
+          // keeps its receipt and retries; nothing is in the session and nothing is settled here.
+          const journalSlot = deferSessionReceipt ? cliDeposits.reserveSessionReceiptSlot() : undefined
+          if (deferSessionReceipt && journalSlot === undefined) {
+            idempotencyStore.releaseUncompleted(taskId, idemFingerprint)
+            logger.warn(`a2a: receipt ${taskId} refused before insertion: the receipt recovery journal is full`)
+            const payload = JSON.stringify({ error: 'receipt recovery journal is full; the receipt was not inserted — keep it and send it again later', code: -32000, task_id: taskId, task_status: 'TASK_STATE_FAILED', delivered: false, receipt_delivery: 'not-inserted' })
+            res.writeHead(503, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+            res.end(payload)
+            return
+          }
+          // Every exit (inserted or not, answered or dropped) gives the slot back; a journaled record took it already.
+          if (journalSlot !== undefined) res.once('close', journalSlot)
           let deferredSettled = false
           /** #708 R2: settle a deferred session receipt; false when it already answered (the ledger write failed). */
           const settleDeferred = (inserted: boolean, session?: string): boolean => {
@@ -915,6 +929,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             try {
               refusedSettlement = settleAndAnnounce(message, settler)
               if (refusedSettlement !== undefined) withSettlementField(res, refusedSettlement)
+              journalSlot?.()
               return true
             } catch {
               if (!inserted) idempotencyStore.releaseUncompleted(taskId, idemFingerprint)
@@ -926,7 +941,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                   const answered = parseReceipt(message)!
                   const original = taskLedger.find(answered.taskId) ?? taskLedger.archive().find(r => r.taskId === answered.taskId)
                   const record = { version: 1 as const, transportId: taskId, fingerprint: idemFingerprint, handle: mailTeam, targetKey: `session:${session}`, from: caller, message, settler, ...(original ? { originalBirth: receiptMailboxBirth(original) } : {}), at: Date.now(), phase: 'pending' as const }
-                  cliDeposits.journalSessionReceipt({ ...record, hash: receiptMailboxHash(record) })
+                  cliDeposits.journalSessionReceipt({ ...record, hash: receiptMailboxHash(record) }, journalSlot)
                 } catch {
                   logger.warn(`a2a: receipt ${taskId} is in session ${session} but neither its settlement nor its recovery record could be written`)
                 }
