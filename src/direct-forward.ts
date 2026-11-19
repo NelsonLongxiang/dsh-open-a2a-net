@@ -51,7 +51,8 @@ export interface DirectForwardDeps {
 const peerDispatchFingerprint=(r:ForwardRequest)=>peerPayloadFingerprint({caller:r.caller,team:r.team,message:JSON.stringify([r.message,r.contextId??'']),noWait:r.noWait})
 export function createDirectForward(d: DirectForwardDeps) {
   return async (request: ForwardRequest): Promise<A2aRouteResult> => {
-    const refuse = (why: string, next?: string): A2aRouteResult => ({ ok: false, code: -32000, task_id: request.taskId, error: 'not forwarded: ' + why, ...(next !== undefined ? { next } : {}) })
+    let dispatchAttempted = false
+    const refuse = (why: string, next?: string): A2aRouteResult => ({ ok: false, code: -32000, task_id: request.taskId, ...(!dispatchAttempted ? { delivery: 'not-sent' as const } : {}), error: 'not forwarded: ' + why, ...(next !== undefined ? { next } : {}) })
     const publish = 'run `a2a-net publish` to renew this CLI deposit on its home host, then send again with a new task id'
     if (!d.enabled()) return refuse('forwardDirect is off', 'ask this host\'s operator to set forwardDirect: true (the default since 0.6.38)')
     if (d.isolated()) return refuse('host is isolated', 'this host forwards nothing while isolated; deposit the CLI on another home host')
@@ -86,8 +87,11 @@ export function createDirectForward(d: DirectForwardDeps) {
       try {
         if(!receipt)try{d.ledger.reserveDispatch(request.taskId,peerDispatchFingerprint(request));reserved=true}catch{return refuse('durable dispatch capacity unavailable; nothing forwarded')}
         // The same selected-peer snapshot supplies both return-link gate and settlement birth.
+        dispatchAttempted = true
         const answer = await d.dispatch(url, plainTeam === request.team ? request : { ...request, team: plainTeam }, guard)
-        const result = !answer.ok && answer.ownBudgetExhausted === true ? { ...answer, code: -32005 } : answer
+        // A remote peer's failure is never this home's pre-dispatch proof.
+        const normalized = answer.ok ? answer : (({ delivery: _remoteDelivery, ...failure }) => failure)(answer)
+        const result = !normalized.ok && normalized.ownBudgetExhausted === true ? { ...normalized, code: -32005 } : normalized
         d.activity(plainTeam, url, result.ok)
         if(!result.ok&&result.acceptance==='unknown'){retained=true;return{...result,task_id:request.taskId}}
         if (result.ok || result.code === -32005) {
@@ -110,7 +114,7 @@ export function createDirectForward(d: DirectForwardDeps) {
     }
     const noReceiver = failures.some(f => f.includes('lists no receiving member'))
     const next = noReceiver ? `the owner's canvas ${plainTeam} lists no member besides you; ask its owner to add one, or route to a member's own handle` : failures.length === 0 ? `no linked peer lists ${request.team}; check the name with \`a2a-net teams\`` : undefined
-    return { ok: false, code: -32004, task_id: request.taskId, error: 'forwarding to "' + request.team + '" failed: ' + (failures.join('; ') || 'no eligible peer candidate'), ...(next !== undefined ? { next } : {}) }
+    return { ok: false, code: -32004, task_id: request.taskId, ...(!dispatchAttempted ? { delivery: 'not-sent' as const } : {}), error: 'forwarding to "' + request.team + '" failed: ' + (failures.join('; ') || 'no eligible peer candidate'), ...(next !== undefined ? { next } : {}) }
   }
 }
 

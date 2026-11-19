@@ -16,6 +16,24 @@ function fixture(results: A2aRouteResult[] = [ok]) {
   return { deps, ledger, sent }
 }
 describe('one-hop CLI forwarding', () => {
+  it('only local pre-dispatch refusals carry not-sent; peer failure is never local proof', async () => {
+    for (const over of [{ enabled: () => false }, { scope: async () => ({ ok: false as const, error: 'not linked' }) }, { candidates: async () => ({ urls: [], card: async () => undefined }) }]) {
+      const x = fixture()
+      const out = await createDirectForward({ ...x.deps, ...over })(request)
+      expect(out).toMatchObject({ ok: false, delivery: 'not-sent', task_id: request.taskId })
+      expect(x.sent).toHaveLength(0)
+    }
+    for (const code of [-32000, -32002, -32003, -32005]) {
+      const x = fixture([{ ok: false, code, error: 'peer failure', delivery: 'not-sent' }])
+      const out = await createDirectForward(x.deps)(request)
+      expect(out.ok).toBe(false)
+      expect(out).not.toHaveProperty('delivery')
+      expect(x.sent).toHaveLength(1)
+    }
+    const x = fixture([{ ok: false, code: -32000, error: 'timeout', acceptance: 'unknown', delivery: 'not-sent' }])
+    expect(await createDirectForward(x.deps)(request)).not.toHaveProperty('delivery')
+    expect(x.sent).toHaveLength(1)
+  })
   it('F2 CLI forwarding reserves the caller slot before remote acceptance and protects it from competing results',async()=>{
     const x=fixture();let posts=0
     x.deps.dispatch=async()=>{
