@@ -2577,7 +2577,7 @@ export function apply(ctx: Context, config: Config): void {
     return matches.length===1?matches[0]:undefined
   }
   const reconciliationInbox = new ReconciliationInbox({sender:config.team,rows:()=>taskLedger.list(),taint:agent=>markLineage(agent,'relay'),
-    invalidated:(kind,ids)=>{if(kind==='blocked')idleReminders.releaseBlockedNotice(ids)}})
+    invalidated:(kind,ids):(()=>void)|undefined=>kind==='blocked'?idleReminders.releaseBlockedNotice(ids):undefined})
   const idleReminders = new ReconciliationReminders({
     ledger:taskLedger,agents:reminderAgents,resolve:exactReminderTarget,
     sender:row=>{

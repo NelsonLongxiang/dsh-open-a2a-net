@@ -17,7 +17,7 @@ function fixture() {
     agent.inbox.remove = (id: string) => { for (const name of ['nextTurn', 'nextStep']) { const index = agent.inbox[name].findIndex((m: any) => m.id === id); if (index >= 0) { agent.inbox[name].splice(index, 1); return true } }; return false }
   }
   let controller: ReconciliationReminders
-  const delivery = new ReconciliationInbox({ rows: () => ledger.list(), sender: 'beta', taint: () => {}, invalidated: (kind, ids) => { if (kind === 'blocked') controller.releaseBlockedNotice(ids) } })
+  const delivery = new ReconciliationInbox({ rows: () => ledger.list(), sender: 'beta', taint: () => {}, invalidated: (kind, ids) => kind === 'blocked' ? controller.releaseBlockedNotice(ids) : undefined })
   controller = new ReconciliationReminders({ ledger, agents: () => [target, sender], resolve: () => target, sender: () => sender,
     available: agent => delivery.available(agent as any), followup: (agent, text, scope) => delivery.send(agent as any, text, scope), now: () => now, warn: vi.fn() })
   ledger.track('job', 'beta/aaaaaaaa', 'local', undefined, 'original', { kind: 'session', id: 'alpha/bbbbbbbb' })
@@ -349,6 +349,49 @@ describe('reconciliation reminder queue backpressure', () => {
       f.target.inbox.nextTurn.length = 0
       f.advance(REMINDER_LONG_MS); f.controller.scan()
       expect(blockedTexts(f)).toHaveLength(0)
+    })
+
+    const twoBlocked = () => {
+      const f = fixture()
+      f.ledger.track('job2', 'beta/aaaaaaaa', 'local', undefined, 'second', { kind: 'session', id: 'alpha/bbbbbbbb' })
+      expect(f.ledger.markAnswered('job', 'beta/aaaaaaaa')).toBe(true)
+      expect(f.ledger.markAnswered('job2', 'beta/aaaaaaaa')).toBe(true)
+      f.controller.scan()
+      expect(blockedTexts(f)).toHaveLength(1)
+      f.ledger.cancel('job', 'settled elsewhere')
+      return f
+    }
+
+    it('R2 persistence: a failed marker release leaves the stale notice queued; a later scan replaces it and the survivor is told', () => {
+      const f = twoBlocked()
+      const save = f.ledger.saveReminders.bind(f.ledger)
+      // The store refuses every marker release for the whole scan (it recovers before the next one).
+      let failed = false
+      const spy = vi.spyOn(f.ledger, 'saveReminders').mockImplementation((updates: any, session?: any) => {
+        if (updates.some((u: any) => u.taskId === 'job2' && u.state?.deliveryNoticeAt === undefined)) { failed = true; throw Object.assign(Error('disk full'), { code: 'EACCES' }) }
+        return save(updates, session)
+      })
+      f.advance(REMINDER_LONG_MS); f.controller.scan()
+      spy.mockRestore()
+      expect(failed).toBe(true)
+      // Nothing removed, nothing released: the old two-debt notice is still the one queued item.
+      expect(blockedTexts(f)).toHaveLength(1)
+      expect(blockedTexts(f)[0]).toContain('task job;')
+      expect(f.ledger.reminderState('job2')?.deliveryNoticeAt).toBeDefined()
+      f.advance(REMINDER_LONG_MS); f.controller.scan()
+      expect(blockedTexts(f)).toHaveLength(1)
+      expect(blockedTexts(f)[0]).toContain('job2')
+      expect(blockedTexts(f)[0]).not.toContain('task job;')
+    })
+
+    it('R2 persistence: a refused removal restores the released markers; the queued notice stays the only one', () => {
+      const f = twoBlocked()
+      const remove = f.target.inbox.remove
+      f.target.inbox.remove = () => false
+      f.advance(REMINDER_LONG_MS); f.controller.scan()
+      f.target.inbox.remove = remove
+      expect(blockedTexts(f)).toHaveLength(1)
+      expect(f.ledger.reminderState('job2')?.deliveryNoticeAt).toBeDefined()
     })
   })
 })

@@ -141,9 +141,12 @@ export class ReconciliationReminders {
    * #709 review R2: a queued blocked notice was invalidated unconsumed while these debts are still blocked. Their
    * once-only marker is released so the next scan can tell them; nothing else of their state changes.
    */
-  releaseBlockedNotice(taskIds:readonly string[]):void {
-    const updates=taskIds.flatMap(taskId=>{const state=this.d.ledger.reminderState(taskId);if(!state||state.deliveryNoticeAt===undefined)return [];const {deliveryNoticeAt:_spent,...rest}=state;return [{taskId,state:rest}]})
+  releaseBlockedNotice(taskIds:readonly string[]):()=>void {
+    const prior:{taskId:string;state:ReminderState}[]=[]
+    const updates=taskIds.flatMap(taskId=>{const state=this.d.ledger.reminderState(taskId);if(!state||state.deliveryNoticeAt===undefined)return [];prior.push({taskId,state});const {deliveryNoticeAt:_spent,...rest}=state;return [{taskId,state:rest}]})
     if(updates.length)this.d.ledger.saveReminders(updates)
+    // Undo (the inbox kept the summary after all): restore the markers exactly as they were.
+    return ()=>{if(prior.length)this.d.ledger.saveReminders(prior)}
   }
   private notify(rows:TaskRecord[]):void {
     const now=this.now(),groups=new Map<ReminderAgent,TaskRecord[]>()
