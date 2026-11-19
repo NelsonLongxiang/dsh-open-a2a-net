@@ -15,6 +15,12 @@ export interface ReminderDeps {
   available: (agent: ReminderAgent) => boolean
   followup: (agent: ReminderAgent, text: string, scope: ReconciliationScope) => boolean | void
   /**
+   * #709 review R2: a blocked summary's message id, and where it stands in the host (queued, taken, or gone untaken).
+   * Without them a spent notice stays spent (the earlier behaviour).
+   */
+  noticeId?: (agent: ReminderAgent, scope: ReconciliationScope) => string
+  noticeState?: (agent: ReminderAgent, messageId: string) => 'queued' | 'taken' | 'gone'
+  /**
    * Redeliver an unconsumed task's original text to its idle receiver, once (src/task-bodies.ts; market request
    * 2026-11-14). True when it went out; the host sends it as the original sender's content, never as this host's.
    */
@@ -118,17 +124,20 @@ export class ReconciliationReminders {
   private deliveryNotice(agent:ReminderAgent,rows:TaskRecord[]):void {
     const id=String(agent.id),now=this.now()
     if(!this.idle(agent)||this.throttled(id,now))return
-    const chosen=rows.filter(row=>{const prior=this.d.ledger.reminderState(row.taskId);return taskIdRefusal(row.taskId)===undefined&&prior?.deliveryNoticeAt===undefined&&(prior===undefined||prior.targetId===id)}).slice(0,8)
+    const chosen=rows.filter(row=>{const prior=this.d.ledger.reminderState(row.taskId);return taskIdRefusal(row.taskId)===undefined&&(prior?.deliveryNoticeAt===undefined||this.untaken(agent,prior.deliveryNoticeId))&&(prior===undefined||prior.targetId===id)}).slice(0,8)
     if(!chosen.length)return
     const old=chosen.map(row=>({taskId:row.taskId,state:this.d.ledger.reminderState(row.taskId)})),at=this.d.ledger.reminderSessionAt(id)
     const next=chosen.map((row,index)=>({taskId:row.taskId,state:{...(old[index]!.state??{version:1 as const,targetId:id,attempts:0,deliveredCount:0,lastAttemptAt:now,nextAt:now+REMINDER_LONG_MS,requestId:'receipt-blocked:'+row.taskId,lastResult:'unknown' as const}),deliveryNoticeAt:now}}))
+    // #709 review R2: the summary's stable message id goes into the same reservation write as the marker.
+    const scope:ReconciliationScope={kind:'blocked',taskIds:chosen.map(row=>row.taskId),requestId:next.map(update=>update.state.requestId).join(':')}
+    if(this.d.noticeId){const noticeId=this.d.noticeId(agent,scope);for(const update of next)(update.state as ReminderState).deliveryNoticeId=noticeId}
     this.d.ledger.saveReminders(next,{id,at:now})
     if(!this.idle(agent)||chosen.some(row=>{const current=this.d.ledger.find(row.taskId);return !current||!deliveryBlocked(current)})){this.d.ledger.saveReminders(old,{id,at});return}
     const lines=chosen.map(row=>{const observation=this.d.ledger.receiptObservation(row.taskId);return 'task '+row.taskId+'; receipt-to '+safe(row.auth?.receipt_target??row.sender?.id??row.peer.replace(/^local:/,''),256)+'; state '+(observation.receiptRecovery?.state??'legacy-unknown')})
     // #709 merge: through the session's reconciliation inbox (one unconsumed item per session); refused → retried later.
     let sent:boolean|void
     try {
-      sent=this.d.followup(agent,'[A2A receipt delivery blocked] 工作已有答复，但原回执尚未确认交付；这不是新任务或普通催办，不需要回执。可靠保存的回执由宿主沿原投递ID对账/补送；旧记录缺载荷或身份/准入已变时停核账，不据摘要重造回执。不要重做业务、再次发布、换ID重发、改投owner或自行恢复目标presence。请由原发送方/有权运维恢复原返回通道；此提示每条只发一次。\n'+lines.join('\n'),{kind:'blocked',taskIds:chosen.map(row=>row.taskId),requestId:next.map(update=>update.state.requestId).join(':')})
+      sent=this.d.followup(agent,'[A2A receipt delivery blocked] 工作已有答复，但原回执尚未确认交付；这不是新任务或普通催办，不需要回执。可靠保存的回执由宿主沿原投递ID对账/补送；旧记录缺载荷或身份/准入已变时停核账，不据摘要重造回执。不要重做业务、再次发布、换ID重发、改投owner或自行恢复目标presence。请由原发送方/有权运维恢复原返回通道；此提示每条只发一次。\n'+lines.join('\n'),scope)
     } catch(error) {
       // #709 review R1: only an unknown acceptance (a throw after a possible insertion) keeps the once-only marker; any
       // earlier failure (unreadable inbox, scope, taint) inserted nothing, so the notice stays eligible for a later scan.
@@ -137,16 +146,14 @@ export class ReconciliationReminders {
     }
     if(sent===false)this.d.ledger.saveReminders(old,{id,at})
   }
+
   /**
-   * #709 review R2: a queued blocked notice was invalidated unconsumed while these debts are still blocked. Their
-   * once-only marker is released so the next scan can tell them; nothing else of their state changes.
+   * #709 review R2: a spent blocked notice is offered again only when the host shows its summary gone without ever being
+   * taken into the session (removed as stale while unread). Queued, taken, unknown id or an unreadable host: stays spent.
    */
-  releaseBlockedNotice(taskIds:readonly string[]):()=>void {
-    const prior:{taskId:string;state:ReminderState}[]=[]
-    const updates=taskIds.flatMap(taskId=>{const state=this.d.ledger.reminderState(taskId);if(!state||state.deliveryNoticeAt===undefined)return [];prior.push({taskId,state});const {deliveryNoticeAt:_spent,...rest}=state;return [{taskId,state:rest}]})
-    if(updates.length)this.d.ledger.saveReminders(updates)
-    // Undo (the inbox kept the summary after all): restore the markers exactly as they were.
-    return ()=>{if(prior.length)this.d.ledger.saveReminders(prior)}
+  private untaken(agent:ReminderAgent,noticeId:string|undefined):boolean {
+    if(noticeId===undefined||!this.d.noticeState)return false
+    try{return this.d.noticeState(agent,noticeId)==='gone'}catch{return false}
   }
   private notify(rows:TaskRecord[]):void {
     const now=this.now(),groups=new Map<ReminderAgent,TaskRecord[]>()

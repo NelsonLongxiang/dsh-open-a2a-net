@@ -24,11 +24,7 @@ const liveFor = (kind: unknown, rows: readonly TaskRecord[]): Set<string> => new
 
 export class ReconciliationInbox {
   private readonly sending = new Set<string>()
-  /**
-   * `invalidated` (#709 review R2): a stale summary was removed while some of its debts are still live; those are reported
-   * so a once-only notice (`blocked`) can be selected again instead of being lost unseen.
-   */
-  constructor(private readonly d: { sender: string; rows: () => readonly TaskRecord[]; taint: (agent: Agent) => void; invalidated?: (kind: ReconciliationScope['kind'], liveTaskIds: string[]) => (() => void) | void }) {}
+  constructor(private readonly d: { sender: string; rows: () => readonly TaskRecord[]; taint: (agent: Agent) => void }) {}
   private prefix(agent: Agent): string { return 'a2a-reconciliation-' + taskKey(this.d.sender + ':' + String(agent.id)) + '-' }
   private pending(agent: Agent): readonly UserMessage[] {
     if (!agent.inbox || !Array.isArray(agent.inbox.nextTurn) || !Array.isArray(agent.inbox.nextStep)) throw Object.assign(Error('reconciliation requires a readable host inbox'), { code: 'REMINDER_INBOX_UNAVAILABLE' })
@@ -59,17 +55,28 @@ export class ReconciliationInbox {
         if (scope.t.every(key => live.has(key))) continue
         // One of the summary's debts ended or was answered: invalidate the summary, not the debt.
         if (typeof agent.inbox.remove !== 'function') throw Object.assign(Error('host inbox cannot invalidate a stale reconciliation summary'), { code: 'REMINDER_REMOVE_UNAVAILABLE' })
-        // The summary was never consumed: its still-live debts have not been told, so they may be selected again.
-        // #709 review R2: release them first (a failed write leaves the summary queued for the next scan to retry), then
-        // remove it; a refused or failed removal undoes the release, so the queued summary stays their only notice.
-        const scoped = scope.t as string[], survivors = rows.filter(row => scoped.includes(taskKey(row.taskId)) && live.has(taskKey(row.taskId))).map(row => row.taskId)
-        const undo = survivors.length > 0 ? this.d.invalidated?.(scope.k as ReconciliationScope['kind'], survivors) : undefined
-        let removed: unknown
-        try { removed = agent.inbox.remove(message.id) } catch (error) { undo?.(); throw error }
-        if (removed === false) undo?.()
+        agent.inbox.remove(message.id)
       }
       return !this.pending(agent).some(message => this.ours(agent, message))
     } finally { this.sending.delete(id) }
+  }
+  /** The stable message id a summary of this scope gets in this agent's inbox (the same one `send` uses). */
+  messageIdFor(agent: Agent, scope: ReconciliationScope): string { return this.prefix(agent) + taskKey(scope.kind + ':' + scope.requestId) }
+  /**
+   * #709 review R2: where a summary stands, read from the host itself — still queued, taken into the session (its history
+   * names it), or gone without being taken (removed as stale). Throws when the inbox or history cannot be read.
+   */
+  noticeState(agent: Agent, messageId: string): 'queued' | 'taken' | 'gone' {
+    if (this.pending(agent).some(message => String(message.id) === messageId)) return 'queued'
+    const session = (agent as unknown as { session?: { snapshotEvents?: () => readonly unknown[]; events?: readonly unknown[] } }).session
+    const events = session?.snapshotEvents?.() ?? session?.events
+    if (!Array.isArray(events)) throw Object.assign(Error('reconciliation requires a readable session history'), { code: 'REMINDER_HISTORY_UNAVAILABLE' })
+    const named = (event: unknown): boolean => {
+      const e = event as { type?: string; data?: { id?: unknown; message?: { id?: unknown }; inserted?: readonly { id?: unknown }[] } } | undefined
+      return e?.type === 'user/message' && e.data?.id === messageId || e?.type === 'agent/inbox/claimed' && e.data?.message?.id === messageId
+        || e?.type === 'agent/inbox/spliced' && (e.data?.inserted ?? []).some(m => m?.id === messageId)
+    }
+    return events.some(named) ? 'taken' : 'gone'
   }
   send(agent: Agent, text: string, scope: ReconciliationScope): boolean {
     if (!scope.taskIds.length || scope.taskIds.length > 8 || !scope.requestId) throw Error('invalid reconciliation scope')

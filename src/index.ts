@@ -2576,8 +2576,7 @@ export function apply(ctx: Context, config: Config): void {
     const matches=live.filter(a=>sessionTeamOf(a)===face)
     return matches.length===1?matches[0]:undefined
   }
-  const reconciliationInbox = new ReconciliationInbox({sender:config.team,rows:()=>taskLedger.list(),taint:agent=>markLineage(agent,'relay'),
-    invalidated:(kind,ids):(()=>void)|undefined=>kind==='blocked'?idleReminders.releaseBlockedNotice(ids):undefined})
+  const reconciliationInbox = new ReconciliationInbox({sender:config.team,rows:()=>taskLedger.list(),taint:agent=>markLineage(agent,'relay')})
   const idleReminders = new ReconciliationReminders({
     ledger:taskLedger,agents:reminderAgents,resolve:exactReminderTarget,
     sender:row=>{
@@ -2586,6 +2585,8 @@ export function apply(ctx: Context, config: Config): void {
     },
     available:agent=>reconciliationInbox.available(agent as Agent),
     followup:(agent,text,scope)=>reconciliationInbox.send(agent as Agent,text,scope),
+    noticeId:(agent,scope)=>reconciliationInbox.messageIdFor(agent as Agent,scope),
+    noticeState:(agent,id)=>reconciliationInbox.noticeState(agent as Agent,id),
     // A delivery whose steer was never consumed: its original text, once, as the original sender's content (it taints).
     // #693 review F1/F2: only a delivery the ledger never tracked (a lost steer), as a queued delivery OF THE ORIGINAL TASK,
     // so its reservation, claim, withdrawal and an unknown outcome follow the ordinary correspondence.
