@@ -193,6 +193,12 @@
             name: '@deepseek-ai/dsh-skill-filesystem'
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
+          # Code mode by default (owner 2026-11-19), as DSH's own ptc preset: the model calls run_code, and every tool it calls
+          # from the program goes through the host's role guard one by one. One executor per scope, so this replaces native
+          # calls for the member. Off where the host has no PTC runtime (DSH before 0.2.2), so the member keeps native tools.
+          - id: tool-executor-ptc
+            name: '@deepseek-ai/dsh-tool-executor-ptc'
+            disabled: !!js '!ctx.get(''ptcRuntime'')'
           # Schedules for the session itself (owner 2026-11-10): the host refuses any target but this_session.
           - id: tool-schedule
             name: '@deepseek-ai/dsh-tool-schedule'
@@ -326,6 +332,12 @@
             name: '@deepseek-ai/dsh-skill-filesystem'
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
+          # Code mode by default (owner 2026-11-19), as DSH's own ptc preset: the model calls run_code, and every tool it calls
+          # from the program goes through the host's role guard one by one. One executor per scope, so this replaces native
+          # calls for the member. Off where the host has no PTC runtime (DSH before 0.2.2), so the member keeps native tools.
+          - id: tool-executor-ptc
+            name: '@deepseek-ai/dsh-tool-executor-ptc'
+            disabled: !!js '!ctx.get(''ptcRuntime'')'
           # Schedules for the session itself (owner 2026-11-10): the host refuses any target but this_session.
           - id: tool-schedule
             name: '@deepseek-ai/dsh-tool-schedule'
