@@ -1158,7 +1158,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                   const fresh=await d.requestRecovery.inspect(body.request_recovery,{caller,hostKey:claim.ok?claim.card.publicKey:'',home:claim.ok?originOf(claim.callerUrl):'',team,message,taskId,contextId,noWait,callback})
                   if(fresh.binding.requestId!==narrow.binding.requestId||String(target.id)!==fresh.binding.receiverSession)throw Error('fixed recovery receiver changed')
                   if(refuseIfQueueFull(caller,message,team,taskId,false,res))return
-                  const auth=buildAuthorization(admission,{caller,proof:'origin-claim',claim:{caller:claim.ok?claim.caller:'',origin:fresh.binding.senderHome},carrierUrl:fresh.binding.senderHome,ingress:'wire',allowlistVersion:admittedAt.version,target:team,receiptTarget,receivedAt:admittedAt.at})
+                  const auth=buildAuthorization(admission,{caller,proof:'origin-claim',claim:{caller:claim.ok?claim.caller:'',origin:fresh.binding.senderHome},carrierUrl:fresh.binding.senderHome,...(fresh.binding.caller===caller?{callerKey:fresh.binding.cliKey}:{}),ingress:'wire',allowlistVersion:admittedAt.version,target:team,receiptTarget,receivedAt:admittedAt.at})
                   // Receiver debt is reliable before consuming consent or calling Agent.followup.
                   taskLedger.trackInbound(taskId,team,receiptTarget,contextId,true,briefOf(message),auth,undefined,String(target.id),false)
                   d.requestRecovery.consume(body.request_recovery,fresh.claim,target)
@@ -1201,7 +1201,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                   caller,
                   proof: callerProof,
                   ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}),
-                  ...((admission.rule === 'remote-ref-cli'||admission.rule==='request-recovery') && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}), ...(CLI_HANDLE_RE.test(caller)&&(cliProof?.key||claim.ok&&claim.cli===true)?{callerKey:cliProof?.key??(claim.ok?claim.card.publicKey:'')}:{}),
+                  ...((admission.rule === 'remote-ref-cli'||admission.rule==='request-recovery') && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}), ...(narrow&&narrow.binding.caller===caller?{callerKey:narrow.binding.cliKey}:CLI_HANDLE_RE.test(caller)&&(cliProof?.key||claim.ok&&claim.cli===true)?{callerKey:cliProof?.key??(claim.ok?claim.card.publicKey:'')}:{}),
                   ingress: 'wire',
                   allowlistVersion: admittedAt.version,
                   target: team,
@@ -1295,7 +1295,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           const syncSteered = req.headers['x-a2a-guard'] === undefined || parseReceipt(message) !== null ? undefined : (target: Agent, floor: number,acceptance?:'inserted'|void): void => {
             syncTarget = sessionTeamOf(target)
             const receiptTarget = callback !== '' ? callback : caller
-            const auth = buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ...((admission.rule === 'remote-ref-cli'||admission.rule==='request-recovery') && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}), ...(CLI_HANDLE_RE.test(caller)&&(cliProof?.key||claim.ok&&claim.cli===true)?{callerKey:cliProof?.key??(claim.ok?claim.card.publicKey:'')}:{}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget, receivedAt: admittedAt.at })
+            const auth = buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ...((admission.rule === 'remote-ref-cli'||admission.rule==='request-recovery') && claim.ok ? { carrierUrl: originOf(claim.callerUrl) } : {}), ...(narrow&&narrow.binding.caller===caller?{callerKey:narrow.binding.cliKey}:CLI_HANDLE_RE.test(caller)&&(cliProof?.key||claim.ok&&claim.cli===true)?{callerKey:cliProof?.key??(claim.ok?claim.card.publicKey:'')}:{}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget, receivedAt: admittedAt.at })
             try{taskLedger.trackInbound(taskId, team, receiptTarget, contextId, receiptExpectationOf(receiptTarget) !== 'process-label', briefOf(message), auth, syncTarget === team ? undefined : syncTarget, String(target.id), acceptance==='inserted'?false:taskLedger.deliveryFor(taskId)?.state==='claimed')}catch(error){taskLedger.noteAdmittedBookkeepingFailure(error);throw new AdmittedBookkeepingError(error)}
             if(acceptance!=='inserted')armReceiptAutosend(target, taskId, receiptTarget, message, floor)
           }
