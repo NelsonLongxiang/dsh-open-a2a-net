@@ -71,6 +71,11 @@ describe('team tab helpers', () => {
     const sick = problemsOf(state({ health: [{ code: 'member-not-loaded', session: 'session-x' }, { code: 'ticket-quiet', title: '写文档', minutes: 90 }] }), NOW)
     expect(sick.map(p => p.tone)).toEqual(['danger', 'warn'])
     expect(sick[1]!.text).toContain('90 分钟没有动静')
+    // Field report 2026-11-19: queued tickets say what they wait for; waiting cannot clear a member that left (danger).
+    const queued = problemsOf(state({ health: [{ code: 'tickets-queued', reason: 'member-busy', session: 'session-x', count: 3, minutes: 90, title: 'R1 整改' }, { code: 'tickets-queued', reason: 'member-absent', session: 'session-y', count: 1, minutes: 70, title: '修文档' }] }), NOW)
+    expect(queued.map(p => p.tone)).toEqual(['warn', 'danger'])
+    expect(queued[0]!.text).toMatch(/3 张工单排队超过 90 分钟（最久的是「R1 整改」）：在等成员 .*改派/)
+    expect(queued[1]!.text).toContain('已不在团队里')
     expect(problemsOf(state({ canvasProblem: 'the bound canvas team ops does not exist on this host' }), NOW)[0]).toMatchObject({ tone: 'danger', text: expect.stringContaining('画布团队「ops」不能作为团队运行') })
   })
 })
