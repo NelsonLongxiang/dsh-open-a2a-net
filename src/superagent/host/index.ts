@@ -45,7 +45,7 @@ export { END_RECEIPT_GRACE_MS } from './receipts.ts'
 /** How long a declined tool request stays declined before the tool may be asked about again (design tool-requests T4). */
 export const TOOL_ASK_AGAIN_MS = 24 * 3_600_000
 import { agentLedEnd, clip, TEXT_CAP, presetRefusal, notTakenText, OTHER_TICKETS_SHOWN, ORIGIN_LINE_NOTE, OBSERVER_LINE, candidateCard, YGL_WRITE, yglCardLines, yglRouterLine } from './cards.ts'
-import { teamYglProject } from './ygl-home.ts'
+import { teamYglProject, teamYglScope, YGL_UNKNOWN } from './ygl-home.ts'
 import { NamedDispatch, WAIT, SWAP } from './named-dispatch.ts'
 import { RootDispatch, childLabel, isChildTeam } from './root-dispatch.ts'
 import { splitTeamRef } from '../../canvas-member.ts'
@@ -152,6 +152,7 @@ export class SuperagentHost {
       memberNotes: (member, ticket) => this.memberNotes(member, ticket),
       deliver: (member, text, kind, ticketId, run) => this.deliverToMember(member, text, kind, ticketId, run), engine: () => this.engine,
       paused: () => this.settingsValue.paused,
+      ready: () => this.yglReady(),
       cancelTurn: member => this.d.cancelTurn?.(member) === true,
       reportFor: (ticketId, member, state, summary) => { this.engine.report(ticketId, { state, summary: clip(summary, 2_000) }); this.relayReport(ticketId, state, summary); this.pass(); void member },
       ticket: id => this.store.tickets.get(id), trigger: id => this.store.triggers.get(id), logger: d.logger,
@@ -199,7 +200,7 @@ export class SuperagentHost {
       logger: d.logger,
     })
     this.receipts = new A2aReceipts({ store: this.store, a2a: this.a2a, a2aOn: () => this.settingsValue.sources.a2a, now: () => this.now(), seatOf: ticketId => this.seatOf(ticketId),
-      parentOf: ticketId => this.splits.parentOf(ticketId), splitView: ticketId => this.splitView(ticketId), senderHold: triggerId => this.senderHold(triggerId), logger: d.logger })
+      parentOf: ticketId => this.splits.parentOf(ticketId), splitView: ticketId => this.splitView(ticketId), senderHold: triggerId => this.senderHold(triggerId), ...(d.receiptLedger !== undefined ? { ledger: d.receiptLedger } : {}), logger: d.logger })
     this.prs = new PrFollower({
       path: join(dir, 'pr-follow.json'), tickets: () => this.store.tickets.list(), engine: () => this.engine, gh: d.gh ?? defaultGh,
       allowed: () => this.settingsValue.allowed.github, paused: () => this.settingsValue.paused, logger: d.logger,
@@ -309,6 +310,8 @@ export class SuperagentHost {
     // initialized yet (a TDZ crash took the plugin down on hosts with models set - review of #566). A microtask runs
     // after apply() finishes; the catch inside applyModels is the second fence.
     queueMicrotask(() => { this.applyModels() })
+    // #739 review R1: what waited on the ygl-trees version read goes out once it settles (resumeHeld), or now if it has.
+    queueMicrotask(() => { this.resumeHeld() })
     this.started = true
     this.syncA2a()
     this.pass()
@@ -777,12 +780,19 @@ export class SuperagentHost {
   /** This team's ygl-trees project (design Y1c), named after its canvas; none while the team has no canvas. */
   yglProject(): string | undefined { return this.settingsValue.canvas === undefined ? undefined : teamYglProject(this.settingsValue.canvas) }
   /** Ask the host to make the team's project (idempotent, cached there); never in the way of the work. */
+  /** This team's kb scope (design Y1e); none while the team has no canvas, or the installed ygl-trees has no kb scopes. */
+  yglScope(): string | undefined { return this.settingsValue.canvas === undefined || this.yglCaps().kbScope !== true ? undefined : teamYglScope(this.settingsValue.canvas) }
+  private yglCaps() { return this.d.yglCapabilities?.() ?? YGL_UNKNOWN }
+  /** Whether cards that depend on the installed ygl-trees may go out yet (#739 review R1). */
+  private yglReady(): boolean { return this.d.yglReady?.() !== false }
+  /** Send what the ygl-trees barrier held: undelivered candidates and waiting launches. */
+  resumeHeld(): void { if (!this.yglReady()) return; this.flushCandidates(); this.executor.launch() }
   private ensureYglProject(): void { const project = this.yglProject(); if (project !== undefined) { try { this.d.ensureYglProject?.(project) } catch { /* best effort */ } } }
   private yglRouterLines(router: string): string[] {
     const project = this.yglProject()
     if (project === undefined || this.d.hasTool?.(router, 'mcp__ygl__read') !== true) return []
     this.ensureYglProject()
-    return [yglRouterLine(project)]
+    return [yglRouterLine(project, this.yglScope())]
   }
 
   private teamCardLines(): string[] {
@@ -812,7 +822,7 @@ export class SuperagentHost {
     for (const rule of (profile?.rules ?? []).filter(r => r.enabled)) lines.push(`your rule ${rule.name}: ${clip(rule.text, 600)}`)
     if (profile !== undefined) lines.push('If this ticket does not fit your role and rules, report blocked and say why; the router will choose again.')
     // The team's memory, in the card the member acts on (owner 2026-11-10: a persona line alone was not followed).
-    if (this.d.hasTool?.(member, YGL_WRITE) === true) { this.ensureYglProject(); lines.push(...yglCardLines(this.yglProject())) }
+    if (this.d.hasTool?.(member, YGL_WRITE) === true) { this.ensureYglProject(); lines.push(...yglCardLines(this.yglProject(), { scope: this.yglScope(), caps: this.yglCaps() })) }
     for (const name of ticket.mandate.basis.rules ?? []) {
       const rule = this.settingsValue.rules.find(r => r.name === name)
       if (rule !== undefined) lines.push(`accepted on team rule ${rule.name}: ${clip(rule.text, 600)}`)
@@ -1480,7 +1490,8 @@ export class SuperagentHost {
 
   private flushCandidates(): void {
     const router = this.settingsValue.router
-    if (router === undefined || this.settingsValue.paused) return
+    // #739 review R1: a candidate card names the team's kb scope, which waits on the ygl-trees version read.
+    if (router === undefined || this.settingsValue.paused || !this.yglReady()) return
     for (const [evalId, entry] of this.candidates) {
       if (entry.delivered) continue
       const open = this.store.tickets.list().filter(t => !t.ended)
@@ -1729,6 +1740,8 @@ export class SuperagentHost {
     const repliesOf = (thread: string): StoredMessage[] => messages.filter(row => row.message.channel.source === 'workbench' && row.message.channel.thread === thread)
     return {
       health: this.health(),
+      // Design Y1d/Y1e: what the installed ygl-trees can do, and this team's project and kb scope.
+      ygl: { ...this.yglCaps(), ...(this.yglProject() !== undefined ? { project: this.yglProject() } : {}), ...(this.yglScope() !== undefined ? { scope: this.yglScope() } : {}) },
       settings: this.settings,
       ...(this.canvasProblem() !== undefined ? { canvasProblem: this.canvasProblem() } : {}),
       ...(this.servesProblem() !== undefined ? { servesProblem: this.servesProblem() } : {}),

@@ -7,6 +7,7 @@
  * W2: canvas membership is a first-class link record — admission basis is
  *     roster ∪ canvas.
  */
+import { TeamMembershipStore } from '../../src/team-store.ts'
 import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 
@@ -90,8 +91,11 @@ function makeConfig(home: string, overrides: Partial<Config> = {}): Config {
 
 interface Mounted { ctx: Context; agents: TwoRootAgentsService; port: number; a: TestAgent; b: TestAgent; dispose: () => Promise<void> }
 
-async function mountTwoSessions(overrides: Partial<Config> = {}): Promise<Mounted> {
+async function mountTwoSessions(overrides: Partial<Config> = {}, rosters: Record<string, readonly string[]> = {}): Promise<Mounted> {
   const home = mkdtempSync(join(tmpdir(), 'a2a-w12-'))
+  // Roster self-join is retired (owner ruling 2026-11-18): a roster declared before is seeded on disk, as an old host has it.
+  const store = new TeamMembershipStore(join(home, 'a2a', 'teams.json'))
+  for (const [id, teams] of Object.entries(rosters)) for (const team of teams) store.add(id, team)
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
@@ -130,12 +134,11 @@ afterEach(() => { vi.unstubAllGlobals() })
 
 describe('W1: joined-face admission rides the local dispatch candidate too', () => {
   it('a teamless joined session routing to another session team is refused; the roster-shared path still passes', async () => {
-    const m = await mountTwoSessions({ teamJoinAllowlist: ['dsh/ops', 'dsh/shared'] })
+    const m = await mountTwoSessions({ teamJoinAllowlist: ['dsh/ops', 'dsh/shared'] }, { 'session-bbbbbbbb22222222': ['dsh/ops'] })
     try {
       expect((await postJson(m.port, '/__dsh_a2a/join', { id: String(m.a.id) })).status).toBe(200)
       expect((await postJson(m.port, '/__dsh_a2a/join', { id: String(m.b.id) })).status).toBe(200)
-      // b declares a roster team; a stays TEAMLESS.
-      await m.ctx.tools.get('a2a_team_join')?.execute({ team: 'dsh/ops', id: String(m.b.id) }, execAs(m.b))
+      // b holds a roster team (declared before the retirement); a stays TEAMLESS.
       // W1: the teamless session's a2a_route to the other session team —
       // the LOCAL in-process candidate — refuses with the same shared-team
       // admission the wire face applies.
@@ -143,9 +146,8 @@ describe('W1: joined-face admission rides the local dispatch candidate too', () 
       expect(refused?.ok).toBe(false)
       expect(refused?.error).toContain('declares no team membership')
       expect(m.b.steerCalls).toHaveLength(0)
-      // Paired pin: once both declare a shared team, the same route passes.
-      await m.ctx.tools.get('a2a_team_join')?.execute({ team: 'dsh/shared', id: String(m.a.id) }, execAs(m.a))
-      await m.ctx.tools.get('a2a_team_join')?.execute({ team: 'dsh/shared', id: String(m.b.id) }, execAs(m.b))
+      // Paired pin: once both sit in one canvas team, the same route passes.
+      for (const id of [String(m.a.id), String(m.b.id)]) expect((await (await postJson(m.port, '/__dsh_a2a/canvas', { action: 'add-member', name: 'pair', id })).json() as { ok?: boolean }).ok).toBe(true)
       const passed = await m.ctx.tools.get('a2a_route')?.execute({ team: 'dsh/bbbbbbbb', message: '同队借道' }, execAs(m.a)) as { ok: boolean; error?: string }
       expect(passed?.ok).toBe(true)
       expect(m.b.steerCalls).toHaveLength(1)
@@ -157,11 +159,10 @@ describe('W1: joined-face admission rides the local dispatch candidate too', () 
 
 describe('W2: canvas membership is a first-class admission basis', () => {
   it('same-host canvas teammates pass without a roster line', async () => {
-    const m = await mountTwoSessions({ teamJoinAllowlist: ['dsh/ops'] })
+    const m = await mountTwoSessions({ teamJoinAllowlist: ['dsh/ops'] }, { 'session-bbbbbbbb22222222': ['dsh/ops'] })
     try {
       expect((await postJson(m.port, '/__dsh_a2a/join', { id: String(m.a.id) })).status).toBe(200)
       expect((await postJson(m.port, '/__dsh_a2a/join', { id: String(m.b.id) })).status).toBe(200)
-      await m.ctx.tools.get('a2a_team_join')?.execute({ team: 'dsh/ops', id: String(m.b.id) }, execAs(m.b))
       // No roster line for a — but BOTH sessions sit in one canvas team:
       // membership is a link record (W2②). Composition rides the
       // workbench's own seam (the add-member control action).

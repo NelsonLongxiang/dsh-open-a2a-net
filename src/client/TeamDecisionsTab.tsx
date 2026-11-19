@@ -6,7 +6,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import styles from './TeamRequestTab.module.css'
-import { TeamHealthBanner } from './TeamHealthBanner.tsx'
 import { AttachedFiles, stageFiles, useAttachedFiles } from './team-files.tsx'
 
 export type TeamDecisionsTabProps = PropsLocale<'a2aNet'>
@@ -140,30 +139,3 @@ export function DecisionList({ t }: TeamDecisionsTabProps) {
   )
 }
 
-/**
- * The view's body.
- * @param props - the slot's locale.
- * @returns the waiting decisions.
- */
-export function TeamDecisionsTab({ t }: TeamDecisionsTabProps) {
-  const [rows, setRows] = useState<readonly DecisionRow[] | undefined>(undefined)
-  const [state, setState] = useState<'ok' | 'denied' | 'failed'>('ok')
-
-  const load = useCallback(async (): Promise<void> => {
-    const read = await readDecisions()
-    if (read.state !== 'ready') { setState(read.state); return }
-    setRows(read.rows)
-    setState('ok')
-  }, [])
-
-  useEffect(() => {
-    void load()
-    const timer = setInterval(() => { void load() }, POLL_MS)
-    return () => { clearInterval(timer) }
-  }, [load])
-
-  if (state !== 'ok') return <div className={styles.view}><p className={styles.hint}>{t(state === 'denied' ? 'team.denied' : 'team.unreadable')}</p></div>
-  if (rows === undefined) return <div className={styles.view}><p className={styles.hint}>{t('team.loading')}</p></div>
-  if (rows.length === 0) return <div className={styles.view}><TeamHealthBanner t={t} /><p className={styles.hint}>{t('team.noDecisions')}</p></div>
-  return <div className={styles.view}><TeamHealthBanner t={t} />{rows.map(row => <Card key={row.id} row={row} t={t} done={() => { void load() }} />)}</div>
-}

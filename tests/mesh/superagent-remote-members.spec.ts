@@ -39,8 +39,8 @@ describe('superagent members on other hosts', () => {
         const added = await canvas({ action: 'add-member', name: 'team', id: member, peer: url(pB) })
         expect(added, JSON.stringify(added)).toMatchObject({ ok: true })
         expect(await sa(A, { action: 'settings', settings: { canvas: 'team', router: R_ID } })).toMatchObject({ ok: true })
-        // The v4 action is gone: a remote member is a canvas slot.
-        expect(await sa(A, { action: 'add-remote-member', ref: member, peer: url(pB) })).toMatchObject({ ok: false, error: expect.stringContaining('canvas') })
+        // The v4 action is gone (and so is its tombstone): a remote member is a canvas slot.
+        expect(await sa(A, { action: 'add-remote-member', ref: member, peer: url(pB) })).toMatchObject({ ok: false, error: expect.stringContaining('action must be') })
         const pinned = (await state(A)).executor.remoteMembers
         expect(pinned).toHaveLength(1)
         expect(pinned[0]).toMatchObject({ url: url(pB) })
@@ -48,7 +48,7 @@ describe('superagent members on other hosts', () => {
         // Design v5 (D4): B and E serve A's team by its canvas id, whose fingerprint names A's key.
         const teamId = ((await (await globalThis.fetch(`${A.baseUrl}/__dsh_a2a/state`)).json()) as any).canvas.teams.find((t: any) => t.name === 'team').id as string
         expect(teamId).toMatch(new RegExp(`^${zA}/canvas/team@[0-9a-f]{8}$`))
-        expect(await sa(B, { action: 'serve-team', peer: url(pA), members: [B_ID] })).toMatchObject({ ok: false, error: expect.stringContaining("action: 'serve'") })
+        expect(await sa(B, { action: 'serve-team', peer: url(pA), members: [B_ID] })).toMatchObject({ ok: false, error: expect.stringContaining('action must be') })
         expect(await sa(B, { action: 'serve', team: `${zA}/canvas/team`, members: [B_ID] })).toMatchObject({ ok: false, error: expect.stringContaining('<fp8>') })
         expect(await sa(B, { action: 'serve', team: `${zA}/canvas/team@00000000`, members: [B_ID] })).toMatchObject({ ok: false, error: expect.stringContaining('no linked peer') })
         const served = await sa(B, { action: 'serve', team: teamId, members: [B_ID] }); expect(served, JSON.stringify(served)).toMatchObject({ ok: true })

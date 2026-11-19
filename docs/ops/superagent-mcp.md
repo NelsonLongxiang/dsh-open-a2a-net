@@ -1,7 +1,7 @@
 # superagent 团队的 MCP 接入（运维指南）
 
 **交付对象**：在宿主机上配置 superagent 团队的属主或管理员
-**适用版本**：next/0.8 线（`@nelsonlongxiang/dsh-open-a2a-net` 0.8.x）、workbench-market 含 #474（PR #478）之后的版本、ygl-trees 0.122.x
+**适用版本**：next/0.8 线（`@nelsonlongxiang/dsh-open-a2a-net` 0.8.x）、workbench-market 含 #474（PR #478）之后的版本、ygl-trees 0.122.x 起（0.126.0 起团队 kb 笔记按团队分 scope）
 **范围**：两件事——(1) 团队会话经工作台市场的 MCP 使用工具；(2) 不在团队预设里、自己挂载 ygl-trees MCP 的宿主怎么配。
 
 > 本页所有地址、令牌、目录都是占位符：`<market-url>`、`<admin-token>`、`<team-ygl-home>` 等按本机替换。不要把真实令牌写进任何会提交到仓库的文件。
@@ -149,7 +149,9 @@ ygl-trees 的「当前项目」按 `YGL_SESSION` 分桶记录。DSH 启动 MCP �
 
 ### 2.3 先 `project use`，再 `agent brief`
 
-工作区里有不止一个项目时，目前 MCP 的 `read` 在 `agent brief` 上**不认显式传入的 `project`**（ygl-trees#260，0.122.0 可复现）：没有选中项目时报 `ambiguous project`，已经选中别的项目时**静默返回那个项目的结果**。在修复它的 ygl-trees 版本发布前，按这个顺序调用：
+> ygl-trees 0.123.0 起已修复（#260）：`agent brief` 认显式传入的 `project`，用团队预设的宿主会读出版本，派单卡里不再有这一步。下面只对 0.122.x 及更早的版本适用。
+
+工作区里有不止一个项目时，0.122.x 的 MCP `read` 在 `agent brief` 上**不认显式传入的 `project`**（ygl-trees#260，0.122.0 可复现）：没有选中项目时报 `ambiguous project`，已经选中别的项目时**静默返回那个项目的结果**。在修复它的 ygl-trees 版本发布前，按这个顺序调用：
 
 1. `write {"domain":"project","action":"use","name":"<项目名>"}`——应答里 `scope` 为 `session`、`session` 是本进程的会话名，说明只改了自己的选择；
 2. 再 `read {"domain":"agent","action":"brief"}`。

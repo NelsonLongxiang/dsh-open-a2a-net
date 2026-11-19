@@ -12,9 +12,9 @@
  * - **Policy.** `auto | confirm | off` per operation and source. `owner-local` never runs on `auto` (builder TB/point 3):
  *   it needs the owner's agreement (the builder's D10 gate, or the owner's control route), and a change to a team that
  *   exists also needs that team's confirmation card. `off` refuses the change.
- * - **This version (S1a).** `team.create`, `member.add` (with an optional profile) and `team.rules.set` (with a scope).
- *   `team.retire`, `member.retire` and `member.retemplate` are refused as `not-yet`: retiring is not in a blueprint, and a
- *   template needs #626 S2. Only existing sessions are used (S39); a template is refused.
+ * - **This version (S1a).** `team.create`, `member.add` (with an optional profile), `team.rules.set` (with a scope) and,
+ *   since the owner ruling of 2026-11-18, `member.retire` (a local member leaves the team's canvas; not the router, not a
+ *   member working on a ticket). `team.retire` and `member.retemplate` are refused as `not-yet`: a template needs #626 S2. Only existing sessions are used (S39); a template is refused.
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/staffing
  */
 import { createHash, randomUUID } from 'node:crypto'
@@ -27,11 +27,11 @@ export type StaffingSource = 'owner-local' | `market:${string}`
 export type PolicyMode = 'auto' | 'confirm' | 'off'
 
 /** What this version carries out; the rest is refused as `not-yet`. */
-const BUILT: ReadonlySet<StaffingOp> = new Set(['team.create', 'member.add', 'team.rules.set'])
+const BUILT: ReadonlySet<StaffingOp> = new Set(['team.create', 'member.add', 'member.retire', 'team.rules.set'])
 
 /** #626 W2 defaults for the market; `owner-local` (a blueprint, agreed as a whole) is `confirm`, retiring is `off`. */
 export const DEFAULT_POLICY: Readonly<Record<'owner-local' | 'market', Readonly<Record<StaffingOp, PolicyMode>>>> = {
-  'owner-local': { 'team.create': 'confirm', 'team.retire': 'off', 'member.add': 'confirm', 'member.retire': 'off', 'member.retemplate': 'off', 'team.rules.set': 'confirm' },
+  'owner-local': { 'team.create': 'confirm', 'team.retire': 'off', 'member.add': 'confirm', 'member.retire': 'confirm', 'member.retemplate': 'off', 'team.rules.set': 'confirm' },
   market: { 'team.create': 'confirm', 'team.retire': 'confirm', 'member.add': 'auto', 'member.retire': 'auto', 'member.retemplate': 'confirm', 'team.rules.set': 'confirm' },
 }
 
@@ -83,6 +83,8 @@ export interface StaffingTeam {
   saveSettings(raw: unknown, by: string): { ok: true } | { ok: false; error: string }
   /** The session a seat stands for now, or undefined. */
   memberOfSeat(seatId: string): string | undefined
+  /** An open ticket a member owns now — running, parked, or named for it — or undefined (a member with one is not retired). */
+  ticketOf?(session: string): string | undefined
   /** A confirmation card on this team for one change; its id. */
   proposeStaffingCard(changeId: string, question: string, reason: string, level: 'P0' | 'P1'): string | undefined
   /** BS2: a rule set's revision (`team`, `dispatch`, `member:<session>`), and one line in its history. */
@@ -191,7 +193,9 @@ export class StaffingExecutor {
       const extra = Object.keys(params).filter(key => !PARAMS[op].includes(key))
       if (extra.length > 0) return { ok: false, code: 'not-allowed', error: `${where} (${op}) takes no ${extra.join(', ')}: only ${PARAMS[op].join(', ')} (#626 W3)` }
       if (this.mode(change.source, input.op) === 'off') return { ok: false, code: 'off', error: `${input.op} is off for ${sourceKind(change.source)} changes` }
-      if (!BUILT.has(input.op)) return { ok: false, code: 'not-yet', error: `${input.op} is not carried out in this version (retiring is not in a blueprint; templates need #626 S2)` }
+      // Owner ruling 2026-11-18 gave retiring to the team builder (owner-local) only; the market's `auto` default for it stays unused.
+      if (input.op === 'member.retire' && change.source !== 'owner-local') return { ok: false, code: 'not-yet', error: 'member.retire comes only from the team builder\'s blueprint (owner-local) in this version' }
+      if (!BUILT.has(input.op)) return { ok: false, code: 'not-yet', error: `${input.op} is not carried out in this version (retiring a whole team is not in a blueprint; templates need #626 S2)` }
       const teamRef = (): string | Refusal => {
         const team = params.team
         if (typeof team !== 'string' || team === '') return { ok: false, code: 'invalid', error: `${where}.team is a team id, or a canvas this change creates` }
@@ -210,6 +214,10 @@ export class StaffingExecutor {
         const team = teamRef(); if (typeof team !== 'string') return team
         if (typeof params.session !== 'string' || !SESSION.test(params.session)) return { ok: false, code: 'invalid', error: `${where}.session is an existing session (a template is not taken: S39)` }
         if (params.profile !== undefined) { const profile = parseProfile(params.profile); if (typeof profile === 'string') return { ok: false, code: 'invalid', error: `${where}.${profile}` } }
+      } else if (input.op === 'member.retire') {
+        const team = teamRef(); if (typeof team !== 'string') return team
+        if (created.has(team)) return { ok: false, code: 'invalid', error: `${where}: a team this change creates has no member to retire yet` }
+        if (typeof params.seatId !== 'string' || params.seatId === '') return { ok: false, code: 'invalid', error: `${where}.seatId is the seat of a member on the team now` }
       } else if (input.op === 'team.rules.set') {
         const team = teamRef(); if (typeof team !== 'string') return team
         if (typeof params.scope !== 'string' || !SCOPE.test(params.scope)) return { ok: false, code: 'invalid', error: `${where}.scope is team, dispatch or member:<seatId>` }
@@ -401,6 +409,20 @@ export class StaffingExecutor {
         onUndo(() => { const ok = team.saveSettings({ profiles: before }, by).ok; if (ok) history(team, `member:${session}`, `${drafted}失败，已撤回`); return ok })
       }
       return { ok: true, result: { teamId, session } }
+    }
+    if (input.op === 'member.retire') {
+      // Owner ruling 2026-11-18: the team builder may take a member off a team. Only a local member, never the router, and
+      // never one working on a ticket (its work would be cut off): the owner stops or finishes that ticket first.
+      const seatId = p.seatId as string
+      const session = team.memberOfSeat(seatId)
+      if (session === undefined) return { ok: false, error: `seat ${seatId} is not on team ${teamId} now` }
+      if (session === team.settings.router) return { ok: false, error: `seat ${seatId} is the team's router: a team keeps its router (bind another one first)` }
+      if (session.includes('/')) return { ok: false, error: `seat ${seatId} is a member on another host: remove it on the canvas` }
+      const ticket = team.ticketOf?.(session)
+      if (ticket !== undefined) return { ok: false, error: `seat ${seatId} is working on ticket ${ticket}: stop or finish it first` }
+      if (!this.d.canvasRemoveLocal(canvas, session)) return { ok: false, error: `seat ${seatId} could not be taken off canvas ${canvas}` }
+      onUndo(async () => (await this.d.canvasAddLocal(canvas, session)).ok)
+      return { ok: true, result: { teamId, seatId, session } }
     }
     // team.rules.set
     const scope = p.scope as string
