@@ -52,6 +52,10 @@ describe('#713 A2 typed capacity refusal', () => {
     expect(note).toContain(new Date(T0 + TTL + 1).toISOString())
     expect(note).toContain('not a promise of a free slot')
     expect(capacityRefusalNote({ ...refusal, capacity: 'unknown' })).not.toContain('expire')
+    // #746 R1 applies here too: a far-future expiry past what a Date holds is text, never a throw.
+    const far = { ...view, earliestPossibleExpiryAt: 8_640_000_000_000_000 + TTL + 1 }
+    expect(() => capacityRefusalNote({ ...refusal, capacity: far })).not.toThrow()
+    expect(capacityRefusalNote({ ...refusal, capacity: far })).toContain('ms since the epoch')
   })
 
   describe('client decode', () => {

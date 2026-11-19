@@ -146,7 +146,7 @@ export function parseCapacityRefusal(raw: unknown): CapacityRefusal | undefined 
 /** The caller-facing text. It names the host-wide window, says nothing was sent, and never advises a workaround. */
 export function capacityRefusalNote(refusal: CapacityRefusal): string {
   const c = refusal.capacity
-  const expiry = c !== 'unknown' && c.status === 'observed' && c.earliestPossibleExpiryAt !== null ? ` The earliest record may expire at ${new Date(c.earliestPossibleExpiryAt).toISOString()}; that is not a promise of a free slot.` : ''
+  const expiry = c !== 'unknown' && c.status === 'observed' && c.earliestPossibleExpiryAt !== null ? ` The earliest record may expire at ${formatPossibleExpiry(c.earliestPossibleExpiryAt)}; that is not a promise of a free slot.` : ''
   return `The receiving host's task-delivery correspondence window is full (host-wide, not the target's queue); nothing was sent for this request.${expiry} Do not cancel tasks, join or route to other seats, or reuse task ids to make room; wait, or ask that host's owner to look at a2a_status.`
 }
 
