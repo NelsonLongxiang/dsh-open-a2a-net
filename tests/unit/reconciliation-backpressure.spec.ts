@@ -35,14 +35,33 @@ describe('reconciliation reminder queue backpressure', () => {
     expect(f.ledger.find('job')?.answeredAt).toBeUndefined()
     expect(f.ledger.archive()).toEqual([])
   })
-  it('does not business-nudge an answered task whose receipt is undelivered', () => {
+  it('does not business-nudge an answered task whose receipt is undelivered; it gets #708\'s one delivery-blocked notice', () => {
     const f = fixture()
     expect(f.ledger.markAnswered('job', 'beta/aaaaaaaa')).toBe(true)
     f.controller.scan()
-    expect(f.target.inbox.nextTurn).toHaveLength(0)
-    expect(f.ledger.reminderState('job')).toBeUndefined()
+    const texts = (): string[] => f.target.inbox.nextTurn.map((m: any) => String(m.content?.[0]?.text))
+    expect(texts().some(t => t.startsWith('[A2A reconciliation reminder]'))).toBe(false)
+    expect(texts().filter(t => t.startsWith('[A2A receipt delivery blocked]'))).toHaveLength(1)
+    expect(f.ledger.reminderState('job')?.attempts ?? 0).toBe(0)
+    expect(f.ledger.reminderState('job')?.deliveryNoticeAt).toBeDefined()
     expect(f.ledger.find('job')?.status).toBe('pending')
     expect(f.ledger.find('job')?.receiptDelivery).toBe('receipt-undelivered')
+    // Once per debt: later scans add nothing, whether or not the notice was consumed.
+    f.advance(REMINDER_LONG_MS); f.controller.scan()
+    expect(f.target.inbox.nextTurn).toHaveLength(1)
+    f.target.inbox.nextTurn.shift(); f.advance(REMINDER_LONG_MS); f.controller.scan()
+    expect(f.target.inbox.nextTurn).toHaveLength(0)
+  })
+  it('a delivery-blocked notice waits while another reconciliation summary is unconsumed, then goes out once (#709 + #708)', () => {
+    const f = fixture()
+    f.controller.scan()
+    expect(f.target.inbox.nextTurn).toHaveLength(1)
+    expect(f.ledger.markAnswered('job', 'beta/aaaaaaaa')).toBe(true)
+    // The queued reminder's debt was answered: the scan invalidates it, and the blocked notice takes the one slot.
+    f.advance(REMINDER_MIN_MS); f.controller.scan()
+    const texts = f.target.inbox.nextTurn.map((m: any) => String(m.content?.[0]?.text))
+    expect(texts.filter(t => t.startsWith('[A2A reconciliation reminder]'))).toHaveLength(0)
+    expect(texts.filter(t => t.startsWith('[A2A receipt delivery blocked]'))).toHaveLength(1)
   })
   it('only consumes the one queued summary before a later reminder can be admitted', () => {
     const f = fixture(); f.controller.scan()

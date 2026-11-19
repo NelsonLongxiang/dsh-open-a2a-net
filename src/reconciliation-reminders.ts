@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import type { TaskLedger, TaskRecord } from './task-ledger.ts'
 import { taskIdRefusal } from './receipt.ts'
-import { reconciliationDue, type ReconciliationScope } from './reconciliation-inbox.ts'
+import { reconciliationDue, receiptDeliveryBlocked, type ReconciliationScope } from './reconciliation-inbox.ts'
 import { FollowupAcceptanceUnknown } from './followup-admission.ts'
 import { REMINDER_MIN_MS, REMINDER_LONG_MS, REMINDER_WARNING_MS, nextReminderDelay, type ReminderState } from './reconciliation-state.ts'
 export interface ReminderAgent { id: unknown; status: string }
@@ -23,6 +23,7 @@ export interface ReminderDeps {
   warn: (code: string) => void
 }
 const dueRow = reconciliationDue
+const deliveryBlocked = receiptDeliveryBlocked
 const safe = (value: string, cap: number): string => JSON.stringify(value.replace(/[\u0000-\u001f\u007f]/g,' ').slice(0,cap))
 export class ReconciliationReminders {
   private stopped=false
@@ -52,7 +53,7 @@ export class ReconciliationReminders {
       for(const agent of this.d.agents())try{if(!this.d.available(agent))this.diagnostics.blockedSessions++}catch(error){this.diagnostics.inboxUnavailable++;this.report(error)}
       const groups=new Map<ReminderAgent,TaskRecord[]>()
       for(const row of debt) {
-        if(!dueRow(row))continue
+        if(!dueRow(row)&&!deliveryBlocked(row))continue
         const agent=this.d.resolve(row)
         if(!agent){this.diagnostics.unresolved++;continue}
         const rows=groups.get(agent)??[];rows.push(row);groups.set(agent,rows)
@@ -61,7 +62,7 @@ export class ReconciliationReminders {
         const id=String(agent.id)
         if(this.active.has(id))continue
         this.active.add(id)
-        try {this.remind(agent,rows);this.notify(rows)}catch(error){this.failedUntil.set(id,this.now()+REMINDER_MIN_MS);this.report(error)}finally{this.active.delete(id)}
+        try {this.remind(agent,rows.filter(dueRow));this.notify(rows.filter(dueRow));this.deliveryNotice(agent,rows.filter(deliveryBlocked))}catch(error){this.failedUntil.set(id,this.now()+REMINDER_MIN_MS);this.report(error)}finally{this.active.delete(id)}
       }
     }catch(error){this.report(error)}
   }
@@ -112,6 +113,21 @@ export class ReconciliationReminders {
       if(sent===false){this.d.ledger.saveReminders(previous,{id,at:oldSession});return}
     }catch(error){const lastResult=error instanceof FollowupAcceptanceUnknown?'unknown' as const:'failed' as const;this.d.ledger.saveReminders(updates.map(u=>({...u,state:{...u.state,lastResult}})));throw error}
     this.d.ledger.saveReminders(updates.map(u=>({...u,state:{...u.state,deliveredCount:Math.min(Number.MAX_SAFE_INTEGER,u.state.deliveredCount+1),lastDeliveredAt:now,lastResult:'delivered' as const}})))
+  }
+  /** Once per answered debt, not an order to redo work, invent a receipt, rejoin, or retry a broken route. */
+  private deliveryNotice(agent:ReminderAgent,rows:TaskRecord[]):void {
+    const id=String(agent.id),now=this.now()
+    if(!this.idle(agent)||this.throttled(id,now))return
+    const chosen=rows.filter(row=>{const prior=this.d.ledger.reminderState(row.taskId);return taskIdRefusal(row.taskId)===undefined&&prior?.deliveryNoticeAt===undefined&&(prior===undefined||prior.targetId===id)}).slice(0,8)
+    if(!chosen.length)return
+    const old=chosen.map(row=>({taskId:row.taskId,state:this.d.ledger.reminderState(row.taskId)})),at=this.d.ledger.reminderSessionAt(id)
+    const next=chosen.map((row,index)=>({taskId:row.taskId,state:{...(old[index]!.state??{version:1 as const,targetId:id,attempts:0,deliveredCount:0,lastAttemptAt:now,nextAt:now+REMINDER_LONG_MS,requestId:'receipt-blocked:'+row.taskId,lastResult:'unknown' as const}),deliveryNoticeAt:now}}))
+    this.d.ledger.saveReminders(next,{id,at:now})
+    if(!this.idle(agent)||chosen.some(row=>{const current=this.d.ledger.find(row.taskId);return !current||!deliveryBlocked(current)})){this.d.ledger.saveReminders(old,{id,at});return}
+    const lines=chosen.map(row=>{const observation=this.d.ledger.receiptObservation(row.taskId);return 'task '+row.taskId+'; receipt-to '+safe(row.auth?.receipt_target??row.sender?.id??row.peer.replace(/^local:/,''),256)+'; state '+(observation.receiptRecovery?.state??'legacy-unknown')})
+    // #709 merge: through the session's reconciliation inbox (one unconsumed item per session); refused → retried later.
+    const sent=this.d.followup(agent,'[A2A receipt delivery blocked] 工作已有答复，但原回执尚未确认交付；这不是新任务或普通催办，不需要回执。可靠保存的回执由宿主沿原投递ID对账/补送；旧记录缺载荷或身份/准入已变时停核账，不据摘要重造回执。不要重做业务、再次发布、换ID重发、改投owner或自行恢复目标presence。请由原发送方/有权运维恢复原返回通道；此提示每条只发一次。\n'+lines.join('\n'),{kind:'blocked',taskIds:chosen.map(row=>row.taskId),requestId:next.map(update=>update.state.requestId).join(':')})
+    if(sent===false)this.d.ledger.saveReminders(old,{id,at})
   }
   private notify(rows:TaskRecord[]):void {
     const now=this.now(),groups=new Map<ReminderAgent,TaskRecord[]>()

@@ -6,16 +6,21 @@ import type { TaskRecord } from './task-ledger.ts'
 import { FollowupAcceptanceUnknown, hostEventCount, hostInserted } from './followup-admission.ts'
 
 export interface ReconciliationScope {
-  kind: 'reminder' | 'notice'
+  /** `blocked`: #708's once-per-debt notice for an answered task whose receipt is not yet confirmed delivered. */
+  kind: 'reminder' | 'notice' | 'blocked'
   taskIds: readonly string[]
   /** Derived from the persisted reminder reservations, not wall-clock randomness. */
   requestId: string
 }
-export const reconciliationDue = (row: TaskRecord): boolean => row.status === 'pending' && row.receiptExpected !== false && row.answeredAt === undefined && (row.direction === 'inbound' || row.peer === 'local') && !row.brief?.startsWith('[A2A receipt]')
+/** #708: answered (or receipt-undelivered) work whose receipt delivery is blocked — never a work reminder, one notice. */
+export const receiptDeliveryBlocked = (row: TaskRecord): boolean => row.status === 'pending' && row.receiptExpected !== false && (row.direction === 'inbound' || row.peer === 'local') && (row.answeredAt !== undefined || row.receiptDelivery === 'receipt-undelivered') && !row.brief?.startsWith('[A2A receipt]')
+export const reconciliationDue = (row: TaskRecord): boolean => row.status === 'pending' && row.receiptExpected !== false && row.answeredAt === undefined && row.receiptDelivery !== 'receipt-undelivered' && (row.direction === 'inbound' || row.peer === 'local') && !row.brief?.startsWith('[A2A receipt]')
 const scopeMarker = '\n[A2A reconciliation scope] '
 const taskKey = (id: string): string => createHash('sha256').update(id).digest('hex').slice(0, 32)
 const textOf = (message: UserMessage): string | undefined => message.content.length === 1 && message.content[0]?.type === 'text' ? message.content[0].text : undefined
-const isNotice = (text: string): boolean => text.startsWith('[A2A reconciliation reminder]') || text.startsWith('[A2A reconciliation notice]')
+const isNotice = (text: string): boolean => text.startsWith('[A2A reconciliation reminder]') || text.startsWith('[A2A reconciliation notice]') || text.startsWith('[A2A receipt delivery blocked]')
+/** Which debts keep a summary of this kind live: due work for reminders/notices, blocked receipts for `blocked`. */
+const liveFor = (kind: unknown, rows: readonly TaskRecord[]): Set<string> => new Set(rows.filter(kind === 'blocked' ? receiptDeliveryBlocked : reconciliationDue).map(row => row.taskId))
 
 export class ReconciliationInbox {
   private readonly sending = new Set<string>()
@@ -38,14 +43,15 @@ export class ReconciliationInbox {
     this.sending.add(id)
     try {
       const pending = this.pending(agent)
-      const live = new Set(this.d.rows().filter(reconciliationDue).map(row => taskKey(row.taskId)))
+      const rows = this.d.rows()
       for (const message of pending) {
         if (!this.ours(agent, message) || !String(message.id).startsWith(this.prefix(agent))) continue
         const text = textOf(message)!, at = text.lastIndexOf(scopeMarker)
         if (at < 0) continue // Unknown metadata blocks, rather than granting permission to append or erase it.
         let scope: { v?: unknown; k?: unknown; t?: unknown }
         try { scope = JSON.parse(text.slice(at + scopeMarker.length)) } catch { continue }
-        if (scope?.v !== 1 || (scope.k !== 'reminder' && scope.k !== 'notice') || !Array.isArray(scope.t) || scope.t.length < 1 || scope.t.length > 8 || scope.t.some(key => typeof key !== 'string' || !/^[a-f0-9]{32}$/.test(key))) continue
+        if (scope?.v !== 1 || (scope.k !== 'reminder' && scope.k !== 'notice' && scope.k !== 'blocked') || !Array.isArray(scope.t) || scope.t.length < 1 || scope.t.length > 8 || scope.t.some(key => typeof key !== 'string' || !/^[a-f0-9]{32}$/.test(key))) continue
+        const live = new Set([...liveFor(scope.k, rows)].map(taskKey))
         if (scope.t.every(key => live.has(key))) continue
         // One of the summary's debts ended or was answered: invalidate the summary, not the debt.
         if (typeof agent.inbox.remove !== 'function') throw Object.assign(Error('host inbox cannot invalidate a stale reconciliation summary'), { code: 'REMINDER_REMOVE_UNAVAILABLE' })
@@ -68,7 +74,7 @@ export class ReconciliationInbox {
     try {
       this.d.taint(agent)
       // A taint observer may settle a task or enqueue input reentrantly. Recheck at the actual insertion boundary.
-      const live = new Set(this.d.rows().filter(reconciliationDue).map(row => row.taskId))
+      const live = liveFor(scope.kind, this.d.rows())
       if (agent.session !== session || String(agent.id) !== id || agent.status !== 'idle' || scope.taskIds.some(taskId => !live.has(taskId)) || this.pending(agent).some(item => this.ours(agent, item))) return false
       try { agent.followup(message) } catch {
         // A throw after durable insertion must retain the occupied slot, including across plugin restart.

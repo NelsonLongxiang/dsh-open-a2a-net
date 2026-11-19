@@ -154,7 +154,8 @@ describe('gh#113 CLI mailbox: seq, loss and truncation are visible', () => {
     const a = store(dir).s
     a.mail(H, 'x', 'on disk')
     const diskEpoch = a.readMailbox(H).epoch
-    chmodSync(join(dir, 'deposits.json'), 0o444)
+    // The store writes through a temp file + rename (#708), so a read-only file no longer fails the write; a read-only directory does.
+    chmodSync(dir, 0o555)
     try {
       a.mail(H, 'x', 'memory only')
       const memory = a.readMailbox(H)
@@ -166,7 +167,7 @@ describe('gh#113 CLI mailbox: seq, loss and truncation are visible', () => {
       expect(restarted).toMatchObject({ epoch: diskEpoch, next_seq: 2 })
       expect(restarted.epoch).not.toBe(memory.epoch)
     } finally {
-      chmodSync(join(dir, 'deposits.json'), 0o644)
+      chmodSync(dir, 0o755)
     }
   })
 

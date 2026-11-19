@@ -8,6 +8,22 @@ import { ReconciliationReminders } from '../../src/reconciliation-reminders.ts'
 import { REMINDER_MIN_MS,REMINDER_LONG_MS } from '../../src/reconciliation-state.ts'
 function fixture(){let now=1_000_000;const file=join(mkdtempSync(join(tmpdir(),'reminder-state-')),'tasks.json'),ledger=new TaskLedger(file,{now:()=>now,staleTtlMs:10*86400000}),target={id:'target',status:'idle'},sender={id:'sender',status:'idle'},steer=vi.fn(),warn=vi.fn();const controller=new ReconciliationReminders({ledger,agents:()=>[target,sender],resolve:()=>target,sender:row=>row.peer==='local'?sender:undefined,available:()=>true,followup:steer,now:()=>now,warn});ledger.track('job','beta/aaaaaaaa','local',undefined,'original', {kind:'session',id:'alpha/bbbbbbbb'});return{ledger,file,target,sender,steer,warn,controller,advance:(ms:number)=>{now+=ms}}}
 describe('#351 observation-only persistence',()=>{
+ it('delivery-blocked notice is persisted once across restart and never consumes a reminder budget or exposes receipt bytes',()=>{
+  const f=fixture();f.ledger.markAnswered('job','beta/aaaaaaaa');f.controller.scan();expect(f.steer).toHaveBeenCalledOnce();expect(f.steer.mock.calls[0]![1]).toContain('[A2A receipt delivery blocked]');expect(f.steer.mock.calls[0]![1]).toContain('legacy-unknown');expect(f.ledger.reminderState('job')?.attempts).toBe(0)
+  const ledger=new TaskLedger(f.file,{now:()=>1_000_000+3*REMINDER_LONG_MS}),followup=vi.fn(),controller=new ReconciliationReminders({ledger,agents:()=>[f.target],resolve:()=>f.target,sender:()=>undefined,followup,warn:vi.fn(),now:()=>1_000_000+3*REMINDER_LONG_MS});controller.scan();expect(followup).not.toHaveBeenCalled();expect(ledger.list()).toHaveLength(1);expect(ledger.archive()).toEqual([])
+ })
+
+ it('does not ask an answered receipt-undelivered target to do the work or send the receipt again',()=>{
+  const f=fixture();f.ledger.markAnswered('job','beta/aaaaaaaa');f.controller.scan();f.advance(REMINDER_LONG_MS);f.controller.scan();
+  expect(f.steer.mock.calls.some(([,text])=>String(text).startsWith('[A2A reconciliation reminder]'))).toBe(false)
+  expect(f.ledger.find('job')).toMatchObject({status:'pending',receiptDelivery:'receipt-undelivered'});expect(f.ledger.archive()).toEqual([])
+ })
+ it('does not warn the sender that an already answered target has ignored multiple reminders',()=>{
+  const f=fixture();f.controller.scan();f.advance(REMINDER_MIN_MS);f.controller.scan();f.advance(600000);f.controller.scan();f.ledger.markAnswered('job','beta/aaaaaaaa');f.advance(1800000);f.controller.scan();
+  expect(f.steer.mock.calls.some(([,text])=>String(text).includes('目标已多次提醒仍欠正式回执'))).toBe(false)
+  expect(f.ledger.reminderState('job')?.attempts).toBe(3)
+ })
+
  it('sends one local sender warning after three reminders and continues long reminders, never when sender is busy',()=>{
   const f=fixture();f.controller.scan();f.advance(REMINDER_MIN_MS);f.controller.scan();f.advance(600000);f.controller.scan();expect(f.steer).toHaveBeenCalledTimes(3)
   f.sender.status='running';f.advance(1800000);f.controller.scan();expect(f.steer).toHaveBeenCalledTimes(3);expect(f.ledger.reminderState('job')!.noticeAttemptedAt).toBeUndefined()
