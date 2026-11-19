@@ -919,8 +919,11 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             res.end(payload)
             return
           }
-          // Every exit (inserted or not, answered or dropped) gives the slot back; a journaled record took it already.
-          if (journalSlot !== undefined) res.once('close', journalSlot)
+          // #708 review R2 (lifetime): the slot belongs to the delivery attempt, not the HTTP connection. A closed response
+          // gives it back only while no cold wake is still able to insert; a pending wake keeps it until its continuation
+          // (deliver, or the wake's failure) ends. A journaled record took it already; release is idempotent.
+          let wakePending = false
+          if (journalSlot !== undefined) res.once('close', () => { if (!wakePending) journalSlot() })
           let deferredSettled = false
           /** #708 R2: settle a deferred session receipt; false when it already answered (the ledger write failed). */
           const settleDeferred = (inserted: boolean, session?: string): boolean => {
@@ -1085,6 +1088,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
             const wake = agent !== undefined ? undefined : wakeColdTeam(team)
             const deliver = (target: Agent): void => {
+              try { deliverInto(target) } finally { journalSlot?.() }
+            }
+            const deliverInto = (target: Agent): void => {
               const from = caller === '' ? 'an unknown node' : caller
               // The receipt target: the caller's callback address when it
               // supplied one (a session node team — wake-on-route covers a
@@ -1203,7 +1209,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             }
             if (agent !== undefined) { deliver(agent); return }
             if (wake?.kind === 'flight') {
+              wakePending = true
               void wake.flight.then(deliver, (error: unknown) => {
+                journalSlot?.()
                 refuseNoWait(`waking the session for team "${team}" failed: ${String(error)}`)
               })
               return
