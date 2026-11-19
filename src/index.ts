@@ -2737,7 +2737,8 @@ export function apply(ctx: Context, config: Config): void {
         const prior=await client.queryOutcome(lane.url,record.transportId,peerPayloadFingerprint({caller:record.caller,message:record.text,noWait:true,team:wireTeam}),new AbortController().signal)
         return prior?.found&&prior.status==='completed'&&prior.receiptDelivery==='delivered'?{confirmed:true}:fail('RECEIPT_REPLAY_UNCONFIRMED',true,true)
       }
-      if(!result.ok&&result[RECEIPT_NOT_INSERTED]===true)return fail('RECEIPT_NOT_INSERTED',true)
+      // #747 review M1: an unknown acceptance outranks a no-insertion capability, even an inconsistent one: query, never repost.
+      if(!result.ok&&result[RECEIPT_NOT_INSERTED]===true&&result.acceptance!=='unknown')return fail('RECEIPT_NOT_INSERTED',true)
       // #708 R1: a connection refused before it opened inserted nothing; the same frozen transport is resent when due, never queried forever.
       if(!result.ok&&result[RECEIPT_PRECONNECT_REFUSED]===true&&result.acceptance!=='unknown')return fail('RECEIPT_PRECONNECT_REFUSED',true)
       if(result.ok&&result.settlementRefused===true)return fail('RECEIPT_SETTLEMENT_REFUSED',false)
