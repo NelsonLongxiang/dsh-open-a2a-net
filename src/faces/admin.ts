@@ -382,6 +382,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // keeps rendering plain owed rows until it learns the tiers.
           ledgerPersistence: taskLedger.persistenceState(),
           deliveryBookkeeping:taskLedger.deliveryBookkeepingState(),
+          deliveryCapacity:taskLedger.deliveryCapacityState(),
           nudgeEscalations:d.nudgeEscalations?.()??{queued:0,unavailable:0,failed:0},
           reconciliationReminders: d.reminderDiagnostics?.(),
           tasks: taskLedger.list()

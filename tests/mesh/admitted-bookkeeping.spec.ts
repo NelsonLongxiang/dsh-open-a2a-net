@@ -56,7 +56,7 @@ for(const sync of[false,true])for(const missingIdempotency of[false,true])it('ac
   if(missingIdempotency){const path=join(home,'a2a/idempotency.json'),snapshot=JSON.parse(readFileSync(path,'utf8'));expect(snapshot.entries.some((r:any)=>r.taskId===task)).toBe(true);snapshot.entries=snapshot.entries.filter((r:any)=>r.taskId!==task);writeFileSync(path,JSON.stringify(snapshot))}
   b=await bootNode({home,name:'birthB',session:'birthB',team:'beta',port:pb,peers:[au],sessionNodes:true,teamScopeRouting:false,silent:true,asyncNudgeDelayMs:86400000});configure()
   const restarted=await state(b);expect(restarted.tasks).toEqual([]);expect(restarted.archived).toEqual([]);expect(restarted.deliveryBookkeeping.orphaned).toBe(1)
-  const diagnostic=await b.ctx.tools.get('a2a_status')!.execute({},runContext(b.agents.agent))as any;expect(diagnostic.deliveryBookkeeping.orphaned).toBe(1)
+  const diagnostic=await b.ctx.tools.get('a2a_status')!.execute({},runContext(b.agents.agent))as any;expect(diagnostic.deliveryBookkeeping.orphaned).toBe(1);expect(diagnostic.deliveryCapacity).toMatchObject({status:'observed',capacity:512,stored:1,retained:1});expect(restarted.deliveryCapacity).toMatchObject({status:'observed',stored:1});expect(JSON.stringify(diagnostic.deliveryCapacity)).not.toContain('private')
   ;(b.agents.agent as any).status='idle';b.ctx.emit('agent/status',{agent:b.agents.agent!,status:'idle'});expect((await state(b)).tasks).toEqual([]);expect((await state(b)).reconciliationReminders.unresolved).toBe(0);expect(deliveries).toBe(1)
   const firstBody={team:'beta/01234567',caller_session:cli,callback:cli,task_id:task,message:'birth work',wait:sync}
   // Reuse exactly the forwarded body; the signed forwarding host remains the same authority.
