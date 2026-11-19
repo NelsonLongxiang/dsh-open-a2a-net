@@ -2,7 +2,20 @@
 /** Exercise the production boot/HTTP adapter, never a real membership service. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-beforeEach(() => { vi.resetModules(); vi.useFakeTimers(); window.localStorage.clear(); window.sessionStorage.clear(); document.body.innerHTML = '<div id="app"></div>' })
+// jsdom here has no Web Storage (opaque origin): every test gets empty in-memory local and session storage.
+function memoryStorage(): Storage {
+  const m = new Map<string, string>()
+  return {
+    get length() { return m.size }, clear: () => { m.clear() }, getItem: (k) => m.get(k) ?? null,
+    key: (i) => [...m.keys()][i] ?? null, removeItem: (k) => { m.delete(k) }, setItem: (k, v) => { m.set(k, String(v)) },
+  }
+}
+beforeEach(() => {
+  vi.resetModules(); vi.useFakeTimers()
+  Object.defineProperty(window, 'localStorage', { value: memoryStorage(), configurable: true })
+  Object.defineProperty(window, 'sessionStorage', { value: memoryStorage(), configurable: true })
+  document.body.innerHTML = '<div id="app"></div>'
+})
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); document.body.replaceChildren() })
 const session = { id: 'session-member', label: 'member', name: '候选成员', team: 'dsh/member', joined: true, live: true }
 const state = { sessions: [session], canvas: { teams: [{ name: 'test-team', team: 'dsh/canvas/test-team', members: [] }] }, peers: [], remote: [], tasks: [], tasksDead: [], activity: [] }
