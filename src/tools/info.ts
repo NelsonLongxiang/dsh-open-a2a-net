@@ -7,7 +7,7 @@
  * a getter so the deps object can be built before the const is declared.
  * @module src/tools/info
  */
-import { parseDeliveryCapacitySnapshot, type DeliveryCapacitySnapshot } from '../task-delivery-capacity.ts'
+import { formatPossibleExpiry, parseDeliveryCapacitySnapshot, type DeliveryCapacitySnapshot } from '../task-delivery-capacity.ts'
 import { reminderView, type ReminderView } from '../reconciliation-state.ts'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
@@ -939,6 +939,6 @@ export function createInfoTools(deps: InfoToolsDeps) {
 export function deliveryCapacityLine(c: DeliveryCapacitySnapshot | undefined): string {
   if (c === undefined) return 'Delivery correspondence: unknown'
   if (c.status === 'unavailable') return `Delivery correspondence: unavailable (${c.reason})`
-  const expiry = c.earliestPossibleExpiryAt === null ? 'none' : new Date(c.earliestPossibleExpiryAt).toISOString()
+  const expiry = c.earliestPossibleExpiryAt === null ? 'none' : formatPossibleExpiry(c.earliestPossibleExpiryAt)
   return `Delivery correspondence: retained=${String(c.retained)}/${String(c.capacity)}${c.saturated ? ' !!! FULL: new deliveries refused !!!' : ''} task-bound=${String(c.taskBound)} expired-untracked=${String(c.expiredUntracked)} earliest possible expiry=${expiry}`
 }
