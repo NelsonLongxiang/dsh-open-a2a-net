@@ -599,18 +599,25 @@ describe('superagent engine in the a2a host', () => {
       const xAsk = asks[tickets.indexOf(xTicket)]!
       await m.sa({ action: 'request', text: '补充：要带单元测试', thread: xAsk.thread })
       await vi.waitFor(() => { expect(m.X.steered.some(t => t.includes('[superagent input]') && t.includes('补充：要带单元测试'))).toBe(true) }, { timeout: 8000 })
+      // This fake member takes the follow-up in and ends its turn quietly before the delivery returns (#742): once the
+      // delivery finishes, that turn end settles X's ticket as waiting and parks it, and the waiting ticket starts on X.
+      await vi.waitFor(() => { expect(cards(m.X).length === 2).toBe(true) }, { timeout: 8000 })
+      expect(cards(m.X)[1]).toContain(queued.id)
+      s = await m.state()
+      expect(s.tickets.find((t: any) => t.id === xTicket).ended).toBeUndefined()
+      // The executor's bindings list holds X's parked ticket and its new one.
+      expect(s.executor.bindings.filter((b: any) => b.member === X_ID).map((b: any) => b.ticketId).sort()).toEqual([queued.id, xTicket].sort())
 
-      // Only an assigned member may report; M reports ready → its ticket completes → the router hears it → M takes the waiting one.
+      // Only an assigned member may report; M reports ready → its ticket completes → the router hears it → M is free.
       expect(await m.tool('a2a_ticket_report', m.O, { ticket_id: 'x', state: 'ready', summary: 'x' })).toMatchObject({ ok: false, code: 'not-member' })
       const mTicket = s.executor.bindings.find((b: any) => b.member === M_ID).ticketId
       const report = await m.tool('a2a_ticket_report', m.M, { ticket_id: mTicket, state: 'ready', summary: '已提交 PR https://example.invalid/pr/1' })
       expect(report, JSON.stringify(report)).toMatchObject({ ok: true, ticketId: mTicket })
       await vi.waitFor(() => { expect(m.R.steered.some(t => t.includes('[superagent report]') && t.includes(mTicket))).toBe(true) }, { timeout: 8000 })
-      await vi.waitFor(() => { expect(cards(m.M).length === 2).toBe(true) }, { timeout: 8000 })
-      expect(cards(m.M)[1]).toContain(queued.id)
       s = await m.state()
       expect(s.tickets.find((t: any) => t.id === mTicket).ended).toMatchObject({ outcome: 'completed' })
       expect(s.executor.bindings.map((b: any) => b.ticketId).sort()).toEqual([queued.id, xTicket].sort())
+      expect(cards(m.M)).toHaveLength(1)
 
       // The router hands the result to the person, on the thread the request came from.
       const mAsk = asks[tickets.indexOf(mTicket)]!
