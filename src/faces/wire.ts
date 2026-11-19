@@ -483,7 +483,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
 
   /** Mailbox insertion is durable before this original-debt settlement can run. No delivery is replayed here. */
   function finishMailboxReceipt(commit:ReceiptMailboxCommit):'delivered'|'refused' {
-    if(cliDeposits.heldKey(commit.handle)!==commit.targetKey)throw Error('receipt mailbox owner changed; reconciliation required')
+    // A mailbox receipt settles only while the same CLI identity holds the mailbox. A session receipt (#708 R2) is already
+    // in its session and has no holder key; the original task's birth below is its identity check.
+    if(!commit.targetKey.startsWith('session:')&&cliDeposits.heldKey(commit.handle)!==commit.targetKey)throw Error('receipt mailbox owner changed; reconciliation required')
     const parsed=parseReceipt(commit.message)!
     const row=taskLedger.find(parsed.taskId),archived=taskLedger.archive().find(r=>r.taskId===parsed.taskId)
     if(commit.originalBirth!==undefined&&(!row&&!archived||receiptMailboxBirth((row??archived)!)!==commit.originalBirth))throw Error('original mailbox receipt task birth changed')
@@ -566,7 +568,10 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           ? { found: false as const, reason: 'unknown-task' as const }
           : idempotencyStore.query(taskId, fingerprint)
         try {
-          const commit=cliDeposits.receiptCommitFor(taskId)
+          let commit=cliDeposits.receiptCommitFor(taskId)
+          // #708 R2: a query for a durable receipt whose settlement is still owed first tries to finish that settlement
+          // (the same step the recovery scan takes); a still-failing store keeps the answer pending.
+          if(commit?.phase==='pending'&&commit.fingerprint===fingerprint){try{finishMailboxReceipt(commit)}catch{/* stays pending */}commit=cliDeposits.receiptCommitFor(taskId)}
           if(commit&&commit.fingerprint===fingerprint)verdict=commit.phase==='pending'?{found:true,status:'pending'}:{found:true,status:'completed',receiptDelivery:commit.phase,reply:'receipt '+commit.phase,settledAt:commit.at}
         }catch{/* corrupt receipt journal supplies no stronger evidence */}
         const payload = JSON.stringify(
@@ -904,7 +909,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           if (refusedSettlement !== undefined) withSettlementField(res, refusedSettlement)
           let deferredSettled = false
           /** #708 R2: settle a deferred session receipt; false when it already answered (the ledger write failed). */
-          const settleDeferred = (inserted: boolean): boolean => {
+          const settleDeferred = (inserted: boolean, session?: string): boolean => {
             if (!deferSessionReceipt || deferredSettled) return true
             deferredSettled = true
             try {
@@ -913,6 +918,19 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
               return true
             } catch {
               if (!inserted) idempotencyStore.releaseUncompleted(taskId, idemFingerprint)
+              // #708 R2 (post-insertion): the receipt is already in the session, so only the local settlement is owed.
+              // Journal it with the original task's birth; the recovery scan (and a query) finishes that settlement once
+              // storage recovers, and the query answers pending until then. Nothing re-inserts or re-posts the receipt.
+              else if (session !== undefined) {
+                try {
+                  const answered = parseReceipt(message)!
+                  const original = taskLedger.find(answered.taskId) ?? taskLedger.archive().find(r => r.taskId === answered.taskId)
+                  const record = { version: 1 as const, transportId: taskId, fingerprint: idemFingerprint, handle: mailTeam, targetKey: `session:${session}`, from: caller, message, settler, ...(original ? { originalBirth: receiptMailboxBirth(original) } : {}), at: Date.now(), phase: 'pending' as const }
+                  cliDeposits.journalSessionReceipt({ ...record, hash: receiptMailboxHash(record) })
+                } catch {
+                  logger.warn(`a2a: receipt ${taskId} is in session ${session} but neither its settlement nor its recovery record could be written`)
+                }
+              }
               const payload = JSON.stringify(inserted
                 ? { error: 'receipt is in the session but local settlement commit failed; reconcile original transport', code: -32011, task_id: taskId, task_status: 'TASK_STATE_FAILED', acceptance: 'unknown' }
                 : { error: 'task ledger write failed; settlement was not committed', code: -32000, task_id: taskId, task_status: 'TASK_STATE_FAILED', delivered: false, receipt_delivery: 'not-inserted' })
@@ -1082,7 +1100,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 d.keepTaskBody?.(taskId, target, from, message)
                 const acceptance=followupRelay(target, `${directHeader(from)}\n\n${message}${receiptRequest}`, from === 'an unknown node' ? undefined : from, undefined, taskId, claim.ok?claim.card.publicKey:undefined, !deliveredReceipt)
                 steered = true
-                if (deliveredReceipt && !settleDeferred(true)) return
+                if (deliveredReceipt && !settleDeferred(true, String(target.id))) return
                 if(deliveredReceipt&&acceptance!=='inserted'&&['enqueued','claimed'].includes(taskLedger.deliveryFor(taskId)?.state??''))idempotencyStore.recordOutcome(taskId,{status:'completed',reply:'receipt delivered',receiptDelivery:refusedSettlement===undefined?'delivered':'refused'})
                 recordActivity('in', team, caller, true)
                 // v0.5.23 (async-stall): "delivered" only proves the steer call

@@ -385,6 +385,25 @@ export class CliDepositStore {
     return same?[]:prior.slice(Math.max(0,MAILBOX_CAP-1))
   }
 
+  /**
+   * #708 R2: journal a receipt already inserted into a SESSION whose local settlement commit failed, so the same
+   * recovery scan finishes only that settlement later (never a second insertion). `targetKey` is `session:<id>`.
+   */
+  journalSessionReceipt(commit:ReceiptMailboxCommit):void {
+    if(this.receiptCommitsCorrupt)throw Error('receipt mailbox journal is corrupt')
+    const parsed=parseReceiptMailbox(commit)
+    if(!parsed||parsed.phase!=='pending'||!parsed.targetKey.startsWith('session:'))throw Error('session receipt commit is invalid')
+    const retained=this.receiptCommits.filter(r=>r.phase==='pending'||this.now()-r.at<=RECEIPT_MAILBOX_RETENTION_MS),old=retained.find(r=>r.transportId===parsed.transportId)
+    if(old) {
+      if(old.fingerprint!==parsed.fingerprint||old.handle!==parsed.handle||old.from!==parsed.from||old.message!==parsed.message||old.targetKey!==parsed.targetKey||old.originalBirth!==parsed.originalBirth||JSON.stringify(old.settler)!==JSON.stringify(parsed.settler))throw Error('receipt mailbox commit identity conflict')
+      return
+    }
+    while(retained.length>=RECEIPT_MAILBOX_CAP){const i=retained.findLastIndex(r=>r.phase!=='pending');if(i<0)throw Error('receipt mailbox journal capacity full');retained.splice(i,1)}
+    retained.unshift(parsed)
+    const snapshot:Snapshot={receiptCommits:retained,deposits:[...this.deposits.values()],mailbox:Object.fromEntries(this.mailbox),epoch:this.epoch,nextSeq:Object.fromEntries(this.nextSeq),dropped:Object.fromEntries(this.dropped),truncated:Object.fromEntries(this.truncated)}
+    writeTaskLedger(this.path,JSON.stringify(snapshot));this.receiptCommits=retained
+  }
+
   pendingReceiptCommits():ReceiptMailboxCommit[] {
     if(this.receiptCommitsCorrupt)throw Error('receipt mailbox journal is corrupt')
     return this.receiptCommits.filter(r=>r.phase==='pending').map(r=>structuredClone(r))
