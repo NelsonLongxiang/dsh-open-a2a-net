@@ -71,11 +71,66 @@ describe('team tab helpers', () => {
     const sick = problemsOf(state({ health: [{ code: 'member-not-loaded', session: 'session-x' }, { code: 'ticket-quiet', title: '写文档', minutes: 90 }] }), NOW)
     expect(sick.map(p => p.tone)).toEqual(['danger', 'warn'])
     expect(sick[1]!.text).toContain('90 分钟没有动静')
+    // Field report 2026-11-19: queued tickets say what they wait for; waiting cannot clear a member that left (danger).
+    const queued = problemsOf(state({ health: [{ code: 'tickets-queued', reason: 'member-busy', session: 'session-x', count: 3, minutes: 90, title: 'R1 整改' }, { code: 'tickets-queued', reason: 'member-absent', session: 'session-y', count: 1, minutes: 70, title: '修文档' }] }), NOW)
+    expect(queued.map(p => p.tone)).toEqual(['warn', 'danger'])
+    expect(queued[0]!.text).toMatch(/3 张工单排队超过 90 分钟（最久的是「R1 整改」）：在等成员 .*改派/)
+    expect(queued[1]!.text).toContain('已不在团队里')
     expect(problemsOf(state({ canvasProblem: 'the bound canvas team ops does not exist on this host' }), NOW)[0]).toMatchObject({ tone: 'danger', text: expect.stringContaining('画布团队「ops」不能作为团队运行') })
   })
 })
 
 describe('team tab', () => {
+
+  it('separates owner outbound reconciliation/recovery from ticket retry and never accepts replacement payload', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    onTestFinished(() => confirm.mockRestore())
+    const { pane, act } = mount()
+    const outbound = { card: 'approved-card', ticketId: 't-fail', address: 'other/aaaaaaaa', text: '<img src=x onerror=alert(1)> approved', state: 'failed', task: 'out-original', approval: {}, attempts: [{ task: 'out-original', delivery: 'not-sent' }] }
+    pane.update(state({ outbound: [outbound] }), sessions, NOW)
+    const detail = pane.root.querySelector<HTMLElement>('[data-outbound="approved-card"]')!
+    expect(detail).not.toBeNull()
+    expect(detail.querySelector('img')).toBeNull()
+    expect(text(detail)).toContain(outbound.text)
+    button(detail, '核对原外发').click(); await flush()
+    expect(act).toHaveBeenLastCalledWith({ action: 'outbound-reconcile', card_id: 'approved-card', task_id: 'out-original' })
+    button(detail, '恢复原批准外发').click(); await flush()
+    expect(confirm).toHaveBeenCalledOnce()
+    expect(act).toHaveBeenLastCalledWith({ action: 'outbound-retry', card_id: 'approved-card', task_id: 'out-original' })
+    expect(act.mock.calls.every(([body]) => !('address' in body) && !('text' in body))).toBe(true)
+  })
+
+  it('never offers resend for unknown, legacy, accepted, ended or declined outbound records', async () => {
+    const { pane } = mount()
+    const base = { card: 'record', ticketId: 't-fail', address: 'other/aaaaaaaa', text: 'approved', state: 'unknown', task: 'out-current' }
+    for (const row of [base, { ...base, state: 'failed' }, { ...base, state: 'sent', approval: {}, attempts: [{ task: base.task, delivery: 'accepted' }] }, { ...base, state: 'declined' }]) {
+      pane.update(state({ outbound: [row] }), sessions, NOW)
+      const detail = pane.root.querySelector<HTMLElement>('[data-outbound="record"]')!
+      expect(detail).not.toBeNull()
+      expect(Array.from(detail.querySelectorAll('button')).some(b => b.textContent === '恢复原批准外发')).toBe(false)
+    }
+    pane.update(state({ tickets: [ticket('t-fail', { ended: { at: at(1), outcome: 'completed' } })], outbound: [{ ...base, state: 'failed', approval: {}, attempts: [{ task: base.task, delivery: 'not-sent' }] }] }), sessions, NOW)
+    onTestFinished(() => pane.select('person'))
+    pane.select('tickets')
+    expect(Array.from(pane.root.querySelectorAll('button')).some(b => b.textContent === '恢复原批准外发')).toBe(false)
+  })
+
+  it('honours explicit cancellation of recovery and disables a pending click', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    onTestFinished(() => confirm.mockRestore())
+    let finish!: () => void
+    const act = vi.fn(async (_body: Record<string, unknown>) => { await new Promise<void>(r => { finish = r }); return { ok: true } })
+    const { pane } = mount(act)
+    pane.update(state({ outbound: [{ card: 'card', ticketId: 't-fail', address: 'other/aaaaaaaa', text: 'approved', state: 'failed', task: 'out-old', approval: {}, attempts: [{ task: 'out-old', delivery: 'not-sent' }] }] }), sessions, NOW)
+    const detail = pane.root.querySelector<HTMLElement>('[data-outbound="card"]')!
+    const retry = button(detail, '恢复原批准外发')
+    retry.click(); await flush(); expect(act).not.toHaveBeenCalled()
+    confirm.mockReturnValue(true)
+    retry.click(); expect(retry.disabled).toBe(true)
+    retry.click(); expect(act).toHaveBeenCalledTimes(1)
+    finish(); await flush(); expect(retry.disabled).toBe(false)
+  })
+
   it('opens on what needs a person: an answer box on the request thread, retry on a failed ticket; badge counts them', async () => {
     const { pane, act, refresh } = mount()
     const out = pane.update(state(), sessions, NOW)
@@ -91,7 +146,7 @@ describe('team tab', () => {
     expect(refresh).toHaveBeenCalled()
     expect(box.value).toBe('')
     expect(text(cards[1])).toContain('构建挂了')
-    button(cards[1]!, '重试').click()
+    button(cards[1]!, '重试工单（不重发外发）').click()
     await flush()
     expect(act).toHaveBeenLastCalledWith({ action: 'retry', ticket_id: 't-fail' })
   })

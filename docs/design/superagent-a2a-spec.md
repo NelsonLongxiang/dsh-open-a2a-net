@@ -1,6 +1,6 @@
 # superagent × a2a-net 接入规格（草案）
 
-配套：[ADR](superagent-a2a-adr.md) · [实施计划](superagent-a2a-plan.md) · [p2 Source 设计稿](superagent-a2a-p2-source-design.md) · [断言与证据](superagent-a2a-evidence.md) · [a2a-watch 接入说明](superagent-a2a-watch.md) · [信箱欠回执](superagent-mailbox-owes.md) · [信箱行准入规则](superagent-mail-admission.md)
+配套：[ADR](../archive/design/superagent-a2a-adr.md) · [实施计划](../archive/design/superagent-a2a-plan.md) · [p2 Source 设计稿](../archive/design/superagent-a2a-p2-source-design.md) · [断言与证据](../archive/design/superagent-a2a-evidence.md) · [a2a-watch 接入说明](superagent-a2a-watch.md) · [信箱欠回执](superagent-mailbox-owes.md) · [信箱行准入规则](superagent-mail-admission.md)
 
 **状态**：
 - 属主已定方向（第 6 节），全局生产评估已对本规格给出 PASS。
@@ -197,4 +197,4 @@ superagent 用本地执行器完成工作，不再经 A2A 把工单派给远端�
 
 **插件包的类型依赖（S19）**：在本仓声明最小结构类型，用 G2 快照和契约测试对照钉住的 superagent 提交 8c32a9d。
 
-已知局限与未决问题见[断言与证据](superagent-a2a-evidence.md)。
+已知局限与未决问题见[断言与证据](../archive/design/superagent-a2a-evidence.md)。

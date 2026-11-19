@@ -3,7 +3,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/types
  */
 
-import type { RECEIPT_RETRYABLE } from './receipt-retry.ts'
+import type { RECEIPT_RETRYABLE, RECEIPT_NOT_INSERTED, RECEIPT_CONFIRMED, RECEIPT_PRECONNECT_REFUSED } from './receipt-retry.ts'
 
 /** One peer node's agent card — the decentralized discovery record. */
 export interface A2aPeerCard {
@@ -152,12 +152,17 @@ export interface A2aRouteOk {
    * #139) — the delivery landed, the debt it named stays owed there.
    */
   readonly settlementRefused?: true
+  readonly [RECEIPT_CONFIRMED]?: true
 }
 
 /** Canonical `a2a_route` failure value. */
 export interface A2aRouteError {
+  /** This home made no dispatch attempt; never inferred from a failed status or error text. */
+  readonly delivery?: 'not-sent'
   readonly acceptance?:'unknown'
   readonly [RECEIPT_RETRYABLE]?:true
+  readonly [RECEIPT_NOT_INSERTED]?:true
+  readonly [RECEIPT_PRECONNECT_REFUSED]?:true
   /** A forwarded receipt never promises another receipt, including uncertain waits. */
   readonly receipt?: 'none'
   readonly ok: false
@@ -175,6 +180,10 @@ export interface A2aRouteError {
   readonly task_id?: string
   /** One actionable next step for the caller (#282 S1); absent when nothing the caller can do helps. */
   readonly next?: string
+  /** #713 A2: the receiving host refused for its full correspondence window; nothing was sent for this occurrence. */
+  readonly refusal?: import('./task-delivery-capacity.ts').CapacityRefusal
+  /** #713 A2: how many candidates refused for their host's full correspondence window (multi-candidate routes). */
+  readonly capacityRefusals?: number
 }
 
 /** Canonical `a2a_route` value: success or explicit failure. */

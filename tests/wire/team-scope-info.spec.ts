@@ -43,7 +43,7 @@ class FakeAgentsService extends Service {
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
-    apiKey: '', session: 'sess-1', team: 'home-zone', routeTimeoutMs: 60_000, flushTimeoutMs: 300_000,
+    apiKey: '', originClaimWindow: true /* #64: unsigned fixture deliveries */, session: 'sess-1', team: 'home-zone', routeTimeoutMs: 60_000, flushTimeoutMs: 300_000,
     announce: false, agentName: 'test node', peers: [], delegates: [], sessionNodes: false,
     wakeJoinedOnBoot: false, stateColdRowsTtlMs: 5_000,
     cardCacheTtlMs: 60_000, cardCacheNegativeTtlMs: 30_000, cardTtlMs: 172_800_000,
@@ -149,7 +149,7 @@ describe('S5 information-plane scoping (teamScopeInfo)', () => {
     const remote = listed.teams.filter(row => row.local !== true)
     expect(remote.map(row => row.team).sort()).toEqual(['zone-a/cargo', 'zone-a/dock', 'zone-b/hub'])
     expect(listed.teams.some(row => row.local === true)).toBe(true)
-    expect(listed.note).toContain('teamScopeInfo on')
+    expect(listed.note).toContain('teamScope on')
     await ctx.fiber.dispose()
   })
 

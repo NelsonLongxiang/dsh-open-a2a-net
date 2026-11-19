@@ -798,7 +798,7 @@ describe('canvas inspector member management (0.6.6)', () => {
     expect(select.value).toBe('https://two.example')
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await vi.waitFor(() => expect(canvasOp).toHaveBeenCalledWith('add-member', 'ygl', 'ops-cli/a1b2c3d4e5f60718', 'https://two.example'))
-    expect(text(form)).toContain('home 已指定')
+    await vi.waitFor(() => expect(text(form)).toContain('home 已指定'))
   })
 
   it('home candidate failures and empty lists stay visible without changing membership', async () => {
@@ -861,11 +861,13 @@ describe('canvas inspector member management (0.6.6)', () => {
     pick.value = 'session-22222222-bbbb'
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await vi.waitFor(() => expect(canvasOp).toHaveBeenCalledWith('add-member', 'ygl', 'session-22222222-bbbb', undefined, undefined))
+    // A second deliberate submission starts only after the first request has settled.
+    await vi.waitFor(() => expect(form.querySelector<HTMLButtonElement>('button[type=submit]')!.disabled).toBe(false))
     // Manual handle wins over the picker when filled.
     manual.value = 'nel85/9abc1234'
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await vi.waitFor(() => expect(canvasOp).toHaveBeenCalledWith('add-member', 'ygl', 'nel85/9abc1234', undefined, undefined))
-    expect(manual.value).toBe('') // cleared on success
+    await vi.waitFor(() => expect(manual.value).toBe('')) // cleared only after confirmed success
   })
 
   it('add-member inputs survive polls (draftForm trick)', () => {

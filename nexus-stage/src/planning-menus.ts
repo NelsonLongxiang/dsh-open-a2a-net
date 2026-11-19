@@ -31,6 +31,8 @@ export interface MenusDeps {
   anchorFor(target: MenuTarget): HTMLElement | null
   emit(a: CanvasAction): void
   notice(kind: 'error' | 'info', text: string): void
+  /** #650: extra frame-menu items (「加入 root「R」」, the keyboard twin of dropping a frame on a root). */
+  frameItems?(frame: string): HTMLButtonElement[]
 }
 
 export interface PlanningMenus {
@@ -93,45 +95,28 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
     title.id = 'p-dialog-title'
     title.className = 'p-dialog-title'
     title.textContent = `组建团队（${ids.length} 个节点，自上而下即优先级）`
-    // Team type: a visible two-way toggle (a bare <select> read as a label and roster went unnoticed).
-    const kind = { value: 'canvas' as 'canvas' | 'roster' }
+    // Roster creation is retired: this dialog has no hidden second kind.
     const kindGroup = document.createElement('div')
     kindGroup.className = 'p-dialog-kind'
     kindGroup.setAttribute('role', 'radiogroup')
     kindGroup.setAttribute('aria-label', '团队类型')
     const kindHint = document.createElement('div')
     kindHint.className = 'p-dialog-hint'
-    const KIND_HINT = {
-      canvas: 'canvas 队：画布上的协作组，可以加入远端成员。',
-      roster: 'roster 网络队：只收本机已入网的会话；队名会写进属主的精确允许名单。',
-    } as const
-    const kindButtons = (['canvas', 'roster'] as const).map(value => {
-      const b = document.createElement('button')
-      b.type = 'button'
-      b.dataset.kind = value
-      b.setAttribute('role', 'radio')
-      b.textContent = value === 'canvas' ? 'canvas 队' : 'roster 网络队'
-      b.addEventListener('click', () => setKind(value))
-      kindGroup.appendChild(b)
-      return b
-    })
-    function setKind(value: 'canvas' | 'roster'): void {
-      kind.value = value
-      for (const b of kindButtons) {
-        const on = b.dataset.kind === value
-        b.setAttribute('aria-checked', String(on))
-        b.tabIndex = on ? 0 : -1
-      }
-      kindHint.textContent = KIND_HINT[value]
-      err.textContent = ''
-    }
-    // Arrow keys move between the two options (radiogroup pattern).
+    kindHint.textContent = 'canvas 队：画布上的协作组，可以加入远端成员。'
+    const canvasKind = document.createElement('button')
+    canvasKind.type = 'button'
+    canvasKind.dataset.kind = 'canvas'
+    canvasKind.setAttribute('role', 'radio')
+    canvasKind.setAttribute('aria-checked', 'true')
+    canvasKind.tabIndex = 0
+    canvasKind.textContent = 'canvas 队'
+    kindGroup.appendChild(canvasKind)
+    // A one-option radiogroup keeps all four arrow keys on its only checked option.
     kindGroup.addEventListener('keydown', (ev) => {
       const e = ev as KeyboardEvent
       if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return
       e.preventDefault()
-      setKind(kind.value === 'canvas' ? 'roster' : 'canvas')
-      kindButtons.find(b => b.dataset.kind === kind.value)?.focus()
+      canvasKind.focus()
     })
     const input = document.createElement('input')
     input.className = 'p-dialog-input'
@@ -149,7 +134,6 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
     cancelBtn.type = 'button'
     cancelBtn.textContent = '取消'
     row.append(okBtn, cancelBtn)
-    setKind('canvas')
     panel.append(title, kindGroup, kindHint, input, err, row)
     wrap.appendChild(panel)
     root.appendChild(wrap)
@@ -162,27 +146,25 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
     }
     const nameError = (): string | null => {
       const name = input.value.trim()
-      if (name === '' || name.length > 40 || name.includes('/') || name.startsWith('roster:') || (kind.value === 'roster' && name.includes('*')) || /^\d+$/.test(name)) return '队名需 1..40 字，不含“/”、通配符或保留前缀，不为纯数字'
-      if (kind.value === 'roster' && model.getFrame(name) !== undefined) return '同名 canvas 队已存在，不能创建 roster 队'
-      if (kind.value === 'roster' && model.getFrame(rosterFrameName(name)) !== undefined && !d.isRoster(rosterFrameName(name))) return 'roster 框名已被 canvas 或镜像队占用'
-      if (kind.value === 'canvas' && model.getFrame(rosterFrameName(name)) !== undefined) return '同名 roster 队已存在，不能创建 canvas 队'
-      if (kind.value === 'roster' && ids.some(id => model.getNode(id)?.remote === true || !d.joined(id))) return 'roster 仅接受本机已入网的会话'
+      if (name === '' || name.length > 40 || name.includes('/') || name.startsWith('roster:') || /^\d+$/.test(name)) return '队名需 1..40 字，不含“/”、通配符或保留前缀，不为纯数字'
+      if (model.getFrame(rosterFrameName(name)) !== undefined) return '同名 roster 队已存在，不能创建 canvas 队'
+      if (ids.some(id => model.getNode(id)?.remote !== true && !d.joined(id))) return '本机会话已离开网络或目录，请重新选择后组建团队'
       return null
     }
     const confirm = (): void => {
       const problem = nameError()
       if (problem !== null) { err.textContent = problem; input.focus(); return }
-      const name = kind.value === 'roster' ? rosterFrameName(input.value.trim()) : input.value.trim()
+      const name = input.value.trim()
       close()
       if (model.getFrame(name) !== undefined) {
         // Duplicate name: host create is idempotent-ok, but the optimistic
         // create-team would WIPE the existing roster and overwrite its saved
         // frame rect. Join instead — same wire result, nothing destroyed.
-        d.notice('info', `已加入现有团队「${kind.value === 'roster' ? rosterFrameTitle(name) : name}」`)
+        d.notice('info', `已加入现有团队「${name}」`)
         d.emit({ type: 'add-member', team: name, ids })
         return
       }
-      d.emit({ type: 'create-team', name, ids, created: true, ...(kind.value === 'roster' ? { roster: true } : {}) })
+      d.emit({ type: 'create-team', name, ids, created: true })
     }
     okBtn.addEventListener('click', confirm)
     cancelBtn.addEventListener('click', close)
@@ -305,6 +287,7 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
       // superagent-root-team S3: the owner marks a team as a root (or unmarks it) right where the team lives.
       const root = d.isRoot(target.name)
       items.push(menuItem(root ? `取消根团队「${titleOf(target.name)}」` : `设为根团队「${titleOf(target.name)}」`, true, () => d.emit({ type: 'set-root', name: target.name, root: !root })))
+      items.push(...d.frameItems?.(target.name) ?? [])
     } else {
       const id = target.id
       if (level === 'root') {

@@ -37,6 +37,7 @@ export type AdmissionRule =
    * address. The team owner decides whether it takes the request (M12 sender card); the host only checks the link.
    */
   | 'superagent-intake'
+  | 'request-recovery'
 
 /** Every rule's basis — the mapping the authorization record stores beside the rule. */
 export const VIA_OF: Readonly<Record<AdmissionRule, Via>> = {
@@ -52,6 +53,7 @@ export const VIA_OF: Readonly<Record<AdmissionRule, Via>> = {
   'node-fact': 'joined-session',
   'cli-deposit': 'cli-deposit',
   'superagent-intake': 'peer-org',
+  'request-recovery': 'peer-org',
 }
 
 /** superagent p1-mail-admission: every admission rule name (the closed set a mailbox row's `admission` may carry). */
@@ -119,7 +121,7 @@ function remoteCliBasis(r: AdmissionRecords, caller: string): string[] {
 }
 
 /** Bound signer evidence and a fresh full-card online check, never caller self-description. */
-export interface RemoteCliProof { readonly origin: string; readonly viaUrl: string; readonly bound: boolean; readonly online: boolean }
+export interface RemoteCliProof { readonly origin: string; readonly viaUrl: string; readonly bound: boolean; readonly online: boolean; readonly key?: string }
 
 const ZONE_ID8 = /^[a-z0-9-]+\/[0-9a-f]{8}$/i
 
@@ -420,6 +422,8 @@ export interface TaskAuthorization {
   readonly via: Via
   /** Signed courier host's card URL for a remote CLI, distinct from the closed-set admission via. */
   readonly carrier_url?: string
+  /** Verified original CLI card key; the carrier host key is a different principal. */
+  readonly caller_key?: string
   readonly admission_rule: AdmissionRule
   /** Every shared team that held (cache-owed ones as `peer-org:<team>`). */
   readonly basis: readonly string[]
@@ -440,7 +444,7 @@ export const AUTH_BASIS_CAP = 64
 const PROOFS: readonly string[] = ['origin-claim', 'claim-mismatch', 'legacy-window', 'unbound', 'cli-identity', 'in-process', 'none']
 const RULES = Object.keys(VIA_OF)
 /** Rules that admit on shared teams: their basis lists at least one, each once. Every other rule has an empty basis. */
-const SHARED_RULES: readonly AdmissionRule[] = ['roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org']
+const SHARED_RULES: readonly AdmissionRule[] = ['roster-shared', 'canvas-shared', 'remote-ref-samezone', 'remote-ref-foreign', 'remote-ref-cli', 'peer-org', 'request-recovery']
 /** A record born more than this far in the future is a forgery or a broken clock, not a birth. */
 export const AUTH_CLOCK_SKEW_MS = 24 * 60 * 60 * 1000
 
@@ -454,6 +458,7 @@ export interface AuthorizationFacts {
   readonly proof: AuthProof
   readonly claim?: { readonly caller: string; readonly origin: string }
   readonly carrierUrl?: string
+  readonly callerKey?: string
   readonly ingress: 'wire' | 'local'
   readonly allowlistVersion: string
   readonly target: string
@@ -472,6 +477,7 @@ export function buildAuthorization(admission: Extract<Admission, { ok: true }>, 
     ingress: facts.ingress,
     via: admission.via,
     ...(facts.carrierUrl !== undefined ? { carrier_url: facts.carrierUrl } : {}),
+    ...(facts.callerKey!==undefined?{caller_key:facts.callerKey}:{}),
     admission_rule: admission.rule,
     basis: Object.freeze([...admission.basis]),
     allowlist_version: facts.allowlistVersion,
@@ -499,6 +505,7 @@ export function canonicalAuthorization(auth: TaskAuthorization): string {
     ingress: auth.ingress,
     via: auth.via,
     ...(auth.carrier_url !== undefined ? { carrier_url: auth.carrier_url } : {}),
+    ...(auth.caller_key!==undefined?{caller_key:auth.caller_key}:{}),
     admission_rule: auth.admission_rule,
     basis: sortedUnique(auth.basis),
     allowlist_version: auth.allowlist_version,
@@ -545,7 +552,8 @@ export function parseAuthorization(raw: unknown, now: number = Date.now()): Task
   if (typeof r.admission_rule !== 'string' || !RULES.includes(r.admission_rule)) return undefined
   const rule = r.admission_rule as AdmissionRule
   if (r.via !== VIA_OF[rule]) return undefined
-  if (rule === 'remote-ref-cli' ? !validCarrierUrl(r.carrier_url) : r.carrier_url !== undefined) return undefined
+  if (rule === 'remote-ref-cli'||rule==='request-recovery' ? !validCarrierUrl(r.carrier_url) : r.carrier_url !== undefined) return undefined
+  if(r.caller_key!==undefined&&(!CLI_HANDLE_RE.test(String(r.caller))||typeof r.caller_key!=='string'||r.caller_key.length===0||r.caller_key.length>512))return undefined
   if (!Array.isArray(r.basis) || r.basis.length > AUTH_BASIS_CAP || !r.basis.every(b => boundedString(b))) return undefined
   if (new Set(r.basis).size !== r.basis.length) return undefined
   if (SHARED_RULES.includes(rule) ? r.basis.length === 0 : r.basis.length !== 0) return undefined
@@ -564,13 +572,14 @@ export function parseAuthorization(raw: unknown, now: number = Date.now()): Task
   // Unbound and deposited-CLI proofs retain their key/card claim for audit, but do not assert origin.
   const claimProof = ['origin-claim', 'claim-mismatch', 'unbound', 'cli-identity'].includes(r.proof)
   if ((claim !== undefined) !== claimProof) return undefined
-  if (claim !== undefined && r.proof === 'origin-claim' && (rule === 'remote-ref-cli' ? claim.origin !== r.carrier_url : !claimCovers(r.caller as string, claim.caller))) return undefined
-  if (rule === 'remote-ref-cli' && (r.proof !== 'origin-claim' || claim === undefined)) return undefined
+  if (claim !== undefined && r.proof === 'origin-claim' && (rule === 'remote-ref-cli'||rule==='request-recovery' ? claim.origin !== r.carrier_url : !claimCovers(r.caller as string, claim.caller))) return undefined
+  if ((rule === 'remote-ref-cli'||rule==='request-recovery') && (r.proof !== 'origin-claim' || claim === undefined)) return undefined
   return buildAuthorization(
     { ok: true, via: VIA_OF[rule], rule, basis: r.basis as string[] },
     {
       caller: r.caller as string, proof: r.proof as AuthProof, ...(claim !== undefined ? { claim } : {}),
-      ...(rule === 'remote-ref-cli' ? { carrierUrl: r.carrier_url as string } : {}),
+      ...(rule === 'remote-ref-cli'||rule==='request-recovery' ? { carrierUrl: r.carrier_url as string } : {}),
+      ...(r.caller_key!==undefined?{callerKey:r.caller_key as string}:{}),
       ingress: r.ingress, allowlistVersion: r.allowlist_version, target: r.target as string,
       receiptTarget: r.receipt_target as string, receivedAt: r.received_at, targetBusy: r.target_busy === true,
     },

@@ -7,6 +7,7 @@
  * N3 rewrite); V5's policy question (allowlist patterns) is an owner
  * ruling, not code.
  */
+import { TeamMembershipStore } from '../../src/team-store.ts'
 import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { request } from 'node:http'
@@ -120,11 +121,12 @@ class FakeAgentsService extends Service {
   roots(): Agent[] { return this.agent === undefined ? [] : [this.agent] }
 }
 
-describe('V4 inverted (N2): a model tool declares membership for its own node only', () => {
-  it('agent-1 cannot enroll agent-2; self-declaration still works; the card stays clean', async () => {
+describe('V4 inverted (N2): no model tool declares team membership (roster self-join retired 2026-11-18)', () => {
+  it('no join tool exists; a roster declared before still reaches the card for one version', async () => {
     const home = mkdtempSync(join(tmpdir(), 'a2a-gov-v4-'))
     mkdirSync(join(home, 'a2a'), { recursive: true })
     writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: ['agent-1', 'agent-2'] }))
+    new TeamMembershipStore(join(home, 'a2a', 'teams.json')).add('agent-1', 'dsh/review-gate')
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
@@ -144,12 +146,7 @@ describe('V4 inverted (N2): a model tool declares membership for its own node on
     ctx.emit('agent/created', { agent: live })
     const port = (ctx as unknown as { webServer: { port: number } }).webServer.port
     try {
-      const joinTool = ctx.tools.get('a2a_team_join')
-      const other = await joinTool?.execute({ team: 'dsh/review-gate', id: 'agent-2' }, runContext(live)) as { ok: boolean; error?: string }
-      expect(other.ok).toBe(false)
-      expect(other.error).toContain('[NOT_SELF]')
-      const self = await joinTool?.execute({ team: 'dsh/review-gate', id: 'agent-1' }, runContext(live)) as { ok: boolean }
-      expect(self.ok).toBe(true)
+      expect(ctx.tools.get('a2a_team_join')).toBeUndefined()
       const card = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`, { headers: envelopeFor(home, port, 'dsh') })).text()) as { teamMemberships?: Array<{ node: string; team: string }> }
       expect(card.teamMemberships).toEqual([{ node: 'dsh/agent-1', team: 'dsh/review-gate' }])
     } finally {

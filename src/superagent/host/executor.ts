@@ -42,6 +42,8 @@ export interface MemberExecutorDeps {
   readonly engine: () => Engine
   /** The owner paused the team (upstream: evaluation, dispatch and outbound delivery hold). */
   readonly paused?: () => boolean
+  /** False while what the assignment cards depend on is not known yet (#739 review R1): launches wait, nothing else does. */
+  readonly ready?: () => boolean
   /** Stop a member's running turn (upstream cancels the worker on stop). True when a turn was running, and an idle event will follow. */
   readonly cancelTurn?: (member: string) => boolean
   /** The ticket's report made on the member's behalf (a turn that ended silently, or failed), told to the router as a report is. */
@@ -134,12 +136,35 @@ export class MemberExecutor implements Executor {
   private readonly leaving = new Set<string>()
   /** Assignments waiting for a free member, oldest first. */
   private waiting: { ticketId: string; assignmentId: string }[] = []
+  /**
+   * The last refused delivery of each waiting Assignment (#744 review R1): a free member whose delivery keeps being refused
+   * leaves the Assignment waiting, which would otherwise read as `launching` for as long as it lasts. In memory only.
+   */
+  private readonly refused = new Map<string, { member: string; at: string }>()
   /** One launch loop at a time, so two launches never bind one slot; a request during a run runs it again. */
   private launching = false
   private launchAgain = false
   /** One delivery at a time per Assignment: the retry never sends what a delivery in flight is sending. */
   private readonly delivering = new Set<string>()
   private readonly deliverAgain = new Set<string>()
+  /**
+   * #742: a quiet turn end that settle() set aside because an Input delivery to its Assignment was still in flight. Kept
+   * with the exact binding and the member's last claim before that idle, and replayed once the delivery chain finishes
+   * only when that claim took the delivered Input in; a later claim, idle, stop or rebinding drops it. In memory only.
+   */
+  private readonly deferredIdle = new Map<string, { binding: Binding; text: string; claimed: number }>()
+  /**
+   * #745 review R2: a causal order for claims and sends, never wall-clock milliseconds (two events in one millisecond are
+   * not ordered by Date.now()). Each real claim and each Input send takes the next number. In memory only.
+   */
+  private causal = 0
+  /** The causal number of each member's last real claim (memberRead from the host). */
+  private readonly claimSeq = new Map<string, number>()
+  /**
+   * #745 review R1: the latest real send (or a failure) across one Assignment's whole delivery chain, so an empty last pass
+   * (a scan that found nothing new) never erases the send boundary an earlier pass of the same chain crossed.
+   */
+  private readonly chainSent = new Map<string, number | 'failed'>()
   private lastRetry = 0
   /** When each member's session last took a message into its history (memberRead), for a claim that beats the delivery record. */
   private readonly claimedAt = new Map<string, number>()
@@ -184,6 +209,16 @@ export class MemberExecutor implements Executor {
   bindingFor(member: string, ticketId: string): Binding | undefined { return [...this.bindings, ...this.parked].find(b => b.member === member && b.ticketId === ticketId) }
   /** Every binding (for the workbench). */
   list(): readonly Binding[] { return [...this.bindings, ...this.parked] }
+  /**
+   * Every open ticket a member owns now: running, parked waiting on a person, or named for it and not yet launched
+   * (#741 review R2: retiring a member checks all three; bindingOf keeps its active-only meaning).
+   */
+  ticketsOf(member: string): string[] {
+    const open = (id: string): boolean => { const t = this.d.ticket(id); return t !== undefined && !t.ended }
+    const held = [...this.bindings, ...this.parked].filter(b => b.member === member).map(b => b.ticketId)
+    const named = Object.entries(this.ticketMembers).filter(([, m]) => m.named && m.member === member).map(([id]) => id)
+    return [...new Set([...held, ...named])].filter(open)
+  }
   /** Members with no ticket bound — for a ticket of a repository, only that repository's members. */
   private free(ticketId?: string): string[] {
     const held = ticketId !== undefined ? this.ticketMembers[ticketId] : undefined
@@ -234,6 +269,38 @@ export class MemberExecutor implements Executor {
   }
 
   memberOfTicket(ticketId: string): { member: string; named: boolean } | undefined { return this.ticketMembers[ticketId] }
+
+  /**
+   * Why each waiting Assignment has not launched, oldest first (field report 2026-11-19: eleven tickets sat queued for days
+   * beside four idle members, and nobody could see what they waited for). `launching` means a member is free for it and no
+   * delivery to it has been refused yet; `delivery-refused` means one was (#744 review R1), with the member last tried.
+   */
+  queued(): QueuedAssignment[] {
+    const members = this.d.members()
+    const cap = this.d.maxConcurrent?.() ?? 0
+    return this.waiting.map(({ ticketId, assignmentId }): QueuedAssignment => {
+      const base = { ticketId, assignmentId }
+      const free = (q: QueuedAssignment): QueuedAssignment => {
+        const refused = this.refused.get(assignmentId)
+        return refused === undefined ? q : { ...base, reason: 'delivery-refused', member: refused.member, refusedAt: refused.at, ...(q.repo !== undefined ? { repo: q.repo } : {}) }
+      }
+      // Paused, nothing launches: the team page says so already, and it is no stalled launch.
+      if (this.d.paused?.() === true) return { ...base, reason: 'paused' }
+      if (cap > 0 && this.bindings.length >= cap) return { ...base, reason: 'at-cap' }
+      const held = this.ticketMembers[ticketId]
+      if (held !== undefined) {
+        if (!members.includes(held.member)) return { ...base, reason: 'member-absent', member: held.member }
+        return this.available(held.member) ? free({ ...base, reason: 'launching', member: held.member }) : { ...base, reason: 'member-busy', member: held.member }
+      }
+      const repo = this.ticketRepos[ticketId]
+      if (repo !== undefined) {
+        const workers = members.filter(m => this.d.repoOf(m) === repo)
+        if (workers.length === 0) return { ...base, reason: 'no-repo-member', repo }
+        return workers.some(m => this.available(m)) ? free({ ...base, reason: 'launching', repo }) : { ...base, reason: 'repo-busy', repo }
+      }
+      return members.some(m => this.available(m)) ? free({ ...base, reason: 'launching' }) : { ...base, reason: 'all-busy' }
+    })
+  }
   /**
    * A member's load for the roster report (superagent-market-progress-roster P3): the tickets it holds (running or
    * parked), the tickets waiting that stay with it, and when its latest hold began.
@@ -275,7 +342,7 @@ export class MemberExecutor implements Executor {
 
   /** Launch waiting Assignments on free members, oldest first, while both exist. */
   launch(): void {
-    if (this.d.paused?.() === true) return
+    if (this.d.paused?.() === true || this.d.ready?.() === false) return
     if (this.launching) { this.launchAgain = true; return }
     this.launching = true
     void this.launchLoop().catch(error => { this.d.logger.warn('superagent: launch failed: %s', String(error)) }).finally(() => {
@@ -329,21 +396,27 @@ export class MemberExecutor implements Executor {
         const engine = this.d.engine()
         const ticket = this.d.ticket(next.ticketId)
         const assignment = ticket?.assignments.find(a => a.id === next.assignmentId)
-        if (ticket === undefined || ticket.ended || assignment === undefined || assignment.state !== 'pending') { this.waiting = this.waiting.filter(w => w !== next); continue }
-        if (this.d.held?.(ticket.id) === true) { this.waiting = this.waiting.filter(w => w !== next); continue }
+        if (ticket === undefined || ticket.ended || assignment === undefined || assignment.state !== 'pending') { this.waiting = this.waiting.filter(w => w !== next); this.refused.delete(next.assignmentId); continue }
+        if (this.d.held?.(ticket.id) === true) { this.waiting = this.waiting.filter(w => w !== next); this.refused.delete(next.assignmentId); continue }
         // R5: at the cap a new ticket waits; a parked ticket coming back for a person's message (above) is not held.
         const cap = this.d.maxConcurrent?.() ?? 0
         if (cap > 0 && this.bindings.length >= cap) break
         let member: string | undefined
+        let tried: string | undefined
         const run = newRun()
         let preparing: { command: string; timeoutMs: number; cwd: string } | 'no-workspace' | undefined
         for (const candidate of this.free(ticket.id)) {
           preparing = this.preparationFor(ticket.id, candidate)
           if (preparing !== undefined) { member = candidate; break }
+          tried = candidate
           if (await this.tryDeliver(candidate, assignmentCard(ticket, this.d.trigger, this.ticketRepos[ticket.id], this.d.memberNotes?.(candidate, ticket) ?? []), 'assign', ticket.id, run)) { member = candidate; break }
         }
-        if (member === undefined) continue
+        if (member === undefined) {
+          if (tried !== undefined) this.refused.set(assignment.id, { member: tried, at: new Date().toISOString() })
+          continue
+        }
         this.waiting = this.waiting.filter(w => w !== next)
+        this.refused.delete(assignment.id)
         this.bindings.push({ member, ticketId: ticket.id, assignmentId: assignment.id, at: new Date().toISOString(), run })
         if (this.ticketMembers[ticket.id] === undefined) this.ticketMembers[ticket.id] = { member, named: false }
         delete this.lastMembers[ticket.id]
@@ -399,35 +472,66 @@ export class MemberExecutor implements Executor {
       // A parked Assignment comes back through the launch loop once its member is free.
       if (binding === undefined) { if (this.parked.some(b => b.assignmentId === assignment.id)) this.launch(); return }
       this.delivering.add(assignment.id)
-      try { await this.deliverNow(ticket, assignment, binding) } finally {
+      let sent: number | 'failed' | undefined = 'failed'
+      try { sent = await this.deliverNow(ticket, assignment, binding) } finally {
         this.delivering.delete(assignment.id)
+        // Fold this pass into the chain: a failure sticks, a send keeps the latest, an empty pass changes nothing.
+        const prior = this.chainSent.get(assignment.id)
+        const chain = prior === 'failed' || sent === 'failed' ? 'failed' : sent === undefined ? prior : Math.max(prior ?? 0, sent)
+        if (chain === undefined) this.chainSent.delete(assignment.id)
+        else this.chainSent.set(assignment.id, chain)
         if (this.deliverAgain.delete(assignment.id)) this.deliver(ticket, assignment)
+        else { this.chainSent.delete(assignment.id); this.replayIdle(assignment.id, chain) }
       }
     })() })
   }
 
-  private async deliverNow(ticket: Ticket, assignment: Assignment, binding: Binding): Promise<void> {
+  /** Sends the Assignment's undelivered Inputs: the send's causal number, undefined when nothing was sent, or 'failed'. */
+  private async deliverNow(ticket: Ticket, assignment: Assignment, binding: Binding): Promise<number | 'failed' | undefined> {
     const current = this.d.ticket(ticket.id)
-    if (current === undefined || current.ended) return
+    if (current === undefined || current.ended) return undefined
     const inputs = current.inputs.filter(input => current.undelivered.includes(input.id))
-    if (inputs.length === 0) return
+    if (inputs.length === 0) return undefined
     const engine = this.d.engine()
     // The Triggers the ticket was accepted from are already in its assignment card: recorded delivered, not sent twice.
     const fresh = inputs.filter(input => !(input.kind === 'trigger' && current.origin.triggerIds.includes(input.triggerId)))
     const sentAt = Date.now()
+    // #745 R1/R2: only an actual send takes a causal number; recording already-carded Triggers sends nothing.
+    const sentSeq = fresh.length > 0 ? ++this.causal : undefined
     if (fresh.length > 0 && !(await this.tryDeliver(binding.member, inputsCard(current, fresh, this.d.trigger), 'input', ticket.id, runOf(binding)))) {
       try { engine.deliveryFailed(ticket.id, assignment.id, `member ${binding.member} did not receive the input`) } catch { /* the ticket ended meanwhile */ }
-      return
+      return 'failed'
     }
     try { engine.inputsDelivered(ticket.id, assignment.id, inputs.map(input => input.id)) } catch (error) { this.d.logger.warn('superagent: inputs of %s not recorded delivered: %s', ticket.id, String(error)) }
     // The member's session may take the message in before its delivery is recorded: that claim counts for it.
-    if ((this.claimedAt.get(binding.member) ?? 0) >= sentAt) this.memberRead(binding.member)
+    if ((this.claimedAt.get(binding.member) ?? 0) >= sentAt) this.markRead(binding.member)
+    return sentSeq
+  }
+
+  /**
+   * #742: the delivery chain of an Assignment finished; a quiet idle settle() set aside meanwhile settles now when it still
+   * applies — same binding, nothing left undelivered, and the turn that ended had taken the last sent Input in (its claim
+   * came causally after the chain's last send). Otherwise the Input wakes a new turn whose own end decides, and the old
+   * idle is dropped. `sent` is the whole chain's: undefined only when no pass of it sent anything.
+   */
+  private replayIdle(assignmentId: string, sent: number | 'failed' | undefined): void {
+    const deferred = this.deferredIdle.get(assignmentId)
+    if (deferred === undefined) return
+    this.deferredIdle.delete(assignmentId)
+    if (sent === 'failed' || (sent !== undefined && deferred.claimed <= sent)) return
+    if (!this.bindings.includes(deferred.binding)) return
+    this.settle(deferred.binding, deferred.text)
+  }
+
+  /** Drops the set-aside idle of a member's Assignments: a newer turn, stop or rebinding of it supersedes the old fact. */
+  private dropDeferredIdle(member: string): void {
+    for (const [id, deferred] of this.deferredIdle) if (deferred.binding.member === member) this.deferredIdle.delete(id)
   }
 
   stop(ticket: Ticket, assignment: Assignment, reason: string): void {
     const binding = this.bindings.find(b => b.assignmentId === assignment.id)
     this.waiting = this.waiting.filter(w => w.assignmentId !== assignment.id)
-    this.retries.delete(assignment.id); this.resuming.delete(assignment.id)
+    this.retries.delete(assignment.id); this.resuming.delete(assignment.id); this.deferredIdle.delete(assignment.id); this.chainSent.delete(assignment.id)
     const parked = this.parked.find(b => b.assignmentId === assignment.id)
     if (parked !== undefined) {
       // It holds no turn and may be on another ticket by now: nothing to stop. A member removed from the team is told.
@@ -451,6 +555,13 @@ export class MemberExecutor implements Executor {
 
   /** The member's session took a message into its history: the Inputs delivered to its assignment so far count as read. */
   memberRead(member: string): void {
+    // A new claim means a new turn: an idle set aside before it no longer describes the member's state (#742).
+    this.dropDeferredIdle(member)
+    this.claimSeq.set(member, ++this.causal)
+    this.markRead(member)
+  }
+
+  private markRead(member: string): void {
     this.claimedAt.set(member, Date.now())
     const binding = this.bindingOf(member)
     if (binding === undefined) return
@@ -465,8 +576,10 @@ export class MemberExecutor implements Executor {
   memberIdle(member: string, turn: MemberTurn = { quiet: true, text: '' }): void {
     if (this.stopping.delete(member)) queueMicrotask(() => this.launch())
     const binding = this.bindingOf(member)
+    this.dropDeferredIdle(member)
     if (binding === undefined) { this.background.delete(member); return }
-    this.memberRead(member)
+    const claimed = this.claimSeq.get(member) ?? 0
+    this.markRead(member)
     // The owner talked to this session directly: that turn says nothing about the ticket, and the ticket goes on after it.
     if (turn.person === true && turn.quiet && !this.resuming.has(binding.assignmentId)) {
       this.background.delete(member)
@@ -479,14 +592,19 @@ export class MemberExecutor implements Executor {
     if (!turn.quiet) { if (!this.background.has(member)) this.background.set(member, Date.now()); return }
     this.background.delete(member)
     this.retries.delete(binding.assignmentId)
-    this.settle(binding, turn.text)
+    this.settle(binding, turn.text, claimed)
   }
 
   /** The turn ended with nothing left running: a handoff parks the Assignment; a turn that said nothing formal reports `waiting` (upstream). */
-  private settle(binding: Binding, text: string): void {
+  private settle(binding: Binding, text: string, claimed?: number): void {
     const ticket = this.d.ticket(binding.ticketId)
     const assignment = ticket?.assignments.find(a => a.id === binding.assignmentId)
-    if (ticket === undefined || ticket.ended || assignment?.state !== 'running' || this.delivering.has(assignment.id) || ticket.undelivered.length > 0) return
+    if (ticket === undefined || ticket.ended || assignment?.state !== 'running') return
+    if (this.delivering.has(assignment.id) || ticket.undelivered.length > 0) {
+      // Never park while an Input is still on its way; keep the idle for when that delivery finishes (#742).
+      if (claimed !== undefined) this.deferredIdle.set(assignment.id, { binding, text, claimed })
+      return
+    }
     const report = assignment.report
     const since = !!assignment.deliveredAt && !!report && assignment.deliveredAt >= report.at
     const handedOff = ((report?.state === 'ready' || report?.state === 'waiting' || !!ticket.attention) && !since) || waitsForPerson(ticket)
@@ -548,6 +666,20 @@ export class MemberExecutor implements Executor {
     this.save()
     queueMicrotask(() => this.launch())
   }
+}
+
+/**
+ * A waiting Assignment and what holds it: the member it is kept for (busy, or no longer in the pool), the repository
+ * none of whose members is free or present, every member busy, or the team's concurrency cap.
+ */
+export interface QueuedAssignment {
+  readonly ticketId: string
+  readonly assignmentId: string
+  readonly reason: 'launching' | 'paused' | 'delivery-refused' | 'member-busy' | 'member-absent' | 'no-repo-member' | 'repo-busy' | 'all-busy' | 'at-cap'
+  readonly member?: string
+  readonly repo?: string
+  /** For `delivery-refused`: when the last delivery was refused. */
+  readonly refusedAt?: string
 }
 
 /** The first message a member gets for a ticket: what it may do, bounded by its Mandate, and how to report. */

@@ -10,6 +10,7 @@ import type { CanvasAction } from './canvas-ops'
 import type { RemoteTeamRow } from './federation'
 import type { PlanningSession, PlanningTeam } from './planning-types'
 import type { WorldModel } from './world'
+import { makeSessionDraggable } from './session-drag'
 
 export interface NodeListFacts {
   readonly sessions: ReadonlyArray<PlanningSession>
@@ -45,17 +46,45 @@ export function createNodeList(d: NodeListDeps): PlanningNodeList {
 
   // ── 节点列表 drawer（组队节点上画布；单一节点按 host/对等节点在列表管理）──
   let nodePanel: HTMLDivElement | null = null
+  let hostSelector: HTMLSelectElement | null = null
   let nodeHost = '' // '' = 本机；否则为 d.facts().remoteTeams 的 host:port 键
   let nodeJoinMenu: HTMLDivElement | null = null
+  let joiningId: string | undefined
+  let dragging = false
+  let renderedFacts = ''
+  const joinChoices = new Map<string, HTMLButtonElement>()
+
+  const mayJoin = (id: string, team: string): boolean => d.facts().sessions.some(s => s.id === id && s.joined === true)
+    && d.facts().teams.some(t => t.name === team)
+    && model.getNode(id)?.memberships.some(m => m.team === team) !== true
+
+  function refreshChoices(): void {
+    if (joiningId === undefined) return
+    for (const [team, button] of joinChoices) {
+      button.disabled = !mayJoin(joiningId, team)
+      button.setAttribute('aria-disabled', String(button.disabled))
+    }
+  }
+
+  function draggable(row: HTMLElement, id: string): void {
+    makeSessionDraggable(row, id)
+    row.addEventListener('dragstart', () => { dragging = true })
+    row.addEventListener('dragend', () => { dragging = false; if (nodePanel !== null) renderNodePanel() })
+  }
 
   function closeNodeJoinMenu(): void {
     nodeJoinMenu?.remove()
     nodeJoinMenu = null
+    joiningId = undefined
+    joinChoices.clear()
   }
   function closeNodePanel(): void {
     closeNodeJoinMenu()
+    dragging = false
     nodePanel?.remove()
     nodePanel = null
+    hostSelector = null
+    renderedFacts = ''
   }
   function toggleNodePanel(): void {
     if (nodePanel !== null) { closeNodePanel(); return }
@@ -82,36 +111,50 @@ export function createNodeList(d: NodeListDeps): PlanningNodeList {
   function renderNodePanel(): void {
     const el = nodePanel
     if (el === null) return
-    closeNodeJoinMenu()
-    el.textContent = ''
-    const head = document.createElement('div')
-    head.className = 'p-nodelist-head'
-    const headLabel = document.createElement('span')
-    headLabel.className = 'p-nodelist-title'
-    headLabel.textContent = '节点'
-    const sel = document.createElement('select')
-    sel.className = 'p-nodesel'
-    sel.setAttribute('aria-label', '选择 host 或对等节点')
-    const localOpt = document.createElement('option')
-    localOpt.value = ''
-    localOpt.textContent = '本机'
-    sel.appendChild(localOpt)
-    for (const [host, rows] of d.facts().remoteTeams) {
-      if (host === '') continue
-      const opt = document.createElement('option')
-      opt.value = host
-      opt.textContent = rows[0]?.origin !== undefined && rows[0].origin !== '' ? `${rows[0].origin}（${host}）` : host
-      sel.appendChild(opt)
+    // A poll may update facts, but must not detach a native drag or an open menu.
+    if (dragging || nodeJoinMenu !== null) { refreshChoices(); return }
+    const latest = d.facts()
+    const stamp = JSON.stringify([nodeHost, latest.sessions, Array.from(latest.canvasMemberIds), Array.from(latest.remoteTeams), latest.teams])
+    if (stamp === renderedFacts && el.firstElementChild !== null) return
+    renderedFacts = stamp
+    const scroll = el.querySelector('.p-nodelist-body')?.scrollTop ?? 0
+    let head = el.querySelector<HTMLElement>('.p-nodelist-head')
+    let body = el.querySelector<HTMLDivElement>('.p-nodelist-body')
+    if (head === null || hostSelector === null || body === null) {
+      head = document.createElement('div')
+      head.className = 'p-nodelist-head'
+      const headLabel = document.createElement('span')
+      headLabel.className = 'p-nodelist-title'
+      headLabel.textContent = '节点'
+      const sel = document.createElement('select')
+      sel.className = 'p-nodesel'
+      sel.setAttribute('aria-label', '选择 host 或对等节点')
+      hostSelector = sel
+      sel.addEventListener('change', () => { closeNodeJoinMenu(); nodeHost = sel.value; renderNodePanel() })
+      head.append(headLabel, sel)
+      body = document.createElement('div')
+      body.className = 'p-nodelist-body'
+      el.append(head, body)
     }
-    if (nodeHost !== '' && !d.facts().remoteTeams.has(nodeHost)) nodeHost = ''
-    sel.value = nodeHost
-    sel.addEventListener('change', () => { nodeHost = sel.value; renderNodePanel() })
-    head.append(headLabel, sel)
-    const body = document.createElement('div')
-    body.className = 'p-nodelist-body'
-    el.append(head, body)
+    // Keep the native selector and existing options connected even when row facts change.
+    const sel = hostSelector!
+    const oldOptions = new Map(Array.from(sel.options).map(option => [option.value, option]))
+    const choices = new Map<string, string>([['', '本机']])
+    for (const [host, rows] of latest.remoteTeams) if (host !== '') {
+      choices.set(host, rows[0]?.origin ? `${rows[0].origin}（${host}）` : host)
+    }
+    for (const [value, label] of choices) {
+      const option = oldOptions.get(value) ?? new Option(label, value)
+      if (option.textContent !== label) option.textContent = label
+      if (option.parentElement !== sel) sel.appendChild(option)
+    }
+    for (const option of Array.from(sel.options)) if (!choices.has(option.value)) option.remove()
+    if (!choices.has(nodeHost)) nodeHost = ''
+    if (sel.value !== nodeHost) sel.value = nodeHost
+    body!.replaceChildren()
     if (nodeHost === '') renderLocalNodeGroups(body)
     else renderRemoteNodeGroups(body, d.facts().remoteTeams.get(nodeHost) ?? [])
+    body.scrollTop = scroll
   }
 
   function nodeRowDot(live: boolean | undefined, joined: boolean): HTMLSpanElement {
@@ -149,18 +192,25 @@ export function createNodeList(d: NodeListDeps): PlanningNodeList {
     el.className = 'p-menu'
     el.setAttribute('role', 'menu')
     el.setAttribute('aria-label', '加入团队')
+    joiningId = id
     for (const t of d.facts().teams) {
       const already = (model.getNode(id)?.memberships.some(m => m.team === t.name)) ?? false
-      el.appendChild(d.menuItem(already ? `${t.name}（已加入）` : t.name, !already, () => {
+      const choice = d.menuItem(already ? `${t.name}（已加入）` : t.name, true, () => {
+        // The DOM may outlive its poll facts; never dispatch a disappeared target/source.
+        if (!mayJoin(id, t.name)) { refreshChoices(); return }
         closeNodePanel()
         d.emit({ type: 'add-member', team: t.name, ids: [id] })
-      }))
+      })
+      joinChoices.set(t.name, choice)
+      el.appendChild(choice)
     }
     el.appendChild(d.menuItem('新团队…', true, () => {
+      if (!d.facts().sessions.some(s => s.id === id && s.joined === true)) return
       closeNodePanel()
       d.openNameDialog([id])
     }))
     nodeJoinMenu = el
+    refreshChoices()
     root.appendChild(el)
     const rect = anchor.getBoundingClientRect()
     el.style.left = `${String(Math.min(rect.right + 4, window.innerWidth - 180))}px`
@@ -182,6 +232,7 @@ export function createNodeList(d: NodeListDeps): PlanningNodeList {
     for (const s of unteamed) {
       const row = document.createElement('div')
       row.className = 'p-noderow'
+      draggable(row, s.id)
       const name = document.createElement('span')
       name.className = 'p-nodename'
       name.textContent = s.name !== undefined && s.name !== '' ? s.name : s.label
@@ -212,6 +263,7 @@ export function createNodeList(d: NodeListDeps): PlanningNodeList {
     for (const s of teamedRows) {
       const row = document.createElement('div')
       row.className = 'p-noderow'
+      draggable(row, s.id)
       const name = document.createElement('span')
       name.className = 'p-nodename'
       name.textContent = s.name !== undefined && s.name !== '' ? s.name : s.label

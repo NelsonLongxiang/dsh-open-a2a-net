@@ -3,6 +3,8 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/deps
  */
 import type { SuperagentHost } from './index.ts'
+import type {RecoveryBinding,RecoveryPermit,RecoveryProposal} from '../../request-recovery.ts'
+import type {NarrowIdentity} from './narrow-outbound.ts'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
@@ -55,6 +57,15 @@ export interface SuperagentHostDeps {
   readonly mcpToolsChanged?: () => void
   /** Make the team's ygl-trees project in the team workspace (design Y1c); idempotent. */
   readonly ensureYglProject?: (name: string) => void
+  /** What the installed ygl-trees can do (design Y1d/Y1e); unknown when absent. */
+  readonly yglCapabilities?: () => import('./ygl-home.ts').YglCapabilities
+  /**
+   * Whether that read has settled (#739 review R1). Until it has, candidates and assignments wait (requests are still taken), so
+   * no card goes out with steps the version would change. Absent: ready.
+   */
+  readonly yglReady?: () => boolean
+  /** The task ledger's state of a request the team identity received (owner ruling 2026-11-18: one book for receipts owed). */
+  readonly receiptLedger?: (task: string) => import('./receipts.ts').LedgerOwed
   readonly stageFiles?: (sessionId: string, paths: readonly string[], canvas: string) => { ok: true; files: DecisionFile[] } | { ok: false; code: string; error: string }
   /** Where this team's state lives instead, when it is not the instance's primary team (design M2). */
   readonly stateDir?: string
@@ -82,6 +93,14 @@ export interface SuperagentHostDeps {
   readonly apiKey?: () => string | undefined
   /** The origin this host publishes as its own (its card URL's): what the team identity's claims are bound to. */
   readonly claimAudience?: () => string | undefined
+  /** Query only this team's exact persisted outbound attempt; missing/failed is not non-delivery evidence. */
+  readonly narrowRecovery?: {
+    identity:(caller:string)=>NarrowIdentity|undefined
+    proposal:(binding:RecoveryBinding)=>Promise<RecoveryProposal>
+    transport:(permit:RecoveryPermit,mode:'send'|'query',current:()=>boolean)=>Promise<{accepted:boolean;ready?:boolean}>
+    receipt:(binding:RecoveryBinding,caller:string,message:string)=>boolean
+  }
+  readonly outboundOutcome?: (input: { sender: string; task: string; address: string; message: string }) => { delivery: 'unknown' | 'not-sent' | 'accepted' }
   /**
    * PR-C2: a signed request to another a2a host (OriginClaim, body-bound, on this host's card key). Absent: no remote
    * members can be reached and no team can be served.
@@ -134,6 +153,6 @@ export interface SuperagentHostDeps {
 /** The candidate card the router reads: bounded facts and the ids its decision names, never authority. */
 /** A message a person typed into a session: only the host can mark one. */
 /** Who a workbench request is from, when it is not the owner at the page: their terminal, or an observer. */
-export type WorkbenchVia = 'cli' | { readonly observer: string }
+export type WorkbenchVia = 'cli' | { readonly observer: string } | { readonly member: string }
 
 export interface PersonMessage { readonly id: string; readonly atMs: number; readonly text: string }

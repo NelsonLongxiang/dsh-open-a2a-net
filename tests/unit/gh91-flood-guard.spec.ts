@@ -3,7 +3,7 @@ import { FloodGuard, DEFAULT_RATE_PER_MINUTE, fileChannelAdvice } from '../../sr
 const part = (t: string, f = 'f', i = 1, n = 1) => '[JPFILE-PART v1] ' + JSON.stringify({ v: 1, transfer_id: t, file_id: f, part_i: i, part_n: n })
 
 describe('gh91 guard boundaries', () => {
-  it('advises the file channel for accepted, oversized and malformed legacy parts only', () => {
+  it('advises the file channel for any legacy part only', () => {
     for (const message of [part('ok'), part('large', 'f', 1, 17), '[JPFILE-PART v1] broken']) {
       expect(fileChannelAdvice(message)).toMatchObject({ reason: 'use-file-channel', message: expect.stringContaining('a2a_file_send { paths, team }') })
       expect(fileChannelAdvice(message)?.message).toContain('a2a-net file send <path…> <team>')
@@ -18,30 +18,19 @@ describe('gh91 guard boundaries', () => {
     now = 59999; expect(g.check('a', 'request')).toBe('sender-rate-limited')
     now = 60000; expect(g.check('a', 'request')).toBeUndefined()
   })
-  it('retains the transfer cap across minute windows and file ids, even if part_n lies', () => {
-    let now = 0; const g = new FloodGuard(() => now)
-    for (let i = 0; i < 16; i++) expect(g.check('a', part('same-transfer', 'file-' + i))).toBeUndefined()
-    now += 60001
-    expect(g.check('a', part('same-transfer', 'next-file'))).toBe('file-parts-exceeded')
-    expect(g.check('a', part('new-transfer'))).toBeUndefined()
-  })
-  it.each([0, -1, 1.5, '17', null])('rejects malformed declared part counts (%s)', n => {
+  it('refuses every JPFILE-PART message, well-formed or not, and spends no sender quota on it', () => {
     const g = new FloodGuard(() => 0)
-    const message = '[JPFILE-PART v1] ' + JSON.stringify({ transfer_id: 't', file_id: 'f', part_i: 1, part_n: n })
-    expect(g.check('a', message)).toBe('file-part-invalid')
+    for (const message of [part('t'), part('t', 'f', 1, 17), '[JPFILE-PART v1] broken', '[JPFILE-PART v2] {}', 'note before [JPFILE-PART v1] {}']) {
+      expect(g.check('a', message)).toBe('file-channel-required')
+    }
+    for (let i = 0; i < DEFAULT_RATE_PER_MINUTE; i++) expect(g.check('a', 'request')).toBeUndefined()
   })
-  it('rejects invalid/missing coordinates and protocol variants rather than failing open', () => {
-    const g = new FloodGuard(() => 0)
-    for (const message of ['[JPFILE-PART v1] null', '[JPFILE-PART v1] {}', '[JPFILE-PART v2] {}', part('t', 'f', -1), part('t', 'f', 2, 1)]) expect(g.check('a', message)).toBe('file-part-invalid')
-  })
-  it('bounds active sender/transfer state, refuses instead of evicting an active allowance', () => {
+  it('bounds sender state, refuses instead of evicting an active budget', () => {
     let now = 0; const g = new FloodGuard(() => now)
-    for (let i = 0; i < 1024; i++) expect(g.check('s-' + i, part('t-' + i))).toBeUndefined()
+    for (let i = 0; i < 1024; i++) expect(g.check('s-' + i, 'request')).toBeUndefined()
     expect(g.check('extra', 'request')).toBe('flood-state-full')
+    expect(g.check('s-0', 'request')).toBeUndefined()
     now = 60001
-    expect(g.check('extra', part('extra-transfer'))).toBe('flood-state-full')
-    expect(g.check('s-0', part('t-0'))).toBe('file-part-duplicate')
-    now = 24 * 60 * 60000
-    expect(g.check('extra', part('extra-transfer'))).toBeUndefined()
+    expect(g.check('extra', 'request')).toBeUndefined()
   })
 })

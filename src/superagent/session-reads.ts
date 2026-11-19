@@ -43,7 +43,7 @@ export function personMessageFrom(events: readonly unknown[]): { id: string; atM
  */
 export function memberTurnFrom(id: string, events: readonly unknown[], jobs: unknown): { quiet: boolean; text: string } {
   const list = (jobs as { list?: (caller: string) => readonly { owner?: string; status: string }[] } | undefined)?.list
-  const quiet = !(list?.(id) ?? []).some(job => job.owner === id && (job.status === 'running' || job.status === 'stopping'))
+  const quiet = !(list?.call(jobs, id) ?? []).some(job => job.owner === id && (job.status === 'running' || job.status === 'stopping'))
   const last = [...events].reverse().find(event => (event as { type?: string } | undefined)?.type === 'assistant/message') as { data?: { message?: { content?: TextBlocks } } } | undefined
   return { quiet, text: textOf(last?.data?.message?.content) }
 }
