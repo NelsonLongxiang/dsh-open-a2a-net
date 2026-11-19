@@ -3,6 +3,8 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/deps
  */
 import type { SuperagentHost } from './index.ts'
+import type {RecoveryBinding,RecoveryPermit,RecoveryProposal} from '../../request-recovery.ts'
+import type {NarrowIdentity} from './narrow-outbound.ts'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
@@ -91,6 +93,14 @@ export interface SuperagentHostDeps {
   readonly apiKey?: () => string | undefined
   /** The origin this host publishes as its own (its card URL's): what the team identity's claims are bound to. */
   readonly claimAudience?: () => string | undefined
+  /** Query only this team's exact persisted outbound attempt; missing/failed is not non-delivery evidence. */
+  readonly narrowRecovery?: {
+    identity:(caller:string)=>NarrowIdentity|undefined
+    proposal:(binding:RecoveryBinding)=>Promise<RecoveryProposal>
+    transport:(permit:RecoveryPermit,mode:'send'|'query',current:()=>boolean)=>Promise<{accepted:boolean;ready?:boolean}>
+    receipt:(binding:RecoveryBinding,caller:string,message:string)=>boolean
+  }
+  readonly outboundOutcome?: (input: { sender: string; task: string; address: string; message: string }) => { delivery: 'unknown' | 'not-sent' | 'accepted' }
   /**
    * PR-C2: a signed request to another a2a host (OriginClaim, body-bound, on this host's card key). Absent: no remote
    * members can be reached and no team can be served.

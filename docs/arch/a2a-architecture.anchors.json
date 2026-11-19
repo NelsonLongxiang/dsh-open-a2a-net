@@ -3,12 +3,12 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "6e9e76a176c39dce25e11528b60aca3f5a8314b6a032a92bf15db2abbfc23688",
+    "src/index.ts": "19840cf459503c6449dcf2df0106cd580d9788dbffb2ab02e1a57c5950944b7e",
     "src/faces/admin.ts": "8e82a4e935492457784de8519bf3a959e3bc655255b229b6f58f52178ff4e6fe",
     "src/canvas-store.ts": "ce935c601af66a524949ccb006310c6b106be159718c0a7839c41fd210c20826",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
-    "src/cli-deposit.ts": "97186e6b791be10cebd68cd2808d642718792b92f6df1f80b23070cc5d7455b7",
-    "nexus-stage/src/workbench.ts": "ef1afcbbca9b6a7614bfc3a22b080b16bb2c439473102832e2d4575195fe8a12",
+    "src/cli-deposit.ts": "d9a887fbfad807321d33c410deaf933f1072ac10ccdca3ff7e4f42380292a1d3",
+    "nexus-stage/src/workbench.ts": "023d5c4225ba3fbea94fa9361bdf54716a4be2f7cbe722107a3c0063b417d235",
     "nexus-stage/src/federation.ts": "0ad1e9e077ebaee592e055a9aa56053ef50963bd5e2a47b27b63c2944daafed9",
     "nexus-stage/src/planning-relayout.ts": "7ce77ba2bc95fcbee62af752f22969b726511d8988133e74123a5e04a7a6a571",
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
@@ -19,9 +19,9 @@
     "nexus-stage/src/planning-overlap.ts": "f4e7ecf5af229f6107191f35be2b5a10ebab921b175ba0950f577458dacc5019",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "5aa2646647229114617859b0e1f0f5db504a25063a2cc0af833a46547da725df",
-    "src/faces/wire.ts": "9a8296c98b7d242e3e7f24051ef8296498e9e53eeecdfa0377457265230e65f1",
+    "src/faces/wire.ts": "10a30edbd83b616422c36c1a34eb5bcd119965720fb73196a7c8bb3c2322129e",
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
-    "src/task-auth.ts": "3fdd98071c6106721e348b567507f826385474c825df106bde9324e3105d2b0f",
+    "src/task-auth.ts": "bdc867d74eed0528c3bebaf4e55f0c024872cd675ca0181ca30cdac3a0356c5a",
     "src/origin-claim.ts": "54079e01ec324ea1054bc892ef403ba813fa52c480bd99ecb9cf8b73190c376a",
     "src/tools/info.ts": "02f76222a5c7b2e64847baf80bdc18c8ca370352a6841b44afc60ebe42e49a6d",
     "src/tools/act.ts": "20f20e0cc9a610d16efca48555dfb6548ddd2a3859b33e58d258cf5d34b84cf1",
@@ -51,7 +51,7 @@
     {
       "page": "p1-arch",
       "cell": "b1",
-      "ref": "src/index.ts:563",
+      "ref": "src/index.ts:566",
       "expect": "const peerAdmissible = (url: string): boolean => {"
     },
     {
@@ -63,13 +63,13 @@
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:3106",
+      "ref": "src/index.ts:3130",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
       "page": "p1-arch",
       "cell": "b4",
-      "ref": "src/index.ts:1494",
+      "ref": "src/index.ts:1507",
       "expect": "function exposureDescription(description: string): string | undefined {"
     },
     {
@@ -87,7 +87,7 @@
     {
       "page": "p1-arch",
       "cell": "b5",
-      "ref": "src/task-auth.ts:137",
+      "ref": "src/task-auth.ts:139",
       "expect": "export function sameZoneAdmission(r: AdmissionRecords, caller: string, targetTeam?: string): Admission {"
     },
     {
@@ -105,7 +105,7 @@
     {
       "page": "p1-arch",
       "cell": "c1",
-      "ref": "src/index.ts:1931",
+      "ref": "src/index.ts:1944",
       "expect": "path: '/.well-known/agent-card.json',"
     },
     {
@@ -117,19 +117,19 @@
     {
       "page": "p1-arch",
       "cell": "c2",
-      "ref": "src/faces/wire.ts:610",
+      "ref": "src/faces/wire.ts:628",
       "expect": "path: '/a2a/direct',"
     },
     {
       "page": "p1-arch",
       "cell": "c3",
-      "ref": "src/faces/wire.ts:422",
+      "ref": "src/faces/wire.ts:425",
       "expect": "path: '/a2a/log',"
     },
     {
       "page": "p1-arch",
       "cell": "c4",
-      "ref": "src/faces/wire.ts:523",
+      "ref": "src/faces/wire.ts:526",
       "expect": "path: '/a2a/query',"
     },
     {
@@ -147,19 +147,19 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:3625",
+      "ref": "src/index.ts:3650",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
       "page": "p1-arch",
       "cell": "d1",
-      "ref": "src/index.ts:552",
+      "ref": "src/index.ts:555",
       "expect": "const peerStore = new PeerStore(config.peers, join(home, 'a2a', 'peers.json'))"
     },
     {
       "page": "p1-arch",
       "cell": "d2",
-      "ref": "src/index.ts:628",
+      "ref": "src/index.ts:631",
       "expect": "const joinedSessions = new JoinedSessions(join(home, 'a2a', 'joined.json'))"
     },
     {
@@ -171,19 +171,19 @@
     {
       "page": "p1-arch",
       "cell": "d4",
-      "ref": "src/index.ts:633",
+      "ref": "src/index.ts:636",
       "expect": "const exposureStore = new ExposureStore(join(home, 'a2a', 'exposure.json'))"
     },
     {
       "page": "p1-arch",
       "cell": "d5",
-      "ref": "src/index.ts:715",
+      "ref": "src/index.ts:718",
       "expect": "const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'), { staleTtlMs: config.taskStaleTtlMs, warn: message => logger.warn(message) })"
     },
     {
       "page": "p1-arch",
       "cell": "d6",
-      "ref": "src/index.ts:884",
+      "ref": "src/index.ts:887",
       "expect": "const idempotencyStore = new IdempotencyStore(join(home, 'a2a', 'idempotency.json'))"
     },
     {
@@ -207,13 +207,13 @@
     {
       "page": "p1-arch",
       "cell": "d9",
-      "ref": "src/index.ts:655",
+      "ref": "src/index.ts:658",
       "expect": "const cliDeposits = new CliDepositStore(join(home, 'a2a', 'cli-deposits.json'))"
     },
     {
       "page": "p1-arch",
       "cell": "e1",
-      "ref": "nexus-stage/src/workbench.ts:616",
+      "ref": "nexus-stage/src/workbench.ts:636",
       "expect": "function renderHosts(): void {"
     },
     {
@@ -225,19 +225,19 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4587",
+      "ref": "src/index.ts:4613",
       "expect": "const callerNodeId = originAgentId"
     },
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/task-auth.ts:164",
+      "ref": "src/task-auth.ts:166",
       "expect": "if (r.canvasRemoteMembersOf(name).includes(caller)) declare(r.canvasTeamOf(name), 'remote-ref-samezone')"
     },
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/task-auth.ts:166",
+      "ref": "src/task-auth.ts:168",
       "expect": "const ownHandles = new Set<string>([r.zone, ...r.joined().map(id => `${r.zone}/${r.id8(id)}`)])"
     },
     {
@@ -267,31 +267,31 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3982",
+      "ref": "src/index.ts:4008",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
       "page": "p1-arch",
       "cell": "f2",
-      "ref": "src/index.ts:1021",
+      "ref": "src/index.ts:1034",
       "expect": "const wakeColdTeam = (team: string, skipId?: string): ColdWake => {"
     },
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2743",
+      "ref": "src/index.ts:2767",
       "expect": "const result=await receiptOutbox.send(record.taskId)"
     },
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2753",
+      "ref": "src/index.ts:2777",
       "expect": "function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {"
     },
     {
       "page": "p1-arch",
       "cell": "f4",
-      "ref": "src/index.ts:1021",
+      "ref": "src/index.ts:1034",
       "expect": "const wakeColdTeam = (team: string, skipId?: string): ColdWake => {"
     },
     {
@@ -303,7 +303,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/index.ts:1840",
+      "ref": "src/index.ts:1853",
       "expect": "registerAdminFaces(webServer, {"
     },
     {
@@ -333,7 +333,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/faces/wire.ts:880",
+      "ref": "src/faces/wire.ts:915",
       "expect": "if (refuseIfFlooded(caller, message, team, taskId, res)) return"
     },
     {
@@ -345,7 +345,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/wire.ts:226",
+      "ref": "src/faces/wire.ts:229",
       "expect": "export function registerWireFaces(webServer: WebServer, d: WireDeps): void {"
     },
     {

@@ -10,6 +10,7 @@ import { createScopeHintsChip, parseScopeHints, type ScopeHintsChip } from './sc
 import { createFaultReporter } from './fault'
 import { createWorkbench, type StateBody } from './workbench'
 import { personTickets, type SaState } from './wb-superagent'
+import { recoveryOwnerResponse } from './request-recovery-panel'
 import { createTeamRoleDecorator } from './planning-team-roles'
 import { createPlanningView } from './planning-view'
 import { rosterFrames, rosterNameOf } from './planning-roster'
@@ -282,7 +283,9 @@ async function fetchLayout(): Promise<unknown> {
 /** The team the 团队 tab shows; '' is the instance's primary team. Kept across reloads per viewer (guarded). */
 const TEAM_KEY = 'dsh-a2a.superagent.team'
 let selectedTeam = (() => { try { return window.localStorage.getItem(TEAM_KEY) ?? '' } catch { return '' } })()
+let teamGeneration = 0
 function rememberTeam(id: string): void {
+  teamGeneration++
   selectedTeam = id
   try { if (id === '') window.localStorage.removeItem(TEAM_KEY); else window.localStorage.setItem(TEAM_KEY, id) } catch { /* convenience only */ }
 }
@@ -293,7 +296,8 @@ const bench = createWorkbench({
   // superagent v4 PR-E: the 团队 tab writes through the owner control face.
   superagent: {
     async act(body) {
-      const res = await controlFetch('/__dsh_a2a/superagent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, ...(selectedTeam !== '' ? { teamId: selectedTeam } : {}) }) })
+      const res = await controlFetch('/__dsh_a2a/superagent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, teamId: typeof body.teamId === 'string' ? body.teamId : selectedTeam }) })
+      if (String(body.action).startsWith('outbound-narrow-')) return recoveryOwnerResponse(res)
       try { return await res.json() as Record<string, unknown> } catch { return { ok: false, error: `HTTP ${res.status}` } }
     },
     refresh() { void pollSuperagent() },
@@ -310,6 +314,10 @@ const bench = createWorkbench({
       const res = await controlFetch('/__dsh_a2a/superagent/teams', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ canvas, router }) })
       try { return await res.json() as Record<string, unknown> } catch { return { ok: false, error: `HTTP ${res.status}` } }
     },
+  },
+  async requestRecovery(body) {
+    const res = await controlFetch('/__dsh_a2a/request-recovery', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    return recoveryOwnerResponse(res)
   },
   // gh#34: the owner three-key panel rides the control face.
   async ownerSettingsRead() {
@@ -494,14 +502,14 @@ async function pollSuperagent(): Promise<void> {
   if (superagentBusy) return
   superagentBusy = true
   // A switch while this read is out: its answer is the old team's, and must not be shown as the new one's.
-  const asked = selectedTeam
+  const asked = selectedTeam, generation = teamGeneration
   try {
     const [res, list] = await Promise.all([
       controlFetch(`/__dsh_a2a/superagent${asked !== '' ? `?teamId=${encodeURIComponent(asked)}` : ''}`, { cache: 'no-store' }),
       controlFetch('/__dsh_a2a/superagent/teams', { cache: 'no-store' }),
     ])
     const { teams = [] } = list.ok ? await list.json() as { teams?: SaState['teams'] } : {}
-    if (asked !== selectedTeam) return
+    if (asked !== selectedTeam || generation !== teamGeneration) return
     // A remembered team that is gone (unbound, another host's list): back to the primary team, not a hidden tab.
     if (asked !== '' && list.ok && !(teams ?? []).some(row => row.id === asked)) { rememberTeam(''); return }
     const own = res.ok ? await res.json() as SaState : null
@@ -511,16 +519,16 @@ async function pollSuperagent(): Promise<void> {
       const r = await controlFetch(`/__dsh_a2a/superagent?teamId=${encodeURIComponent(row.id)}`, { cache: 'no-store' }).catch(() => undefined)
       return [row.id, r?.ok === true ? await r.json() as SaState : undefined] as const
     }))
-    if (asked !== selectedTeam) return
+    if (asked !== selectedTeam || generation !== teamGeneration) return
     const others = read.flatMap(([, other]) => other !== undefined ? [other] : [])
     const waiting = new Map(read.flatMap(([id, other]) => other !== undefined ? [[id, personTickets(other).length] as const] : []))
     const rows = (teams ?? []).map(row => waiting.has(row.id) ? { ...row, waiting: waiting.get(row.id) } : row)
     const state = own === null ? null : { ...own, teams: rows, selectedTeam: asked }
     bench.updateSuperagent(state)
     teamRoles.update(state === null ? null : [state, ...others])
-  } catch { bench.updateSuperagent(null); teamRoles.update(null) } finally {
+  } catch { if (generation === teamGeneration && asked === selectedTeam) { bench.updateSuperagent(null); teamRoles.update(null) } } finally {
     superagentBusy = false
-    if (asked !== selectedTeam) void pollSuperagent()
+    if (asked !== selectedTeam || generation !== teamGeneration) void pollSuperagent()
   }
 }
 
@@ -622,6 +630,7 @@ async function poll(): Promise<void> {
   }
 }
 
+window.addEventListener('beforeunload', () => bench.dispose(), { once: true })
 void poll()
 window.setInterval(() => {
   if (!document.hidden) void poll()

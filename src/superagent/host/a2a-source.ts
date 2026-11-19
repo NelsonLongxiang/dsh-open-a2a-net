@@ -97,14 +97,14 @@ export function runCli(args: string[], env: NodeJS.ProcessEnv, signal?: AbortSig
  * The refusal a `--json` run printed on stdout before exiting non-zero (its `error`, `next` and `task_id`): with `--json`
  * the CLI writes nothing to stderr, so this is the only reason there is.
  */
-export function cliRefusal(stdout: unknown): { summary: string; error?: string; task?: string } {
+export function cliRefusal(stdout: unknown): { summary: string; error?: string; task?: string; delivery?: 'not-sent' } {
   let out: Record<string, unknown> = {}
   try { const parsed = JSON.parse(typeof stdout === 'string' ? stdout : '') as unknown; if (typeof parsed === 'object' && parsed !== null) out = parsed as Record<string, unknown> } catch { /* not JSON */ }
   const error = typeof out.error === 'string' && out.error !== '' ? out.error : undefined
   const next = typeof out.next === 'string' && out.next !== '' ? out.next : undefined
   const task = typeof out.task_id === 'string' && out.task_id !== '' ? out.task_id : undefined
   const summary = [error ?? (typeof stdout === 'string' && stdout.trim() !== '' ? stdout.trim() : 'no reason given'), ...(next !== undefined ? [`next: ${next}`] : []), ...(task !== undefined ? [`task ${task}`] : [])].join(' · ')
-  return { summary, ...(error !== undefined ? { error } : {}), ...(task !== undefined ? { task } : {}) }
+  return { summary, ...(error !== undefined ? { error } : {}), ...(task !== undefined ? { task } : {}), ...(out.delivery === 'not-sent' && out.acceptance !== 'unknown' && out.delivered !== true && out.routed !== true && out.code !== -32005 && out.task_status !== 'TASK_STATE_DELIVERED' ? { delivery: 'not-sent' as const } : {}) }
 }
 
 /** The home host refused to forward because the team identity's CLI deposit is not online there (direct-forward.ts). */
@@ -113,7 +113,7 @@ const DEPOSIT_REFUSAL = /not an online local CLI deposit|local CLI deposit expir
 
 /** A route that did not go out: the reason the CLI gave and the task id it used, when it printed one. */
 export class RouteRefused extends Error {
-  constructor(message: string, readonly task?: string) { super(message) }
+  constructor(message: string, readonly task?: string, readonly delivery?: 'not-sent') { super(message) }
 }
 
 export class A2aSource {
@@ -300,19 +300,35 @@ export class A2aSource {
     return await this.routeAs(address, text, context)
   }
 
+  /** Send one persisted approved outbound attempt; no automatic retry under another task id. */
+  async askApproved(address: string, text: string, task: string, sender: string): Promise<string | undefined> {
+    if (sender === '' || this.address !== sender) throw new RouteRefused('团队发送身份变化，未执行 route。', task, 'not-sent')
+    // A reviewer admission asks about the reverse reply link, not outbound authority.
+    // The approved card authorizes only the sender scope; wire signature/deposit/receiver admission still apply.
+    return await this.routeAs(address, text, undefined, task)
+  }
+
   /**
    * superagent-root-team S2: send to a child team from the team's identity. No admission precheck: that check asks
    * whether the address would be let into this identity's mailbox as a sender (right for a reviewer, who answers from
    * that address), while a child team answers from its host's face, never from its canvas address — the check said no
    * and nothing was sent (test host, 2026-11-12). The child's own admission of this identity still applies to the send.
    */
-  async routeAs(address: string, text: string, context?: string): Promise<string | undefined> {
+  async routeAs(address: string, text: string, context?: string, task?: string): Promise<string | undefined> {
     const route = async (): Promise<string | undefined> => {
-      const sent = JSON.parse(await this.context.commands.run('a2a-net', ['route', address, '--json', ...(context !== undefined ? ['--context', context] : []), '--', text])) as { task_id?: unknown }
+      const args = ['route', address, '--json', ...(context !== undefined ? ['--context', context] : []), ...(task !== undefined ? ['--task', task] : []), '--', text]
+      const stdout = task !== undefined ? await (this.d.run ?? runCli)(args, this.env()) : await this.context.commands.run('a2a-net', args)
+      const sent = JSON.parse(stdout) as { task_id?: unknown; routed?: unknown; delivered?: unknown; acceptance?: unknown; prior?: { status?: unknown }; error?: unknown }
+      if (task !== undefined && (sent.task_id !== task || (sent.delivered !== true && sent.routed !== true) || sent.acceptance === 'unknown' || (sent.prior !== undefined && sent.prior.status !== 'completed') || sent.error !== undefined)) throw new RouteRefused('原 task 的接纳未确认，请对账，不重派。', task)
       return typeof sent.task_id === 'string' ? sent.task_id : undefined
     }
     try { return await route() } catch (error) {
       const refusal = cliRefusal((error as { stdout?: unknown }).stdout)
+      // A durable approved-outbound task is single-use. Renewal/retry needs a new owner recovery attempt.
+      if (task !== undefined) {
+        if (error instanceof RouteRefused) throw error
+        throw new RouteRefused(refusal.error !== undefined ? 'a2a-net route refused: ' + refusal.summary : String(error instanceof Error ? error.message : error), task, refusal.task === task ? refusal.delivery : undefined)
+      }
       if (refusal.error === undefined || !DEPOSIT_REFUSAL.test(refusal.error)) throw this.refused(error, refusal)
       // The home host refused before any dispatch: nothing reached the address. Renew the team identity's deposit there
       // (as the watch loop does, which does not run while the Source is off or setup is pending) and send once more.
@@ -327,7 +343,7 @@ export class A2aSource {
 
   private refused(error: unknown, refusal: ReturnType<typeof cliRefusal>, note?: string): Error {
     const base = refusal.error !== undefined ? `a2a-net route refused: ${refusal.summary}` : String(error instanceof Error ? error.message : error)
-    return new RouteRefused(note !== undefined ? `${base} (${note})` : base, refusal.task)
+    return new RouteRefused(note !== undefined ? `${base} (${note})` : base, refusal.task, refusal.delivery)
   }
 
   /**
