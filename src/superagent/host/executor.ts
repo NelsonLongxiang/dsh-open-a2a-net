@@ -246,6 +246,32 @@ export class MemberExecutor implements Executor {
   }
 
   memberOfTicket(ticketId: string): { member: string; named: boolean } | undefined { return this.ticketMembers[ticketId] }
+
+  /**
+   * Why each waiting Assignment has not launched, oldest first (field report 2026-11-19: eleven tickets sat queued for days
+   * beside four idle members, and nobody could see what they waited for). `launching` means a member is free for it and
+   * the next launch takes it.
+   */
+  queued(): QueuedAssignment[] {
+    const members = this.d.members()
+    const cap = this.d.maxConcurrent?.() ?? 0
+    return this.waiting.map(({ ticketId, assignmentId }): QueuedAssignment => {
+      const base = { ticketId, assignmentId }
+      if (cap > 0 && this.bindings.length >= cap) return { ...base, reason: 'at-cap' }
+      const held = this.ticketMembers[ticketId]
+      if (held !== undefined) {
+        if (!members.includes(held.member)) return { ...base, reason: 'member-absent', member: held.member }
+        return this.available(held.member) ? { ...base, reason: 'launching', member: held.member } : { ...base, reason: 'member-busy', member: held.member }
+      }
+      const repo = this.ticketRepos[ticketId]
+      if (repo !== undefined) {
+        const workers = members.filter(m => this.d.repoOf(m) === repo)
+        if (workers.length === 0) return { ...base, reason: 'no-repo-member', repo }
+        return workers.some(m => this.available(m)) ? { ...base, reason: 'launching', repo } : { ...base, reason: 'repo-busy', repo }
+      }
+      return members.some(m => this.available(m)) ? { ...base, reason: 'launching' } : { ...base, reason: 'all-busy' }
+    })
+  }
   /**
    * A member's load for the roster report (superagent-market-progress-roster P3): the tickets it holds (running or
    * parked), the tickets waiting that stay with it, and when its latest hold began.
@@ -560,6 +586,18 @@ export class MemberExecutor implements Executor {
     this.save()
     queueMicrotask(() => this.launch())
   }
+}
+
+/**
+ * A waiting Assignment and what holds it: the member it is kept for (busy, or no longer in the pool), the repository
+ * none of whose members is free or present, every member busy, or the team's concurrency cap.
+ */
+export interface QueuedAssignment {
+  readonly ticketId: string
+  readonly assignmentId: string
+  readonly reason: 'launching' | 'member-busy' | 'member-absent' | 'no-repo-member' | 'repo-busy' | 'all-busy' | 'at-cap'
+  readonly member?: string
+  readonly repo?: string
 }
 
 /** The first message a member gets for a ticket: what it may do, bounded by its Mandate, and how to report. */

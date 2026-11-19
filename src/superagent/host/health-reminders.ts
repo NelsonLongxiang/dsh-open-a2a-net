@@ -10,7 +10,7 @@
  */
 
 /** One health problem, as health() reports it. */
-export interface HealthProblem { readonly code: string; readonly session?: string; readonly ticketId?: string; readonly detail?: string; readonly title?: string }
+export interface HealthProblem { readonly code: string; readonly session?: string; readonly ticketId?: string; readonly detail?: string; readonly title?: string; readonly reason?: string; readonly repo?: string; readonly count?: number; readonly minutes?: number }
 
 /** How often the host looks (reliability R7: 对照上游的每小时,这里 15 分钟). */
 export const HEALTH_TICK_MS = 15 * 60_000
@@ -18,7 +18,22 @@ export const HEALTH_TICK_MS = 15 * 60_000
 export const HOLD_IGNORE_MS = 24 * 3_600_000, HOLD_OTHER_MS = 3_600_000
 
 /** The problems a reminder card is about, one key each. */
-export const problemKey = (problem: HealthProblem): string => `${problem.code}:${problem.session ?? problem.ticketId ?? problem.title ?? ''}`
+export const problemKey = (problem: HealthProblem): string => problem.code === 'tickets-queued'
+  // One card per thing the tickets wait for: the oldest ticket in the group changes as tickets launch, the member does not.
+  ? `${problem.code}:${problem.reason ?? ''}:${problem.session ?? problem.repo ?? ''}`
+  : `${problem.code}:${problem.session ?? problem.ticketId ?? problem.title ?? ''}`
+
+/** Why queued tickets wait, as a person reads it (field report 2026-11-19). */
+export function queuedText(problem: HealthProblem, name: (session: string) => string = s => s): string {
+  const who = problem.session !== undefined ? name(problem.session) : ''
+  const waits = problem.reason === 'member-busy' ? `在等成员 ${who}，它手上的工单没结束；可让总工用 superagent_assign 改派给空闲成员`
+    : problem.reason === 'member-absent' ? `在等成员 ${who}，它已不在团队里；请总工改派`
+    : problem.reason === 'no-repo-member' ? `只能派给负责仓库 ${problem.repo ?? ''} 的成员，团队里没有这样的成员；在设置里给成员填仓库，或请总工改派`
+    : problem.reason === 'repo-busy' ? `只能派给负责仓库 ${problem.repo ?? ''} 的成员，他们都在忙`
+    : problem.reason === 'at-cap' ? '团队已到同时运行的上限'
+    : '所有成员都在忙'
+  return `${String(problem.count ?? 1)} 张工单排队超过 ${String(problem.minutes ?? 0)} 分钟（最久的是「${problem.title ?? problem.ticketId ?? ''}」）：${waits}`
+}
 
 /** What a problem's card says, in the words the health banner already uses (no internal codes). */
 export const problemText = (problem: HealthProblem): string =>
@@ -27,6 +42,7 @@ export const problemText = (problem: HealthProblem): string =>
   : problem.code === 'mcp-no-seat' ? `团队 MCP 服务器 ${problem.title ?? ''} 还用不了：团队里还没有带席位 id 的成员，市场只给名册里的席位发令牌`
   : problem.code === 'mcp-token-unavailable' ? `团队 MCP 服务器 ${problem.title ?? ''} 换不到席位令牌，成员对它的调用会失败：${problem.detail ?? ''}`
   : problem.code === 'member-not-loaded' ? `成员会话 ${problem.session ?? ''} 没有加载，工单派不给它，打开这个会话即可`
+  : problem.code === 'tickets-queued' ? queuedText(problem)
   : problem.ticketId !== undefined ? `工单 ${problem.ticketId} 很久没有动静`
   : `问题 ${problem.code}`
 

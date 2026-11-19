@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import styles from './TeamRequestTab.module.css'
 
-export interface HealthRow { readonly code: string; readonly team: string; readonly session?: string; readonly title?: string; readonly ticketId?: string; readonly minutes?: number; readonly detail?: string }
+export interface HealthRow { readonly code: string; readonly team: string; readonly session?: string; readonly title?: string; readonly ticketId?: string; readonly minutes?: number; readonly detail?: string; readonly reason?: string; readonly repo?: string; readonly count?: number }
 
 const POLL_MS = 30_000
 
@@ -19,6 +19,16 @@ export function healthLine(row: HealthRow, t: PropsLocale<'a2aNet'>['t']): strin
   if (row.code === 'mcp-token-unavailable') return team + t('team.healthMcpUnavailable', { server: row.title ?? '' })
   if (row.code === 'member-not-loaded') return team + t('team.healthMember', { session: (row.session ?? '').slice(8, 16) })
   if (row.code === 'ticket-quiet') return team + t('team.healthQuiet', { title: row.title ?? row.ticketId ?? '', minutes: String(row.minutes ?? 0) })
+  if (row.code === 'tickets-queued') {
+    const session = (row.session ?? '').slice(8, 16), repo = row.repo ?? ''
+    const why = row.reason === 'member-busy' ? t('team.healthQueuedBusy', { session })
+      : row.reason === 'member-absent' ? t('team.healthQueuedAbsent', { session })
+      : row.reason === 'no-repo-member' ? t('team.healthQueuedNoRepo', { repo })
+      : row.reason === 'repo-busy' ? t('team.healthQueuedRepoBusy', { repo })
+      : row.reason === 'at-cap' ? t('team.healthQueuedCap')
+      : t('team.healthQueuedAllBusy')
+    return team + t('team.healthQueued', { count: String(row.count ?? 1), minutes: String(row.minutes ?? 0), title: row.title ?? row.ticketId ?? '', why })
+  }
   return team + row.code
 }
 

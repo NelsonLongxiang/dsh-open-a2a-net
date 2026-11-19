@@ -25,7 +25,7 @@ import { progressState } from './progress.ts'
 import { TeamMcp } from './team-mcp.ts'
 import { credentialAccess, redactedPreview, type CredentialKind } from './credential-audit.ts'
 import { RosterReports } from './roster.ts'
-import { MemberExecutor, runOf, transientError, type MemberTurn, type PrepareRunner } from './executor.ts'
+import { MemberExecutor, runOf, transientError, type MemberTurn, type PrepareRunner, type QueuedAssignment } from './executor.ts'
 import { PiEvents } from './pi-events.ts'
 import { ReviewRequests } from './review-requests.ts'
 import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, type OutboundAsk } from './outbound.ts'
@@ -65,6 +65,33 @@ export const PASS_MS = 5_000
 const REFUSALS_KEPT = 50
 /** How long a working ticket may go without any change before the health check names it (reliability R6). */
 export const QUIET_MINUTES = 60
+
+/** One group of tickets queued past QUIET_MINUTES for the same reason: the member or repository it names, how many, the oldest. */
+export interface QueuedProblem { code: 'tickets-queued'; reason: QueuedAssignment['reason']; session?: string; repo?: string; count: number; ticketId: string; title: string; minutes: number }
+
+/**
+ * Group long-waiting Assignments by what holds them (field report 2026-11-19): one problem per member or repository, so
+ * eleven tickets behind one busy member raise one reminder card, not eleven. `launching` is left out: a free member takes it.
+ * @param queued - the executor's waiting Assignments with their reasons.
+ * @param since - when an Assignment began waiting (its createdAt), or undefined when the ticket is gone.
+ * @param titleOf - a ticket's title.
+ * @param now - the clock, in milliseconds.
+ */
+export function queuedProblems(queued: readonly QueuedAssignment[], since: (q: QueuedAssignment) => string | undefined, titleOf: (ticketId: string) => string, now: number): QueuedProblem[] {
+  const groups = new Map<string, QueuedProblem>()
+  for (const q of queued) {
+    if (q.reason === 'launching') continue
+    const at = since(q)
+    if (at === undefined) continue
+    const minutes = Math.floor((now - Date.parse(at)) / 60_000)
+    if (!(minutes >= QUIET_MINUTES)) continue
+    const key = `${q.reason}:${q.member ?? q.repo ?? ''}`
+    const seen = groups.get(key)
+    if (seen === undefined) groups.set(key, { code: 'tickets-queued', reason: q.reason, ...(q.member !== undefined ? { session: q.member } : {}), ...(q.repo !== undefined ? { repo: q.repo } : {}), count: 1, ticketId: q.ticketId, title: titleOf(q.ticketId), minutes })
+    else { seen.count += 1; if (minutes > seen.minutes) { seen.minutes = minutes; seen.ticketId = q.ticketId; seen.title = titleOf(q.ticketId) } }
+  }
+  return [...groups.values()]
+}
 
 /** A remote member's refs that take tickets: those whose handle is not on the team's A2A bot list. */
 export function workerRemotes(settings: Pick<TeamSettings, 'remoteMembers' | 'bots'>): string[] {
@@ -1715,8 +1742,8 @@ export class SuperagentHost {
    */
   // #722: default to the host's clock, the one routerFailure.at and the engine's updatedAt are stamped with (as #721 did for the
   // decision book); the real clock here misreported a ticket quiet for days whenever the host's clock was injected.
-  health(now = Date.parse(this.now())): Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> {
-    const out: Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> = []
+  health(now = Date.parse(this.now())): Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string; reason?: string; repo?: string; count?: number }> {
+    const out: Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string; reason?: string; repo?: string; count?: number }> = []
     const loaded = this.d.sessionLoaded
     if (loaded === undefined || !this.teamBound()) return out
     const { router, members } = this.settings
@@ -1732,7 +1759,26 @@ export class SuperagentHost {
       const minutes = Math.floor((now - Date.parse(ticket.updatedAt)) / 60_000)
       if (minutes >= QUIET_MINUTES) out.push({ code: 'ticket-quiet', ticketId: ticket.id, title: ticket.title, minutes })
     }
+    // A queued ticket has no binding, so the quiet check above never sees it: say what it has waited for, and for how long.
+    out.push(...queuedProblems(this.executor.queued(), q => this.queuedSince(q), id => this.store.tickets.get(id)?.title ?? id, now))
     return out
+  }
+
+  /** When a waiting Assignment began waiting: its createdAt, or undefined when the ticket or Assignment is gone. */
+  private queuedSince(q: QueuedAssignment): string | undefined {
+    const ticket = this.store.tickets.get(q.ticketId)
+    return ticket === undefined || ticket.ended !== undefined ? undefined : ticket.assignments.find(a => a.id === q.assignmentId)?.createdAt
+  }
+
+  /**
+   * What a queued ticket waits for, for the router's and observers' reads: the reason, the member or repository, since
+   * when. Undefined when the ticket is not waiting for a member.
+   */
+  queueOf(ticketId: string): { reason: QueuedAssignment['reason']; member?: string; repo?: string; since?: string } | undefined {
+    const q = this.executor.queued().find(entry => entry.ticketId === ticketId)
+    if (q === undefined) return undefined
+    const since = this.queuedSince(q)
+    return { reason: q.reason, ...(q.member !== undefined ? { member: this.memberName(q.member) } : {}), ...(q.repo !== undefined ? { repo: q.repo } : {}), ...(since !== undefined ? { since } : {}) }
   }
 
   state(): Record<string, unknown> {
@@ -1758,7 +1804,7 @@ export class SuperagentHost {
       ...(this.issues.problem !== undefined ? { githubIssuesProblem: this.issues.problem } : {}),
       reviews: this.reviews.list(),
       outbound: this.outbound.list(),
-      executor: { canvas: this.settingsValue.canvas ?? null, members: this.settings.members, remoteMembers: this.settings.remoteMembers, bindings: this.executor.list() },
+      executor: { canvas: this.settingsValue.canvas ?? null, members: this.settings.members, remoteMembers: this.settings.remoteMembers, bindings: this.executor.list(), queued: this.executor.queued().map(q => ({ ...q, since: this.queuedSince(q) ?? null })) },
       ...(this.settingsValue.serves !== undefined ? { serves: this.settingsValue.serves } : {}),
       ...(this.store.loadError !== undefined ? { error: this.store.loadError } : {}),
       threads: this.store.threads.list().map(thread => ({
