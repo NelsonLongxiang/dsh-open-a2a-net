@@ -136,6 +136,11 @@ export class MemberExecutor implements Executor {
   private readonly leaving = new Set<string>()
   /** Assignments waiting for a free member, oldest first. */
   private waiting: { ticketId: string; assignmentId: string }[] = []
+  /**
+   * The last refused delivery of each waiting Assignment (#744 review R1): a free member whose delivery keeps being refused
+   * leaves the Assignment waiting, which would otherwise read as `launching` for as long as it lasts. In memory only.
+   */
+  private readonly refused = new Map<string, { member: string; at: string }>()
   /** One launch loop at a time, so two launches never bind one slot; a request during a run runs it again. */
   private launching = false
   private launchAgain = false
@@ -246,6 +251,38 @@ export class MemberExecutor implements Executor {
   }
 
   memberOfTicket(ticketId: string): { member: string; named: boolean } | undefined { return this.ticketMembers[ticketId] }
+
+  /**
+   * Why each waiting Assignment has not launched, oldest first (field report 2026-11-19: eleven tickets sat queued for days
+   * beside four idle members, and nobody could see what they waited for). `launching` means a member is free for it and no
+   * delivery to it has been refused yet; `delivery-refused` means one was (#744 review R1), with the member last tried.
+   */
+  queued(): QueuedAssignment[] {
+    const members = this.d.members()
+    const cap = this.d.maxConcurrent?.() ?? 0
+    return this.waiting.map(({ ticketId, assignmentId }): QueuedAssignment => {
+      const base = { ticketId, assignmentId }
+      const free = (q: QueuedAssignment): QueuedAssignment => {
+        const refused = this.refused.get(assignmentId)
+        return refused === undefined ? q : { ...base, reason: 'delivery-refused', member: refused.member, refusedAt: refused.at, ...(q.repo !== undefined ? { repo: q.repo } : {}) }
+      }
+      // Paused, nothing launches: the team page says so already, and it is no stalled launch.
+      if (this.d.paused?.() === true) return { ...base, reason: 'paused' }
+      if (cap > 0 && this.bindings.length >= cap) return { ...base, reason: 'at-cap' }
+      const held = this.ticketMembers[ticketId]
+      if (held !== undefined) {
+        if (!members.includes(held.member)) return { ...base, reason: 'member-absent', member: held.member }
+        return this.available(held.member) ? free({ ...base, reason: 'launching', member: held.member }) : { ...base, reason: 'member-busy', member: held.member }
+      }
+      const repo = this.ticketRepos[ticketId]
+      if (repo !== undefined) {
+        const workers = members.filter(m => this.d.repoOf(m) === repo)
+        if (workers.length === 0) return { ...base, reason: 'no-repo-member', repo }
+        return workers.some(m => this.available(m)) ? free({ ...base, reason: 'launching', repo }) : { ...base, reason: 'repo-busy', repo }
+      }
+      return members.some(m => this.available(m)) ? free({ ...base, reason: 'launching' }) : { ...base, reason: 'all-busy' }
+    })
+  }
   /**
    * A member's load for the roster report (superagent-market-progress-roster P3): the tickets it holds (running or
    * parked), the tickets waiting that stay with it, and when its latest hold began.
@@ -341,21 +378,27 @@ export class MemberExecutor implements Executor {
         const engine = this.d.engine()
         const ticket = this.d.ticket(next.ticketId)
         const assignment = ticket?.assignments.find(a => a.id === next.assignmentId)
-        if (ticket === undefined || ticket.ended || assignment === undefined || assignment.state !== 'pending') { this.waiting = this.waiting.filter(w => w !== next); continue }
-        if (this.d.held?.(ticket.id) === true) { this.waiting = this.waiting.filter(w => w !== next); continue }
+        if (ticket === undefined || ticket.ended || assignment === undefined || assignment.state !== 'pending') { this.waiting = this.waiting.filter(w => w !== next); this.refused.delete(next.assignmentId); continue }
+        if (this.d.held?.(ticket.id) === true) { this.waiting = this.waiting.filter(w => w !== next); this.refused.delete(next.assignmentId); continue }
         // R5: at the cap a new ticket waits; a parked ticket coming back for a person's message (above) is not held.
         const cap = this.d.maxConcurrent?.() ?? 0
         if (cap > 0 && this.bindings.length >= cap) break
         let member: string | undefined
+        let tried: string | undefined
         const run = newRun()
         let preparing: { command: string; timeoutMs: number; cwd: string } | 'no-workspace' | undefined
         for (const candidate of this.free(ticket.id)) {
           preparing = this.preparationFor(ticket.id, candidate)
           if (preparing !== undefined) { member = candidate; break }
+          tried = candidate
           if (await this.tryDeliver(candidate, assignmentCard(ticket, this.d.trigger, this.ticketRepos[ticket.id], this.d.memberNotes?.(candidate, ticket) ?? []), 'assign', ticket.id, run)) { member = candidate; break }
         }
-        if (member === undefined) continue
+        if (member === undefined) {
+          if (tried !== undefined) this.refused.set(assignment.id, { member: tried, at: new Date().toISOString() })
+          continue
+        }
         this.waiting = this.waiting.filter(w => w !== next)
+        this.refused.delete(assignment.id)
         this.bindings.push({ member, ticketId: ticket.id, assignmentId: assignment.id, at: new Date().toISOString(), run })
         if (this.ticketMembers[ticket.id] === undefined) this.ticketMembers[ticket.id] = { member, named: false }
         delete this.lastMembers[ticket.id]
@@ -560,6 +603,20 @@ export class MemberExecutor implements Executor {
     this.save()
     queueMicrotask(() => this.launch())
   }
+}
+
+/**
+ * A waiting Assignment and what holds it: the member it is kept for (busy, or no longer in the pool), the repository
+ * none of whose members is free or present, every member busy, or the team's concurrency cap.
+ */
+export interface QueuedAssignment {
+  readonly ticketId: string
+  readonly assignmentId: string
+  readonly reason: 'launching' | 'paused' | 'delivery-refused' | 'member-busy' | 'member-absent' | 'no-repo-member' | 'repo-busy' | 'all-busy' | 'at-cap'
+  readonly member?: string
+  readonly repo?: string
+  /** For `delivery-refused`: when the last delivery was refused. */
+  readonly refusedAt?: string
 }
 
 /** The first message a member gets for a ticket: what it may do, bounded by its Mandate, and how to report. */
