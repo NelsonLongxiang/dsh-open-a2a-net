@@ -126,6 +126,27 @@ describe('RoleTools', () => {
     expect(log.slice(1)).toEqual(['lift', 'restrict schedule_list,superagent_route,superagent_status'])
   })
 
+  it('a short restriction is made again on every later sync and warns only once (warnedShort, #584)', () => {
+    const log: string[] = []
+    const warned: string[] = []
+    const tools = new RoleTools({ roleOf: () => 'router', agentOf: () => undefined, logger: { warn: (f, ...a) => { warned.push([f, ...a].join(' ')) } } })
+    // The sync ran while only these of the router's tools were visible (a session restored as the host starts), so the applied
+    // list is one `superagent_*` short of the role's own tools: every later sync re-makes it, and the warning is not repeated.
+    const known = ['bash', 'schedule_list', 'superagent_route']
+    const r: RoleAgent = { id: 'r', ctx: { [Symbol('dsh.scope')]: {}, tools: { get: name => (known.includes(name) ? {} : undefined), restrict: f => { log.push(`restrict ${f.allow!.join(',')}`); return () => { log.push('lift') } } } } } as never
+    tools.sync(r); tools.sync(r); tools.sync(r)
+    expect(log).toEqual(['restrict schedule_list,superagent_route', 'lift', 'restrict schedule_list,superagent_route', 'lift', 'restrict schedule_list,superagent_route'])
+    expect(warned.filter(line => line.includes('does not see'))).toHaveLength(1)
+    expect(warned.join()).toContain('made again at its next turn')
+    // Once the scope has the rest of the team's tools the restriction is complete: made once more, then left alone, and still
+    // one warning for the whole run.
+    known.push(...TEAM_TOOLS.filter(name => !known.includes(name)))
+    const complete = ROUTER_TOOLS.filter(name => known.includes(name)).join(',')
+    tools.sync(r); tools.sync(r)
+    expect(log.slice(5)).toEqual(['lift', `restrict ${complete}`])
+    expect(warned.filter(line => line.includes('does not see'))).toHaveLength(1)
+  })
+
   it('a complete restriction is not made again on every sync', () => {
     const roles: Record<string, Role> = { m: 'member' }
     const { log, scoped, tools } = setup(roles)
