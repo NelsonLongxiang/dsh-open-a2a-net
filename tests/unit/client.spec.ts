@@ -95,7 +95,7 @@ describe('receipt delivery evidence never guesses',()=>{
  })
  it('not-inserted evidence requires an explicit matching failed transport and cannot contradict acceptance',async()=>{
   const valid={error:'task ledger write failed',code:-32000,task_id:'receipt-fixed',delivered:false,task_status:'TASK_STATE_FAILED',receipt_delivery:'not-inserted'}
-  for(const patch of [{},{task_id:'another'},{task_id:undefined},{routed:true},{delivered:true},{acceptance:'unknown'},{task_status:'TASK_STATE_DELIVERED'}]){
+  for(const patch of [{},{task_id:'another'},{task_id:undefined},{routed:true},{delivered:true},{acceptance:'unknown'},{acceptance:'inserted'},{acceptance:'inserted',refusal:{code:'correspondence-capacity',notSent:true,capacity:'unknown'}},{task_status:'TASK_STATE_DELIVERED'}]){
    const {fetch}=stubFetch(()=>({status:503,body:{...valid,...patch}})),result=await makeClient({fetch}).routeDirect('https://peer.invalid','alpha/aaaaaaaa','[A2A receipt] task original complete',undefined,undefined,'beta/bbbbbbbb',true,'receipt-fixed')
    expect(!result.ok&&result[RECEIPT_NOT_INSERTED]===true).toBe(Object.keys(patch).length===0)
   }

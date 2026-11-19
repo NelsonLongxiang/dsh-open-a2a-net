@@ -7,6 +7,7 @@ import {ACCEPTANCE_UNKNOWN_NOTE,ACCEPTANCE_INSERTED_NOTE} from './followup-admis
  * @module @nelsonlongxiang/dsh-open-a2a-net/a2a-client
  */
 
+import { parseCapacityRefusal, parseCapacityCount, deliveryEvidence, capacityRefusalNote, type CapacityRefusal } from './task-delivery-capacity.ts'
 import { ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
 import { RECEIPT_RETRYABLE, RECEIPT_NOT_INSERTED, RECEIPT_CONFIRMED, RECEIPT_PRECONNECT_REFUSED } from './receipt-retry.ts'
 import { verifyCard, type CardRejection } from './card.ts'
@@ -71,6 +72,10 @@ export type CardFetchOutcome =
 
 type WireRoute = {
   readonly acceptance?:unknown
+  /** #713 A2: a receiving host's typed capacity refusal; decoded strictly, never trusted as an object. */
+  readonly refusal?: unknown
+  /** #747 review R1: a forwarded multi-candidate route's count-only capacity fact. */
+  readonly capacityRefusals?: unknown
   readonly receiverBookkeeping?:unknown
   readonly routed?: unknown
   readonly delivered?: unknown
@@ -316,19 +321,26 @@ export class A2aClient {
       // caller can tell a terminal verdict from an ordinary transport miss
       // without parsing prose.
       let code = -32000
+      let refusal: CapacityRefusal | undefined
+      let counted: number | undefined
+      let accepted: { task_id: string } | undefined
       const bodyText = (error as { bodyText?: unknown }).bodyText
       if (typeof bodyText === 'string') {
         try {
-          const parsed = JSON.parse(bodyText) as { code?: unknown }
+          const parsed = JSON.parse(bodyText) as { code?: unknown; refusal?: unknown; capacityRefusals?: unknown; acceptance?: unknown; delivered?: unknown; routed?: unknown; task_id?: unknown }
           if (typeof parsed.code === 'number') code = parsed.code
+          // #747 review R2: acceptance evidence in an error body outranks any capacity claim, and stops failover as unknown.
+          if (parsed !== null && typeof parsed === 'object' && deliveryEvidence(parsed)) accepted = { task_id: wireText(parsed.task_id) || taskIdFromCaller || '' }
+          else if (parsed !== null && typeof parsed === 'object') { refusal = parseCapacityRefusal(parsed.refusal); counted = refusal ? undefined : parseCapacityCount(parsed.capacityRefusals) }
         } catch {
           /* prose body — keep the generic code */
         }
       }
       let notInserted=false
-      if(typeof bodyText==='string')try{const refusal=JSON.parse(bodyText);notInserted=refusal.receipt_delivery==='not-inserted'&&refusal.task_id===taskIdFromCaller&&refusal.delivered===false&&refusal.routed!==true&&refusal.task_status==='TASK_STATE_FAILED'&&refusal.acceptance!=='unknown'}catch{/* no structured proof */}
+      if(typeof bodyText==='string')try{const refusal=JSON.parse(bodyText);notInserted=refusal.receipt_delivery==='not-inserted'&&refusal.task_id===taskIdFromCaller&&refusal.delivered===false&&refusal.routed!==true&&refusal.task_status==='TASK_STATE_FAILED'&&refusal.acceptance!=='unknown'&&!deliveryEvidence(refusal)}catch{/* no structured proof */}
+      // #747 review M1: acceptance evidence in the body is never a no-insertion or retry capability, whatever else it says.
       const status=(error as {statusCode?:unknown})?.statusCode
-      const transient=status===503&&typeof bodyText==='string'&&bodyText.includes('task ledger write failed')||status===undefined
+      const transient=accepted===undefined&&(status===503&&typeof bodyText==='string'&&bodyText.includes('task ledger write failed')||status===undefined)
       const networkCode=(error as {code?:unknown;cause?:{code?:unknown}})?.cause?.code??(error as {code?:unknown})?.code
       const preconnectRefusal=typeof networkCode==='string'&&['ECONNREFUSED','ENOTFOUND','EAI_AGAIN','ENETUNREACH','EHOSTUNREACH'].includes(networkCode)
       const uncertain=(status===undefined&&!preconnectRefusal)||(typeof status==='number'&&status>=500&&!notInserted)
@@ -344,15 +356,21 @@ export class A2aClient {
         // whose budget ended it. Pure observation, zero semantics.
         abortElapsedMs: Date.now() - dispatchedAt,
         ...(ownBudgetExhausted ? { ownBudgetExhausted: true } : {}),
+        ...(refusal ? { refusal, error: capacityRefusalNote(refusal) } : {}),
+        ...(counted !== undefined ? { capacityRefusals: counted } : {}),
+        ...(accepted ? { acceptance: 'unknown' as const, error: ACCEPTANCE_UNKNOWN_NOTE, ...(accepted.task_id !== '' ? { task_id: accepted.task_id } : {}) } : {}),
       }
       return failure
     }
     if (raw.error !== undefined && raw.error !== null) {
-      const failure: { ok: false; error: string; code?: number; acceptance?:'unknown';task_id?:string } = {
+      const failure: { ok: false; error: string; code?: number; acceptance?:'unknown';task_id?:string;refusal?:CapacityRefusal;capacityRefusals?:number } = {
         ok: false,
         error: typeof raw.error === 'string' ? raw.error : JSON.stringify(raw.error),
       }
-      if(raw.acceptance==='unknown'){failure.acceptance='unknown';failure.error=ACCEPTANCE_UNKNOWN_NOTE;failure.task_id=wireText(raw.task_id)||taskIdFromCaller}
+      // #747 review R2: any acceptance evidence (unknown, inserted, delivered, routed) outranks a capacity claim and reads unknown.
+      if(deliveryEvidence(raw)){failure.acceptance='unknown';failure.error=ACCEPTANCE_UNKNOWN_NOTE;failure.task_id=wireText(raw.task_id)||taskIdFromCaller}
+      // #713 A2: the refusal is rebuilt from a strict decode, its text local; a count-only result keeps its count (#747 R1).
+      else{const refusal=parseCapacityRefusal(raw.refusal);if(refusal){failure.refusal=refusal;failure.error=capacityRefusalNote(refusal)}else{const counted=parseCapacityCount(raw.capacityRefusals);if(counted!==undefined)failure.capacityRefusals=counted}}
       if (typeof raw.code === 'number') failure.code = raw.code
       return failure
     }
