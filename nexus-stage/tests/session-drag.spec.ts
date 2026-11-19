@@ -77,6 +77,15 @@ describe('drag a rail session into a canvas team', () => {
     v.destroy()
   })
 
+  it('a source that left the network during a native drag cannot issue a stale add', () => {
+    const { v, actions } = mount()
+    v.reconcile({ ...input, sessions: input.sessions.map(session => session.id === LONE ? { ...session, joined: false } : session) })
+    v.root.dispatchEvent(dragEvent('drop', 10, 10, { [SESSION_DRAG_TYPE]: LONE }))
+    expect(actions).toEqual([])
+    expect(v.root.textContent).toContain('已离开网络')
+    v.destroy()
+  })
+
   it('blank board, foreign drags and an existing member do not write', async () => {
     const { v, actions } = mount()
     const blank = dragEvent('dragover', 2000, 2000, { [SESSION_DRAG_TYPE]: LONE })

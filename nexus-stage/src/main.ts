@@ -382,12 +382,15 @@ const bench = createWorkbench({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action, name, id, ...(home === undefined ? {} : { home }), ...(peer === undefined ? {} : { peer }) }),
       })
-      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string }
-      if (res.ok && body.ok !== false) return true
-      console.warn(`canvas ${action} ${name}: ${body.error ?? `HTTP ${res.status}`}`)
-      return false
-    } catch {
-      return false
+      const body = await res.json().catch(() => undefined) as { ok?: boolean; error?: string } | undefined
+      if (res.ok && body?.ok === true) { void poll(); return { ok: true } }
+      const error = typeof body?.error === 'string' ? body.error : res.ok ? '主机未确认操作结果，请刷新核对成员列表。' : `HTTP ${res.status}`
+      planning.notice('error', `成员操作失败：${error}`)
+      return { ok: false, error }
+    } catch (failure) {
+      const error = String(failure)
+      planning.notice('error', `成员操作失败：${error}`)
+      return { ok: false, error }
     }
   },
   async dispatchQuick(team, message) {
