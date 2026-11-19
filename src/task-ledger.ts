@@ -26,6 +26,7 @@ import { safeObservationCode } from './nudge-observability.ts'
 import { parseTaskDelivery, TASK_DELIVERY_CAP, TASK_DELIVERY_RETENTION_MS, type TaskDelivery } from './task-delivery.ts'
 import { deliveryCapacitySnapshot, deliveryRetainedByRule, DeliveryCapacityError, type DeliveryCapacitySnapshot } from './task-delivery-capacity.ts'
 import { parseReminder, REMINDER_LONG_MS, type ReminderState } from './reconciliation-state.ts'
+import { parseReceiptOutbox, receiptBirth, receiptPayloadHash, receiptLaneMatchesBirth, type ReceiptOutboxRecord } from './receipt-outbox.ts'
 import { holdsRow, parseReceipt, RECEIPT_DISPOSITIONS, RECEIPT_OUTCOMES, type ReceiptDisposition, type ReceiptOutcomeV2 } from './receipt.ts'
 import { classifyConservationBlock, ConservationCounters, type ConservationVerdict } from './ledger-conservation.ts'
 import { CALLER_ENDED_PREFIX, TASK_CAP, ARCHIVE_CAP, SUMMARY_CAP, TASK_STALE_TTL_MS, TASK_ACKNOWLEDGED_TTL_MS, ARCHIVE_ENDS, ECHO_SUMMARY, ROUTING_FACT_CAP, SETTLEMENT_ID_CAP, SETTLEMENT_REFUSAL_CAP, withSender, withAuth, routingOf, birthFacts, withRouting, withSettledBy, parseRefusal, archivedEndedBy, WITHDRAWAL_RESULTS, isWithdrawalResult } from './task-ledger-rows.ts'
@@ -60,6 +61,23 @@ export class TaskLedger {
   private committed = ''
   private deliveries: TaskDelivery[] = []
   private deliveryRestoreError = false
+  private dispatchReservations:Array<{taskId:string;fingerprint:string;createdAt:number}>=[]
+  /** Reserve the caller's eventual owed slot before an asynchronous local or remote effect. Never replays a request. */
+  reserveDispatch(taskId:string,fingerprint:string):void {
+    if(this.deliveryRestoreError||this.counters.damaged)throw Error('damaged delivery ledger cannot reserve dispatch')
+    if(taskId.length===0||taskId.length>80||!/^[0-9a-f]{64}$/.test(fingerprint))throw Error('invalid dispatch reservation')
+    const old=this.dispatchReservations.find(r=>r.taskId===taskId)
+    if(old)throw Error(old.fingerprint!==fingerprint?'dispatch reservation identity conflict':'unresolved original dispatch remains reserved; reconcile original task, do not resend')
+    if(this.tasks.some(r=>r.taskId===taskId)||this.archived.some(r=>r.taskId===taskId))return
+    this.protectReceiptCapacity(taskId)
+    const kept=this.dispatchReservations.filter(r=>this.tasks.some(t=>t.taskId===r.taskId)||this.now()-r.createdAt<=TASK_DELIVERY_RETENTION_MS)
+    if(kept.length>=TASK_CAP)throw Error('dispatch reservation capacity full')
+    this.dispatchReservations=[...kept,{taskId,fingerprint,createdAt:this.now()}];this.trimOwed();this.persist()
+  }
+  releaseDispatch(taskId:string):void {
+    if(!this.dispatchReservations.some(r=>r.taskId===taskId))return
+    this.dispatchReservations=this.dispatchReservations.filter(r=>r.taskId!==taskId);this.persist()
+  }
   markConsumed(taskId:string, consumed:boolean): void {
     const row=this.tasks.find(r=>r.taskId===taskId);if(!row||row.consumed===true||row.consumed===consumed)return
     row.consumed=consumed;this.persist()
@@ -79,11 +97,12 @@ export class TaskLedger {
       if(old.sessionId!==record.sessionId||old.fingerprint!==record.fingerprint)throw Error('task delivery identity conflict')
       return old
     }
+    if(record.taskExpected===true)this.protectReceiptCapacity(record.taskId)
     // #713: one clock sample and the one retention rule the capacity view uses; a refusal carries that view, and nothing was enqueued.
     const now=this.now(),bound=new Set(this.tasks.map(t=>t.taskId))
     this.deliveries=this.deliveries.filter(row=>deliveryRetainedByRule(row,bound,now))
     if(this.deliveries.length>=TASK_DELIVERY_CAP)throw new DeliveryCapacityError(this.capacityAt(now))
-    this.deliveries.push(parsed);this.persist();return {...parsed}
+    this.deliveries.push(parsed);this.trimOwed();this.persist();return {...parsed}
   }
   /**
    * #713: how full the retained task-delivery correspondence window is, as a detached numeric view. Read-only: no sweep, no
@@ -98,6 +117,60 @@ export class TaskLedger {
     row.state=state
     if(state==='claimed'){const task=this.tasks.find(r=>r.taskId===taskId);if(task)task.consumed=true}
     this.persist()
+  }
+  private receiptRecords: ReceiptOutboxRecord[] = []
+  private receiptRestoreError = false
+  /** Full receipt bytes stay private: model/control row projections expose only the delivery observation. */
+  receiptFor(taskId: string): ReceiptOutboxRecord | undefined {
+    if(this.receiptRestoreError)throw Error('receipt outbox is corrupt; automatic replay refused')
+    const row=this.receiptRecords.find(r=>r.taskId===taskId)
+    return row&&this.tasks.some(t=>t.taskId===taskId&&t.status==='pending')?structuredClone(row):undefined
+  }
+  receipts(): ReceiptOutboxRecord[] {
+    if(this.receiptRestoreError)throw Error('receipt outbox is corrupt; automatic replay refused')
+    return this.receiptRecords.filter(r=>this.tasks.some(t=>t.taskId===r.taskId&&t.status==='pending')).map(r=>structuredClone(r))
+  }
+  receiptObservation(taskId:string): {receiptRecovery?:{state:'retained'|'blocked'|'legacy-unknown'|'corrupt';attempts?:number;nextAt?:number;code?:string}} {
+    const task=this.tasks.find(t=>t.taskId===taskId)
+    if(!task||(task.answeredAt===undefined&&task.receiptDelivery!=='receipt-undelivered'))return {}
+    if(this.receiptRestoreError)return {receiptRecovery:{state:'corrupt',code:'RECEIPT_STORAGE_CORRUPT'}}
+    const row=this.receiptRecords.find(r=>r.taskId===taskId)
+    return {receiptRecovery:row?{state:row.phase==='blocked'?'blocked':'retained',attempts:row.attempts,nextAt:row.nextAt,...(row.code?{code:row.code}:{})}:{state:'legacy-unknown',code:'RECEIPT_PAYLOAD_MISSING'}}
+  }
+  /** The exact answering session reserves the terminal receipt and answer marker in one atomic ledger commit. */
+  prepareReceipt(input: ReceiptOutboxRecord): ReceiptOutboxRecord {
+    if(this.receiptRestoreError||this.deliveryRestoreError||this.counters.damaged)throw Error('damaged ledger cannot authorize receipt replay')
+    const record=parseReceiptOutbox(input),row=this.tasks.find(r=>r.taskId===input.taskId)
+    if(!record||!row||row.status!=='pending'||row.receiptExpected===false||!(row.direction==='inbound'||row.peer==='local')||receiptBirth(row,this.deliveryFor(row.taskId)?.callerKey)!==record.birth||record.sourceKey!==this.deliveryFor(row.taskId)?.callerKey)throw Error('receipt does not match pending task birth')
+    if(!receiptLaneMatchesBirth(record,row))throw Error('receipt lane differs from original authenticated birth')
+    if((row.deliveredTo??row.team)!==record.authorTeam||(row.receiverSessionId!==undefined&&row.receiverSessionId!==record.authorId))throw Error('receipt author is not the original receiver')
+    const target=row.auth?.receipt_target??row.sender?.id??(row.peer.startsWith('local:')?row.peer.slice(6):undefined)
+    if(!target||target!==record.target||(record.contextId??'')!==(row.contextId??''))throw Error('receipt return target or conversation differs from original task')
+    const old=this.receiptFor(record.taskId)
+    if(old) {
+      if(old.target!==record.target||old.text!==record.text||old.authorId!==record.authorId||old.caller!==record.caller||old.payer!==record.payer||old.localKey!==record.localKey||old.contextId!==record.contextId||old.birth!==record.birth||JSON.stringify(old.lane)!==JSON.stringify(record.lane))throw Error('the original terminal receipt is already reserved')
+      return old
+    }
+    if(row.answeredAt!==undefined||row.receiptDelivery==='receipt-undelivered')throw Error('legacy answered task has no retained receipt; do not reconstruct it')
+    if(this.receiptRecords.filter(r=>this.tasks.some(t=>t.taskId===r.taskId)).length>=TASK_CAP)throw Error('receipt outbox capacity reached')
+    this.receiptRecords=this.receiptRecords.filter(r=>this.tasks.some(t=>t.taskId===r.taskId))
+    this.receiptRecords.push(record)
+    row.answeredAt??=this.now();row.receiptDelivery='receipt-undelivered'
+    this.persist()
+    return structuredClone(record)
+  }
+  updateReceipt(taskId:string,transportId:string,patch:Pick<ReceiptOutboxRecord,'phase'|'attempts'|'nextAt'|'code'|'notifiedAt'>|Partial<Pick<ReceiptOutboxRecord,'phase'|'attempts'|'nextAt'|'code'|'notifiedAt'>>):ReceiptOutboxRecord {
+    const old=this.receiptFor(taskId)
+    if(!old||old.transportId!==transportId)throw Error('receipt outbox changed')
+    const next=parseReceiptOutbox({...old,...patch})
+    if(!next)throw Error('invalid receipt delivery update')
+    this.receiptRecords=this.receiptRecords.map(r=>r.taskId===taskId?next:r);this.persist();return structuredClone(next)
+  }
+  bindReceiptLane(taskId:string,transportId:string,lane:ReceiptOutboxRecord['lane']):void {
+    const prior=this.receiptFor(taskId)
+    if(!prior||prior.transportId!==transportId||prior.lane.kind!=='unresolved'||prior.attempts!==0||prior.phase!=='ready'||lane.kind==='unresolved')throw Error('receipt lane is already frozen')
+    const binding={...prior,lane};const next=parseReceiptOutbox({...binding,payloadHash:receiptPayloadHash(binding)}),row=this.tasks.find(r=>r.taskId===taskId);if(!next||!row||!receiptLaneMatchesBirth(next,row))throw Error('invalid receipt return lane')
+    this.receiptRecords=this.receiptRecords.map(r=>r.taskId===taskId?next:r);this.persist()
   }
   private reminderRecoveryPending = false
   private reminders: Record<string, ReminderState> = Object.create(null)
@@ -187,6 +260,20 @@ export class TaskLedger {
     return [...this.archived]
   }
 
+  /** An undelivered full result cannot be discarded to admit unrelated work. */
+  private pendingDeliveryBirths():Set<string> {
+    const local=this.deliveries.filter(d=>d.taskExpected===true&&!['cancelled','failed'].includes(d.state)&&this.now()-d.createdAt<=TASK_DELIVERY_RETENTION_MS).map(d=>d.taskId)
+    const outgoing=this.dispatchReservations.filter(d=>this.now()-d.createdAt<=TASK_DELIVERY_RETENTION_MS).map(d=>d.taskId)
+    return new Set([...local,...outgoing].filter(id=>!this.tasks.some(t=>t.taskId===id)&&!this.archived.some(t=>t.taskId===id)))
+  }
+  receiptCapacityAvailable(taskId?:string):boolean {
+    const reserved=this.pendingDeliveryBirths()
+    if(taskId!==undefined&&reserved.has(taskId))return true
+    return this.tasks.filter(t=>this.receiptRecords.some(r=>r.taskId===t.taskId)).length+reserved.size<TASK_CAP
+  }
+  private protectReceiptCapacity(taskId?:string):void {
+    if(!this.receiptCapacityAvailable(taskId))throw Error('receipt-protected task capacity full; no new work admitted')
+  }
   /**
    * Remember one outbound task owed a receipt, most-recent first, bounded by
    * {@link TASK_CAP} over the owed book only (settled rows live in the
@@ -210,6 +297,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    this.protectReceiptCapacity(taskId)
     this.counters.trackedTotal += 1
     this.tasks = [{
       taskId,
@@ -233,6 +321,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    this.protectReceiptCapacity(taskId)
     this.counters.trackedTotal += 1
     this.tasks = [{
       taskId,
@@ -268,6 +357,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    this.protectReceiptCapacity(taskId)
     this.counters.trackedTotal += 1
     this.tasks = [{
       taskId,
@@ -297,7 +387,7 @@ export class TaskLedger {
    * @returns whether a pending inbound row of `team` was archived.
    */
   evictInbound(taskId: string, team: string): boolean {
-    if (taskId === '') return false
+    if (taskId === ''||this.receiptRecords.some(r=>r.taskId===taskId)) return false
     this.sweep(this.now())
     const row = this.tasks.find(entry => entry.taskId === taskId)
     if (row === undefined || !(row.direction === 'inbound' || row.peer === 'local') || row.status !== 'pending' || (row.deliveredTo ?? row.team) !== team) return false
@@ -714,9 +804,14 @@ export class TaskLedger {
    * with no trace. L8 criterion: zero silently-dropped.
    */
   private trimOwed(): void {
-    if (this.tasks.length <= TASK_CAP) return
-    const overflow = this.tasks.slice(TASK_CAP)
-    this.tasks = this.tasks.slice(0, TASK_CAP)
+    const capacity=Math.max(0,TASK_CAP-this.pendingDeliveryBirths().size)
+    if (this.tasks.length <= capacity) return
+    const protectedIds=new Set(this.receiptRecords.map(r=>r.taskId))
+    const protectedRows=this.tasks.filter(t=>protectedIds.has(t.taskId))
+    const ordinary=this.tasks.filter(t=>!protectedIds.has(t.taskId))
+    const overflow=ordinary.slice(Math.max(0,capacity-protectedRows.length))
+    const removed=new Set(overflow.map(t=>t.taskId))
+    this.tasks=this.tasks.filter(t=>!removed.has(t.taskId))
     const now = this.now()
     for (const row of overflow) {
       this.archiveSettled({
@@ -786,6 +881,10 @@ export class TaskLedger {
         this.reminderSessions=Object.fromEntries(Object.entries(snapshot.reconciliationSessions).filter(([id,at])=>id.length>0&&id.length<=256&&Number.isSafeInteger(at)&&at>=0).slice(0,TASK_CAP))
       }
       if(snapshot.taskDeliveryRestoreError===true)this.deliveryRestoreError=true
+      if(snapshot.dispatchReservations!==undefined){
+        if(!Array.isArray(snapshot.dispatchReservations)||snapshot.dispatchReservations.length>TASK_CAP)this.deliveryRestoreError=true
+        else for(const raw of snapshot.dispatchReservations){if(!raw||typeof raw.taskId!=='string'||raw.taskId.length===0||raw.taskId.length>80||typeof raw.fingerprint!=='string'||!/^[0-9a-f]{64}$/.test(raw.fingerprint)||!Number.isSafeInteger(raw.createdAt)||raw.createdAt<0||this.dispatchReservations.some(r=>r.taskId===raw.taskId)){this.deliveryRestoreError=true;break}this.dispatchReservations.push({taskId:raw.taskId,fingerprint:raw.fingerprint,createdAt:raw.createdAt})}
+      }
       if(snapshot.taskDeliveries!==undefined) {
         if(!Array.isArray(snapshot.taskDeliveries)||snapshot.taskDeliveries.length>TASK_DELIVERY_CAP)this.deliveryRestoreError=true
         else {
@@ -895,6 +994,18 @@ export class TaskLedger {
       // snapshot carried beyond the caps leave the live view but remain in the
       // identity through restoreTrimmed.
       this.tasks = restored.slice(0, TASK_CAP)
+      if(snapshot.receiptOutboxRestoreError===true)this.receiptRestoreError=true
+      if(snapshot.receiptOutbox!==undefined) {
+        if(!Array.isArray(snapshot.receiptOutbox)||snapshot.receiptOutbox.length>TASK_CAP)this.receiptRestoreError=true
+        else {
+          const seen=new Set<string>()
+          for(const raw of snapshot.receiptOutbox) {
+            const parsed=parseReceiptOutbox(raw),row=parsed?this.tasks.find(r=>r.taskId===parsed.taskId):undefined
+            if(!parsed||seen.has(parsed.taskId)||!row||!receiptLaneMatchesBirth(parsed,row)||row.answeredAt===undefined||row.receiptDelivery!=='receipt-undelivered'||receiptBirth(row,this.deliveryFor(row.taskId)?.callerKey)!==parsed.birth||parsed.sourceKey!==this.deliveryFor(row.taskId)?.callerKey||(row.deliveredTo??row.team)!==parsed.authorTeam||(row.receiverSessionId!==undefined&&row.receiverSessionId!==parsed.authorId)||(row.auth?.receipt_target??row.sender?.id??(row.peer.startsWith('local:')?row.peer.slice(6):undefined))!==parsed.target) {this.receiptRestoreError=true;break}
+            seen.add(parsed.taskId);this.receiptRecords.push(parsed)
+          }
+        }
+      }
       if(this.reminderRecoveryPending) {
         const recoveredAt=this.now()
         for(const row of this.tasks) {
@@ -944,8 +1055,11 @@ export class TaskLedger {
       const becameUnavailable=this.writeFailure===undefined
       this.writeFailure = { at: this.now(), code:safeObservationCode(error,'LEDGER_WRITE_FAILED') }
       const previous = JSON.parse(this.committed) as TaskLedgerSnapshot
+      this.receiptRecords = previous.receiptOutbox ? previous.receiptOutbox.map(r=>structuredClone(r)) : []
+      this.receiptRestoreError = previous.receiptOutboxRestoreError===true
       this.reminders = Object.assign(Object.create(null), previous.reconciliationReminders ?? {})
       this.reminderSessions = previous.reconciliationSessions ?? Object.create(null)
+      this.dispatchReservations=(previous.dispatchReservations??[]).map(r=>({...r}))
       this.deliveryRestoreError = previous.taskDeliveryRestoreError===true
       this.deliveries = previous.taskDeliveries ? previous.taskDeliveries.map(r=>({...r})) : []
       this.tasks = [...previous.tasks]
@@ -961,7 +1075,10 @@ export class TaskLedger {
   private snapshot(): TaskLedgerSnapshot {
     return {
         tasks: this.tasks.map(task => ({ ...task })),
+        ...(this.receiptRestoreError?{receiptOutboxRestoreError:true as const}:{}),
+        ...(this.receiptRecords.length?{receiptOutbox:this.receiptRecords.filter(r=>this.tasks.some(t=>t.taskId===r.taskId)).map(r=>structuredClone(r))}:{}),
         ...(this.deliveryRestoreError?{taskDeliveryRestoreError:true as const}:{}),
+        ...(this.dispatchReservations.length?{dispatchReservations:this.dispatchReservations.map(r=>({...r}))}:{}),
         ...(this.deliveries.length ? {taskDeliveries:this.deliveries.map(row=>({...row}))} : {}),
         ...(Object.keys(this.reminderSessions).length ? { reconciliationSessions: {...this.reminderSessions} } : {}),
         ...(Object.keys(this.reminders).length ? { reconciliationReminders: Object.fromEntries(Object.entries(this.reminders).filter(([id])=>this.tasks.some(row=>row.taskId===id&&row.status==='pending'))) } : {}),

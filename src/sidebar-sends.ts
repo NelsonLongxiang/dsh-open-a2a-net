@@ -74,10 +74,8 @@ export class SidebarSends {
    */
   take(team: string, message: string, from: string, settled: boolean): boolean {
     const parsed = parseReceipt(message)
-    if (parsed === null || parsed.taskId === '') return false
-    const ids = baseTaskIds(parsed.taskId)
-    const row = this.rows.find(entry => entry.sender === team && ids.includes(entry.taskId))
-    if (row === undefined) return false
+    const row = this.rowFor(team, message)
+    if (parsed === null || row === undefined) return false
     const envelope = parsed.envelope
     const disposition = envelope?.disposition ?? 'result'
     const summary = (envelope?.progress?.summary ?? parsed.summary).trim().slice(0, 1000)
@@ -86,6 +84,16 @@ export class SidebarSends {
     if (disposition === 'result' && settled) row.ended = true
     this.save()
     return true
+  }
+
+  /** Whether {@link take} would take this receipt, without recording anything. */
+  claims(team: string, message: string): boolean { return this.rowFor(team, message) !== undefined }
+
+  private rowFor(team: string, message: string): SidebarSend | undefined {
+    const parsed = parseReceipt(message)
+    if (parsed === null || parsed.taskId === '') return undefined
+    const ids = baseTaskIds(parsed.taskId)
+    return this.rows.find(entry => entry.sender === team && ids.includes(entry.taskId))
   }
 
   /** The tab's view: one session's requests, newest first. */
