@@ -109,6 +109,8 @@
 
 过渡期内 16 件的上限保持不变。
 
+第 2 步已于 2026-11-18 实现（`src/flood-guard.ts`）：任何 JPFILE-PART 消息一律以 `-32008` / `file-channel-required` 拒收，附 `use-file-channel` 提示；被拒的分件不占发送方限流名额。随 0.8 正式版发布。
+
 ## 5. 安全与边界
 
 - 授权只认 OriginClaim 证明过的身份。调用方自述的 `caller_session` 只用来定位授权，不能代替证明，和 #172 / #179 的口径一致。

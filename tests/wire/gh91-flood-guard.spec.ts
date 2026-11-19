@@ -23,14 +23,14 @@ function part(transfer: string, file: string, i: number, n: number): string {
 }
 
 describe('gh#91 authenticated direct flood brake', () => {
-  it.each([true, false])('legacy parts remain accepted with file-channel advice (wait=%s)', async wait => {
+  it.each([true, false])('every legacy part is refused before steer with file-channel advice (wait=%s)', async wait => {
     const n = await boot()
-    const accepted = await post(n, 'hint-part', part('hint', 'f', 1, 16), 'dsh', wait)
-    expect(accepted.status).toBe(200)
-    expect(accepted.body.code).toBeUndefined()
-    expect(accepted.body.advice).toMatchObject({ reason: 'use-file-channel', message: expect.stringContaining('a2a_file_send { paths, team }') })
-    expect(accepted.body.advice?.message).toContain('a2a-net file send <path…> <team>')
-    expect(n.steered.filter((p:any)=>p.source?.taskId==='hint-part')).toHaveLength(1)
+    const refused = await post(n, 'hint-part', part('hint', 'f', 1, 16), 'dsh', wait)
+    expect(refused.status).toBe(200)
+    expect(refused.body).toMatchObject({ code: -32008, reason: 'file-channel-required', delivered: false, advice: { reason: 'use-file-channel' } })
+    expect(refused.body.advice?.message).toContain('a2a_file_send { paths, team }')
+    expect(refused.body.error).toContain('a2a-net file send <path…> <team>')
+    expect(n.steered.filter((p:any)=>p.source?.taskId==='hint-part')).toHaveLength(0)
     expect((await post(n, 'no-hint', 'ordinary request', 'dsh', wait)).body.advice).toBeUndefined()
   })
   it('admits 16 ordinary deliveries, rejects the 17th visibly BEFORE steer, and stores a failed query outcome', async () => {
@@ -63,28 +63,14 @@ describe('gh#91 authenticated direct flood brake', () => {
     expect((await post(n, 'over')).body.reason).toBe('sender-rate-limited')
     expect(n.steered).toHaveLength(16)
   })
-  it('17 declared parts and malformed part messages are rejected without steering', async () => {
+  it('oversized, malformed and repeated parts are all refused the same way and never steered', async () => {
     const n = await boot()
-    const over = (await post(n, 'declared-over', part('t', 'f', 1, 17))).body
-    expect(over).toMatchObject({ code: -32008, reason: 'file-parts-exceeded', advice: { reason: 'use-file-channel' } })
-    expect(over.error).toContain('file-parts-exceeded')
-    expect(over.error).toContain('use-file-channel')
-    expect(over.error).toContain('a2a_file_send { paths, team }')
-    expect(over.error).toContain('a2a-net file send <path…> <team>')
-    expect((await post(n, 'malformed', '[JPFILE-PART v1] broken')).body.reason).toBe('file-part-invalid')
-    expect(n.steered).toHaveLength(0)
-  })
-  it('counts a transfer across files, rejects its 17th part, and does not reinject duplicate part coordinates', async () => {
-    const n = await boot()
-    await post(n, 'p0', part('transfer', 'first-file', 1, 1))
-    expect((await post(n, 'duplicate-new-task', part('transfer', 'first-file', 1, 1))).body.reason).toBe('file-part-duplicate')
-    for (let i = 1; i < 16; i++) {
-      const accepted = (await post(n, 'p' + i, part('transfer', 'file-' + i, 1, 1))).body
-      expect(accepted.code).toBeUndefined()
-      expect(accepted.advice?.reason).toBe('use-file-channel')
+    for (const [id, message] of [['declared-over', part('t', 'f', 1, 17)], ['malformed', '[JPFILE-PART v1] broken'], ['p0', part('transfer', 'first-file', 1, 1)], ['p0-again', part('transfer', 'first-file', 1, 1)]] as const) {
+      expect((await post(n, id, message)).body).toMatchObject({ code: -32008, reason: 'file-channel-required', advice: { reason: 'use-file-channel' } })
     }
-    expect((await post(n, 'p16', part('transfer', 'another-file', 1, 1))).body).toMatchObject({ code: -32008, reason: 'file-parts-exceeded', advice: { reason: 'use-file-channel' } })
-    expect(n.steered).toHaveLength(16)
+    expect(n.steered).toHaveLength(0)
+    // Refused parts spent no quota: 16 ordinary deliveries still go through.
+    for (let i = 0; i < 16; i++) expect((await post(n, 'after-' + i)).body.code).toBeUndefined()
   })
   it('the async path shares the same pre-steer brake', async () => {
     const n = await boot()
