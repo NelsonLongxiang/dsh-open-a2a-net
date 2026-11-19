@@ -4,7 +4,8 @@
  * the team host) is a team member: admitted to the team canvas with its key pinned, given work through its mailbox, and
  * heard only through a CLI claim under the pinned key.
  */
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, rmSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'

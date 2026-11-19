@@ -9,9 +9,9 @@
  *   a2a status    ↔ a2a_status     网络健康：peers/在途/活动环 + 户口状态
  *   a2a tasks     ↔ a2a_tasks      账本三层：pending/dead/archived
  *   a2a probe     ↔ a2a_probe      可达性：peer 评分/链接/验证状态
- *   a2a report    ↔ a2a_report     离网单向报告（CLI 形态：投给进程队信箱）
+ *   a2a tell-host                  投给宿主进程队信箱的单向消息（旧名 report 保留一个版本；与 a2a_report 的报告环不是一回事）
  *   a2a exposure  ↔ a2a_exposure   会话暴露档 —— CLI 无会话面，见 N/A 说明
- *   a2a team join/leave ↔ a2a_team_join/leave 会话手势 —— CLI 以「拉卡入队」
+ *   入队 —— 名册自入队已退役（2026-11-18）；CLI 以「拉卡入队」
  *                                  等价：属主把 CLI 成员卡拖进 canvas 队
  *   a2a skills    （插件面无此工具）加载本机技能目录并输出
  *   a2a init / publish / inbox / revoke / tools —— CLI 户口制自有命令
@@ -49,7 +49,7 @@ const USAGE = `a2a-net CLI — aligned with the plugin's model tools ('a2a tools
 usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 
 户口制:   init <name> [--uuid 16hex] [--force] · publish [--owes] [--declare progressReceipts,directedSeats,reworkReturns,teamRoster] · inbox [--new|--wait|--hook] · thread <context_id> · receipt <task_id> <result…> · admission <caller> [--local] · revoke
-对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · report <msg…> [--task ID]
+对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · tell-host <msg…> [--task ID]
 CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
 文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR] · file grants · file revoke <sha256> <to>   (#91: bytes never ride a message)
@@ -334,11 +334,9 @@ async function state(optional = false) {
   return await replyOf(res)
 }
 
-// ── the plugin's ten tools, one line each (mirrors src registration) ─────
+// ── the plugin's core a2a tools, one line each (mirrors src registration; the team-only superagent tools are not mirrored) ─────
 const TOOL_CATALOG = [
   ['a2a_whoami', '身份自省：节点 id、joined 状态、可路由句柄、roster/canvas 队、allowlist 效应'],
-  ['a2a_team_join', '声明会话节点为某可路由队成员（allowlist 精确名门控；人建队而非模型自组）'],
-  ['a2a_team_leave', '撤销一次队成员声明（只能缩不能扩）'],
   ['a2a_report', '离网单向报告入监督读的报表环（无在场权——不带来发现/路由权）'],
   ['a2a_teams', '列/搜可达队：本机行+远端 peer 行（teamScopeInfo 开时跟随协作圈）'],
   ['a2a_route', '向远端队发消息并等回复（长任务用 async；context_id 续谈）'],
@@ -364,11 +362,10 @@ function printAlignment() {
     ['a2a status', 'a2a_status', '网络健康（peers/在途/活动环）+ 户口状态'],
     ['a2a tasks', 'a2a_tasks', '账本三层（pending/dead/archived）'],
     ['a2a probe', 'a2a_probe', 'peer 可达性（评分/链接/验证，读暖态）'],
-    ['a2a report', 'a2a_report', '离网报告（CLI 形态：投给宿主进程队信箱）'],
+    ['a2a tell-host', '（无对应工具）', '投给宿主进程队信箱的单向消息；a2a_report 写的是宿主的报告环，二者不同（旧名 a2a report 保留一个版本）'],
     ['a2a file send/fetch', 'a2a_file_send/fetch', '文件通道（CLI 只能从自己的 home 宿主拉取）'],
     ['a2a file grants/revoke', 'a2a_file_grants/revoke', '管理自己在 home 宿主上的文件授权（签名证明身份）'],
     ['（N/A）', 'a2a_exposure', '暴露档是会话面概念——CLI 无会话；户口即其可见性'],
-    ['（拖卡入队）', 'a2a_team_join/leave', '入队是会话手势——等价物：属主把 CLI 成员卡拖进 canvas 队（画布手势=运营者链接）'],
     ['a2a skills', '（插件无）', '加载本机技能目录输出（CLI 专有）'],
     ['a2a init/publish/inbox/revoke/tools', '（插件无）', '户口制自有：建钥/落户/收信箱/撤户/本表'],
   ]
@@ -699,12 +696,15 @@ async function cmdReceipt() {
  */
 async function cmdAdmission() {
   const [caller] = positionals()
-  if (caller === undefined || caller === '') usage('usage: a2a admission <caller> [--local] [--json]')
+  if (caller === undefined || caller === '') usage('usage: a2a admission <caller> [--local] [--task ID] [--json]')
   const id = identity()
   const ingress = has('--local') ? 'local' : 'wire'
   const ts = Date.now()
-  const sig = edSign(null, Buffer.from(JSON.stringify(['a2a-admission', id.handle, caller, ingress, ts])), createPrivateKey(id.privateKeyPem)).toString('base64')
-  const out = await control({ action: 'admission', handle: id.handle, caller, ingress, ts, sig })
+  // --task: the question is about that one task (#697 review R1); the task is signed too, in the domain-separated form.
+  const task = taskFlag()
+  const payload = task === undefined ? ['a2a-admission', id.handle, caller, ingress, ts] : ['a2a-admission/2', id.handle, caller, ingress, ts, task]
+  const sig = edSign(null, Buffer.from(JSON.stringify(payload)), createPrivateKey(id.privateKeyPem)).toString('base64')
+  const out = await control({ action: 'admission', handle: id.handle, caller, ingress, ts, sig, ...(task !== undefined ? { task } : {}) })
   if (out.ok !== true) die(`[admission] the host did not answer for ${id.handle} (refused, or a host before p1-mail-admission)`)
   const row = { caller, admitted: out.admitted === true, ...(typeof out.rule === 'string' ? { rule: out.rule } : {}) }
   if (has('--json')) { console.log(JSON.stringify(row)); return }
@@ -1608,6 +1608,9 @@ async function main() {
     // the address it dials is missing from the host's originClaimAudiences.
     if (typeof s.unboundInbound === 'number') {
       console.log(`claims      unboundInbound=${String(s.unboundInbound)}  boundMissInbound=${String(s.boundMissInbound ?? 0)}  (dialled as ${claimTarget(home())?.audience ?? home()}${claimAudienceOverride() !== undefined ? `, signed for ${claimAudienceOverride()}` : ''})`)
+      // #64 step 2: the restart-proof measure — whole days at zero (legacy, unbound, boundMiss) up to yesterday.
+      const w = s.originClaimWindow
+      if (w !== null && typeof w === 'object' && typeof w.zeroStreakDays === 'number') console.log(`window      zero-days=${String(w.zeroStreakDays)}  measuring since ${String(w.since)}  (unbound window closes after 7, #64)`)
       // Who missed and by which origin: add that origin to the host's originClaimAudiences.
       for (const m of (Array.isArray(s.boundMissRecent) ? s.boundMissRecent : []).slice(0, 5)) {
         console.log(`  miss      ${String(m.caller)} dialled ${String(m.audience) || '(no origin)'} ×${String(m.count)}`)
@@ -1625,9 +1628,15 @@ async function main() {
   if (cmd === 'superagent') { await cmdSuperagent(); return }
   if (cmd === 'ticket') { await cmdTicket(); return }
   if (cmd === 'pi') { await cmdPi(); return }
-  if (cmd === 'report') {
+  if (cmd === 'tell-host' || cmd === 'report') {
+    // Redundancy review 2026-11-18: `report` shared its name with the a2a_report tool, which writes the host's report ring;
+    // this command is a one-way message into the host's process-team mailbox. The old name works for one more version.
+    if (cmd === 'report') console.error('[report] deprecated: use a2a tell-host (same command; report is the a2a_report tool, a different thing)')
     const text = positionals().join(' ')
-    if (text === '') usage('usage: a2a report <message…> — one-way report into the host process-team mailbox')
+    if (text === '') usage('usage: a2a tell-host <message…> — one-way message into the host process-team mailbox')
+    // A report is a fresh task into the home mailbox, wrapped in a prefix, so a receipt
+    // sent this way never reads as one: the caller's row stays owed. Point at `receipt`.
+    if (/^\s*\[A2A receipt\]/.test(text)) usage('report: this text is a receipt — a report wraps it so it never settles the task; send it with: a2a receipt <task_id> [--outcome O] <one line…>')
     await sendDirect('report', { team: await homeZone(), message: `[a2a-net cli report] ${text}`, caller_session: identity().handle, wait: false, task_id: taskFlag() ?? newTaskId() })
     return
   }

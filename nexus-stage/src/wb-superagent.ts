@@ -439,7 +439,10 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     card.appendChild(head)
     kv(card, '范围', ticket.mandate.scope)
     const { source, id: actorId } = ticket.mandate.actor
-    kv(card, '授权', source === 'workbench' && actorId.startsWith('observer:') ? `观察者开单 · ${sessionName(actorId.slice('observer:'.length))}` : `${ticket.mandate.strength === 'explicit' ? '明确请求' : '推断'} · ${source}:${actorId}`)
+    // #717: a plain member's proposal (`member:<session or ref>`) is shown as such, never as the owner's request.
+    kv(card, '授权', source === 'workbench' && actorId.startsWith('observer:') ? `观察者开单 · ${sessionName(actorId.slice('observer:'.length))}`
+      : source === 'workbench' && actorId.startsWith('member:') ? `成员提议 · ${sessionName(actorId.slice('member:'.length))}`
+      : `${ticket.mandate.strength === 'explicit' ? '明确请求' : '推断'} · ${source}:${actorId}`)
     const binding = last?.executor.bindings.find(b => b.ticketId === ticket.id)
     if (binding !== undefined) kv(card, '成员', sessionName(binding.member))
     for (const f of ticket.follows ?? []) if (f.thread.startsWith('github:')) kv(card, 'PR', `${f.thread.slice(7)}${f.closed !== undefined ? ` · ${f.closed.outcome === 'merged' ? '已合并' : '已关闭'}` : ' · 等待合并'}`)
@@ -766,7 +769,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     reset.addEventListener('click', () => { settingsDirty = false; render() })
     const actions = el('div', 'wb-sa-actions')
     actions.append(save, reset)
-    form.append(actions, el('div', 'wb-sa-hint', '团队就是一支画布团队：在画布上建队、增删成员（含远端成员），这里只绑定画布并从中指定总工。总工用 superagent-router 预设，本机成员用 superagent-member 预设，能自己开工单的观察者用 superagent-observer 预设；团队里的会话不再加入别的画布。'))
+    form.append(actions, el('div', 'wb-sa-hint', '团队就是一支画布团队：在画布上建队、增删成员（含远端成员），这里只绑定画布并从中指定总工。总工用 superagent-router 预设，本机成员用 superagent-member 预设，能自己开工单的观察者用 superagent-observer 预设（成员也能提议新工作，由总工决定接不接、派给谁）；团队里的会话不再加入别的画布。'))
     return form
   }
 

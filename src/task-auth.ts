@@ -32,6 +32,11 @@ export type AdmissionRule =
   | 'peer-org'
   | 'node-fact'
   | 'cli-deposit'
+  /**
+   * Owner ruling 2026-11-14 (option B): a session on a host the operator linked asks a superagent team at its canvas
+   * address. The team owner decides whether it takes the request (M12 sender card); the host only checks the link.
+   */
+  | 'superagent-intake'
 
 /** Every rule's basis — the mapping the authorization record stores beside the rule. */
 export const VIA_OF: Readonly<Record<AdmissionRule, Via>> = {
@@ -46,6 +51,7 @@ export const VIA_OF: Readonly<Record<AdmissionRule, Via>> = {
   'peer-org': 'peer-org',
   'node-fact': 'joined-session',
   'cli-deposit': 'cli-deposit',
+  'superagent-intake': 'peer-org',
 }
 
 /** superagent p1-mail-admission: every admission rule name (the closed set a mailbox row's `admission` may carry). */

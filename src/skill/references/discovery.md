@@ -9,7 +9,9 @@ capability flags) plus unsigned serve-fresh fields.
   `teamMemberships`, `canvasOrg` or `lanIp`.
 - The full card goes only to a caller that presents an OriginClaim envelope
   (`X-A2A-Caller` / `-Url` / `-Ts` / `-Sig`, signed with the caller's card
-  key) AND that this host links: the same origin (self-fetch), one of its
+  key — the audience-unbound legacy form, accepted while the host's
+  `originClaimUnboundWindow` is open; the audience-bound form adds
+  `X-A2A-Caller-Aud` / `-Sig2`) AND that this host links: the same origin (self-fetch), one of its
   joined session handles, an exact canvas remote member ref the operator
   added (#18, #19 D1), or bilateral seeding — this host's `peers` config
   names the caller's origin AND the caller's card lists this host's origin
@@ -25,9 +27,15 @@ capability flags) plus unsigned serve-fresh fields.
   likely fail at transport.
 - `a2a_teams` also exposes remote `canvasOrg` groups as group rows with the
   publisher's `origin` and `via` (#159); they do not become extra session
-  nodes in state `remote`. With `teamScopeInfo` on, a remote canvas row is
+  nodes in state `remote`. With `teamScope` on, a remote canvas row is
   included only when it names an unambiguously resolved joined session on this
-  host. With it off, discoverable rows are open like other remote rows.
+  host. A remote session row is included the same way: when that host's own
+  canvas holds the session beside a joined session of this host, the row
+  carries `sharedVia` (rendered `[shared via <canvas>]`) — the relation routing
+  already admits. With it off, discoverable rows are open like other remote rows.
+  A refused `a2a_probe` says which side declares nothing; the fix is an owner's
+  canvas edit on either workbench board (the board's 协作提示 chip offers the
+  one-click add when the peer's canvas already holds a local session).
   `canvasOrg` is unsigned serve-fresh data, **not** a signed membership proof:
   discovery does not replace the receiver's OriginClaim/target admission.
   A model caller's same-named canvas candidates are checked against that
@@ -42,8 +50,9 @@ capability flags) plus unsigned serve-fresh fields.
   Host/initiator exemptions and the operator-controlled seed/delegate
   resolution boundary stay intact.
   The existing local-first route still wins when this host owns the same team
-  name; `a2a_route` has no owner-URL selector, so avoid creating a duplicate
-  local group to address a remote one. If remote resolution finds multiple
+  name; `a2a_route` selects a remote owner by its owner-qualified canvas id
+  `<zone>/canvas/<name>@<fp8>` (#282 S2) — prefer that over creating a
+  duplicate local group to address a remote one. If remote resolution finds multiple
   distinct matching group owners or an overlapping session identity, it
   fails closed with `ambiguous` rather than guessing a remote recipient.
 

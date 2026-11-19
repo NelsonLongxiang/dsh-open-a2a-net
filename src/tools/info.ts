@@ -14,8 +14,8 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Config } from '../index.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from '../runtime.ts'
 import type { A2aPeerCard } from '../types.ts'
-import { splitQualifiedMember } from '../canvas-member.ts'
-import { peerDirectoryRows } from '../peer-directory.ts'
+import { qualifiedSessionMember, splitQualifiedMember } from '../canvas-member.ts'
+import { advertisedCanvasTeams, peerDirectoryRows } from '../peer-directory.ts'
 import { canvasMemberships, canvasOwners } from '../canvas-discovery.ts'
 import { peerContentMeta } from '../node-self.ts'
 import type { ZoneCardFetch } from '../zone.ts'
@@ -34,7 +34,39 @@ import type { TeamMembershipStore } from '../team-store.ts'
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
 /** One directory row shared with listDirectoryTeams (which stays in index.ts). */
-export type DirectoryTeamRow = { memberRef?: string; team: string; session: string; name: string; seatName?: string; kind?: 'canvas'; owner?: string; memberCount?: number; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; /** gh#106: the peer's last card fetch missed — this row is its kept card, not a live answer. */ unreachable?: boolean; teams?: string[]; /** Internal S5 scope hint, stripped before the tool's public output. */ canvasMembers?: readonly string[] }
+/** The row fields a2a_teams publishes (its output schema); anything else on a row is internal. */
+/** S5 refusal guidance (production feedback 2026-11-14): name the missing side instead of a bare "no team". */
+const SCOPE_FIRST_READ = 'If this host or that peer restarted recently, its card may not be read yet — retry shortly.'
+const SCOPE_NEITHER_SIDE = 'Neither side declares the other: no canvas or roster team here names one of its sessions, and none of its canvases holds a joined session of this host.'
+const SCOPE_WIDEN = 'To bring it in scope, either owner puts the two sessions in one canvas team on their own workbench board; an agent cannot do it.'
+/**
+ * #61/#63 owner ruling 2026-11-17 (probe tiering, partial): every probed row carries a four-value verdict. "slow" is a
+ * reachable peer whose card fetch took longer than maxLatencyMs; it stays reachable:true. The stateful parts of the old
+ * ladder (two consecutive degradations => dead, minScore, the T2 session-liveness tier) are retired.
+ */
+export const PROBE_VERDICTS = ['reachable', 'slow', 'rejected', 'unreachable'] as const
+export type ProbeVerdict = typeof PROBE_VERDICTS[number]
+export const PROBE_MAX_LATENCY_MS = 2_000
+export const PROBE_MAX_LATENCY_CAP_MS = 60_000
+type ProbeRow = { url: string; reachable: boolean; verdict?: ProbeVerdict; ms?: number; team?: string; error?: string }
+/** A positive finite bound in whole milliseconds (at least 1), capped; anything else falls back to the default. */
+export const probeLatencyBound = (value: unknown): number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.min(Math.max(1, Math.round(value)), PROBE_MAX_LATENCY_CAP_MS) : PROBE_MAX_LATENCY_MS
+const probeSummary = (rows: readonly ProbeRow[]): string => {
+  const up = rows.filter(row => row.reachable).length
+  const slow = rows.filter(row => row.verdict === 'slow').length
+  return `Fleet probe (${String(rows.length)}): ${String(up)} reachable${slow > 0 ? ` (${String(slow)} slow)` : ''}, ${String(rows.length - up)} down`
+}
+const PUBLIC_TEAM_ROW_KEYS = ['team', 'memberRef', 'session', 'name', 'seatName', 'kind', 'owner', 'memberCount', 'description', 'local', 'origin', 'via', 'workspace', 'legacy', 'unreachable', 'sharedVia', 'teams'] as const
+
+/** A directory row as a2a_teams publishes it: the declared fields only. */
+export function publicTeamRow(row: DirectoryTeamRow): DirectoryTeamRow {
+  const out: Record<string, unknown> = {}
+  for (const key of PUBLIC_TEAM_ROW_KEYS) if (row[key] !== undefined) out[key] = row[key]
+  return out as DirectoryTeamRow
+}
+
+export type DirectoryTeamRow = { memberRef?: string; team: string; session: string; name: string; seatName?: string; kind?: 'canvas'; owner?: string; memberCount?: number; description: string; local?: boolean; origin?: string; workspace?: string; via?: string; legacy?: boolean; /** gh#106: the peer's last card fetch missed — this row is its kept card, not a live answer. */ unreachable?: boolean; /** The peer canvas this remote session shares with a joined session of this host (S5 scope by the owner's board). */ sharedVia?: string; teams?: string[]; /** Internal S5 scope hint, stripped before the tool's public output. */ canvasMembers?: readonly string[] }
 
 /** Everything the information-plane tools capture from apply(). */
 export interface InfoToolsDeps {
@@ -64,6 +96,8 @@ export interface InfoToolsDeps {
   // destructured copy would freeze the boot value.
   readonly ownerAllowlist: readonly string[]
   readonly ownerTeamScopeInfo: boolean
+  /** The routing half of the one `teamScope` switch, read at call time. */
+  readonly ownerTeamScopeRouting: boolean
   readonly id8: (id: string) => string
   readonly sessionTeamOf: (agent: Agent) => string
   readonly nodeMetadataOf: (agent: Agent) => { name: string; seatName?: string; description: string; workspace?: string }
@@ -117,7 +151,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
     // too. This host's canvas teams — and every member handle they name
     // (remote zone-qualified handles as-is, local session ids as their
     // session-team handle) — belong to the scope, so canvas teammates stay
-    // visible to each other under teamScopeInfo instead of the roster-only
+    // visible to each other under teamScope instead of the roster-only
     // reading splitting them apart.
     for (const name of canvasStore.list()) {
       joined.add(canvasTeamOf(name))
@@ -143,6 +177,24 @@ export function createInfoTools(deps: InfoToolsDeps) {
       return joined.has(row.team) || [...joined].some(ref => splitQualifiedMember(ref)?.handle === row.team && canvasStore.ownerKeyOf(ref) === card.publicKey) || (row.teams ?? []).some(team => joined.has(team))
     })
 
+  /**
+   * Production feedback 2026-11-14 (S5 alignment): routing admits a target that shares a canvas with a joined session of
+   * this host on a PEER's board (outboundScope orgShared), while the information plane read only this host's own
+   * declarations — a session could route to a teammate it could not list. The same relation, read tighter: only the
+   * canvasOrg of the card that publishes the session (the host that owns both the canvas and the session), naming the
+   * session bare or under that card's key, beside a ref that resolves to a joined local session by the local-first handle
+   * rules. Returns that canvas team, or undefined.
+   */
+  const sharedViaPeerCanvas = (card: A2aPeerCard | undefined, team: string, resolveLocal: (ref: string) => string | undefined): string | undefined => {
+    if (card === undefined || !(card.sessionTeams ?? []).some(entry => entry.team === team)) return undefined
+    const qualified = qualifiedSessionMember(team, card.publicKey)
+    for (const canvas of advertisedCanvasTeams(card)) {
+      if (!canvas.members.some(ref => ref === team || (qualified !== undefined && ref === qualified))) continue
+      if (canvas.members.some(ref => { const id = resolveLocal(ref); return id !== undefined && joinedSessions.has(id) })) return canvas.team
+    }
+    return undefined
+  }
+
 
 
   /** Human duration for a ledger row: how long a task has been owed or took. */
@@ -161,7 +213,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
 
   function registerWhoami(): void {
     // K3 feedback P0 (2026-10-20): a session could appear in a2a_teams, route
-    // fine, and still be refused by a2a_team_join — with no way to ask "what am
+    // fine, and still be refused a team join — with no way to ask "what am
     // I, actually?". whoami is that one-call answer. Deliberately NOT gated by
     // a2aJoinGateRefusal: the unjoined session is precisely the caller that
     // needs it.
@@ -170,7 +222,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
       description:
         'One-call self-introspection on this host\'s A2A network: the calling session\'s node id, joined/live '
         + 'state, routable team handle, declared team memberships (roster + canvas), the owner\'s teamJoinAllowlist, '
-        + 'the teamScopeRouting switch, and this node\'s most recent refused join/leave attempts with reasons. '
+        + 'the teamScope switch (routing and information), and this node\'s most recent refused join/leave attempts with reasons. '
         + 'Note: outbound routing never requires join — the originating session is always exempt (initiator face); '
         + 'join buys presence, discovery, and being routed to.',
       parameters: {},
@@ -189,13 +241,14 @@ export function createInfoTools(deps: InfoToolsDeps) {
             teams: {
               type: 'object',
               additionalProperties: true,
-              description: 'roster: allowlisted teams declared via a2a_team_join; canvas: local workbench-assigned names (compatibility); canvasDetails: local/remote membership with qualified team, owner URL and memberCount.',
+              description: 'roster: roster teams declared before roster self-join was retired (2026-11-18); canvas: local workbench-assigned names (compatibility); canvasDetails: local/remote membership with qualified team, owner URL and memberCount.',
             },
             allowlist: {
               type: 'object',
               additionalProperties: true,
               description: 'The owner-curated teamJoinAllowlist: exact entries (the only join authority, gh#11) plus pattern entries kept readable but carrying no mint rights (deny-all / curated; allow-all only via explicit exact entries).',
             },
+            teamScope: { type: 'boolean' },
             teamScopeRouting: { type: 'boolean' },
             note: { type: 'string', description: 'What join does and does not gate, in one sentence.' },
             lastRefusals: {
@@ -219,6 +272,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         node?: Record<string, JsonValue>
         teams?: Record<string, JsonValue>
         allowlist?: Record<string, JsonValue>
+        teamScope?: boolean
         teamScopeRouting?: boolean
         lastRefusals?: Array<Record<string, JsonValue>>
         note?: string
@@ -262,7 +316,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
             patterns,
             effect: patterns.length === 0 ? 'deny-all (empty allowlist refuses every join)' : patterns.includes('*') ? 'allow-all' : 'curated',
           },
-          teamScopeRouting: config.teamScopeRouting === true,
+          teamScope: deps.ownerTeamScopeRouting && deps.ownerTeamScopeInfo,
+          teamScopeRouting: deps.ownerTeamScopeRouting,
           ...(refusals.length > 0 ? { lastRefusals: refusals } : {}),
           note: joined
             ? 'join buys presence + being routed to; outbound routing needs no join (initiator face is exempt)'
@@ -286,7 +341,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         + 'the first live member or wakes the first cold one; the dispatching session itself is skipped on the local tiers '
         + '(issue #41: routing to its own group never loops home). Remote candidates still require the existing peer-link and '
         + 'receiver admission checks; a served-fresh canvasOrg is not itself a signature over membership. '
-        + 'While teamScopeInfo is on (default), the listing follows YOUR collaboration circle: remote canvas rows name a joined session of this host, remote roster rows serve a joined team, and [this host] session rows show only your own row, your canvas teams, and sessions sharing a team with you — an exposed node id invites mis-routing, so the directory does not advertise strangers. The owner\'s GUI panel keeps the full plane; teamScopeInfo: false opens it for tools too. '
+        + 'While teamScope is on (default), the listing follows YOUR collaboration circle: remote canvas rows name a joined session of this host, remote roster rows serve a joined team, and [this host] session rows show only your own row, your canvas teams, and sessions sharing a team with you — an exposed node id invites mis-routing, so the directory does not advertise strangers. The owner\'s GUI panel keeps the full plane; teamScopeInfo: false opens it for tools too. '
         + 'Call this before a2a_route to pick a target team.',
       parameters: {
         query: { type: 'string', description: 'Optional keyword filter (case-insensitive substring over team/name/description).' },
@@ -321,18 +376,20 @@ export function createInfoTools(deps: InfoToolsDeps) {
                   via: { type: 'string', description: 'The peer URL this row was discovered through (host:port), when it came from a peer card.' },
                   workspace: { type: 'string', description: 'The session\'s working directory, when shared.' },
                   legacy: { type: 'boolean', description: 'true when the publishing node advertises no roster capability (pre-roster peer).' },
+                  unreachable: { type: 'boolean', description: 'true when the peer\'s last card fetch missed: the row is its kept card, not a live answer (gh#106).' },
+                  sharedVia: { type: 'string', description: 'The peer canvas team (on the row\'s own host) that holds both this session and one of this host\'s joined sessions — why the row is in scope although this host declares nothing about it.' },
                   teams: { type: 'array', items: { type: 'string' }, description: 'Roster teams the node declared for this handle (card teamMemberships).' },
                 },
               },
             },
-            note: { type: 'string', description: 'Present while teamScopeInfo scoping is on: the joined-team scope plus how many rows outside YOUR collaboration circle were withheld (remote/local split; the process team, your own row, and your canvas teams always show).' },
+            note: { type: 'string', description: 'Present while teamScope is on: the joined-team scope plus how many rows outside YOUR collaboration circle were withheld (remote/local split; the process team, your own row, and your canvas teams always show).' },
           },
         },
         render: (args, value) => [{
           type: 'text',
           text: (value.teams.length === 0
             ? `No A2A teams${(value.query ?? '') === '' ? '' : ` matching "${String(args.query)}"`} are currently reachable.`
-            : value.teams.map(team => `- ${team.team}${team.local === true ? ' [this host]' : ''}${team.name === '' ? '' : ` (${team.name})`}${team.kind === 'canvas' ? ` [canvas owner=${team.owner ?? '?'} members=${String(team.memberCount ?? '?')}]` : ''}${team.description === '' ? '' : ` — ${team.description}`}${typeof team.origin === 'string' && team.origin !== '' && team.local !== true ? ` @ ${team.origin}` : ''}${typeof team.workspace === 'string' && team.workspace !== '' ? ` [${team.workspace}]` : ''}`).join('\n'))
+            : value.teams.map(team => `- ${team.team}${team.local === true ? ' [this host]' : ''}${team.unreachable === true ? ' [unreachable: last card]' : ''}${typeof team.sharedVia === 'string' ? ` [shared via ${team.sharedVia}]` : ''}${team.name === '' ? '' : ` (${team.name})`}${team.kind === 'canvas' ? ` [canvas owner=${team.owner ?? '?'} members=${String(team.memberCount ?? '?')}]` : ''}${team.description === '' ? '' : ` — ${team.description}`}${typeof team.origin === 'string' && team.origin !== '' && team.local !== true ? ` @ ${team.origin}` : ''}${typeof team.workspace === 'string' && team.workspace !== '' ? ` [${team.workspace}]` : ''}`).join('\n'))
             + (value.note === undefined ? '' : `\n${value.note}`),
         }],
       },
@@ -350,6 +407,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           const joined = joinedTeamScope()
           const resolveLocal = localHandleResolver()
           const remoteBefore = teams.filter(row => row.local !== true).length
+          const sharedVia = new Map<DirectoryTeamRow, string>()
           teams = teams.filter(row => {
             if (row.local === true) return true
             // A same-zone canvas NAME can exist on two hosts: a local team
@@ -359,8 +417,12 @@ export function createInfoTools(deps: InfoToolsDeps) {
               return id !== undefined && joinedSessions.has(id)
             })
             const card = row.via ? cardCache.get(row.via)?.card : undefined
-            return joined.has(row.team) || [...joined].some(ref=>splitQualifiedMember(ref)?.handle===row.team && canvasStore.ownerKeyOf(ref)===card?.publicKey) || (row.teams ?? []).some(name => joined.has(name))
-          })
+            if (joined.has(row.team) || [...joined].some(ref=>splitQualifiedMember(ref)?.handle===row.team && canvasStore.ownerKeyOf(ref)===card?.publicKey) || (row.teams ?? []).some(name => joined.has(name))) return true
+            const via = sharedViaPeerCanvas(card, row.team, resolveLocal)
+            if (via === undefined) return false
+            sharedVia.set(row, via)
+            return true
+          }).map(row => sharedVia.has(row) ? { ...row, sharedVia: sharedVia.get(row) } : row)
           const hiddenRemote = remoteBefore - teams.filter(row => row.local !== true).length
           // gh#39 (owner ruling: the listing ADVERTISES targets — an exposed
           // node id invites a session with no collaboration relationship to
@@ -392,10 +454,12 @@ export function createInfoTools(deps: InfoToolsDeps) {
             hiddenLocal = before - teams.length
           }
           const hidden = hiddenRemote + hiddenLocal
-          note = `teamScopeInfo on: ${String(joined.size)} joined team${joined.size === 1 ? '' : 's'} on this host — ${String(hidden)} row${hidden === 1 ? '' : 's'} outside your collaboration circle withheld (${String(hiddenRemote)} remote, ${String(hiddenLocal)} local [this host] session rows; the process team, your own row, and your canvas teams always show). To widen the scope: a human composes the shared canvas team (the board drag), the owner adds the EXACT team name to teamJoinAllowlist (patterns carry no mint rights, gh#11), or the owner sets teamScopeInfo: false for the open plane`
+          note = `teamScope on: ${String(joined.size)} joined team${joined.size === 1 ? '' : 's'} on this host — ${String(hidden)} row${hidden === 1 ? '' : 's'} outside your collaboration circle withheld (${String(hiddenRemote)} remote, ${String(hiddenLocal)} local [this host] session rows; the process team, your own row, and your canvas teams always show). A remote session shows when this host declares it (a canvas member ref or a shared roster team) or when its own host's canvas holds it beside one of this host's joined sessions [shared via]. ${SCOPE_WIDEN} The owner can also add the EXACT team name to teamJoinAllowlist (patterns carry no mint rights, gh#11), or set teamScopeInfo: false for the open plane`
         }
         // Canvas members are a private scope hint, not part of the tool schema.
-        teams = teams.map(({ canvasMembers: _canvasMembers, ...row }) => row)
+        // Production feedback 2026-11-14: only the fields the output schema declares leave the tool (its additionalProperties is
+        // false), so an internal or future row field can never fail the whole listing.
+        teams = teams.map(row => publicTeamRow(row))
         if (query === '') return { ok: true, query: '', teams, ...(note !== undefined ? { note } : {}) }
         const matches = (team: DirectoryTeamRow): boolean =>
           team.team.toLowerCase().includes(query) || team.name.toLowerCase().includes(query) || team.description.toLowerCase().includes(query)
@@ -414,7 +478,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         + '(who is waiting on whom), and the recent routing activity ring (inbound and outbound outcomes). '
         + 'Includes the idempotency window occupancy (claims, replays, conflicts) behind the UNIQUE-ization '
         + 'traffic watch. '
-        + 'While teamScopeInfo is on (default), peers / in-flight / activity narrow to the joined-team scope — local traffic and idempotency aggregates stay. '
+        + 'While teamScope is on (default), peers / in-flight / activity narrow to the joined-team scope — local traffic and idempotency aggregates stay. '
         + 'Use it to observe an ongoing collaboration or diagnose delivery instead of re-routing.',
       parameters: {},
       output: {
@@ -560,6 +624,12 @@ export function createInfoTools(deps: InfoToolsDeps) {
           return card !== undefined && cardServesJoined(card, joined, resolveLocal) ? { url, score: peerStore.score(url) } : undefined
         })
         const peers = peerRows.filter((row): row is { url: string; score?: number } => row !== undefined)
+        // S5 alignment: a remote session that shares a peer canvas with a joined session here is in the a2a_teams scope,
+        // so its routing facts are too (the memoized fetch makes this a warm read).
+        for (const { url } of peers) {
+          const card = await fetch(url)
+          for (const entry of card?.sessionTeams ?? []) if (sharedViaPeerCanvas(card, entry.team, resolveLocal) !== undefined) visibleTeams.add(entry.team)
+        }
         const inScope = (entry: { team: string; peer: string }): boolean => entry.peer === 'local' || visibleTeams.has(entry.team)
         return {
           ok: true,
@@ -746,10 +816,12 @@ export function createInfoTools(deps: InfoToolsDeps) {
         'Probe the tracked peer fleet for reachability and round-trip latency: one verified-card fetch per peer '
         + '(the same fetch discovery uses), reporting reachable peers with their team and latency and unreachable '
         + 'ones with the failure reason. Pass url to probe one target instead of the whole fleet. '
-        + 'While teamScopeInfo is on (default), the sweep covers only peers serving a joined team, and a single URL is refused unless its verified card proves service. '
+        + 'While teamScope is on (default), the sweep covers only peers serving a joined team, and a single URL is refused unless its verified card proves service. '
+        + 'Each probed row carries a verdict: reachable, slow (answered, but slower than maxLatencyMs), rejected (answered with a card that does not verify) or unreachable. The verdict covers the host card only, not whether a session there accepts work. '
         + 'Use it before dispatching verification work or when routes fail over, instead of guessing which node is down.',
       parameters: {
         url: { type: 'string', description: 'Optional single peer base URL to probe; empty probes every tracked peer.' },
+        maxLatencyMs: { type: 'number', description: `Latency above which a reachable peer is reported slow (default ${String(PROBE_MAX_LATENCY_MS)}, at most ${String(PROBE_MAX_LATENCY_CAP_MS)}).` },
       },
       output: {
         // gh#198: the host's own verdict on whether this result came from outside this host, persisted on tool/result.
@@ -768,6 +840,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
                 properties: {
                   url: { type: 'string', required: true },
                   reachable: { type: 'boolean', required: true },
+                  verdict: { type: 'string', enum: [...PROBE_VERDICTS], description: 'The four-value verdict (#61/#63); absent when the URL was refused without a probe.' },
                   ms: { type: 'number', description: 'Round-trip of the card fetch, reachable or not.' },
                   team: { type: 'string', description: 'The team the peer publishes, when reachable.' },
                   error: { type: 'string', description: 'Why the peer is unreachable.' },
@@ -781,16 +854,17 @@ export function createInfoTools(deps: InfoToolsDeps) {
           text: value.results.length === 0
             ? 'No peers are tracked; add seeds or let referrals arrive.'
             : [
-              `Fleet probe (${String(value.results.length)}): ${String(value.results.filter((row: { reachable: boolean }) => row.reachable).length)} reachable, ${String(value.results.filter((row: { reachable: boolean }) => !row.reachable).length)} down`,
-              ...value.results.map((row: { url: string; reachable: boolean; ms?: number; team?: string; error?: string }) =>
-                `  ${row.reachable ? '✓' : '✗'} ${row.url}${row.reachable ? ` (team ${String(row.team)}, ${String(row.ms)}ms)` : ` (${String(row.error)})`}`),
+              probeSummary(value.results),
+              ...value.results.map((row: ProbeRow) =>
+                `  ${row.verdict === 'slow' ? '~' : row.reachable ? '✓' : '✗'} ${row.url}${row.reachable ? ` (team ${String(row.team)}, ${String(row.ms)}ms${row.verdict === 'slow' ? ', slow' : ''})` : ` (${String(row.error)})`}`),
             ].join('\n'),
         }],
       },
       presentCall: args => ({ card: 'generic', title: args.url === undefined || args.url === '' ? 'Probe the A2A fleet' : `Probe A2A peer: ${args.url}`, kind: 'other', rawInput: args }),
-      execute: async (args: { url?: string }, exec): Promise<{ ok: boolean; results: { url: string; reachable: boolean; ms: number; team?: string; error?: string }[] }> => {
+      execute: async (args: { url?: string; maxLatencyMs?: number }, exec): Promise<{ ok: boolean; results: ProbeRow[] }> => {
         a2aJoinGateRefusal(exec)
-        const probeOne = async (url: string): Promise<{ url: string; reachable: boolean; ms: number; team?: string; error?: string }> => {
+        const maxLatencyMs = probeLatencyBound(args.maxLatencyMs)
+        const probeOne = async (url: string): Promise<ProbeRow> => {
           const startedAt = Date.now()
           const outcome = await client.fetchCardDetail(url)
           const ms = Date.now() - startedAt
@@ -803,12 +877,12 @@ export function createInfoTools(deps: InfoToolsDeps) {
             // cache — the probe is often the FIRST contact (no directory sweep
             // has run), and the state face's peerOrg reads exactly this cache.
             cardCache.set(url, { at: Date.now(), card })
-            return { url, reachable: true, ms, team: card.team }
+            return { url, reachable: true, verdict: ms > maxLatencyMs ? 'slow' : 'reachable', ms, team: card.team }
           }
-          if (outcome.ok) return { url, reachable: false, ms, error: 'dropped: the card lists this node back as its own referral' }
+          if (outcome.ok) return { url, reachable: false, verdict: 'rejected', ms, error: 'dropped: the card lists this node back as its own referral' }
           return outcome.stage === 'unreachable'
-            ? { url, reachable: false, ms, error: `unreachable: ${outcome.detail}` }
-            : { url, reachable: false, ms, error: `rejected: ${outcome.reason} card` }
+            ? { url, reachable: false, verdict: 'unreachable', ms, error: `unreachable: ${outcome.detail}` }
+            : { url, reachable: false, verdict: 'rejected', ms, error: `rejected: ${outcome.reason} card` }
         }
         // S5: a reachability report is fleet disclosure too. The sweep probes
         // only peers whose verified card serves a joined team (memoized —
@@ -834,8 +908,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
               return { ok: true, results: await Promise.all([args.url].map(probeOne)) }
             }
             return { ok: true, results: [{ url: args.url, reachable: false, ms: 0, error: stale === undefined
-              ? 'refused (not probed): teamScopeInfo on — no verified card for this URL proves service to a joined team'
-              : 'refused (not probed): teamScopeInfo on — this URL\'s verified card shows no team joined by this host\'s nodes' }] }
+              ? `refused (not probed): teamScope on — no verified card for this URL proves service to a joined team. ${SCOPE_FIRST_READ} ${SCOPE_WIDEN}`
+              : `refused (not probed): teamScope on — this URL's verified card shows no team joined by this host's nodes. ${SCOPE_NEITHER_SIDE} ${SCOPE_WIDEN}` }] }
           }
           return { ok: true, results: await Promise.all([args.url].map(probeOne)) }
         }

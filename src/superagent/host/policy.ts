@@ -57,7 +57,7 @@ export interface TeamSettings {
   readonly remoteMembers: readonly RemoteMember[]
   /**
    * This host serving another team host: that host's base URL and pinned key, and the local sessions that work for it.
-   * Only that key may assign them work. Written only by the `serve-team` control action.
+   * Only that key may assign them work. Written only by the `serve` control action.
    */
   readonly serves?: { readonly url: string; readonly key: string; readonly members: readonly string[]; /** Design v5: the team's canvas id, `<zone>/canvas/<name>@<fp8>`. */ readonly team?: string }
   /**
@@ -148,6 +148,14 @@ const OBSERVER_ACTOR = 'observer:'
 export const observerActor = (session: string): string => `${OBSERVER_ACTOR}${session}`
 /** The observer a workbench actor id names, if it names one. */
 export const observerOfActor = (actor: string): string | undefined => actor.startsWith(OBSERVER_ACTOR) ? actor.slice(OBSERVER_ACTOR.length) : undefined
+const MEMBER_ACTOR = 'member:'
+/** #717: the workbench actor of a request a plain member proposed (a local session id, or a remote member's ref). */
+export const memberActor = (member: string): string => `${MEMBER_ACTOR}${member}`
+/** The member a workbench actor id names, if it names one. */
+export const memberOfActor = (actor: string): string | undefined => actor.startsWith(MEMBER_ACTOR) ? actor.slice(MEMBER_ACTOR.length) : undefined
+/** Which kind of agent filed a workbench request of its own (D15, #717), if one did: such a request is never a person's. */
+export const proposerKind = (actor: { source: string; id: string }): 'observer' | 'member' | undefined =>
+  actor.source !== 'workbench' ? undefined : observerOfActor(actor.id) !== undefined ? 'observer' : memberOfActor(actor.id) !== undefined ? 'member' : undefined
 
 export const DEFAULT_SETTINGS: TeamSettings = {
   members: [],
@@ -349,7 +357,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
     rules = parsed
   }
   if ('members' in r || 'remoteMembers' in r) return { ok: false, error: 'the team is a canvas team: add or remove members on the canvas (planning view 建队), then bind it here with canvas and router' }
-  if ('serves' in r) return { ok: false, error: 'serving a team is set by its own action (serve-team), which pins the peer key' }
+  if ('serves' in r) return { ok: false, error: 'serving a team is set by its own action (serve), which pins the peer key' }
   // The pool is the bound canvas's, which the host derives; a settings write never names members.
   const members = current.members
   // A member's repository: named explicitly here, or kept from the current settings while it is still a member.
@@ -441,6 +449,12 @@ const observerOn = (settings: TeamSettings, source: string, actor: string): bool
   // after checking the preset (requestForObserver). A session that left the team loses what it filed from here on.
   return session !== undefined && settings.members.includes(session)
 }
+const memberOn = (settings: TeamSettings, source: string, actor: string): boolean => {
+  const member = source === 'workbench' ? memberOfActor(actor) : undefined
+  // #717: as an observer's, pool membership only; the host checked the caller when it filed (requestForMember, remoteEvent).
+  // A Pi seat signs only for itself and has no proposal in its vocabulary, so its ref never stands as a proposer.
+  return member !== undefined && (settings.members.includes(member) || settings.remoteMembers.some(r => r.ref === member && r.platform !== 'pi'))
+}
 /**
  * What a settings change means to each open ticket, in upstream's PolicyEffect terms (the engine records it as the
  * ticket's `policy-changed` input and delivers it to its worker): a rule the ticket was accepted on that changed or no
@@ -467,8 +481,8 @@ export function policyEffects(before: TeamSettings, after: TeamSettings, open: r
     if (rules.length > 0) effect.rules = rules
     if (mandate.strength === 'inferred' && before.acceptMode === 'auto' && after.acceptMode !== 'auto') effect.proactive = false
     const { source, id } = mandate.actor
-    const allowedBefore = allowedOn(before, source, id) || botOn(before, source, id) || observerOn(before, source, id)
-    if (allowedBefore && !allowedOn(after, source, id) && !botOn(after, source, id) && !observerOn(after, source, id)) { effect.requesterAllowed = false; effect.requester = mandate.actor }
+    const allowedBefore = allowedOn(before, source, id) || botOn(before, source, id) || observerOn(before, source, id) || memberOn(before, source, id)
+    if (allowedBefore && !allowedOn(after, source, id) && !botOn(after, source, id) && !observerOn(after, source, id) && !memberOn(after, source, id)) { effect.requesterAllowed = false; effect.requester = mandate.actor }
     if (Object.keys(effect).length > 0) effects.set(ticket.id, effect)
   }
   return effects
@@ -494,6 +508,9 @@ export function teamPolicy(settings: TeamSettings, grants?: SenderGrants): Polic
       if (!trigger.human) {
         // An observer files a request of its own (design D15): the owner created it for this, so no accept mode or rule holds it back.
         if (observerOn(settings, trigger.source, trigger.actor.id)) return { admissible: true, strength: 'explicit', basis: { via: 'listed', addressed: 'direct', sender: trigger.actor.id, authority: 'observer' } }
+        // #717: a member's proposal goes the same way. Explicit means only that the router weighs it: accepting, attaching or
+        // ignoring it, and choosing who works it, stay the router's; it gives its proposer no ticket and no authority.
+        if (memberOn(settings, trigger.source, trigger.actor.id)) return { admissible: true, strength: 'explicit', basis: { via: 'listed', addressed: 'direct', sender: trigger.actor.id, authority: 'member' } }
         // A bot on the Source's list that addresses the agent may make an inferred candidate; nothing else of a bot.
         // Design M12: the owner took this one message from an unlisted sender on its card: an explicit request, once.
         if (grants?.taken(trigger.id) === true) return { admissible: true, strength: 'explicit', basis: { via: 'listed', addressed: 'direct', sender: trigger.actor.id, authority: 'owner-once' } }
@@ -518,6 +535,7 @@ export function teamPolicy(settings: TeamSettings, grants?: SenderGrants): Polic
       // The owner's own decision on that one message (M12): nothing the settings change takes it back.
       if (basis.via === 'listed' && basis.authority === 'owner-once') return true
       if (basis.via === 'listed' && basis.authority === 'observer') return basis.sender !== undefined && observerOn(settings, mandate.actor.source, basis.sender)
+      if (basis.via === 'listed' && basis.authority === 'member') return basis.sender !== undefined && memberOn(settings, mandate.actor.source, basis.sender)
       if (basis.via === 'bot') return basis.sender !== undefined && botOn(settings, mandate.actor.source, basis.sender) && admits(settings, basis.rules ?? [])
       if (mandate.strength === 'inferred') return admits(settings, basis.rules ?? [])
       if (basis.via === 'followup' && basis.sender === undefined) return true

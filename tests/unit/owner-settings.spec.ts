@@ -38,10 +38,10 @@ describe('applyOwnerSettings', () => {
   it('rewrites the three keys inside the existing a2a config block, foreign lines verbatim', () => {
     const { yaml, restartNeeded } = applyOwnerSettings(EXISTING, {
       teamJoinAllowlist: ['dsh/review-gate', "dsh/owner's-team"],
-      teamScopeInfo: false,
+      teamScope: false,
     })
     expect(yaml).toContain("teamJoinAllowlist: ['dsh/review-gate', 'dsh/owner''s-team']")
-    expect(yaml).toContain('teamScopeInfo: false')
+    expect(yaml).toContain('teamScope: false')
     expect(yaml).toContain('wakeJoinedOnBoot: true')
     expect(yaml).toContain("peers: [ 'http://10.20.30.11:13080' ]")
     expect(yaml).toContain('- id: session-persistence-jsonl')
@@ -67,11 +67,11 @@ describe('applyOwnerSettings', () => {
   })
 
   it('appends a canonical entry when the patch has no a2a block', () => {
-    const { yaml } = applyOwnerSettings('# empty patch\n[]\n', { announce: true, teamScopeInfo: true })
+    const { yaml } = applyOwnerSettings('# empty patch\n[]\n', { announce: true, teamScope: true })
     expect(yaml).toContain('- id: a2a')
     expect(yaml).toContain('  config:')
     expect(yaml).toContain('announce: true')
-    expect(yaml).toContain('teamScopeInfo: true')
+    expect(yaml).toContain('teamScope: true')
   })
 
   it('empty allowlist writes the empty literal (deny-all, the S3 floor)', () => {

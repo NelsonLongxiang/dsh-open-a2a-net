@@ -33,17 +33,15 @@ The owner can open the workbench header ⚙, select a local session under “会
 2. Leave the config at its defaults. `sessionNodes: true` exposes main
    sessions as joinable nodes; no `apiKey` is needed while the listener is
    bound to loopback.
-3. Join each session that should collaborate: sidebar → A2A 网络 → toggle.
+3. Join each session that should collaborate: workbench `/__dsh_a2a_nexus/` →
+   the session row's network join action (the panel-slim move took join/leave
+   out of the sidebar).
    An unjoined session is invisible and refused (see
    [membership.md](membership.md)).
-4. Give the sessions a shared team (`teamScopeRouting` is on by default, so a
-   teamless session has no network). Pick ONE of:
-   - **Canvas team (recommended):** workbench `/__dsh_a2a_nexus/` → select
-     the session cards → 建队. Canvas membership is assigned by hand.
-   - **Roster team:** add the EXACT name (for example `dsh/review`) to
-     `teamJoinAllowlist` in the workbench owner panel (header ⚙). Each
-     session then declares it with `a2a_team_join { team: "dsh/review" }`.
-     A `*`/prefix entry authorizes nothing (`[PATTERN_NO_MINT]`).
+4. Give the sessions a shared team (`teamScope` is on by default, so a
+   teamless session has no network): a canvas team. In the workbench
+   `/__dsh_a2a_nexus/` select the session cards → 建队, or ask the team
+   builder (组队顾问). Roster teams are retired (owner ruling 2026-11-18).
 
 **Agent, verify:**
 - `a2a_whoami`: `node.joined: true`, the handle `<zone>/<id8>`, and the
@@ -104,11 +102,12 @@ Do section 1 on both hosts first. Then the **owner**, on BOTH hosts:
    `/__dsh_a2a/fleet-canvas-op`; your host's link gate decides.
 
 **Agent, verify on each host:**
-- `a2a_probe`: the peer is reachable. A miss is classified as `unreachable`
-  (network, port, tunnel) or `rejected` (key, signature, clock).
+- `a2a_probe`: the peer is reachable. Each row has a `verdict`: `reachable`,
+  `slow` (answered, but slower than `maxLatencyMs`, default 2000), `rejected`
+  (key, signature, clock) or `unreachable` (network, port, tunnel).
 - State face `remote` rows: the peer's sessions appear, with `via` set to
   the peer URL. `a2a_teams` shows peer rows only for teams in this host's
-  joined scope (S5, `teamScopeInfo`), so an empty list is not proof that the
+  joined scope (S5, `teamScope`), so an empty list is not proof that the
   link failed.
 - One async round with a receipt:
   `a2a_route { team: "<remote handle>", message: "...", async: true }`,
@@ -156,5 +155,3 @@ a mailbox, no wake. The home can forward eligible requests one hop under section
 | `a2a_probe` → `unreachable` | §2.1 reachability (bind address, firewall, tunnel) |
 | peer reachable but its sessions never appear | §2.3: seeding is one-sided, or the peer did not `announce` |
 | `No live DSH session node accepts team X` | X is on another host and nothing forwards (§3), or X is not joined/live there |
-| `[PATTERN_NO_MINT]` / `[ALLOWLIST_DENY]` | §1.4: add the EXACT team name to the allowlist |
-| `[CANVAS_TEAM]` from `a2a_team_join` | canvas teams are built in the workbench, not joined by tool |

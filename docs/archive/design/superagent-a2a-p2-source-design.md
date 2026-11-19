@@ -1,10 +1,10 @@
 # p2-source-shadow 设计：a2a Source（影子模式）
 
-配套：[接入规格](superagent-a2a-spec.md) · [实施计划](superagent-a2a-plan.md) · [断言与证据](superagent-a2a-evidence.md)
+配套：[接入规格](../../design/superagent-a2a-spec.md) · [实施计划](superagent-a2a-plan.md) · [断言与证据](superagent-a2a-evidence.md)
 
 状态：设计稿第 2 版。全局设计评审（PR #385 @ 355f5fe）已批 G1、G2、D4，D7 不批；本版按评审改稿：D7 移进 p3 推迟项，并收入三条非阻断意见。不写代码；代码等属主选定运行节点（S15）、全局放行后再写。
 
-> **r8 修订说明（2026-11-07）**：本稿是 p2（已交付：#390、#391、#395）的历史设计。下列结论已经被之后的属主裁定取代，以[接入规格](superagent-a2a-spec.md) r8 为准：
+> **r8 修订说明（2026-11-07）**：本稿是 p2（已交付：#390、#391、#395）的历史设计。下列结论已经被之后的属主裁定取代，以[接入规格](../../design/superagent-a2a-spec.md) r8 为准：
 > - **D4**：S36 已修订。可信集合扩为 {origin-claim, in-process, cli-identity}，且三类来源的调用方都须在属主建立的链接集内（`admission` 字段，#398）。由 p3 实现。
 > - **D7**：S21 已裁定。规则化 inferred，`human:false`，auto 模式只设一条规则，S13② 的 explicit 强度不再实现。
 > - **S17 缺口**：S33 已修复。Source 身份以 `publish --owes` 声明欠回执，调用方记欠账，并受名额约束（#397）。

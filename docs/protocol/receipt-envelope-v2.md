@@ -12,6 +12,23 @@
 > **Next version (next/0.8, superagent p1-receipt-cmd):** the codec also
 > carries `disposition` (§2a), and the CLI gains `a2a-net receipt`, the one
 > formal-receipt command for a CLI identity.
+>
+> **Update (2026-11-13, checked against `src/receipt.ts`):** the codec now also
+> carries `disposition`, `onBehalfOf`, `authRef`, `by`, `artifacts`, `question`,
+> `progress` and `tickets` (the who/what/question fields are designed in
+> [receipt-envelope-fields](../design/receipt-envelope-fields.md)), so `artifacts`
+> is no longer missing. Still not implemented: the envelope `taskId` field, the
+> §3 4096-byte overflow rule, the §5 T1/T2 liveness ladder; the ledger still
+> never writes the `expired` outcome.
+>
+> **Final dispositions (owner ruling 2026-11-17, #61):**
+>
+> | Item | Disposition | Reason |
+> |---|---|---|
+> | envelope `taskId` | **retired** | The header line already carries the task id; a second copy in the body could only disagree with it. |
+> | `artifacts` | **implemented** (different shape) | Shipped as `{kind, id, title}` entries with per-field caps; the `{kind, ref, digest}` shape below is not used. |
+> | §3 4096-byte overflow rule | **retired** | Every envelope field has its own cap, and large content goes through the file channel (#91), so no automatic externalization is needed. |
+> | §5 liveness ladder | **partly implemented** | `a2a_probe` gives each probed row a four-value `verdict` (`reachable`/`slow`/`rejected`/`unreachable`) with an optional `maxLatencyMs` (default 2000); a slow peer stays `reachable: true`. Retired: "two consecutive degradations ⇒ dead", the `minScore` floor and the T2 session tier. T3 stays as it is (`consumed` on the `/a2a/direct` response). |
 
 - **Status**: design frozen with the orchestration face (co-design round, pure-spec slice ahead of implementation) — codec since shipped; see the status note above
 - **Owner**: dsh-open-a2a-net (protocol face) · Co-signer: graph_loop orchestration face (pending_remote W3 consumer)
@@ -48,7 +65,7 @@ interface ReceiptEnvelopeV2 {
     | 'completed' | 'failed' | 'abandoned'
     | 'expired' | 'rejected' | 'sync_completed' | 'unknown'
   /** Correlation triple echoed back — crash-storm rehydration skips N ledger lookups. */
-  taskId: string   // [2026-10-27: not implemented — not parsed or emitted; the header carries the id]
+  taskId: string   // [retired 2026-11-17 (#61): never parsed or emitted; the header carries the id]
   /**
    * Idempotency key. v1 equivalence: identical to taskId (caller-born,
    * single-use). P3 (W4) may widen its lifetime independently WITHOUT any
@@ -58,7 +75,7 @@ interface ReceiptEnvelopeV2 {
   /** Tool-face conversation identity echo. */
   sessionKey?: string
   /** B5 artifact references; REQUIRED once any field overflows (see §3). */
-  artifacts?: Array<{ kind: string; ref: string; digest: string }>   // [2026-10-27: not implemented — tolerated as an unknown key]
+  artifacts?: Array<{ kind: string; ref: string; digest: string }>   // [superseded (#61): shipped as { kind, id, title }; see receipt-envelope-fields]
   /** Telemetry slot #4: wall-clock cost of the remote turn. */
   elapsedMs?: number
   /** §2a (next/0.8): what the receipt hands back. Closed set; other values are dropped. */
@@ -120,6 +137,8 @@ receipt settles a debt only where the caller tracked an owed row.
 
 ## 3. Atomic overflow rule (no illegal tails, ever)
 
+*[Retired 2026-11-17 (#61): per-field caps and the file channel (#91) replace this rule. Kept as the design record.]*
+
 *[2026-10-27: not implemented — `formatReceipt` serializes the four known
 fields inline with no size budget.]*
 
@@ -159,10 +178,15 @@ state face in `src/index.ts`):*
 
 ## 5. Target-liveness ladder (three tiers, upgrade not replace)
 
-*[2026-10-27: not implemented as a ladder. `a2a_probe` takes only `url` and
-returns `reachable: boolean` (plus `ms`, `team`, `error`), with no
-thresholds and no four-value verdict. T2 is not wired. Only the T3 signal
-exists: the `/a2a/direct` response carries `consumed`.]*
+*[2026-11-17 (#61/#63 owner ruling): partly implemented. `a2a_probe` takes
+`url` and `maxLatencyMs` (default 2000, capped at 60000) and gives every
+probed row a `verdict`: `reachable`, `slow` (answered slower than the bound;
+still `reachable: true`), `rejected` (answered with a card that does not
+verify) or `unreachable`. A URL refused by the S5 scope gets no verdict,
+because it was not probed. Retired: "two consecutive degradations ⇒ dead",
+the `minScore` floor and the T2 tier. T3 stays: the `/a2a/direct` response
+carries `consumed`. The verdict covers the host card only: a peer whose card
+answers is `reachable` even if no session there accepts or consumes work.]*
 
 | Tier | Signal | Source | Meaning |
 |---|---|---|---|

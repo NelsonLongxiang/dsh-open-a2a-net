@@ -1,6 +1,8 @@
 # ADR：a2a-net 作为 superagent 的跨节点端口实现
 
-状态：已接受，并分阶段实施中（见[实施计划](superagent-a2a-plan.md)）。配套文档：[接入规格](superagent-a2a-spec.md)。本版（r8）按 2026-11-07 的属主裁定修订，涉及 S21、S25–S27、S33、S36、S38。
+状态：已接受，并分阶段实施中（见[实施计划](superagent-a2a-plan.md)）。配套文档：[接入规格](../../design/superagent-a2a-spec.md)。本版（r8）按 2026-11-07 的属主裁定修订，涉及 S21、S25–S27、S33、S36、S38。
+
+实现核对（2026-11-18，next/0.8 `44907c00`）：p1 系列（#379–#398）和 p3（#402）已交付。后续形态已被改写：v4 把执行器内置进引擎（#409–#419），v5 改用画布团队（#441–#446），送审由 pr-follow 落地（#516、#517、#519）。本 ADR 作为来历保留，现行设计见 [v5 画布团队](../../design/superagent-v5-canvas-team.md) 和 [router-owner-asks](../../design/superagent-router-owner-asks.md)。
 
 ## 上下文
 
@@ -47,4 +49,4 @@ a2a-net 一侧只补读取面、观察面，以及由宿主强制执行的声明
 - Source 户口迁家时，入站行归谁；
 - Gitea 等镜像通道。
 
-已裁定（见[规格第 6 节](superagent-a2a-spec.md)）：S13（2026-11-06）；S21、S25、S26、S27、S33、S36、S38（2026-11-07）。
+已裁定（见[规格第 6 节](../../design/superagent-a2a-spec.md)）：S13（2026-11-06）；S21、S25、S26、S27、S33、S36、S38（2026-11-07）。

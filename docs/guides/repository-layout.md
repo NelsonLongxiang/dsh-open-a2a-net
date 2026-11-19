@@ -4,7 +4,7 @@
 
 ## 根目录保留什么
 
-根目录只保留包与工具链发现所必需的入口：README（中英）、LICENSE、THIRD_PARTY_NOTICES、AGENTS、package.json、pnpm 锁与 workspace、TypeScript/Vitest/tsdown 配置、cordis.patch.yml、Git 配置文件。不要为了减少文件数搬走这些入口，否则会破坏安装、构建、许可证或宿主发现。
+根目录只保留包与工具链发现所必需的入口：README（中英）、LICENSE、THIRD_PARTY_NOTICES、AGENTS、package.json、pnpm 锁与 workspace、TypeScript/Vitest/tsdown 配置、cordis.patch.yml、市场插图清单 screenshots.json（社区市场在 package.json 旁按根路径发现，随包发布）、Git 配置文件。不要为了减少文件数搬走这些入口，否则会破坏安装、构建、许可证或宿主发现。
 
 | 位置 | 职责 | Git |
 |---|---|---|

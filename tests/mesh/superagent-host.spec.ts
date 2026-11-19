@@ -19,7 +19,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, type Config } from '../../src/index.ts'
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { cliEnv, mockGuiLogin } from './harness.ts'
+import { cliEnv, MockGuiConnection, mockGuiLogin } from './harness.ts'
 
 class ManyAgents extends Service {
   map = new Map<string, Agent>()
@@ -54,6 +54,7 @@ async function mount(home: string, extra: Partial<Config> = {}) {
   await ctx.plugin(SystemPrompt); await ctx.plugin(ToolRuntime); await ctx.plugin(TimerService)
   await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   await ctx.plugin(ManyAgents)
+  await ctx.plugin(MockGuiConnection)
   const agents = ctx.get('agents') as unknown as ManyAgents
   const [R, M, O, X] = [[R_ID, 'router'], [M_ID, 'member'], [O_ID, 'outsider'], [X_ID, 'member-x']].map(([id, name]) => makeAgent(id!, name!))
   for (const a of [R!, M!, O!, X!]) { agents.map.set(String(a.id), a); a.host = ctx }
@@ -465,8 +466,9 @@ describe('superagent engine in the a2a host', () => {
       // network views and its own team tools stay.
       const memberDeny = scopes.get(M_ID)!.deny ?? []
       expect(scopes.get(M_ID)!.allow).toBeUndefined()
-      for (const name of ['a2a_route', 'a2a_report', 'a2a_file_send', 'a2a_team_join', 'superagent_route', 'a2a_ticket_request']) expect(memberDeny, name).toContain(name)
-      for (const name of ['a2a_teams', 'a2a_tasks', 'a2a_whoami', 'a2a_ticket_report', 'a2a_file_fetch', 'a2a_outbound_request']) expect(memberDeny, name).not.toContain(name)
+      // #717: a member may propose new work (a2a_ticket_request); its own decision cards stay the observer's.
+      for (const name of ['a2a_route', 'a2a_report', 'a2a_file_send', 'superagent_route', 'a2a_decision_propose']) expect(memberDeny, name).toContain(name)
+      for (const name of ['a2a_teams', 'a2a_tasks', 'a2a_whoami', 'a2a_ticket_report', 'a2a_file_fetch', 'a2a_outbound_request', 'a2a_ticket_request']) expect(memberDeny, name).not.toContain(name)
       expect(await refusedByRole('a2a_ticket_report', m.M, { ticket_id: 'x', state: 'progress', summary: 'x' })).toBe(false)
       expect(await refusedByRole('a2a_file_fetch', m.M, {})).toBe(false)
       for (const name of ['a2a_teams', 'a2a_tasks']) expect(await refusedByRole(name, m.M, {}), name).toBe(false)

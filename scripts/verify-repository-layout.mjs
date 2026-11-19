@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process'
 
 const ROOT_FILES = new Set([
   '.gitattributes', '.gitignore', 'AGENTS.md', 'LICENSE', 'README.md', 'README_zh.md',
-  'THIRD_PARTY_NOTICES.md', 'cordis.patch.yml', 'package.json', 'pnpm-lock.yaml',
+  'THIRD_PARTY_NOTICES.md', 'cordis.patch.yml', 'package.json', 'pnpm-lock.yaml', 'screenshots.json',
   'pnpm-workspace.yaml', 'tsconfig.json', 'tsconfig.client.json', 'tsdown.config.ts', 'vitest.config.ts',
 ])
 const SOURCE_DIRS = new Set([

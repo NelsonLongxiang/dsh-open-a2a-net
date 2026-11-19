@@ -1,6 +1,7 @@
 # Release Provenance: source gap record and clean-source policy (proposed)
 
 - **Status**: proposed — this document becomes a project rule only after a normal PR review (non-author reviewer) lands it.
+- **Implementation check (2026-11-18, next/0.8 `44907c00`)**: part of this has landed. The pinned-candidate rule (pack the candidate SHA once, then accept and publish that same tgz) is in `docs/release-gate.md`, and `scripts/verify-release-artifact.mjs` records the provenance facts. This check did not confirm that every C1–C5 counter-example has machine evidence. This document has not itself been adopted as a rule.
 - **Basis**: supervisor rulings direct-91d8539b (no reconstruction of past history) and direct-83a25c09 (submit via PR; three wording corrections).
 - **Scope**: release builds and publish evidence from 0.6.30 on. No build/install/tag/Release/publish is authorized by this document.
 

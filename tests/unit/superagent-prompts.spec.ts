@@ -1,5 +1,6 @@
 /** Team prompt supplements (owner 2026-11-10): parsed, gated, and handed to the role sessions as labeled card lines. */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { rmSync } from 'node:fs'
+import { mkdtempSync } from '../temp-dirs.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'

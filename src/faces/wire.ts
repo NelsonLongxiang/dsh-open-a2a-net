@@ -73,6 +73,8 @@ function sameOrigin(a: string, b: string): boolean {
 
 /** The closure captures the wire faces read (grows with each extracted face). */
 export interface WireDeps {
+  /** The team-scope switch for routing, read at call time (owner ruling 2026-11-18: one hot-applied `teamScope`). */
+  readonly teamScopeRouting: () => boolean
   /** superagent design v4: the refusal when `team` is the superagent router (it takes no A2A work), else undefined. */
   readonly superagentInbound: (team: string) => string | undefined
   /** superagent design v4: whether `team` is the team's A2A address (its requests take no target queue slot). */
@@ -125,6 +127,12 @@ export interface WireDeps {
   readonly scanSessionLogList: () => Array<{ id: string; mtimeMs: number; sizeBytes: number }>
   readonly readSessionLogTail: (id: string, limit: number) => { ok: true; id: string; messages: Array<{ role: string; text: string; time?: number }> } | { ok: false; error: string }
   readonly taskLedger: TaskLedger
+  /**
+   * Superagent intake (owner ruling 2026-11-14, option B): the canvas team a request from a session on a linked host may
+   * reach, or undefined. Only a superagent team's canvas address, only a bound claim from a linked peer's root card whose
+   * zone covers the caller, never this host's own key; the team owner's sender card decides the rest (M12).
+   */
+  readonly superagentIntakeBasis?: (team: string, caller: string, claim: Extract<OriginClaimResult, { ok: true }>, taskId: string) => Promise<string | undefined>
   /** Keep an admitted session delivery's text for its receiver (src/task-bodies.ts; receipts are skipped there). */
   readonly keepTaskBody?: (taskId: string, target: Agent, from: string, message: string) => void
   readonly refuseIfFlooded: (caller: string, message: string, team: string, taskId: string, res: ServerResponse) => boolean
@@ -439,7 +447,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
       // verification (§8.3) — same window semantics as delivery.
       const logClaim = await verifyOriginClaim(req)
       if (!logClaim.ok) {
-        if (logClaim.reason !== 'absent' || config.originClaimWindow === false) {
+        if (logClaim.reason !== 'absent' || config.originClaimWindow !== true) {
           recordActivity('in', 'log', caller, false)
           send(200, { ok: false, error: `untrusted-origin: OriginClaim verification failed (${logClaim.reason}) — present a signed envelope or upgrade your node`, code: -32000 })
           return
@@ -686,7 +694,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // standard as message delivery.)
           // Complete present-envelope validation before evaluating request admission.
           // The fully absent-envelope migration policy remains independent.
-          const foreignCli = config.teamScopeRouting && CLI_HANDLE_RE.test(caller) && cliDeposits.get(caller) === undefined
+          const foreignCli = d.teamScopeRouting() && CLI_HANDLE_RE.test(caller) && cliDeposits.get(caller) === undefined
           const envelopePresent=hasOriginClaimFields(req)
           const earlyClaim: OriginClaimResult = envelopePresent ? await completeInboundVerification(()=>verifyOriginClaim(req, { cli: true, rawBody })) : {ok:false,reason:'absent'}
           const memberClaim=/^[^/\s]+\/[0-9a-f]{8}(?:@[0-9a-f]{8})?$/.test(caller)||caller===config.team||caller.startsWith(config.team+'/')||canvasStore.list().some(name=>canvasStore.rawMembersOf(name).some(ref=>ref===caller||ref.startsWith(caller+'@')))||String(req.headers['x-a2a-caller']??'')===config.team
@@ -722,6 +730,13 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const basis = d.teamReceiptBasis?.(teamAnswer.taskId, caller, team, teamAnswer.envelope?.onBehalfOf, earlyClaim)
             if (basis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'peer-org', basis: [basis] }
           }
+          // Owner ruling 2026-11-14 (option B): a request (never a receipt) from a session on a linked host to a superagent
+          // team's canvas address passes the host gate; whether the team takes it is the team owner's decision (M12 card).
+          if (!admission.ok && echoed === null && teamAnswer === null && earlyClaim.ok && parseReceipt(message) === null) {
+            // The canvas address the caller named (a superagent team's mailbox is its own handle: `mailTeam` is not it).
+            const basis = await d.superagentIntakeBasis?.(team, caller, earlyClaim, taskId).catch(() => undefined)
+            if (basis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'superagent-intake', basis: [basis] }
+          }
           const callerRefusal = refusalOf(admission)
           if (callerRefusal !== undefined || !admission.ok) {
             recordActivity('in', team, caller === '' ? 'anonymous' : caller, false)
@@ -752,7 +767,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // gh#133: the delivery face is where a deposited CLI identity signs its routes.
           const claim = earlyClaim
           if (!claim.ok) {
-            if (claim.reason !== 'absent' || config.originClaimWindow === false) {
+            if (claim.reason !== 'absent' || config.originClaimWindow !== true) {
               recordActivity('in', team, caller, false)
               const payload = JSON.stringify({ error: `untrusted-origin: OriginClaim verification failed (${claim.reason}) — present a signed envelope (X-A2A-Caller/-Url/-Ts/-Sig with your card key) or upgrade your node`, code: -32000, team, task_status: 'TASK_STATE_FAILED' })
               res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })

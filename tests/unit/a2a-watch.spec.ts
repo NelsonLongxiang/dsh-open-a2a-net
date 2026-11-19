@@ -64,7 +64,7 @@ describe('1 · mode is observe or reply; observe never sends', () => {
 describe('2 · trust is a host proof plus an operator link (S36), then loop, then receipt', () => {
   it('the trusted proofs and the link rules are exactly the ruled sets', () => {
     expect([...TRUSTED_PROOFS].sort()).toEqual(['cli-identity', 'in-process', 'origin-claim'])
-    expect([...LINK_RULES].sort()).toEqual(['canvas-shared', 'cli-deposit', 'remote-ref-cli', 'remote-ref-foreign', 'remote-ref-samezone'])
+    expect([...LINK_RULES].sort()).toEqual(['canvas-shared', 'cli-deposit', 'remote-ref-cli', 'remote-ref-foreign', 'remote-ref-samezone', 'superagent-intake'])  // superagent-intake: owner ruling 2026-11-14 (option B)
     // The record vocabulary is the host's whole admission set.
     expect([...ADMISSION_VALUES].sort()).toEqual([...MAIL_ADMISSIONS].sort())
   })

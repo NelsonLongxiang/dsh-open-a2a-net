@@ -1,5 +1,7 @@
 # #351 独立前置P2：日志解码分配前输出界（待高档复核）
 
+> 补记（2026-11-13）：已于 2026-11-05 经 PR#353（`725c1c6`）合入 master，高档复核为评审席非作者 PASS @ `677dd89`。标题里的「待复核 / 未合并」是写这份记录时的状态，正文保持原样。
+
 授权direct-e44d43ed49a2/direct-b7af83bf3c57，两独立缺陷先行与D1方向无关。base masterf636331，仅修session-transcript解码与对应测试，不改回执/queue/sync语义，不补生产积压，不动#343文件。PR352语义重写已暂停，本地未推草稿仅tmp留存，未按ack方向出稿。
 
 实现：每frame调用zstdDecompressSync时明确maxOutputLength=160MiB剩余额度，预算耗尽不再调用下一frame；保留累计后防御检查。输入64MiB在函数自身检查，plain同样受界。预算测试seam只准缩小，不准抬高生产cap。

@@ -11,8 +11,8 @@ F1–F4 已全部落地并合入 master；单测级验收（A1/A2/A4 及行为�
 
 | 修复 | 落地提交 | 验收证据 |
 |---|---|---|
-| F1 PeerStore 防抖异步持久化 | `0243ec1` perf(peers) | `tests/peer-store.spec.ts`（防抖合并 + `flush()` 落盘语义） |
-| F2 共享 TTL 卡片缓存（含负缓存） | `c339c01` perf(cards) | `tests/card-cache.spec.ts` |
+| F1 PeerStore 防抖异步持久化 | `0243ec1` perf(peers) | `tests/unit/peer-store.spec.ts`（防抖合并 + `flush()` 落盘语义） |
+| F2 共享 TTL 卡片缓存（含负缓存） | `c339c01` perf(cards) | `tests/wire/card-cache.spec.ts` |
 | F2 附带 候选并发上限遍历（消 B2 串行等待） | `3cb2127` perf(route) | apply / canvas-routing 行为回归 |
 | F3 remoteRows 单飞 + TTL 配置化 | `e95e635` perf(panel) | `remoteRowsTtlMs` 断言见 apply.spec.ts 等 4 个 spec |
 | F4 摘录按事件长度缓存 | `8a64221` perf(state) | apply.spec.ts activity-excerpt 新鲜度用例 |

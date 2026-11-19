@@ -132,7 +132,7 @@ describe('superagent p3: a2a Source replies on a real host', () => {
       expect((await (await postJson(a.baseUrl, '/__dsh_a2a/canvas', { action: 'remove-member', name: 'ops', id: SID })).json() as { ok?: boolean }).ok).toBe(true)
       runs.length = 0
       expect(await sendReply(ctx, ctx.commands, reply('reply:session', 'done', fromSession))).toBe('gone')
-      expect(runs).toEqual([['admission', SESSION_LABEL, '--local', '--json']])
+      expect(runs).toEqual([['admission', SESSION_LABEL, '--local', '--task', fromSession.channel!.address.task, '--json']])
       expect(reports).toEqual([['a2a-reply', expect.objectContaining({ state: 'error', detail: expect.stringContaining('no longer linked') })]])
       expect(state.get(KV.answered)).not.toHaveProperty(String(fromSession.meta.taskId))
     } finally {

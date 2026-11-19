@@ -35,7 +35,6 @@ export function resolveCallerLabel(input: {
   return input.sessionLabel
 }
 import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
-import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef, legacyBareMember } from './canvas-store.ts'
 import { childRegistration, linkRootRequester } from './canvas-root.ts'
 import { inactiveContextError } from './context-live.ts'
@@ -138,6 +137,8 @@ import { A2aClient, type A2aFetch, type A2aSchedule, type CardFetchOutcome } fro
 import { MAX_LAYOUT_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap } from './transport-caps.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from './runtime.ts'
 import { registerAdminFaces } from './faces/admin.ts'
+import { scopeHints } from './scope-hints.ts'
+import { WindowMeasure } from './window-measure.ts'
 import { registerNodeFaces } from './faces/nodes.ts'
 import { NodeStore } from './node-store.ts'
 import { createNodeBinder, NodeBindings } from './node-bind.ts'
@@ -148,9 +149,10 @@ import { registerBuilderTools } from './superagent/host/builder-tools.ts'
 import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
-import { guiOwnerProven, ownerOrNoLogin, touchesRules } from './superagent/host/owner-proof.ts'
-import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject } from './superagent/host/teams.ts'
+import { touchesRules } from './superagent/host/owner-proof.ts'
+import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, startWhenYglKnown, yglCapabilities, yglSettled } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
+import { IntakeOrigins } from './intake-origins.ts'
 import { redeliverLost, TaskBodies } from './task-bodies.ts'
 import { registerTaskRead } from './tools/task-read.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
@@ -634,7 +636,11 @@ export function apply(ctx: Context, config: Config): void {
   // Truthiness matches the ORIGINAL read site (`if (config.teamScopeInfo)`):
   // literal compositions without the schema default carry undefined, which
   // reads as the OPEN plane — `!== false` would silently scope them.
-  let ownerTeamScopeInfo = config.teamScopeInfo === true
+  // Owner ruling 2026-11-18 (simplify D3): one `teamScope` switch for both halves, hot-applied; while it is absent the two
+  // deprecated per-half keys decide, each for its own half, so an existing configuration keeps its meaning for one version.
+  let ownerTeamScopeInfo = (config.teamScope ?? config.teamScopeInfo) === true
+  let ownerTeamScopeRouting = (config.teamScope ?? config.teamScopeRouting) === true
+  if (config.teamScope === undefined && (config.teamScopeInfo === false || config.teamScopeRouting === false)) logger.warn('a2a: teamScopeInfo / teamScopeRouting are deprecated; set teamScope (one switch for routing and information)')
   let ownerAnnounceRestartPending = false
   // S2: node-declared team memberships — the roster half of the
   // team-roster iteration. Joins ride the allowlist-gated tools; the store
@@ -684,17 +690,14 @@ export function apply(ctx: Context, config: Config): void {
    */
   const lanIp = selectLanIPv4(networkInterfaces())
 
-  // Session groups: user-named buckets for the panel's session listing,
-  // persisted beside the join intents so they survive restarts.
-  // Deprecated as of 0.6.6 — canvas teams are the grouping face now; this
-  // store only stays readable for old panels.
-  const groupStore = new GroupStore(join(home, 'a2a', 'groups.json'))
   // Canvas teams: user-composed multi-member routing groups. A session node
   // may sit in many teams; routing to <team>/canvas/<name> resolves the
   // first live member or wakes the first cold one (member order = priority).
   const canvasStore = new CanvasStore(join(home, 'a2a', 'canvas.json'), { legacyBareMembers: config.canvasLegacyBareMembers !== false, ownPublicKey: encodePublicKey(createPublicKey(nodePrivateKey)) })
   // #91 file channel: the sender host's blob store (docs/design/file-channel.md).
   const blobStore = new BlobStore(join(home, 'a2a'))
+  // #697 review: the origin and key each superagent-intake caller was admitted under, for the rechecks.
+  const intakeOrigins = new IntakeOrigins(join(home, 'a2a', 'superagent-intake.json'))
   // Inbound session deliveries' text (market request 2026-11-14): a2a_task_read and the idle redelivery read it.
   const taskBodies = new TaskBodies(join(home, 'a2a', 'task-bodies.json'))
   // Spatial presentation state for the full-page stage (contract v2).
@@ -1833,19 +1836,39 @@ export function apply(ctx: Context, config: Config): void {
       registerAdminFaces(webServer, {
         reminderDiagnostics:()=>({...idleReminders.diagnostics}),
         nudgeEscalations:()=>nudgeObservations.snapshot(),
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
+        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
+        sessionPresetOf,
         rootChildrenOpen: canvas => { const open = new Map<string, number>(); for (const row of superagentTeams?.all().find(team => team.settings.canvas === canvas)?.root.open() ?? []) open.set(row.child, (open.get(row.child) ?? 0) + 1); return open },
         rootIdentityOf: canvas => superagentTeams?.all().find(team => team.settings.canvas === canvas)?.a2a.address,
         rootChildRegistration: (canvas, childRef, rootHandle) => childRegistration({ keyOf: ref => canvasStore.ownerKeyOf(ref), ownKey: encodePublicKey(createPublicKey(nodePrivateKey)), cards: [...cardCache.values()].map(entry => ({ card: entry.card ?? {} })) }, childRef, rootHandle),
         canvasRoot: { store: canvasStore, zone: config.team, ownKey: encodePublicKey(createPublicKey(nodePrivateKey)),
           localSuperagentCanvas: (name: string) => superagentTeams?.all().some(team => team.a2aAddress !== undefined && team.settings.canvas === name) === true,
           peerCards: async () => (await freshCliHomeCards()).flatMap(row => row.card !== undefined ? [{ url: row.url, card: row.card, linked: peerAdmissionLinkState(row.url).link === 'linked' }] : []) },
-        admissionRecheck: (caller: string, handle: string, local: boolean) => recheckCallerAdmission(linkRecheckRecords, caller, handle, local),
+        admissionRecheck: (caller: string, handle: string, local: boolean, task?: string) => {
+          const verdict = recheckCallerAdmission(linkRecheckRecords, caller, handle, local)
+          // Owner ruling 2026-11-14 (option B): a linked host's session that asked a superagent team still counts as linked.
+          return verdict.ok || local ? verdict : superagentIntakeRecheck(caller, handle, task) ?? verdict
+        },
+        // Production feedback 2026-11-14: the owner board's one-click suggestions for peer sessions that share a peer canvas
+        // with local sessions but are declared nowhere here (kept cards that missed their last read give no hint).
+        scopeHints: () => {
+          const resolve = localHandleResolver()
+          const raw = new Set(canvasStore.list().flatMap(name => canvasStore.rawMembersOf(name)))
+          return scopeHints({
+            cards: peerStore.list().flatMap(url => { const entry = cardCache.get(url); return entry?.card !== undefined && entry.missAt === undefined ? [{ url, card: entry.card }] : [] }),
+            resolveLocal: resolve,
+            joined: id => joinedSessions.has(id),
+            handleOf: id => `${config.team}/${id8(id)}`,
+            canvasesOf: id => canvasTeamsOfSession(id),
+            declared: ref => raw.has(ref),
+          })
+        },
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
         get legacyInboundCount() { return legacyInboundCount },
+        originClaimWindowMeasure: () => windowMeasure.view(),
         get unboundInboundCount() { return unboundInboundCount },
         get boundMissInboundCount() { return boundMissInboundCount },
         get boundMissRecent() { return boundMissRecent },
@@ -1858,6 +1881,8 @@ export function apply(ctx: Context, config: Config): void {
         set ownerAllowlist(v) { ownerAllowlist = v },
         get ownerTeamScopeInfo() { return ownerTeamScopeInfo },
         set ownerTeamScopeInfo(v) { ownerTeamScopeInfo = v },
+        get ownerTeamScopeRouting() { return ownerTeamScopeRouting },
+        set ownerTeamScopeRouting(v) { ownerTeamScopeRouting = v },
         get ownerAnnounceRestartPending() { return ownerAnnounceRestartPending },
         set ownerAnnounceRestartPending(v) { ownerAnnounceRestartPending = v },
       })
@@ -1882,7 +1907,7 @@ export function apply(ctx: Context, config: Config): void {
         // async: wait:false is honored (steer + delivered, no final hold);
         // the signed capability turns async dialing into a deterministic
         // check instead of a timeout race against pre-0.5.2 peers.
-        // roster: the team-roster face (a2a_team_join/leave, card
+        // roster: the team-roster face (card
         // teamMemberships, team-scope routing admission) ships — peers read
         // its absence as a pre-roster legacy node (0.5.43 and older).
         // superagent named dispatch: a host running superagent teams reads a request's [A2A dispatch] line (for, rework), so a
@@ -2091,6 +2116,11 @@ export function apply(ctx: Context, config: Config): void {
     localSessionOf: handle => localSessionOfHandle(handle),
     onRolesChanged: () => { syncRoleTools() },
     ensureYglProject: name => { void ensureTeamYglProject(name, { logger }) },
+    yglCapabilities,
+    yglReady: yglSettled,
+    // Owner ruling 2026-11-18: what the team still owes a requester is read from this one ledger (the team identity publishes
+    // with --owes, so each request it receives has an inbound row here); its own memory is only the fallback without a row.
+    receiptLedger: task => taskLedger.inboundReceiptState(task),
     // Design v5: the team is a canvas team this host owns. Its local sessions in canvas order, and its remote session slots
     // with the key the canvas pinned and the base URL of the linked peer whose signed card carries that key.
     // Pi platform P1/P2/P3: whether a CLI handle is a Pi seat deposited here, and the mailbox delivery to one.
@@ -2168,7 +2198,15 @@ export function apply(ctx: Context, config: Config): void {
   let superagentHomeUrl: string | undefined
   if (superagentHost !== undefined) {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
-    ctx.effect(() => { superagentTeams!.start(); void ensureTeamYglHome({ logger }); return () => { void superagentTeams!.stop() } }, 'a2a: superagent engine passes')
+    ctx.effect(() => {
+      void ensureTeamYglHome({ logger })
+      // Design Y1d (#739 review R1): the engines start at boot, as before #739 (a late start's recovery restarted assignments
+      // the team had already begun, 2026-11-18); the ygl barrier holds candidates and launches until the bounded version
+      // read settles, and what it held goes out then.
+      superagentTeams!.start()
+      const cancel = startWhenYglKnown(() => { superagentTeams!.resumeHeld() }, { logger })
+      return () => { cancel(); void superagentTeams!.stop() }
+    }, 'a2a: superagent engine passes')
     registerSuperagentTools(ctx, id => superagentTeams!.ofSession(id))
     // superagent-builder BS1: the team builder's inventory and rule templates (read-only).
     registerBuilderTools(ctx, id => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET, () => ({
@@ -2771,10 +2809,20 @@ export function apply(ctx: Context, config: Config): void {
    *  closing originClaimUnboundWindow; boundMissInbound: those of them whose
    *  bound form missed (a peer dials us by a name not in our audiences). */
   let unboundInboundCount = 0, boundMissInboundCount = 0
+  /** #64 step 2: the same three counts by UTC day on disk, so the 7-day zero measure survives restarts. */
+  const windowMeasure = new WindowMeasure(join(home, 'a2a', 'origin-claim-window.json'), Date.now, message => logger.warn(message))
+  {
+    // A day the host runs is a measured day even when nothing arrives: touch it hourly (cheap no-op once it exists).
+    const timer = setInterval(() => { windowMeasure.touch() }, 3_600_000)
+    timer.unref?.()
+    // close() writes anything left and marks the run clean; an unclean run's days are invalid on the next boot.
+    ctx.effect(() => () => { clearInterval(timer); windowMeasure.close() }, 'a2a: OriginClaim window measure day tick')
+  }
   /** Which verified callers missed, and the origin they dialled: what to add to originClaimAudiences (#64). */
   const boundMissRecent: Array<{ caller: string; audience: string; count: number; lastAt: number }> = []
   const noteBoundMiss = (miss: { caller: string; audience: string }): void => {
     boundMissInboundCount += 1
+    windowMeasure.note('boundMiss')
     const at = boundMissRecent.findIndex(row => row.caller === miss.caller && row.audience === miss.audience)
     const row = at >= 0 ? boundMissRecent.splice(at, 1)[0]! : { ...miss, count: 0, lastAt: 0 }
     boundMissRecent.unshift({ ...row, count: row.count + 1, lastAt: Date.now() })
@@ -2812,7 +2860,7 @@ export function apply(ctx: Context, config: Config): void {
       freshCard: true,
       audiences: [ownCardUrl, ...config.originClaimAudiences ?? []],
       unboundOpen: config.originClaimUnboundWindow !== false,
-      onUnbound: () => { unboundInboundCount += 1 },
+      onUnbound: () => { unboundInboundCount += 1; windowMeasure.note('unbound') },
       onBoundMiss: noteBoundMiss,
       loopbackArrival: (config.originClaimUrl ?? '') === '',
       now: Date.now(),
@@ -2980,7 +3028,7 @@ export function apply(ctx: Context, config: Config): void {
   // disagree. Records are read at decision time, never copied.
   const admissionRecords: AdmissionRecords = {
     zone: config.team,
-    get teamScopeRouting() { return config.teamScopeRouting },
+    get teamScopeRouting() { return ownerTeamScopeRouting },
     id8,
     canvasTeamOf,
     memberships: () => teamMemberships.list(),
@@ -3025,6 +3073,86 @@ export function apply(ctx: Context, config: Config): void {
   function joinedFaceAdmissionRefusal(callerSession: string | undefined, targetTeam?: string): string | undefined {
     const verdict = joinedFaceAdmission(admissionRecords, callerSession, targetTeam)
     return verdict === undefined ? undefined : refusalOf(verdict)
+  }
+
+  /**
+   * Owner ruling 2026-11-14 (option B): the canvas team a session on a linked host may ask — a superagent team's canvas
+   * address only. #697 review: the evidence is the request's own — its bound claim from a root card (not this host's key,
+   * not a CLI identity), the host at exactly that origin and key linked by the operator ({@link intakeHostLinked}: a
+   * bilateral seed or a key-pinned remote reference, never a bare-ref zone match), and that host's card, read FRESH now,
+   * listing the caller as one of its sessions (never an earlier cached listing). The admitted origin and key are kept for
+   * the rechecks. Whether the team takes the request stays the team owner's sender card (M12).
+   */
+  async function superagentIntakeBasis(team: string, caller: string, claim: { readonly bound?: boolean; readonly cli?: boolean; readonly callerUrl: string; readonly caller: string; readonly card: { readonly publicKey?: unknown } }, taskId: string): Promise<string | undefined> {
+    if (superagentTeams === undefined || claim.cli === true || claim.bound !== true || !isRootOriginUrl(claim.callerUrl) || !claimCovers(caller, claim.caller)) return undefined
+    const canvas = canvasStore.list().find(name => canvasTeamOf(name) === team)
+    if (canvas === undefined || superagentTeams.ofCanvas(canvas) === undefined) return undefined
+    const key = claim.card.publicKey
+    if (typeof key !== 'string' || key === '' || key === encodePublicKey(createPublicKey(nodePrivateKey))) return undefined
+    if (!intakeCallerShape(caller)) return undefined
+    let origin: string
+    try { origin = new URL(claim.callerUrl).origin } catch { return undefined }
+    for (const url of peerStore.list()) {
+      try { if (new URL(url).origin !== origin) continue } catch { continue }
+      const card = await fetchPeerCard(url)
+      if (card === undefined || card.publicKey !== key) continue
+      cardCache.set(url, { at: Date.now(), card })
+      if (!intakeHostLinked(origin, key)) continue
+      if (!(card.sessionTeams ?? []).some(row => row.team === caller)) continue
+      // The task's birth provenance, written once (#697 review R1): a replay of this task under another host's key is refused.
+      if (taskId === '' || !intakeOrigins.record({ task: taskId, caller, team, origin, key })) return undefined
+      return team
+    }
+    return undefined
+  }
+
+  /** A session handle shape, and not one of this host's own sessions. */
+  function intakeCallerShape(caller: string): boolean {
+    if (!/^[^/\s]+\/[0-9a-f]{8}$/.test(caller)) return false
+    return !joinedSessions.list().some(id => `${config.team}/${id8(id)}` === caller) && ![...sessionNodes.keys()].some(id => `${config.team}/${id8(id)}` === caller)
+  }
+
+  /**
+   * #697 review F1: whether the operator linked the host at exactly `origin` under `key` — a bilateral seed (we seed that
+   * origin and its card, under that key, seeds us) or a key-pinned canvas remote reference confirmed for that key. A bare
+   * legacy reference's zone match (peerAdmissionLinkState's compatibility basis) is never a link here.
+   */
+  function intakeHostLinked(origin: string, key: string): boolean {
+    const ourOrigin = ownCardUrl === '' ? '' : (() => { try { return new URL(ownCardUrl).origin } catch { return '' } })()
+    const sameOrigin = (u: string): boolean => { try { return new URL(u).origin === origin } catch { return false } }
+    const bilateral = ourOrigin !== '' && config.peers.some(sameOrigin) && [...cardCache.entries()].some(([url, entry]) =>
+      sameOrigin(url) && entry.card?.publicKey === key && (entry.card.peers ?? []).some(peer => { try { return new URL(peer).origin === ourOrigin } catch { return false } }))
+    if (bilateral) return true
+    const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))
+    return canvasStore.list().some(name => canvasStore.remoteMembersOf(name).some(ref => splitQualifiedMember(ref) !== undefined && canvasStore.ownerKeyOf(ref) === key && memberProvenance(ref, key, ownKey) === 'confirmed-remote'))
+  }
+
+  /**
+   * The link recheck of an intake caller (the Source's admission query carries no signer key): the identity it asks for is
+   * a superagent team's mailbox, and the host this caller was admitted from — the origin and key kept at intake — is still
+   * linked under that key.
+   */
+  function superagentIntakeRecheck(caller: string, handle: string, task: string | undefined): Admission | undefined {
+    // #697 review R1: only a query about one task, judged by that task's own birth provenance — never by the caller's handle.
+    if (task === undefined) return undefined
+    const owner = superagentTeams?.all().find(host => host.a2aAddress === handle)
+    const canvas = owner?.settings.canvas
+    if (owner === undefined || canvas === undefined || canvas === '') return undefined
+    const birth = intakeOrigins.of(task)
+    if (birth === undefined || birth.caller !== caller || birth.team !== canvasTeamOf(canvas)) return undefined
+    return intakeHostLinked(birth.origin, birth.key) ? { ok: true, via: 'peer-org', rule: 'superagent-intake', basis: [birth.team] } : undefined
+  }
+
+  /** The recheck of a superagent-intake record: the target is still a superagent team, and the admitted origin's host is still linked under its key. */
+  function recheckSuperagentIntake(target: string, caller: string, auth: { readonly claim?: { readonly origin: string } }, taskId: string | undefined): Admission {
+    const canvas = canvasStore.list().find(name => canvasTeamOf(name) === target)
+    const stillTeam = canvas !== undefined && superagentTeams?.ofCanvas(canvas) !== undefined
+    // The row's own task's birth provenance; a row without its task or record fails closed.
+    const birth = taskId === undefined ? undefined : intakeOrigins.of(taskId)
+    const stillLinked = birth !== undefined && birth.caller === caller && birth.team === target && (auth.claim === undefined || birth.origin === auth.claim.origin) && intakeHostLinked(birth.origin, birth.key)
+    return stillTeam && stillLinked
+      ? { ok: true, via: 'peer-org', rule: 'superagent-intake', basis: [target] }
+      : { ok: false, refusal: `the superagent intake of ${target} no longer holds: ${stillTeam ? 'the sender\'s host is no longer linked under the key it was admitted with' : 'the target is no longer a superagent team'}` }
   }
 
   /** Inbound admission with the rule and shared teams that admitted the caller (gh#114 S1). */
@@ -3078,7 +3206,7 @@ export function apply(ctx: Context, config: Config): void {
     const handle = (session: string): string => `${config.team}/${id8(session)}`
     return {
       zone: config.team,
-      scope: [config.teamScopeRouting, config.originClaimWindow !== false],
+      scope: [ownerTeamScopeRouting, config.originClaimWindow === true],
       joined: joinedSessions.list().map(handle),
       roster: teamMemberships.list().flatMap(entry => entry.teams.map(team => [handle(entry.session), team] as const)),
       // Local members by their handle (design §2.3), remote refs as they are stored.
@@ -3107,7 +3235,7 @@ export function apply(ctx: Context, config: Config): void {
       cause,
       rows: () => taskLedger.list(),
       // A local-candidate record (#139) is judged as the local candidate admits; every other one by the wire face.
-      judge: (caller, target, ingress, auth) => auth.admission_rule === 'remote-ref-cli' ? recheckRemoteCliAuthorization(admissionRecords, auth) : (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
+      judge: (caller, target, ingress, auth, taskId) => auth.admission_rule === 'remote-ref-cli' ? recheckRemoteCliAuthorization(admissionRecords, auth) : auth.admission_rule === 'superagent-intake' ? recheckSuperagentIntake(target, caller, auth, taskId) : (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
     })
     if (entry === undefined) return
     const revoke = entry.tasks.filter(task => task.verdict === 'would-revoke').length
@@ -3192,6 +3320,7 @@ export function apply(ctx: Context, config: Config): void {
 
   whenWebServerSettled((webServer) => {
     registerWireFaces(webServer, {
+      teamScopeRouting: () => ownerTeamScopeRouting,
       ctx,
       logger,
       config,
@@ -3213,12 +3342,13 @@ export function apply(ctx: Context, config: Config): void {
       peerKeyAdmits,
       remoteCliProof,
       forwardReceiptBasis: (taskId, caller, cliHandle, claim) => forwardReceiptBasis(taskLedger.find(taskId), caller, cliHandle, claim),
+      superagentIntakeBasis,
       teamReceiptBasis: (taskId, caller, target, onBehalfOf, claim) => teamReceiptBasis(taskLedger.find(taskId), caller, target, onBehalfOf, claim),
       forwardDirect: request => forwardDirect(request), ownCanvasFingerprint,
       diagnoseCanvas: (team, reason, caller) => diagnoseCanvas(team, reason, caller),
       callerLinkedToThisHost, get ownCardUrl() { return ownCardUrl },
       recordActivity,
-      bumpLegacyInbound: () => { legacyInboundCount += 1 },
+      bumpLegacyInbound: () => { legacyInboundCount += 1; windowMeasure.note('legacy') },
       a2aCallerRefusal,
       a2aCallerAdmission,
       allowlistVersionNow,
@@ -3469,7 +3599,7 @@ export function apply(ctx: Context, config: Config): void {
   if (superagentHost !== undefined && superagentTeams !== undefined) whenWebServerSettled((webServer) => {
     registerSuperagentFaces(webServer, {
       sidebarSends,
-      ctx, config, superagentHost, superagentTeams, homeUrl: () => superagentHomeUrl, controlRoute, readJsonBody, recordActivity, routeTrunk,
+      ctx, config, superagentHost, superagentTeams, controlRoute, readJsonBody, recordActivity, routeTrunk,
       sessionNodes, sessionPresetOf, sessionTeamOf, joinedSessions, archivedSessionFilter, verifyOriginClaim, fetchPeerCard, peerStore, cardCache,
       ownCanvasFingerprint, peerAdmissionLinkState, blobStore, ...(staffing !== undefined ? { staffing } : {}),
       linkRequester: (canvas: string, handle: string, home: unknown) => linkRootRequester({ store: canvasStore, deposited: h => cliDeposits.directoryRows().some(row => row.team === h), pinHome: cliHomeForAdd }, canvas, handle, home),
@@ -3755,6 +3885,7 @@ export function apply(ctx: Context, config: Config): void {
     // disables owner-settings hot-apply (whoami allowlist / teams scoping).
     get ownerAllowlist() { return ownerAllowlist },
     get ownerTeamScopeInfo() { return ownerTeamScopeInfo },
+    get ownerTeamScopeRouting() { return ownerTeamScopeRouting },
     teamAuditRing, reportRing, a2aJoinGateRefusal, observeAuthorization,
     settlePeerCard, client, listDirectoryTeams, canvasTeamsOfSession, localHandleResolver, canvasMigrationState,
     SWEEP_CONCURRENCY,
@@ -3769,10 +3900,6 @@ export function apply(ctx: Context, config: Config): void {
     // module's call-time read live instead of snapshotting at construction.
     get ownerAllowlist() { return ownerAllowlist },
   })
-  actTools.registerTeamJoin()
-
-  actTools.registerTeamLeave()
-
   actTools.registerExposure()
 
   actTools.registerReport()
@@ -4001,7 +4128,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     if (caller !== undefined && cliDeposits.get(caller) !== undefined) {
       if (!config.forwardDirect) missing.push('home forwardDirect is off')
       if (config.isolated) missing.push('home is isolated')
-      const scope = config.teamScopeRouting ? await outboundScope(senderScopeRecords, caller, caller, team) : { ok: true as const }
+      const scope = ownerTeamScopeRouting ? await outboundScope(senderScopeRecords, caller, caller, team) : { ok: true as const }
       if (!scope.ok) missing.push('sender scope: ' + scope.error)
       for (const owner of owners.filter(row => row.team === team && !row.local)) {
         if (!owner.members.includes(caller)) missing.push(owner.owner + ': caller is not an advertised canvas member')
@@ -4014,7 +4141,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const forwardDirect = createDirectForward({
     births: forwardingBirths,
     enabled: () => config.forwardDirect === true, isolated: () => config.isolated, deposited: handle => cliDeposits.get(handle) !== undefined,
-    scope: (handle, team) => config.teamScopeRouting ? forwardScope(cardAuthorizedSend, () => outboundScope(senderScopeRecords, handle, handle, team), handle, team) : Promise.resolve({ ok: true as const }),
+    scope: (handle, team) => ownerTeamScopeRouting ? forwardScope(cardAuthorizedSend, () => outboundScope(senderScopeRecords, handle, handle, team), handle, team) : Promise.resolve({ ok: true as const }),
     candidates: async (team, failures, caller) => { const fetch = memoizedCardFetch(); return { urls: await directoryPeerCandidates(fetch, team, failures, { id: caller, handle: caller }), card: fetch } },
     dispatch: (url, request, guard) => dispatchPeerCandidate(url, request.team, request.message, request.contextId, new AbortController().signal, request.caller, request.noWait, request.taskId, request.caller, guard),
     ledger: taskLedger, activity: (team, peer, ok) => recordActivity('fwd', team, peer, ok),
@@ -4033,7 +4160,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const senderScopeRecords: OutboundScopeRecords = {
     zone: config.team, id8, teamsOf: id => teamMemberships.teamsOf(id), membersOf: team => teamMemberships.membersOf(team),
     canvasNames: () => canvasStore.list(), canvasMembers: name => canvasStore.membersOf(name), canvasTeam: canvasTeamOf,
-    memberHandle: ref => splitQualifiedMember(ref)?.handle ?? ref,
+    // A local member sits by its session id: map it to its handle too, as inbound admission does (sameZoneAdmission matches
+    // either shape), so two canvas teammates on this host can route to each other's handle — what a shared roster used to
+    // cover before roster self-join was retired (owner ruling 2026-11-18).
+    memberHandle: ref => splitQualifiedMember(ref)?.handle ?? (ref.includes('/') ? ref : `${config.team}/${id8(ref)}`),
     peerOrgs: function* () { for (const hit of cardCache.values()) if (hit.card?.canvasOrg) yield hit.card.canvasOrg.map(row=>({...row,members:row.members.map(ref=>splitQualifiedMember(ref)&&localHandleResolver()(ref)!==undefined?splitQualifiedMember(ref)!.handle:ref)})) },
     warmPeers: () => mapBounded(resolutionPeers(), SWEEP_CONCURRENCY, cachedCardFetch),
   }
@@ -4092,7 +4222,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // and the initiator face stay exempt, like the join gate; discovery
       // (a2a_teams) stays open so a teamless node can still see what to join.
       let scopedCanvasCaller: { id: string; handle: string } | undefined
-      if (config.teamScopeRouting && agent !== undefined) {
+      if (ownerTeamScopeRouting && agent !== undefined) {
         const scopeCaller = String(agent.id)
         let initiator = false
         try {

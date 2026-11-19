@@ -2,7 +2,7 @@
 /** The right bar's decisions view (docs/design/superagent-decision-cards.md). */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { TeamDecisionsTab, canApprove, type DecisionRow } from '../../src/client/TeamDecisionsTab.tsx'
+import { DecisionList, canApprove, type DecisionRow } from '../../src/client/TeamDecisionsTab.tsx'
 import { en } from '../../src/client/locales.ts'
 
 const t = ((key: string, values?: Record<string, string>) => Object.entries(values ?? {}).reduce((text, [name, value]) => text.replace(`{${name}}`, value), (en as Record<string, string>)[key] ?? key)) as never
@@ -23,16 +23,16 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 describe('the decisions view', () => {
   it('marks the recommendation, and approves it with one click at P2', async () => {
     const f = serve([card()])
-    render(<TeamDecisionsTab t={t} />)
+    render(<DecisionList t={t} />)
     await screen.findByText('要不要升级？')
     expect(screen.getByText(en['team.recommended']).parentElement!.textContent).toContain('升级')
     fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
-    await screen.findByText(en['team.noDecisions'])
+    await waitFor(() => { expect(screen.queryByText('要不要升级？')).toBeNull() })
     expect(posts(f)).toEqual([{ id: 'd-1', how: 'approve' }])
   })
   it.each(['P0', 'P1'])('offers no one-click at %s: an option must be chosen', async (level) => {
     const f = serve([card({ level })])
-    render(<TeamDecisionsTab t={t} />)
+    render(<DecisionList t={t} />)
     await screen.findByText('要不要升级？')
     expect(screen.queryByRole('button', { name: en['team.approve'] })).toBeNull()
     const confirm = screen.getByRole('button', { name: en['team.confirmChoice'] }) as HTMLButtonElement
@@ -44,7 +44,7 @@ describe('the decisions view', () => {
   })
   it('sends the team and a note', async () => {
     const f = serve([card({ teamId: 'aaaaaaaa' })])
-    render(<TeamDecisionsTab t={t} />)
+    render(<DecisionList t={t} />)
     await screen.findByText('要不要升级？')
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '改成周五' } })
     fireEvent.click(screen.getByRole('button', { name: en['team.confirmChoice'] }))
@@ -52,7 +52,7 @@ describe('the decisions view', () => {
   })
   it('shows why a decision was refused, and keeps the card', async () => {
     serve([card()], () => ({ status: 403, body: { ok: false, error: '需要登录' } }))
-    render(<TeamDecisionsTab t={t} />)
+    render(<DecisionList t={t} />)
     await screen.findByText('要不要升级？')
     fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
     await waitFor(() => { expect(screen.getByRole('status').textContent).toContain('需要登录') })
@@ -60,13 +60,14 @@ describe('the decisions view', () => {
   })
   it.each([['router', 'team.fromRouter'], ['observer', 'team.fromObserver'], ['ticket', 'team.fromMember']] as const)('says who raised a %s card', async (source, key) => {
     serve([card({ source })])
-    render(<TeamDecisionsTab t={t} />)
+    render(<DecisionList t={t} />)
     await screen.findByText(new RegExp(en[key]))
   })
-  it('says when nothing is waiting', async () => {
+  it('shows nothing when nothing is waiting (the right bar team view needs no empty section)', async () => {
     serve([])
-    render(<TeamDecisionsTab t={t} />)
-    await screen.findByText(en['team.noDecisions'])
+    const { container } = render(<DecisionList t={t} />)
+    await waitFor(() => { expect(fetch).toHaveBeenCalled() })
+    expect(container.innerHTML).toBe('')
   })
   it('never offers one click without a recommendation', () => {
     expect(canApprove(card({ level: 'P3', recommended: '' }))).toBe(false)
@@ -87,20 +88,20 @@ describe('files on a card (C8)', () => {
   }
   it('lists the proposer\'s files as downloads from this card', async () => {
     serve([card({ teamId: 'aaaaaaaa', files: [{ sha256: 'b'.repeat(64), size: 2048, name: '方案.md' }] })])
-    render(<TeamDecisionsTab t={t} />)
+    render(<DecisionList t={t} />)
     const link = await screen.findByRole('link', { name: /方案\.md/ }) as HTMLAnchorElement
     expect(link.getAttribute('href')).toBe(`/__dsh_a2a/superagent/decisions/file?card=d-1&sha256=${'b'.repeat(64)}&teamId=aaaaaaaa`)
     expect(link.textContent).toContain('2.0 KB')
   })
   it('stages the owner\'s files to the card\'s team and sends their references with the decision', async () => {
     const f = serveWithBlob([card({ address: 'dsh/canvas/ops' })])
-    const { container } = render(<TeamDecisionsTab t={t} />)
+    const { container } = render(<DecisionList t={t} />)
     await screen.findByText('要不要升级？')
     const input = container.querySelector('input[type="file"]') as HTMLInputElement
     fireEvent.change(input, { target: { files: [new File(['hi'], 'n.txt')] } })
     await screen.findByText('n.txt')
     fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
-    await screen.findByText(en['team.noDecisions'])
+    await waitFor(() => { expect(screen.queryByText('要不要升级？')).toBeNull() })
     const urls = f.mock.calls.map(([url]) => url)
     expect(urls.find(url => url.startsWith('/__dsh_a2a/blob'))).toContain(encodeURIComponent('dsh/canvas/ops'))
     const decided = f.mock.calls.filter(([url, init]) => init?.method === 'POST' && !url.startsWith('/__dsh_a2a/blob')).map(([, init]) => JSON.parse(String(init!.body)) as Record<string, unknown>)
@@ -108,7 +109,7 @@ describe('files on a card (C8)', () => {
   })
   it('refuses to send files when the card names no team address, and keeps the card', async () => {
     serveWithBlob([card()])
-    const { container } = render(<TeamDecisionsTab t={t} />)
+    const { container } = render(<DecisionList t={t} />)
     await screen.findByText('要不要升级？')
     fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [new File(['hi'], 'n.txt')] } })
     fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))

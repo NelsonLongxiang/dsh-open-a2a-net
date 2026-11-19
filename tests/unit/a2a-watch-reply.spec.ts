@@ -68,7 +68,7 @@ describe('P3-5 · the first message is the one formal receipt; later ones are ne
     f.tickets.set('tk-1', { id: 'tk-1', ended: { at: 'x', by: 'executor', outcome: 'dropped' } })
     expect(await sendReply(f.ctx, f.commands, message({ ticketId: 'tk-1' }), at(T0))).toBe('sent')
     expect(f.runs).toEqual([
-      ['a2a-net', 'admission', 'dsh/aaaa1111', '--json'],
+      ['a2a-net', 'admission', 'dsh/aaaa1111', '--task', 'task-1', '--json'],
       ['a2a-net', 'receipt', 'task-1', '--to', 'dsh/aaaa1111', '--outcome', 'rejected', '--json', '--exit-class', '--', 'the PR is ready'],
     ])
     expect(f.state.get(KV.answered)).toEqual({ 'task-1': new Date(T0).toISOString() })
@@ -126,7 +126,7 @@ describe('P3-5 · the first message is the one formal receipt; later ones are ne
   it('a caller from this host session is rechecked on the local face', async () => {
     const f = fake(cli())
     await sendReply(f.ctx, f.commands, message({}, { caller: 'dsh/01234567', task: 'task-1', ingress: 'local' }), at(T0))
-    expect(f.runs[0]).toEqual(['a2a-net', 'admission', 'dsh/01234567', '--local', '--json'])
+    expect(f.runs[0]).toEqual(['a2a-net', 'admission', 'dsh/01234567', '--local', '--task', 'task-1', '--json'])
   })
 
   it('no link, no message (O1): the recheck refuses and nothing is sent', async () => {

@@ -9,6 +9,10 @@
 > #112（CLI `route` 不带 task id）、#113（CLI 信箱 64 行无 id）。
 > 参照：deepseek-ai/dsh-superagent-prototype `docs/002-authorization.md`（Mandate /
 > Policy version / observe）。
+>
+> **实现核对（2026-11-18，next/0.8 `44907c00`）：S1–S6 已合入，#114 已关闭。** 唯一余项是 S7：把 `settlementAuth` 默认从 observe 改成 enforce。这一项由 #125 跟踪，现在默认仍是 observe（`src/config.ts`）。
+
+> 补记（2026-11-13，对照 master）：判定已落在 `src/task-auth.ts`（`d570208`，2026-10-31 起），配置键 `settlementAuth`（`off` / `observe` / `enforce`，缺省 `observe`）已在 `src/config.ts`。下文是方案稿原文。
 
 ## 0. 一句话
 

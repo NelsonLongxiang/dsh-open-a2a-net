@@ -6,6 +6,7 @@
  * the honesty surface).
  * @module nexus-stage/main
  */
+import { createScopeHintsChip, parseScopeHints, type ScopeHintsChip } from './scope-hints-chip'
 import { createFaultReporter } from './fault'
 import { createWorkbench, type StateBody } from './workbench'
 import { personTickets, type SaState } from './wb-superagent'
@@ -123,6 +124,15 @@ const planning = createPlanningView({
     void poll()
     return ok
   },
+  // #650: 组成 root 团队 writes through the owner's canvas and superagent-teams routes; the next poll shows the result.
+  compose: {
+    async call(path, body) {
+      const res = await controlFetch(path, body === undefined ? { cache: 'no-store' } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const parsed: unknown = await res.json().catch(() => undefined)
+      if (body !== undefined) void poll()
+      return { status: res.status, body: parsed }
+    },
+  },
 })
 
 const saveLoop = createSaveLoop({
@@ -223,6 +233,20 @@ function runCanvasAction(a: CanvasAction): Promise<boolean> {
     case 'join-network':
     case 'leave-network': return postNetworkJoin(a.type === 'join-network' ? 'join' : 'leave', a.id)
   }
+}
+
+/** Production feedback 2026-11-14: the 协作提示 chip rides the toolbar right after 未入网 (mounted once, on first poll). */
+let scopeHintsChip: ScopeHintsChip | undefined
+function mountScopeHints(): ScopeHintsChip {
+  if (scopeHintsChip !== undefined) return scopeHintsChip
+  scopeHintsChip = createScopeHintsChip({
+    addMember: (canvas, ref) => canvasWire.addMembers(canvas, [ref]),
+    joinNetwork: id => postNetworkJoin('join', id),
+    notice: (kind, text) => planning.notice(kind, text),
+  })
+  const net = document.querySelector('#dsh-plan .p-netbtn')
+  if (net !== null) net.after(scopeHintsChip.el)
+  return scopeHintsChip
 }
 
 /** Network join/leave for one session (the panel-slim migration: this
@@ -582,11 +606,14 @@ async function poll(): Promise<void> {
         url: r.url as string,
         ...(r.unreachable === true ? { unreachable: true } : {}),
         org: (r.org as unknown[])
-          .filter((e): e is { name?: unknown; team?: unknown; members?: unknown } => e !== null && typeof e === 'object')
+          .filter((e): e is { name?: unknown; team?: unknown; members?: unknown; id?: unknown; superagentTeam?: unknown; root?: unknown } => e !== null && typeof e === 'object')
           .filter(e => typeof e.team === 'string' && e.team !== '')
-          .map(e => ({ name: typeof e.name === 'string' ? e.name : '', team: e.team as string, members: Array.isArray(e.members) ? e.members.filter((m): m is string => typeof m === 'string') : [] })),
+          .map(e => ({ name: typeof e.name === 'string' ? e.name : '', team: e.team as string, members: Array.isArray(e.members) ? e.members.filter((m): m is string => typeof m === 'string') : [],
+            // #650: the address add-team takes and the card's markers, for 组成 root 团队.
+            ...(typeof e.id === 'string' && e.id !== '' ? { id: e.id } : {}), ...(e.superagentTeam === true ? { superagentTeam: true } : {}), ...(e.root === true ? { root: true } : {}) })),
       }))
     planning.reconcile({ sessions: allSessions, teams, peerCount: peers.length, peers, inFlight, remoteTeams, peerOrg })
+    mountScopeHints().update(parseScopeHints(body.scopeHints))
   } catch (err) {
     fault(`state 轮询失败：${String(err)}`)
   }

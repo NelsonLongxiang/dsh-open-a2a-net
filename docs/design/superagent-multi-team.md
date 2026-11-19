@@ -2,6 +2,8 @@
 
 Status: agreed with the owner on 2026-11-09, not built yet.
 
+> Update (2026-11-13): built — several teams on one instance landed in PR #536 (`9ede749`, 2026-11-09), code in `src/superagent/host/teams.ts` (M1–M6). The "not built yet" line above is the state when this design was agreed.
+
 ## Context
 
 The owner wants to send a request to a team without leaving the conversation, from a view in DSH's right bar, and to choose which team gets it. Teams can be on the same DSH instance or on another instance or host.
@@ -37,6 +39,13 @@ Today one DSH instance runs one team. `SuperagentHost` holds one settings file, 
   - one waiting card per sender, and at most ten at a time;
   - a message older than a day is not held;
   - every other unlisted message is refused as before.
+
+- **M13 A linked host's session reaches a superagent team (owner ruling 2026-11-14, option B).** Two instances that use the same zone (the default `dsh`) could not ask each other's superagent teams: the host gate's target-level rule (F5) wanted the caller to share a team with the team itself, and a team session joins no other team. Now a request — never a receipt — reaches a superagent team's canvas address when:
+  - it carries a bound OriginClaim from a root card, not this host's own key and not a CLI identity;
+  - the host at exactly that origin is linked under exactly that key: a bilateral seed, or a key-pinned canvas remote reference confirmed for that key. A bare legacy reference's zone match does not count (#697 review F1);
+  - that host's card, read fresh for this request, lists the caller as one of its sessions — never an earlier cached listing (#697 review F2) — and the caller is not a handle of this host's own sessions.
+
+  The host records it under rule `superagent-intake`, an operator link (the operator linked the host), which the team's A2A Source listens to. Whether the team takes the request stays the owner's decision: an unlisted sender waits on a sender card (M12), with its limits. Only superagent canvas addresses are opened; any other team keeps the old rule. Each intake task's birth — caller, canvas team, and the origin and key of the host it was admitted from — is kept per task and written once (`<a2a home>/superagent-intake.json`; a replay of the task id under another key is refused). The team Source's signed admission query names the task (`a2a-net admission <caller> --task <id>`, the task signed too), and the recheck judges exactly that task's birth host under that key; a taskless query, an unknown or pushed-out task, and an unlinked birth host all fail closed. Another host with the same caller handle neither replaces a task's birth nor revives it (#697 review R1).
 
 ## Not doing
 
