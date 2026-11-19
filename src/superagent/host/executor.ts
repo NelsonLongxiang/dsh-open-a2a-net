@@ -153,6 +153,18 @@ export class MemberExecutor implements Executor {
    * only when that claim took the delivered Input in; a later claim, idle, stop or rebinding drops it. In memory only.
    */
   private readonly deferredIdle = new Map<string, { binding: Binding; text: string; claimed: number }>()
+  /**
+   * #745 review R2: a causal order for claims and sends, never wall-clock milliseconds (two events in one millisecond are
+   * not ordered by Date.now()). Each real claim and each Input send takes the next number. In memory only.
+   */
+  private causal = 0
+  /** The causal number of each member's last real claim (memberRead from the host). */
+  private readonly claimSeq = new Map<string, number>()
+  /**
+   * #745 review R1: the latest real send (or a failure) across one Assignment's whole delivery chain, so an empty last pass
+   * (a scan that found nothing new) never erases the send boundary an earlier pass of the same chain crossed.
+   */
+  private readonly chainSent = new Map<string, number | 'failed'>()
   private lastRetry = 0
   /** When each member's session last took a message into its history (memberRead), for a claim that beats the delivery record. */
   private readonly claimedAt = new Map<string, number>()
@@ -463,13 +475,18 @@ export class MemberExecutor implements Executor {
       let sent: number | 'failed' | undefined = 'failed'
       try { sent = await this.deliverNow(ticket, assignment, binding) } finally {
         this.delivering.delete(assignment.id)
+        // Fold this pass into the chain: a failure sticks, a send keeps the latest, an empty pass changes nothing.
+        const prior = this.chainSent.get(assignment.id)
+        const chain = prior === 'failed' || sent === 'failed' ? 'failed' : sent === undefined ? prior : Math.max(prior ?? 0, sent)
+        if (chain === undefined) this.chainSent.delete(assignment.id)
+        else this.chainSent.set(assignment.id, chain)
         if (this.deliverAgain.delete(assignment.id)) this.deliver(ticket, assignment)
-        else this.replayIdle(assignment.id, sent)
+        else { this.chainSent.delete(assignment.id); this.replayIdle(assignment.id, chain) }
       }
     })() })
   }
 
-  /** Sends the Assignment's undelivered Inputs: when the send started, undefined when there was nothing to send, or 'failed'. */
+  /** Sends the Assignment's undelivered Inputs: the send's causal number, undefined when nothing was sent, or 'failed'. */
   private async deliverNow(ticket: Ticket, assignment: Assignment, binding: Binding): Promise<number | 'failed' | undefined> {
     const current = this.d.ticket(ticket.id)
     if (current === undefined || current.ended) return undefined
@@ -479,6 +496,8 @@ export class MemberExecutor implements Executor {
     // The Triggers the ticket was accepted from are already in its assignment card: recorded delivered, not sent twice.
     const fresh = inputs.filter(input => !(input.kind === 'trigger' && current.origin.triggerIds.includes(input.triggerId)))
     const sentAt = Date.now()
+    // #745 R1/R2: only an actual send takes a causal number; recording already-carded Triggers sends nothing.
+    const sentSeq = fresh.length > 0 ? ++this.causal : undefined
     if (fresh.length > 0 && !(await this.tryDeliver(binding.member, inputsCard(current, fresh, this.d.trigger), 'input', ticket.id, runOf(binding)))) {
       try { engine.deliveryFailed(ticket.id, assignment.id, `member ${binding.member} did not receive the input`) } catch { /* the ticket ended meanwhile */ }
       return 'failed'
@@ -486,19 +505,20 @@ export class MemberExecutor implements Executor {
     try { engine.inputsDelivered(ticket.id, assignment.id, inputs.map(input => input.id)) } catch (error) { this.d.logger.warn('superagent: inputs of %s not recorded delivered: %s', ticket.id, String(error)) }
     // The member's session may take the message in before its delivery is recorded: that claim counts for it.
     if ((this.claimedAt.get(binding.member) ?? 0) >= sentAt) this.markRead(binding.member)
-    return sentAt
+    return sentSeq
   }
 
   /**
    * #742: the delivery chain of an Assignment finished; a quiet idle settle() set aside meanwhile settles now when it still
-   * applies — same binding, nothing left undelivered, and the turn that ended had taken the sent Input in (its claim came
-   * at or after the send). Otherwise the Input wakes a new turn whose own end decides, and the old idle is dropped.
+   * applies — same binding, nothing left undelivered, and the turn that ended had taken the last sent Input in (its claim
+   * came causally after the chain's last send). Otherwise the Input wakes a new turn whose own end decides, and the old
+   * idle is dropped. `sent` is the whole chain's: undefined only when no pass of it sent anything.
    */
   private replayIdle(assignmentId: string, sent: number | 'failed' | undefined): void {
     const deferred = this.deferredIdle.get(assignmentId)
     if (deferred === undefined) return
     this.deferredIdle.delete(assignmentId)
-    if (sent === 'failed' || (sent !== undefined && deferred.claimed < sent)) return
+    if (sent === 'failed' || (sent !== undefined && deferred.claimed <= sent)) return
     if (!this.bindings.includes(deferred.binding)) return
     this.settle(deferred.binding, deferred.text)
   }
@@ -511,7 +531,7 @@ export class MemberExecutor implements Executor {
   stop(ticket: Ticket, assignment: Assignment, reason: string): void {
     const binding = this.bindings.find(b => b.assignmentId === assignment.id)
     this.waiting = this.waiting.filter(w => w.assignmentId !== assignment.id)
-    this.retries.delete(assignment.id); this.resuming.delete(assignment.id); this.deferredIdle.delete(assignment.id)
+    this.retries.delete(assignment.id); this.resuming.delete(assignment.id); this.deferredIdle.delete(assignment.id); this.chainSent.delete(assignment.id)
     const parked = this.parked.find(b => b.assignmentId === assignment.id)
     if (parked !== undefined) {
       // It holds no turn and may be on another ticket by now: nothing to stop. A member removed from the team is told.
@@ -537,6 +557,7 @@ export class MemberExecutor implements Executor {
   memberRead(member: string): void {
     // A new claim means a new turn: an idle set aside before it no longer describes the member's state (#742).
     this.dropDeferredIdle(member)
+    this.claimSeq.set(member, ++this.causal)
     this.markRead(member)
   }
 
@@ -557,7 +578,7 @@ export class MemberExecutor implements Executor {
     const binding = this.bindingOf(member)
     this.dropDeferredIdle(member)
     if (binding === undefined) { this.background.delete(member); return }
-    const claimed = this.claimedAt.get(member) ?? 0
+    const claimed = this.claimSeq.get(member) ?? 0
     this.markRead(member)
     // The owner talked to this session directly: that turn says nothing about the ticket, and the ticket goes on after it.
     if (turn.person === true && turn.quiet && !this.resuming.has(binding.assignmentId)) {

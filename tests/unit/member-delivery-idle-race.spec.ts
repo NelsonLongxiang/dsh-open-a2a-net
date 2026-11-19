@@ -165,4 +165,42 @@ describe('#742 idle versus input-delivery completion', () => {
     await f.drained()
     f.expectSlotHeld()
   })
+
+  it('#745 R1: an empty extra delivery pass keeps the real send boundary; an idle claimed before the send does not park', async () => {
+    const f = await fixture()
+    // The old turn is claimed and reports before the new Input exists.
+    f.h.memberClaimed(M)
+    expect(f.h.report(M, { state: 'waiting', summary: 'needs owner input', question: 'which output format?' }, f.a.ticket)).toMatchObject({ ok: true })
+    const release = await f.heldInput()
+    f.h.memberIdle(M)
+    // A normal scan while the delivery is pending queues a pass that will find nothing new.
+    f.h.executor.launch()
+    await tick()
+    release(true)
+    await f.drained()
+    f.expectSlotHeld()
+    // The Input's own turn still settles as usual.
+    f.turn('read the follow-up')
+    await f.drained()
+    f.expectSlotFreed()
+  })
+
+  it('#745 R2: a second Input in the same millisecond as the ended turn is not taken for one that turn consumed', async () => {
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now)
+    try {
+      const f = await fixture()
+      const first = await f.heldInput('first follow-up')
+      f.turn()
+      // After the idle, without another claim: same Date.now() as the claim and the first send.
+      f.h.request('second follow-up', f.a.thread)
+      await tick()
+      first(true)
+      await f.drained()
+      f.expectSlotHeld()
+      f.turn('read the second follow-up')
+      await f.drained()
+      f.expectSlotFreed()
+    } finally { clock.mockRestore() }
+  })
 })
