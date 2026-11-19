@@ -68,13 +68,25 @@ export interface SaSettings {
 export interface SaTeamRow { readonly id: string; readonly canvas?: string; readonly waiting?: number }
 
 /** A problem the host found (design reliability R6). */
-export interface SaHealth { readonly code: string; readonly session?: string; readonly ticketId?: string; readonly title?: string; readonly minutes?: number }
+export interface SaHealth { readonly code: string; readonly session?: string; readonly ticketId?: string; readonly title?: string; readonly minutes?: number; readonly reason?: string; readonly repo?: string; readonly count?: number }
 
 /** The words for a problem the host found. */
 export function healthText(problem: SaHealth, sessionName: (id: string) => string = id => id): string {
   if (problem.code === 'router-not-loaded') return `总工会话 ${sessionName(problem.session ?? '')} 没有加载：需求送不到它，打开这个会话即可`
   if (problem.code === 'member-not-loaded') return `成员会话 ${sessionName(problem.session ?? '')} 没有加载：工单派不给它，打开这个会话即可`
   if (problem.code === 'ticket-quiet') return `工单「${problem.title ?? problem.ticketId ?? ''}」已经 ${String(problem.minutes ?? 0)} 分钟没有动静`
+  if (problem.code === 'tickets-queued') {
+    const who = sessionName(problem.session ?? '')
+    const waits = problem.reason === 'member-busy' ? `在等成员 ${who}，它手上的工单没结束；可让总工改派给空闲成员`
+      : problem.reason === 'member-absent' ? `在等成员 ${who}，它已不在团队里；请总工改派`
+      : problem.reason === 'no-repo-member' ? `只能派给负责仓库 ${problem.repo ?? ''} 的成员，团队里没有这样的成员；在设置里给成员填仓库，或请总工改派`
+      : problem.reason === 'repo-busy' ? `只能派给负责仓库 ${problem.repo ?? ''} 的成员，他们都在忙`
+      : problem.reason === 'delivery-refused' ? `派给成员 ${who} 时被拒绝，还在重试；看看这个成员的会话或它所在主机是否接收，或请总工改派`
+      : problem.reason === 'launch-stalled' ? '有空闲成员，但这些工单一直没派出去，原因不明；可请总工改派，或查看主机日志'
+      : problem.reason === 'at-cap' ? '团队已到同时运行的上限'
+      : '所有成员都在忙'
+    return `${String(problem.count ?? 1)} 张工单排队超过 ${String(problem.minutes ?? 0)} 分钟（最久的是「${problem.title ?? problem.ticketId ?? ''}」）：${waits}`
+  }
   return problem.code
 }
 
@@ -156,7 +168,8 @@ export function problemsOf(state: SaState, now: number): SaProblem[] {
   if (state.settings.router === undefined) out.push({ tone: 'danger', text: '还没有指定总工：需求会停在候选里，没人决定（到「设置」里选）' })
   if (state.settings.members.length === 0 && state.settings.remoteMembers.length === 0) out.push({ tone: 'warn', text: '成员池是空的：在画布团队里加成员，接下的工单才有人做' })
   if (state.settings.paused) out.push({ tone: 'warn', text: '执行已暂停：新工单不会派给成员' })
-  for (const problem of state.health ?? []) out.push({ tone: problem.code === 'ticket-quiet' ? 'warn' : 'danger', text: healthText(problem) })
+  // A queued group that waiting cannot clear (its member left, no member has its repository) is danger; the rest are warn.
+  for (const problem of state.health ?? []) out.push({ tone: problem.code === 'ticket-quiet' || (problem.code === 'tickets-queued' && problem.reason !== 'member-absent' && problem.reason !== 'no-repo-member') ? 'warn' : 'danger', text: healthText(problem) })
   if (state.pullRequestProblem !== undefined) out.push({ tone: 'warn', text: `读取 PR 状态失败，稍后重试：${state.pullRequestProblem}` })
   for (const [entry, health] of Object.entries(state.a2a.health)) if (health.state === 'error') out.push({ tone: 'danger', text: `A2A Source（${entry}）出错：${health.detail ?? ''}` })
   for (const thread of state.threads) {

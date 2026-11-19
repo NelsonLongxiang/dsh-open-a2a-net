@@ -86,7 +86,7 @@ Canvas rows in `a2a-net teams` carry an owner-qualified id, `<zone>/canvas/<name
 
 ## Files (#91 file channel)
 
-Files do not go through session messages: use the file channel below, never JPFILE-PART/base64 chunks in `route`. Legacy part replies carry `advice.reason: use-file-channel` with the send commands; up to 16 compatible parts are still allowed, while over-limit transfers keep `-32008` / `file-parts-exceeded`. The hint alone does not mean rejection.
+Files do not go through session messages: use the file channel below, never JPFILE-PART/base64 chunks in `route`. Any JPFILE-PART message is refused with `-32008` / `file-channel-required` and `advice.reason: use-file-channel` carrying the send commands; nothing is delivered.
 
 - `a2a-net file send <path…> <team> [--note TEXT]` stages each file (≤64 MiB,
   ≤16 per send) on the home host by sha256, granted to `<team>` for 24h, and

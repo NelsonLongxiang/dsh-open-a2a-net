@@ -68,7 +68,7 @@ import { runReceiptLadder } from './receipt-ladder.ts'
 import { receiptFailure, retryReceiptDelivery, transientReceiptFailure, receiptRetryWait, readReceiptReplay, RECEIPT_RETRYABLE } from './receipt-retry.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { refuseIfBudgetExhausted } from './recursion-guard.ts'
-import { createFloodGuard } from './flood-guard.ts'
+import { createFloodGuard, fileChannelAdvice } from './flood-guard.ts'
 import { createQueueGuard, queueFullRefusal, QUEUE_FULL_NEXT, WIRE_ERROR_QUEUE_FULL } from './queue-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
@@ -557,6 +557,9 @@ export function apply(ctx: Context, config: Config): void {
   const cardCache = new Map<string, CardCacheEntry>()
   // Node identity (docs/design/node-identity.md, N1): human-named nodes and their prompt versions.
   const nodeStore = new NodeStore(join(home, 'a2a'))
+  // Restored live sessions synchronize role tools during apply. Their canvas lookup reads this cache through both
+  // localHandleResolver (seeded peers) and remote-member resolution, before the later discovery faces are registered.
+  const cardCache = new Map<string, CardCacheEntry>()
   // Peer boundary model (docs/design/peer-boundary-model.md) — connection
   // layer. referralLearning off freezes the seed set: referrals are neither
   // learned nor offered. A non-empty peerAllowlist admits a referral only
@@ -2399,7 +2402,8 @@ export function apply(ctx: Context, config: Config): void {
     const agent=receiverId ? ctx.get('agents')?.get(SessionId(receiverId)) : row ? (resolveAgentForTeam(row.deliveredTo??row.team)??canvasLiveAgent(parseCanvasTeamName(row.team))) : undefined
     if(!agent) {taskLedger.recordWithdrawalResult(taskId,'no-agent');return {removed:false,steered:false,withdrawalResult:'no-agent'}}
     const notice=cancelNoticeText(taskId)
-    steerRelay(agent,text.includes('If this task reaches you later from the queue, do not execute it.')?text:notice,sender)
+    // #733 review R1: a stop notice that carries a retired file chunk is replaced by the host's own notice; the stop itself still lands.
+    steerRelay(agent,text.includes('If this task reaches you later from the queue, do not execute it.')&&fileChannelAdvice(text)===undefined?text:notice,sender)
     const withdrawalResult=withdrawFailed?'withdraw-failed-steered':'claimed-steered'
     taskLedger.recordWithdrawalResult(taskId,withdrawalResult)
     return {removed:false,steered:true,withdrawalResult}

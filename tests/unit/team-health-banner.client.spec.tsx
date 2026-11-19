@@ -21,6 +21,12 @@ describe('the health banner', () => {
     render(<TeamHealthBanner t={t} />)
     expect(await screen.findByText(/ops：Router session a0000000's last turn failed \(GoUsageLimitError: usage limit reached\)/)).toBeTruthy()
   })
+  it('says how many tickets are queued and what they wait for', async () => {
+    serve([{ code: 'tickets-queued', team: 'ops', reason: 'member-busy', session: 'session-a0000000aaaa', count: 3, minutes: 90, title: 'R1 整改' }, { code: 'tickets-queued', team: 'ops', reason: 'no-repo-member', repo: 'acme/widgets', count: 1, minutes: 70, title: '修文档' }])
+    render(<TeamHealthBanner t={t} />)
+    expect(await screen.findByText(/ops：3 ticket\(s\) queued for over 90 minutes \(oldest: “R1 整改”\): waiting for member a0000000/)).toBeTruthy()
+    expect(screen.getByText(/only members working in acme\/widgets can take them, and the team has none/)).toBeTruthy()
+  })
   it('shows nothing when the teams are healthy', async () => {
     serve([])
     render(<TeamHealthBanner t={t} />)
