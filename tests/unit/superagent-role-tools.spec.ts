@@ -2,7 +2,7 @@
  * superagent design v4, PR-D: the role tool lists (pinned) and how the host applies them.
  */
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync } from '../temp-dirs.ts'
+import { mkdtempSync, cleanupBeforeTempDirs } from '../temp-dirs.ts'
 import { Config } from '../../src/config.ts'
 import { MEMBER_DENY, MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, TEAM_TOOLS, memberBoundary, roleToolRefusal, type Role, type RoleAgent } from '../../src/superagent/host/role-tools.ts'
 
@@ -237,6 +237,7 @@ describe('the team\'s agent presets: shipped in the bundle layer, required of a 
     // Design v5: the team is a canvas team; the host reads its sessions from the canvas (router first here).
     let local: string[] = []
     const h = new SuperagentHost({ home: mkdtempSync(join(tmpdir(), 'sa-presets-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, canvasTeam: name => name === 'team' ? { local, remote: [] } : undefined })
+    cleanupBeforeTempDirs(() => h.stop())
     local = ['session-s', 'session-m']
     expect(h.saveSettings({ canvas: 'team', router: 'session-s' }, () => true, of)).toMatchObject({ ok: false, error: expect.stringContaining('superagent-router') })
     local = ['session-r', 'session-s']
@@ -244,5 +245,6 @@ describe('the team\'s agent presets: shipped in the bundle layer, required of a 
     local = ['session-r', 'session-m']
     expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true, of)).toMatchObject({ ok: true })
     expect(h.serveTeam({ url: 'http://127.0.0.1:1', key: 'MCowBQYDK2VwAyEAabcdefghijklmnopqrstuvwxyz0123456789' }, ['session-s'], () => true, of)).toMatchObject({ ok: false })
+    await h.stop()
   })
 })

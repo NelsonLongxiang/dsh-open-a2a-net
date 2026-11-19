@@ -61,6 +61,7 @@ import { SuperagentHost } from './superagent/host/index.ts'
 import { registerSuperagentTools } from './superagent/host/tools.ts'
 import { BUILDER_PRESET, RoleTools, scopeKeyOf, type RoleAgent } from './superagent/host/role-tools.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
+import { ReconciliationInbox } from './reconciliation-inbox.ts'
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
 import {FollowupAcceptanceUnknown,ACCEPTANCE_UNKNOWN_NOTE,ACCEPTANCE_INSERTED_NOTE} from './followup-admission.ts'
@@ -2576,13 +2577,17 @@ export function apply(ctx: Context, config: Config): void {
     const matches=live.filter(a=>sessionTeamOf(a)===face)
     return matches.length===1?matches[0]:undefined
   }
+  const reconciliationInbox = new ReconciliationInbox({sender:config.team,rows:()=>taskLedger.list(),taint:agent=>markLineage(agent,'relay')})
   const idleReminders = new ReconciliationReminders({
     ledger:taskLedger,agents:reminderAgents,resolve:exactReminderTarget,
     sender:row=>{
       if(row.peer!=='local'||row.sender?.kind!=='session')return undefined
       const matches=reminderAgents().filter(a=>sessionTeamOf(a)===row.sender!.id);return matches.length===1?matches[0]:undefined
     },
-    followup:(agent:ReminderAgent,text:string)=>followupRelay(agent as Agent,text,config.team),
+    available:agent=>reconciliationInbox.available(agent as Agent),
+    followup:(agent,text,scope)=>reconciliationInbox.send(agent as Agent,text,scope),
+    noticeId:(agent,scope)=>reconciliationInbox.messageIdFor(agent as Agent,scope),
+    noticeState:(agent,id)=>reconciliationInbox.noticeState(agent as Agent,id),
     // A delivery whose steer was never consumed: its original text, once, as the original sender's content (it taints).
     // #693 review F1/F2: only a delivery the ledger never tracked (a lost steer), as a queued delivery OF THE ORIGINAL TASK,
     // so its reservation, claim, withdrawal and an unknown outcome follow the ordinary correspondence.

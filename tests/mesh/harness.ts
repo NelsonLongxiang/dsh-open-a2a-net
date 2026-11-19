@@ -250,7 +250,10 @@ export async function bootNode(options: MeshNodeOptions): Promise<MeshNode> {
   }
   // Most historical mesh cases script Agent.steer as their fake consumption seam.
   // followup defers that script to a next microtask; real FIFO/maintenance is tested by the host-loop fixture.
-  agent.followup = payload => {queueMicrotask(()=>{ctx.emit('agent/inbox/claimed',{agent,message:payload,turn:1});agent.steer(payload)})}
+  // Readable durable-queue facade for reminder backpressure; ordinary scripted turns still consume at the next microtask.
+  const pending: import('@deepseek-ai/dsh-llm').UserMessage[] = []
+  ;(agent as any).inbox = {nextTurn:pending,nextStep:[],remove:(id:unknown)=>{const i=pending.findIndex(m=>m.id===id);if(i<0)return false;pending.splice(i,1);return true}}
+  agent.followup = payload => {pending.push(payload);queueMicrotask(()=>{const i=pending.indexOf(payload);if(i<0)return;pending.splice(i,1);ctx.emit('agent/inbox/claimed',{agent,message:payload,turn:1});agent.steer(payload)})}
   const { agentId: _agentId, silent: _silent, ...configOptions } = options
   void _agentId
   apply(ctx, meshConfig({ ...configOptions, home }))

@@ -63,7 +63,7 @@ it('late final with unknown insertion retains one receipt and never blindly repo
   await f.send('sync-retry')
   const spy=vi.spyOn(globalThis,'fetch').mockImplementation(async(url,init)=>{
    const receipt=String(url)===f.a.baseUrl+'/a2a/direct'&&init?.method==='POST'&&String(init.body).includes('[A2A receipt] task sync-retry')
-   if(receipt){bodies.push(String(init!.body));if(!failed){failed=true;throw new TypeError('fetch failed')}}
+   if(receipt){bodies.push(String(init!.body));if(!failed){failed=true;throw new TypeError('fetch failed')}await releaseRetry.promise}
    const r=await original(url,init);if(receipt&&r.ok)accepted.push(String(init!.body));return r
   })
   try{
