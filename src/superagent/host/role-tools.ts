@@ -62,7 +62,7 @@ export const MEMBER_WORK_TOOLS: readonly string[] = ['read', 'write', 'edit', 'r
   'job_kill', 'web_search', 'web_fetch', 'skill', 'todo_write']
 
 /** A member's tools: its work tools, its report, the file channel for inputs it was handed, and proposing new work (#717). */
-export const MEMBER_TOOLS: readonly string[] = [...MEMBER_WORK_TOOLS, ...SCHEDULE_TOOLS, ...SELF_TOOLS, ...YGL_WORK_TOOLS, 'a2a_tool_request', 'a2a_outbound_request', 'a2a_decision_decide', 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_ticket_request', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch']
+export const MEMBER_TOOLS: readonly string[] = [...MEMBER_WORK_TOOLS, ...SCHEDULE_TOOLS, ...SELF_TOOLS, ...YGL_WORK_TOOLS, 'a2a_outbound_request', 'a2a_decision_decide', 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_ticket_request', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch']
 
 /** An observer's tools: a member's, and its own decision cards (design D15; since #717 every member may file a request). */
 export const OBSERVER_TOOLS: readonly string[] = [...MEMBER_TOOLS, 'a2a_decision_propose']

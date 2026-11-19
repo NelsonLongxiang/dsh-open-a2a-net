@@ -68,13 +68,13 @@ describe('#58 human-owned seat labels', () => {
     expect(after).toEqual({ ...before, seatNames: { [ID]: '开发席' } })
     const yaml = readFileSync(join(n.home, 'cordis.patch.yml'), 'utf8')
     expect(yaml).toContain("teamJoinAllowlist: ['dsh/review']")
-    expect(yaml).toContain('teamScopeInfo: false')
+    expect(yaml).toContain('teamScope: false')
     expect(yaml).toContain('announce: false')
   })
 
   it('real tool runtime rejects naming fields, including otherwise valid tool arguments, without changing owner state', async () => {
     const n = await setup(), runtime = n.ctx.get('tools') as any
-    for (const [name, args] of [['a2a_whoami', { seatName: '模型命名' }], ['a2a_team_join', { team: 'dsh/dev', seatNames: { [ID]: '模型命名' } }], ['a2a_route', { team: 'dsh/01234567', message: 'hello', seatName: '模型命名' }]] as const) {
+    for (const [name, args] of [['a2a_whoami', { seatName: '模型命名' }], ['a2a_exposure', { tier: 'linked', seatNames: { [ID]: '模型命名' } }], ['a2a_route', { team: 'dsh/01234567', message: 'hello', seatName: '模型命名' }]] as const) {
       const result = await runtime.execute({ name, arguments: args, agent: n.agents.agent, signal: new AbortController().signal, callId: 'seat-denied-' + name })
       expect(result.isError, JSON.stringify(result)).toBe(true)
       expect(JSON.stringify(result.error)).toContain('human-owned')

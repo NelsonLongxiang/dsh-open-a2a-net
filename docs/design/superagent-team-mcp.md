@@ -5,7 +5,7 @@ Status: proposed, 2026-11-11; revised 2026-11-12 for one system user. Not implem
 Implementation check (2026-11-18, next/0.8 `44907c00`): partly built in #690 (`team-mcp.ts`, `team-mcp-tools.ts`, `seat-token.ts`). Seat tokens work, and members on this host can call the team's MCP servers. Not built yet: a member serving another team host is refused as `remote-member`, and the router gets no team MCP tools (`routerTools` is refused).
 
 - **Why it exists.** In the local market trial a team member found no market tool, read another session's token file and called the market's MCP with it.
-- **The topology changed.** On 2026-11-11 the owner had decided that team sessions run as a separate system user. On 2026-11-12 he withdrew that ([superagent-team-user](../ops/superagent-team-user.md), not pursued): team sessions stay under the host's own user. This design no longer relies on a second user.
+- **The topology changed.** On 2026-11-11 the owner had decided that team sessions run as a separate system user. On 2026-11-12 he withdrew that ([superagent-team-user](../archive/ops/superagent-team-user.md), not pursued): team sessions stay under the host's own user. This design no longer relies on a second user.
 - **Agreed with the workbench market:** a team's MCP token goes only to the host, is scoped to the team, short-lived and revocable, and the host learns when it is revoked. Until this is built, no team gets an MCP token.
 
 ## Context

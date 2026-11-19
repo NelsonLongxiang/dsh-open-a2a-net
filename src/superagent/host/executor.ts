@@ -186,6 +186,16 @@ export class MemberExecutor implements Executor {
   bindingFor(member: string, ticketId: string): Binding | undefined { return [...this.bindings, ...this.parked].find(b => b.member === member && b.ticketId === ticketId) }
   /** Every binding (for the workbench). */
   list(): readonly Binding[] { return [...this.bindings, ...this.parked] }
+  /**
+   * Every open ticket a member owns now: running, parked waiting on a person, or named for it and not yet launched
+   * (#741 review R2: retiring a member checks all three; bindingOf keeps its active-only meaning).
+   */
+  ticketsOf(member: string): string[] {
+    const open = (id: string): boolean => { const t = this.d.ticket(id); return t !== undefined && !t.ended }
+    const held = [...this.bindings, ...this.parked].filter(b => b.member === member).map(b => b.ticketId)
+    const named = Object.entries(this.ticketMembers).filter(([, m]) => m.named && m.member === member).map(([id]) => id)
+    return [...new Set([...held, ...named])].filter(open)
+  }
   /** Members with no ticket bound — for a ticket of a repository, only that repository's members. */
   private free(ticketId?: string): string[] {
     const held = ticketId !== undefined ? this.ticketMembers[ticketId] : undefined

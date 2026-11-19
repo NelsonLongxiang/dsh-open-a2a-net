@@ -35,7 +35,6 @@ import { refreshPeerCard, registerCanvasNotify, type CanvasNotifyDeps } from './
 import { CLI_HANDLE_RE, verifyAdmissionQuery, type CliDepositStore } from '../cli-deposit.ts'
 import type { Admission } from '../task-auth.ts'
 import type { ExposureStore } from '../exposure-store.ts'
-import type { GroupStore } from '../group-store.ts'
 import type { IdempotencyStore } from '../idempotency-store.ts'
 import type { JoinedSessions } from '../joined-store.ts'
 import type { LayoutStore } from '../layout-store.ts'
@@ -77,7 +76,6 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly cliDeposits: CliDepositStore
   /** superagent p1-mail-admission (M-2): the admission `caller` would get delivering to a deposited handle now. */
   readonly admissionRecheck: (caller: string, handle: string, local: boolean, task?: string) => Admission
-  readonly groupStore: GroupStore
   readonly canvasStore: CanvasStore
   readonly canvasMemberForWrite: (ref: string, peer?: unknown) => Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }>
   /** Design v5 R3/R4: why the superagent team refuses this member on this canvas, if it does (absent: no team). */
@@ -147,6 +145,7 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   ownerSeatNames: Record<string, string>
   ownerAllowlist: string[]
   ownerTeamScopeInfo: boolean
+  ownerTeamScopeRouting: boolean
   ownerAnnounceRestartPending: boolean
 }
 
@@ -176,7 +175,6 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
     exposureStore,
     teamMemberships,
     cliDeposits,
-    groupStore,
     canvasStore,
     layoutStore,
     taskLedger,
@@ -216,11 +214,6 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
         pruneArchivedJoins()
         pruneCanvasMemberships()
         const tPrune = Date.now()
-        const assignments = groupStore.all()
-        const groupOf = (id: string): string | undefined => {
-          const name = assignments[id]
-          return name === undefined ? undefined : name
-        }
         // Archived sessions are closed: the GUI hides them everywhere, so
         // the panel must not re-list them as join surface rows — joined
         // or not. (The prune above already took their join intents; this
@@ -255,7 +248,6 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               // #650: the agent preset it runs, so the board's router picker offers only what a team binding accepts.
               ...(d.sessionPresetOf?.(String(agent.id)) !== undefined ? { preset: d.sessionPresetOf(String(agent.id)) } : {}),
               ...(canvasTeams.length > 0 ? { canvasTeams } : {}),
-              ...(groupOf(String(agent.id)) !== undefined ? { group: groupOf(String(agent.id)) } : {}),
             }
           })
         // Cold joined sessions: a remembered intent whose Agent is not
@@ -287,7 +279,6 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             teams: [...teamMemberships.teamsOf(id)],
             // gh#152: same local lens as the live rows (handle-stored counts).
             ...(canvasTeamsOfSession(id).length > 0 ? { canvasTeams: canvasTeamsOfSession(id) } : {}),
-            ...(groupOf(id) !== undefined ? { group: groupOf(id) } : {}),
           })
         }
         const body = JSON.stringify({
@@ -298,7 +289,6 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // gh#193: a dark host says so — an empty remote list is not an outage.
           ...(config.isolated ? { isolated: true } : {}),
           sessions,
-          groups: groupStore.list(),
           canvas: {
             ...d.canvasMigrationState(),
             // Raw retained slots are an inspection view, never the effective team member list.
@@ -790,7 +780,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
       })
     }),
   }), 'a2a: fleet-canvas-op relay route')
-  // A roster owner gesture writes the same teams.json declarations as a2a_team_join; it cannot admit remote or unjoined ids.
+  // A roster owner gesture on the board (roster teams retired 2026-11-18: only remove-member and dissolve still apply).
   ctx.effect(() => webServer.register({
     kind: 'exact', path: '/__dsh_a2a/roster-op',
     handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
@@ -820,7 +810,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
   // surfaced as a control face instead of "翻配置文件". GET reads the
   // effective values; POST writes the HOME patch layer (the
   // authoritative surface) AND hot-applies the two call-time keys
-  // (teamJoinAllowlist / teamScopeInfo); announce is boot-time
+  // (teamJoinAllowlist / teamScope, which covers routing and information);
+  // announce is boot-time
   // publishing, so its change lands on the next host restart and the
   // reply says so. Same key gate as every write face.
   ctx.effect(() => webServer.register({
@@ -832,7 +823,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           ok: true,
           seatNames: { ...d.ownerSeatNames },
           teamJoinAllowlist: [...d.ownerAllowlist],
-          teamScopeInfo: d.ownerTeamScopeInfo,
+          teamScope: d.ownerTeamScopeRouting && d.ownerTeamScopeInfo,
+          // A panel from before 2026-11-18 reads this name; it is the same one switch now.
+          teamScopeInfo: d.ownerTeamScopeRouting && d.ownerTeamScopeInfo,
           announce: config.announce === true,
           announceRestartPending: d.ownerAnnounceRestartPending,
         })
@@ -856,10 +849,12 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           const list = (body.teamJoinAllowlist as unknown[]).filter((name): name is string => typeof name === 'string' && name !== '' && name.length <= 128)
           changes.teamJoinAllowlist = [...new Set(list)]
         }
-        if (typeof body.teamScopeInfo === 'boolean') changes.teamScopeInfo = body.teamScopeInfo
+        // One switch (owner ruling 2026-11-18); a panel from before writes the old name, which now means the same switch.
+        if (typeof body.teamScope === 'boolean') changes.teamScope = body.teamScope
+        else if (typeof body.teamScopeInfo === 'boolean') changes.teamScope = body.teamScopeInfo
         if (typeof body.announce === 'boolean') changes.announce = body.announce
         if (Object.keys(changes).length === 0) {
-          const payload = JSON.stringify({ ok: false, error: 'no recognized keys: teamJoinAllowlist (string[]), teamScopeInfo (bool), announce (bool)' })
+          const payload = JSON.stringify({ ok: false, error: 'no recognized keys: teamJoinAllowlist (string[]), teamScope (bool), announce (bool)' })
           res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
           res.end(payload)
           return
@@ -873,7 +868,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // Hot-apply the call-time owner keys.
           if (changes.seatNames !== undefined) d.ownerSeatNames = changes.seatNames
           if (changes.teamJoinAllowlist !== undefined) d.ownerAllowlist = [...changes.teamJoinAllowlist]
-          if (changes.teamScopeInfo !== undefined) d.ownerTeamScopeInfo = changes.teamScopeInfo
+          if (changes.teamScope !== undefined) { d.ownerTeamScopeInfo = changes.teamScope; d.ownerTeamScopeRouting = changes.teamScope }
           if (changes.announce !== undefined && changes.announce !== (config.announce === true)) d.ownerAnnounceRestartPending = true
           if (changes.announce !== undefined && changes.announce === (config.announce === true)) d.ownerAnnounceRestartPending = false
           logger.info(`a2a: owner settings updated (${Object.keys(changes).join(', ')}${restartNeeded ? ' — restart pending for announce' : ''})`)
@@ -888,41 +883,6 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
       })
     }),
   }), 'a2a: owner-settings route')
-  // Groups control: create/remove named groups and assign sessions to
-  // them (an empty name unassigns). Same guard as join/leave — the
-  // group taxonomy enumerates session ids, so it stays behind the key.
-  // Deprecated as of 0.6.6 (canvas teams supersede manual grouping);
-  // kept working for old panels.
-  ctx.effect(() => webServer.register({
-    kind: 'exact',
-    path: '/__dsh_a2a/groups',
-    handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
-      readJsonBody(req, res, (body) => {
-        const action = body.action
-        let payload: string
-        if (action === 'create') {
-          const name = typeof body.name === 'string' ? body.name : ''
-          const stored = groupStore.create(name)
-          payload = JSON.stringify(stored === undefined ? { ok: false, error: 'invalid name or group cap reached' } : { ok: true, name: stored, groups: groupStore.list() })
-        } else if (action === 'remove') {
-          const name = typeof body.name === 'string' ? body.name : ''
-          payload = JSON.stringify({ ok: groupStore.remove(name), groups: groupStore.list() })
-        } else if (action === 'assign') {
-          const id = typeof body.id === 'string' ? body.id : ''
-          const name = typeof body.name === 'string' ? body.name : undefined
-          if (id === '' || name === undefined) {
-            payload = JSON.stringify({ ok: false, error: 'id and name are required' })
-          } else {
-            payload = JSON.stringify({ ok: groupStore.assign(id, name), groups: groupStore.list() })
-          }
-        } else {
-          payload = JSON.stringify({ ok: false, error: 'unknown action' })
-        }
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
-        res.end(payload)
-      })
-    }),
-  }), 'a2a: session-group route')
   // Canvas control: create/remove named multi-member teams and manage
   // membership. Same key guard as join/leave — membership enumerates
   // session ids. A member must be a joined session (live node or

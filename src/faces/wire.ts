@@ -73,6 +73,8 @@ function sameOrigin(a: string, b: string): boolean {
 
 /** The closure captures the wire faces read (grows with each extracted face). */
 export interface WireDeps {
+  /** The team-scope switch for routing, read at call time (owner ruling 2026-11-18: one hot-applied `teamScope`). */
+  readonly teamScopeRouting: () => boolean
   /** superagent design v4: the refusal when `team` is the superagent router (it takes no A2A work), else undefined. */
   readonly superagentInbound: (team: string) => string | undefined
   /** superagent design v4: whether `team` is the team's A2A address (its requests take no target queue slot). */
@@ -692,7 +694,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // standard as message delivery.)
           // Complete present-envelope validation before evaluating request admission.
           // The fully absent-envelope migration policy remains independent.
-          const foreignCli = config.teamScopeRouting && CLI_HANDLE_RE.test(caller) && cliDeposits.get(caller) === undefined
+          const foreignCli = d.teamScopeRouting() && CLI_HANDLE_RE.test(caller) && cliDeposits.get(caller) === undefined
           const envelopePresent=hasOriginClaimFields(req)
           const earlyClaim: OriginClaimResult = envelopePresent ? await completeInboundVerification(()=>verifyOriginClaim(req, { cli: true, rawBody })) : {ok:false,reason:'absent'}
           const memberClaim=/^[^/\s]+\/[0-9a-f]{8}(?:@[0-9a-f]{8})?$/.test(caller)||caller===config.team||caller.startsWith(config.team+'/')||canvasStore.list().some(name=>canvasStore.rawMembersOf(name).some(ref=>ref===caller||ref.startsWith(caller+'@')))||String(req.headers['x-a2a-caller']??'')===config.team

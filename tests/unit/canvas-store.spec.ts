@@ -1,7 +1,6 @@
 /**
  * CanvasStore unit tests: name validation, caps, member ordering (routing
- * priority), cross-team drop, and persistence round-trip — the same contract
- * family as group-store.spec.ts.
+ * priority), cross-team drop, and persistence round-trip.
  */
 import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'

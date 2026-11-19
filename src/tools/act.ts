@@ -61,198 +61,15 @@ export interface ActToolsDeps {
 export function createActTools(deps: ActToolsDeps) {
   const {
     ctx, config, logger, sessionNodes, joinedSessions,
-    teamMemberships, exposureStore, reportRing, recordTeamAudit,
+    exposureStore, reportRing, recordTeamAudit,
     a2aJoinGateRefusal, id8, routeTrunk,
   } = deps
   const reportLastAt = new Map<string, number>()
   /** Fix ④ loop circuit-breaker: session+text-hash → accepted-report timestamps (10min window). */
   const reportLoopRing = new Map<string, number[]>()
 
-  // S4: team-membership tools — node-declared rosters under the owner's
-  // allowlist curation. Joining is a network-visible declaration (the card
-  // publishes it), so the default allowlist denies everything: a refused
-  // join says why and names the curation surface instead of failing
-  // silently. Leaving is always allowed — it only shrinks exposure.
-  // S4 audit: every join/leave attempt — allowed or refused — lands in
-  // a bounded ring the state route serves (the ring itself is declared with
-  // the stores: the boot-settlement prune records before this section
-  // initializes). Refusals are the audit-worthy half (each one is widening
-  // pressure on the allowlist); log lines rotate away, this face is queryable.
-  // gh#11 (N7, operator directive: team creation is a human act): only an
-  // EXACT allowlist entry authorizes a join — each exact name is a
-  // deliberate operator act of creation. Wildcard/prefix patterns match
-  // nothing at join time: a pattern pre-authorizing every future name
-  // under it would let a model mint teams nobody created. Pattern entries
-  // remain readable (whoami shows them) but carry no mint rights.
-  const teamJoinExactAllowed = (team: string): boolean =>
-    deps.ownerAllowlist.includes(team)
-  const teamJoinPatternMatches = (team: string): boolean =>
-    deps.ownerAllowlist.some(pattern => {
-      if (pattern === '*') return true
-      if (pattern.endsWith('*')) {
-        // Boundary: the wildcard consumes at most the remainder of one
-        // '/'-delimited segment — `dsh*` matches `dsh/agent-1`, never
-        // `dshield`; `dsh/canvas/*` matches the canvas subtree only.
-        const prefix = pattern.slice(0, -1)
-        return team.startsWith(prefix) && (prefix.endsWith('/') || (team.length > prefix.length && team[prefix.length] === '/'))
-      }
-      return team === pattern
-    })
-  const joinedNodeOrNone = (id: string): string | undefined =>
-    joinedSessions.has(id) || sessionNodes.has(id) ? id : undefined
-
-
-  function registerTeamJoin(): void {
-    ctx.tools.register(defineTool({
-      name: 'a2a_team_join',
-      description:
-        'Declare one of this host\'s joined session nodes a member of a routable team '
-        + '(node-declared roster; the host card publishes it and peers rebuild team rosters as the union of '
-        + 'member declarations). Gated by the owner\'s teamJoinAllowlist — an empty list denies every join; '
-        + 'patterns are exact names or trailing-`*` prefixes. Canvas teams are out of scope here: their '
-        + 'membership is assigned by hand in the A2A workbench, and the tool refuses `/canvas/` names. '
-        + 'Collaboration itself stays within teams (team-scoped routing is the separate teamScopeRouting switch).',
-      parameters: {
-        team: { type: 'string', description: 'The routable team to join (full form, e.g. dsh/review-gate).' },
-        id: { type: 'string', description: 'The joined session node id on this host that declares the membership.' },
-      },
-      output: {
-        schema: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            ok: { type: 'boolean', required: true },
-            team: { type: 'string' },
-            id: { type: 'string' },
-            teams: { type: 'array', items: { type: 'string' } },
-            error: { type: 'string', description: 'Refusal reason when ok is false: unknown node or team not allowlisted.' },
-          },
-        },
-        render: (_args, value) => [{
-          type: 'text',
-          text: value.ok === true
-            ? `Node ${String(value.id)} joined team ${String(value.team)}; its teams: ${Array.isArray(value.teams) ? value.teams.join(', ') : String(value.team)}`
-            : `Join refused: ${String(value.error)}`,
-        }],
-      },
-      presentCall: () => ({ card: 'generic', title: 'A2A team join', kind: 'other', rawInput: null }),
-      execute: async (args, exec): Promise<{ ok: boolean; team?: string; id?: string; teams?: string[]; error?: string }> => {
-        a2aJoinGateRefusal(exec)
-        const team = String(args.team ?? '').trim()
-        const id = String(args.id ?? '').trim()
-        if (team === '' || id === '') {
-          const reason = '[BAD_ARGUMENTS] both team and id are required'
-          recordTeamAudit('join', team, id, false, reason)
-          return { ok: false, error: reason }
-        }
-        if (joinedNodeOrNone(id) === undefined) {
-          // K3 feedback (2026-10-20): reason code + a step the MODEL can take.
-          // The old text pointed at a sidebar control and a CLI — neither is
-          // executable by a session agent. Joining is a host-side human
-          // control; the model's executable step is to ask its operator and
-          // to self-check state with a2a_whoami.
-          const reason = `[NOT_JOINED] session ${id} is not a joined node on this host — network joining is a host-side human control (the GUI sidebar A2A panel), so relay the request to your human operator; once the node is joined, retry this declaration. Your current state (joined/live, teams, allowlist) is one a2a_whoami call away`
-          recordTeamAudit('join', team, id, false, reason)
-          return { ok: false, error: reason }
-        }
-        // V4 (gh#7, N2): a model tool changes membership for the CALLING
-        // session only — agent-1 declaring agent-2 into a team was an agent
-        // creating a link for another node, published to the whole fleet via
-        // the card. The host face (agent-less, operator surface) may still
-        // act for any joined node.
-        if (exec?.agent !== undefined && String(exec.agent.id) !== id) {
-          const reason = `[NOT_SELF] a model tool may only declare membership for its own session node (${String(exec.agent.id)}) — membership for other nodes is your operator's gesture (the workbench or the host face); N2: agents use links, they do not create them for others`
-          recordTeamAudit('join', team, id, false, reason)
-          return { ok: false, error: reason }
-        }
-        // Unified teaming (0.6.6): canvas teams are the human-composed surface.
-        // A session may not self-join one through the roster tool — membership
-        // there is assigned by hand, so the refusal names the surface where the
-        // assignment happens. Any `/canvas/` name (this zone's or a peer's) is
-        // refused: remote canvas membership is the owning host's store, and a
-        // roster declaration here would neither feed it nor be read by it.
-        if (team.includes('/canvas/')) {
-          const reason = `[CANVAS_TEAM] team "${team}" is a canvas team — canvas membership is assigned by hand in the A2A workbench (open /__dsh_a2a_nexus/, pick the team, add or remove members there); the roster tool manages allowlisted teams only. If this membership must change now, relay the request to your human operator`
-          recordTeamAudit('join', team, id, false, reason)
-          return { ok: false, error: reason }
-        }
-        if (!teamJoinExactAllowed(team)) {
-          const reason = teamJoinPatternMatches(team)
-            ? `[PATTERN_NO_MINT] team "${team}" matches only a wildcard/pattern entry of this host's teamJoinAllowlist — patterns carry no mint rights (gh#11/N7: team creation is a human act); ask the owner to add the EXACT team name, which is the act of creating it`
-            : `[ALLOWLIST_DENY] team "${team}" is not in this host's teamJoinAllowlist — the owner curates joinable teams with exact names (patterns match nothing at join time; human-composed groups live in the workbench's canvas teams); ask them to add the exact name. The live list is visible in a2a_whoami`
-          recordTeamAudit('join', team, id, false, reason)
-          return { ok: false, error: reason }
-        }
-        teamMemberships.add(id, team)
-        recordTeamAudit('join', team, id, true)
-        logger.info(`a2a: ${id8(id)} declared membership in ${team}`)
-        return { ok: true, team, id, teams: [...teamMemberships.teamsOf(id)] }
-      },
-    }))
-  }
-
-  function registerTeamLeave(): void {
-    ctx.tools.register(defineTool({
-      name: 'a2a_team_leave',
-      description:
-        'Retract one team-membership declaration previously made by a2a_team_join. Always allowed — leaving only '
-        + 'shrinks the node\'s visible collaboration surface.',
-      parameters: {
-        team: { type: 'string', description: 'The routable team to leave.' },
-        id: { type: 'string', description: 'The session node id retracting the membership.' },
-      },
-      output: {
-        schema: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            ok: { type: 'boolean', required: true },
-            team: { type: 'string' },
-            id: { type: 'string' },
-            teams: { type: 'array', items: { type: 'string' } },
-            error: { type: 'string', description: 'Refusal reason when ok is false: node unknown or membership absent.' },
-          },
-        },
-        render: (_args, value) => [{
-          type: 'text',
-          text: value.ok === true
-            ? `Node ${String(value.id)} left team ${String(value.team)}; remaining teams: ${Array.isArray(value.teams) && value.teams.length > 0 ? value.teams.join(', ') : 'none'}`
-            : `Leave refused: ${String(value.error)}`,
-        }],
-      },
-      presentCall: () => ({ card: 'generic', title: 'A2A team leave', kind: 'other', rawInput: null }),
-      execute: async (args, exec): Promise<{ ok: boolean; team?: string; id?: string; teams?: string[]; error?: string }> => {
-        a2aJoinGateRefusal(exec)
-        const team = String(args.team ?? '').trim()
-        const id = String(args.id ?? '').trim()
-        if (team === '' || id === '') {
-          recordTeamAudit('leave', team, id, false, 'both team and id are required')
-          return { ok: false, error: 'both team and id are required' }
-        }
-        if (joinedNodeOrNone(id) === undefined) {
-          const reason = `[NOT_JOINED] session ${id} is not a joined node on this host — check current state with a2a_whoami`
-          recordTeamAudit('leave', team, id, false, reason)
-          return { ok: false, error: reason }
-        }
-        // V4 (gh#7, N2): same self-only rule as join — narrowing another
-        // node's surface is still a link change by a third party.
-        if (exec?.agent !== undefined && String(exec.agent.id) !== id) {
-          const reason = `[NOT_SELF] a model tool may only retract membership for its own session node (${String(exec.agent.id)}); N2 — use links, do not reshape another node's`
-          recordTeamAudit('leave', team, id, false, reason)
-          return { ok: false, error: reason }
-        }
-        if (!teamMemberships.teamsOf(id).includes(team)) {
-          const reason = `session ${id} declares no membership in "${team}" — nothing to leave`
-          recordTeamAudit('leave', team, id, false, reason)
-          return { ok: false, error: reason }
-        }
-        teamMemberships.remove(id, team)
-        recordTeamAudit('leave', team, id, true)
-        logger.info(`a2a: ${id8(id)} retracted membership in ${team}`)
-        return { ok: true, team, id, teams: [...teamMemberships.teamsOf(id)] }
-      },
-    }))
-  }
+  // Roster self-join (a2a_team_join / a2a_team_leave) is retired (owner ruling 2026-11-18): a team is a canvas team, composed by
+  // the owner on the board or by the team builder's blueprints. Rosters declared before stay readable for one version.
 
   function registerExposure(): void {
     ctx.tools.register(defineTool({
@@ -425,5 +242,5 @@ export function createActTools(deps: ActToolsDeps) {
     }))
   }
 
-  return { registerTeamJoin, registerTeamLeave, registerExposure, registerReport, registerRoute }
+  return { registerExposure, registerReport, registerRoute }
 }
