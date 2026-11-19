@@ -175,6 +175,10 @@ export interface A2aRouteError {
   readonly task_id?: string
   /** One actionable next step for the caller (#282 S1); absent when nothing the caller can do helps. */
   readonly next?: string
+  /** #713 A2: the receiving host refused for its full correspondence window; nothing was sent for this occurrence. */
+  readonly refusal?: import('./task-delivery-capacity.ts').CapacityRefusal
+  /** #713 A2: how many candidates refused for their host's full correspondence window (multi-candidate routes). */
+  readonly capacityRefusals?: number
 }
 
 /** Canonical `a2a_route` value: success or explicit failure. */

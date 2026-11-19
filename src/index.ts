@@ -64,6 +64,7 @@ import { ReconciliationReminders, type ReminderAgent } from './reconciliation-re
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
 import {FollowupAcceptanceUnknown,ACCEPTANCE_UNKNOWN_NOTE,ACCEPTANCE_INSERTED_NOTE} from './followup-admission.ts'
+import { capacityRefusalOf, capacityRefusalNote, capacityRefusalFields, type CapacityRefusal } from './task-delivery-capacity.ts'
 import { runReceiptLadder } from './receipt-ladder.ts'
 import { receiptFailure, retryReceiptDelivery, transientReceiptFailure, receiptRetryWait, readReceiptReplay, RECEIPT_RETRYABLE } from './receipt-retry.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
@@ -2696,7 +2697,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number,acceptance?:'inserted'|void) => void, callerKey?: string): Promise<
-    { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; status?: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; localMiss?: true }
+    { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; status?: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; localMiss?: true; refusal?: CapacityRefusal }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
@@ -2737,7 +2738,7 @@ export function apply(ctx: Context, config: Config): void {
    * @returns the agent's final reply, or the explicit failure.
    */
   function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number,acceptance?:'inserted'|void) => void, callerKey?: string): Promise<
-    { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown' }
+    { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; refusal?: CapacityRefusal }
   > {
     // superagent v4: whatever address resolved to it (a canvas team, the node team), the router takes no A2A work.
     if (superagentTeams?.ofSession(String(agent.id)) !== undefined) {
@@ -2793,6 +2794,8 @@ export function apply(ctx: Context, config: Config): void {
         waiter.timeoutDisposer?.()
         if(error instanceof AdmittedBookkeepingError){resolve({ok:true,reply:ADMITTED_BOOKKEEPING_NOTE,receiverBookkeeping:'failed',placeholder:true});return}
         if(error instanceof FollowupAcceptanceUnknown){resolve({ok:false,error:ACCEPTANCE_UNKNOWN_NOTE,acceptance:'unknown'});return}
+        // #713 A2: reserve refused before enqueue — this occurrence was not sent; say so, typed.
+        const refusal=capacityRefusalOf(error);if(refusal){resolve({ok:false,error:capacityRefusalNote(refusal),refusal});return}
         resolve({ ok: false, error: `The DSH session rejected the message: ${String(error)}` })
       }
     })
@@ -4278,6 +4281,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // cheapest possible and immune to nested-signal aborts), then direct
       // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
+      // #713 A2: candidates refused for their host's full correspondence window (a fact about each such host, not the network).
+      const capacityRefusals: CapacityRefusal[] = []
       if (signal?.aborted) return localRoute({ ok: false, error: 'route aborted before dispatch', code: -32000 })
       const outcome = foreignOwner !== undefined ? undefined : await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress, agent === undefined ? undefined : String(agent.id))
       const localBirth = localBirths.get(taskId)
@@ -4290,6 +4295,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           return ((outcome.bridge === undefined && (outcome.task_status === 'TASK_STATE_DELIVERED' || outcome.task_status === 'TASK_STATE_ABORTED_WAIT' || (t => t !== undefined && nodeTaint.of(String(t.id)) === '')(resolveAgentForTeam(args.team) ?? canvasLiveAgent(parseCanvasTeamName(args.team))))) ? localRoute(outcome) : outcome) as unknown as Record<string, JsonValue>
         }
         if(outcome.acceptance==='unknown')return localRoute(outcome) as unknown as Record<string,JsonValue>
+        if (outcome.refusal) capacityRefusals.push(outcome.refusal)
         failures.push(`local: ${outcome.error}`)
       }
       // Failover seam for canvas teams: after the local tiers miss, the
@@ -4354,11 +4360,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           }
           return { ...result, ...(result.ok ? { team: args.team } : {}) } as unknown as Record<string, JsonValue>
         }
+        if (!result.ok && result.refusal) capacityRefusals.push(result.refusal)
         failures.push(`${candidate}: ${result.error}`)
       }
       if (failures.length > 0) logger.warn(`route to team "${args.team}" exhausted its candidates: ${failures.join('; ')}`)
       const verdict = routeVerdict(args.team, failures, candidatePool.length)
-      return { ...verdict, error: await diagnoseCanvas(args.team, verdict.error, callerSession) }
+      return { ...verdict, error: await diagnoseCanvas(args.team, verdict.error, callerSession), ...capacityRefusalFields(capacityRefusals, failures.length) } as unknown as Record<string, JsonValue>
   }
 
   /**
@@ -4532,6 +4539,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         endRoute(flight)
         recordActivity('out', team, 'local', false)
         if(error instanceof FollowupAcceptanceUnknown)return{ok:false,error:ACCEPTANCE_UNKNOWN_NOTE,acceptance:'unknown',task_id:taskId,code:-32000}
+        const refusal=capacityRefusalOf(error);if(refusal)return{ok:false,error:capacityRefusalNote(refusal),refusal,task_id:taskId,code:-32000}
         return { ok: false, error: `waking or steering the session for team "${team}" failed: ${String(error)}`, code: -32000 }
       }
     }

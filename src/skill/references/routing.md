@@ -83,6 +83,10 @@ submitting the same fingerprint inside the idempotency window returns the
 original verdict (-32002/-32003 shapes) instead of executing twice. Never
 work around a duplicate verdict by mutating the message — reconcile instead.
 
+## Correspondence capacity refusal (#713)
+
+A host keeps a correspondence record for each task delivery (512 records, 24 h, host-wide). When that window is full, a new delivery is refused before anything is enqueued: the failure carries `refusal: {code: 'correspondence-capacity', notSent: true, capacity}` (or, on a route that also had other candidate failures, `capacityRefusals: <n>`), and `a2a_status` shows the window as `Delivery correspondence`. Nothing was sent for that request. Do not cancel tasks, join or route to other seats, or reuse task ids to make room; the earliest possible expiry in the view is not a promise of a free slot. Wait, or ask that host's owner.
+
 ## -32005 (DELIVERED-UNSETTLED) procedure
 
 1. Note the task id from the result.

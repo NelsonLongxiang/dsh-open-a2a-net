@@ -7,6 +7,7 @@ import {ACCEPTANCE_UNKNOWN_NOTE,ACCEPTANCE_INSERTED_NOTE} from './followup-admis
  * @module @nelsonlongxiang/dsh-open-a2a-net/a2a-client
  */
 
+import { parseCapacityRefusal, capacityRefusalNote, type CapacityRefusal } from './task-delivery-capacity.ts'
 import { ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
 import { RECEIPT_RETRYABLE } from './receipt-retry.ts'
 import { verifyCard, type CardRejection } from './card.ts'
@@ -71,6 +72,8 @@ export type CardFetchOutcome =
 
 type WireRoute = {
   readonly acceptance?:unknown
+  /** #713 A2: a receiving host's typed capacity refusal; decoded strictly, never trusted as an object. */
+  readonly refusal?: unknown
   readonly receiverBookkeeping?:unknown
   readonly routed?: unknown
   readonly delivered?: unknown
@@ -316,11 +319,13 @@ export class A2aClient {
       // caller can tell a terminal verdict from an ordinary transport miss
       // without parsing prose.
       let code = -32000
+      let refusal: CapacityRefusal | undefined
       const bodyText = (error as { bodyText?: unknown }).bodyText
       if (typeof bodyText === 'string') {
         try {
-          const parsed = JSON.parse(bodyText) as { code?: unknown }
+          const parsed = JSON.parse(bodyText) as { code?: unknown; refusal?: unknown; acceptance?: unknown }
           if (typeof parsed.code === 'number') code = parsed.code
+          if (parsed.acceptance !== 'unknown') refusal = parseCapacityRefusal(parsed.refusal)
         } catch {
           /* prose body — keep the generic code */
         }
@@ -336,15 +341,18 @@ export class A2aClient {
         // whose budget ended it. Pure observation, zero semantics.
         abortElapsedMs: Date.now() - dispatchedAt,
         ...(ownBudgetExhausted ? { ownBudgetExhausted: true } : {}),
+        ...(refusal ? { refusal, error: capacityRefusalNote(refusal) } : {}),
       }
       return failure
     }
     if (raw.error !== undefined && raw.error !== null) {
-      const failure: { ok: false; error: string; code?: number; acceptance?:'unknown';task_id?:string } = {
+      const failure: { ok: false; error: string; code?: number; acceptance?:'unknown';task_id?:string;refusal?:CapacityRefusal } = {
         ok: false,
         error: typeof raw.error === 'string' ? raw.error : JSON.stringify(raw.error),
       }
       if(raw.acceptance==='unknown'){failure.acceptance='unknown';failure.error=ACCEPTANCE_UNKNOWN_NOTE;failure.task_id=wireText(raw.task_id)||taskIdFromCaller}
+      // #713 A2: an unknown acceptance outranks a capacity claim; the refusal is rebuilt from a strict decode, its text local.
+      else{const refusal=parseCapacityRefusal(raw.refusal);if(refusal){failure.refusal=refusal;failure.error=capacityRefusalNote(refusal)}}
       if (typeof raw.code === 'number') failure.code = raw.code
       return failure
     }
