@@ -39,6 +39,7 @@ class FakeAgentsService extends Service {
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
     apiKey: '',
+    originClaimWindow: true, // #64: fixture posts unsigned deliveries (production default is closed)
     session: 'sess-1',
     team: 'dsh',
     routeTimeoutMs: 60_000,
@@ -70,10 +71,17 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
 }
 
 /** Module-level host mount for the S3 admission tests (route tool included). */
-async function mountHost(overrides: Partial<Config> = {}): Promise<{ ctx: Context; port: number; join: ToolDefinition | undefined; route: ToolDefinition | undefined }> {
+/** Rosters can no longer be joined (owner ruling 2026-11-18); one declared before is seeded on disk, as an old host has it. */
+function seedRosters(home: string, rosters: Record<string, readonly string[]>): void {
+  const store = new TeamMembershipStore(join(home, 'a2a', 'teams.json'))
+  for (const [id, teams] of Object.entries(rosters)) for (const team of teams) store.add(id, team)
+}
+
+async function mountHost(overrides: Partial<Config> = {}, rosters: Record<string, readonly string[]> = {}): Promise<{ ctx: Context; port: number; route: ToolDefinition | undefined }> {
   const home = mkdtempSync(join(tmpdir(), 'a2a-team-s3-'))
   mkdirSync(join(home, 'a2a'), { recursive: true })
   writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: ['agent-1'] }))
+  seedRosters(home, rosters)
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
@@ -94,7 +102,6 @@ async function mountHost(overrides: Partial<Config> = {}): Promise<{ ctx: Contex
   return {
     ctx,
     port,
-    join: ctx.tools.get('a2a_team_join'),
     route: ctx.tools.get('a2a_route'),
   }
 }
@@ -137,140 +144,39 @@ describe('team membership store', () => {
   })
 })
 
-describe('a2a_team_join / a2a_team_leave tools', () => {
-  async function mounted(overrides: Partial<Config> = {}): Promise<{ ctx: Context; port: number; home: string; join: ToolDefinition | undefined; leave: ToolDefinition | undefined; route: ToolDefinition | undefined }> {
-    const home = mkdtempSync(join(tmpdir(), 'a2a-team-tools-'))
-    mkdirSync(join(home, 'a2a'), { recursive: true })
-    writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: ['agent-1'] }))
-    const ctx = new Context()
-    await ctx.plugin(SystemPrompt)
-    await ctx.plugin(ToolRuntime)
-    await ctx.plugin(TimerService)
-    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
-    await ctx.plugin(FakeAgentsService)
-    ctx.provide('sessionPersistence', {
-      list: async () => [{ id: SessionId('agent-1') }],
-    } as unknown as import('@deepseek-ai/dsh-session-persistence').SessionPersistence)
-    apply(ctx, makeConfig({ dshHome: home, ...overrides }))
-    // Mount agent-1 live: a mounted joined session passes the join gate, so
-    // the S3 assertions exercise the team-scope layer, not the join gate.
-    const agents = ctx.get('agents') as unknown as FakeAgentsService
-    const live = { id: SessionId('agent-1'), session: { events: [] }, steer: vi.fn() } as unknown as Agent
-    agents.agent = live
-    ctx.emit('agent/created', { agent: live })
-    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
-    return {
-      ctx,
-      port,
-      home,
-      join: ctx.tools.get('a2a_team_join'),
-      leave: ctx.tools.get('a2a_team_leave'),
-      route: ctx.tools.get('a2a_route'),
-    }
-  }
-
-  it('default-deny joins with guidance, allowlisted joins land in store, state, and card', async () => {
-    const { ctx, port, home, join } = await mounted()
-    const refused = await join?.execute({ team: 'dsh/private-ops', id: 'agent-1' }, {}) as { ok: boolean; error?: string }
-    expect(refused?.ok).toBe(false)
-    expect(refused?.error).toContain('teamJoinAllowlist')
-    const ok = await join?.execute({ team: 'dsh/review-gate', id: 'agent-1' }, {}) as { ok: boolean; teams?: string[] }
-    expect(ok?.ok).toBe(true)
-    expect(ok?.teams).toEqual(['dsh/review-gate'])
-    const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as {
-      registry: {
-        teams: Array<{ team: string; members: string[]; live: number }>
-        nodes: Array<{ id: string; teams: string[]; zone: string }>
-        teamAudit: Array<{ action: string; team: string; id: string; ok: boolean }>
-      }
-    }
-    expect(state.registry.teams).toEqual([{ team: 'dsh/review-gate', members: ['agent-1'], live: 1 }])
-    expect(state.registry.nodes.find(node => node.id === 'agent-1')).toMatchObject({ teams: ['dsh/review-gate'], zone: 'dsh' })
-    expect(state.registry.teamAudit).toHaveLength(2)
-    expect(state.registry.teamAudit[0]).toMatchObject({ action: 'join', team: 'dsh/private-ops', id: 'agent-1', ok: false })
-    expect(state.registry.teamAudit[0]?.reason).toContain('teamJoinAllowlist')
-    expect(state.registry.teamAudit[1]).toMatchObject({ action: 'join', team: 'dsh/review-gate', id: 'agent-1', ok: true })
-    const card = JSON.parse(await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`, { headers: envelopeFor(home, port, 'dsh') })).text()) as {
-      teamMemberships?: Array<{ node: string; team: string }>
-    }
-    expect(card.teamMemberships).toHaveLength(1)
-    expect(card.teamMemberships?.[0]?.team).toBe('dsh/review-gate')
-    expect(card.teamMemberships?.[0]?.node).toBe('dsh/agent-1')
-    await ctx.fiber.dispose()
-  })
-
-  it('refuses canvas-team names with workbench guidance (human-assigned, 0.6.6)', async () => {
-    const { ctx, join } = await mounted({ teamJoinAllowlist: ['*'] })
-    const refused = await join?.execute({ team: 'dsh/canvas/review-gate', id: 'agent-1' }, {}) as { ok: boolean; error?: string }
-    expect(refused?.ok).toBe(false)
-    expect(refused?.error).toContain('canvas team')
-    expect(refused?.error).toContain('/__dsh_a2a_nexus/')
-    // Even a wildcard allowlist cannot open the canvas namespace to agents.
-    const second = await join?.execute({ team: 'dsh/canvas/ops', id: 'agent-1' }, {}) as { ok: boolean }
-    expect(second?.ok).toBe(false)
-    await ctx.fiber.dispose()
-  })
-
-  it('gh#11 N7: wildcard boundaries stop smuggling AND stop minting; exact entries are the only join basis', async () => {
-    const { ctx, port, join } = await mounted({ teamJoinAllowlist: ['dsh*', 'dsh/agent-team'] })
-    // `dsh*` must not smuggle `dshield` (segment boundary) — and under
-    // gh#11 it does not authorize ANY new name either: patterns carry no
-    // mint rights. Only the exact entry joins.
-    const smuggle = await join?.execute({ team: 'dshield', id: 'agent-1' }, {}) as { ok: boolean; error?: string }
-    expect(smuggle?.ok).toBe(false)
-    expect(smuggle?.error).toContain('teamJoinAllowlist')
-    const patternOnly = await join?.execute({ team: 'dsh/minted-by-model', id: 'agent-1' }, {}) as { ok: boolean; error?: string }
-    expect(patternOnly?.ok).toBe(false)
-    expect(patternOnly?.error).toContain('[PATTERN_NO_MINT]')
-    const subtree = await join?.execute({ team: 'dsh/agent-team', id: 'agent-1' }, {}) as { ok: boolean }
-    expect(subtree?.ok).toBe(true)
-    const state = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json() as {
-      registry: { teamAudit: Array<{ action: string; team: string; ok: boolean; reason?: string }> }
-    }
-    const audit = state.registry.teamAudit
-    expect(audit.some(entry => entry.action === 'join' && entry.ok === false && entry.team === 'dshield')).toBe(true)
-    expect(audit.some(entry => entry.action === 'join' && entry.ok === true && entry.team === 'dsh/agent-team')).toBe(true)
-    await ctx.fiber.dispose()
-  })
-
-  it('refuses joins for unknown nodes, duplicate noise is idempotent, and leave retracts', async () => {
-    const { ctx, join, leave } = await mounted({ teamJoinAllowlist: ['dsh/anything'] })
-    const unknown = await join?.execute({ team: 'dsh/anything', id: 'session-ghost-0000-0000-0000-000000000000' }, {}) as { ok: boolean; error?: string }
-    expect(unknown?.ok).toBe(false)
-    expect(unknown?.error).toContain('not a joined node')
-    const first = await join?.execute({ team: 'dsh/anything', id: 'agent-1' }, {}) as { ok: boolean }
-    expect(first?.ok).toBe(true)
-    const left = await leave?.execute({ team: 'dsh/anything', id: 'agent-1' }, {}) as { ok: boolean; teams?: string[] }
-    expect(left?.ok).toBe(true)
-    expect(left?.teams).toEqual([])
-    const again = await leave?.execute({ team: 'dsh/anything', id: 'agent-1' }, {}) as { ok: boolean; error?: string }
-    expect(again?.ok).toBe(false)
-    expect(again?.error).toContain('nothing to leave')
+describe('roster self-join is retired (owner ruling 2026-11-18)', () => {
+  it('no join or leave tool is registered; the board cannot create or grow a roster, only shrink one', async () => {
+    const { ctx, port } = await mountHost({ teamJoinAllowlist: ['dsh/review-gate'] }, { 'agent-1': ['dsh/review-gate'] })
+    expect(ctx.tools.get('a2a_team_join')).toBeUndefined()
+    expect(ctx.tools.get('a2a_team_leave')).toBeUndefined()
+    const op = async (body: Record<string, unknown>) => await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/roster-op`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json() as { ok: boolean; error?: string; members?: string[] }
+    expect(await op({ op: 'create', name: 'fresh', ids: ['agent-1', 'agent-2'] })).toMatchObject({ ok: false, error: expect.stringContaining('retired') })
+    expect(await op({ op: 'add-member', name: 'review-gate', id: 'agent-1' })).toMatchObject({ ok: false, error: expect.stringContaining('retired') })
+    expect(await op({ op: 'remove-member', name: 'review-gate', id: 'agent-1' })).toMatchObject({ ok: true, members: [] })
     await ctx.fiber.dispose()
   })
 })
 
 describe('S3 team-scoped routing admission', () => {
   it('refuses a teamless session caller and a mismatched team when enforcement is on', async () => {
-    const { ctx, join, route } = await mountHost({ teamScopeRouting: true })
+    const { ctx, route } = await mountHost({ teamScopeRouting: true })
     const exec = { agent: { id: SessionId('agent-1') } }
     const teamless = await route?.execute({ team: 'dsh/anything', message: 'q' }, exec) as { ok: boolean; error?: string }
     expect(teamless?.ok).toBe(false)
     expect(teamless?.error).toContain('has declared no team membership')
-    const joined = await join?.execute({ team: 'dsh/review-gate', id: 'agent-1' }, {}) as { ok: boolean }
-    expect(joined?.ok).toBe(true)
-    const mismatched = await route?.execute({ team: 'dsh/other-team', message: 'q' }, exec) as { ok: boolean; error?: string }
+    await ctx.fiber.dispose()
+    // A roster declared before the retirement still scopes the routing for one version.
+    const seeded = await mountHost({ teamScopeRouting: true }, { 'agent-1': ['dsh/review-gate'] })
+    const mismatched = await seeded.route?.execute({ team: 'dsh/other-team', message: 'q' }, exec) as { ok: boolean; error?: string }
     expect(mismatched?.ok).toBe(false)
     expect(mismatched?.error).toContain('requires declared membership')
     expect(mismatched?.error).toContain('dsh/review-gate')
-    await ctx.fiber.dispose()
+    await seeded.ctx.fiber.dispose()
   })
 
   it('a member caller passes admission (fails later on resolution) and host-side callers stay exempt', async () => {
-    const { ctx, join, route } = await mountHost({ teamScopeRouting: true, teamJoinAllowlist: ['dsh/nowhere-0000'] })
+    const { ctx, route } = await mountHost({ teamScopeRouting: true, teamJoinAllowlist: ['dsh/nowhere-0000'] }, { 'agent-1': ['dsh/nowhere-0000'] })
     const exec = { agent: { id: SessionId('agent-1') } }
-    const declared = await join?.execute({ team: 'dsh/nowhere-0000', id: 'agent-1' }, {}) as { ok: boolean }
-    expect(declared?.ok).toBe(true)
     // Admission passes; dispatch then fails the normal resolution way —
     // the scope gate must not be the error a member sees.
     const routed = await route?.execute({ team: 'dsh/nowhere-0000', message: 'q' }, exec) as { ok: boolean; error?: string }
@@ -571,10 +477,11 @@ describe('discovery invisibility for unjoined sessions (owner ruling B)', () => 
 })
 
 describe('a2a_whoami + structured join refusals (K3 feedback, 0.6.14)', () => {
-  async function mountedWhoami(overrides: Partial<Config> = {}): Promise<{ ctx: Context; join: ToolDefinition | undefined; whoami: ToolDefinition | undefined }> {
+  async function mountedWhoami(overrides: Partial<Config> = {}, rosters: Record<string, readonly string[]> = {}): Promise<{ ctx: Context; whoami: ToolDefinition | undefined }> {
     const home = mkdtempSync(join(tmpdir(), 'a2a-whoami-'))
     mkdirSync(join(home, 'a2a'), { recursive: true })
     writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: ['agent-1'] }))
+    seedRosters(home, rosters)
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
@@ -589,7 +496,7 @@ describe('a2a_whoami + structured join refusals (K3 feedback, 0.6.14)', () => {
     const live = { id: SessionId('agent-1'), session: { events: [] }, steer: vi.fn() } as unknown as Agent
     agents.agent = live
     ctx.emit('agent/created', { agent: live })
-    return { ctx, join: ctx.tools.get('a2a_team_join'), whoami: ctx.tools.get('a2a_whoami') }
+    return { ctx, whoami: ctx.tools.get('a2a_whoami') }
   }
 
   it('answers an UNJOINED session without any gate: joined=false, no handle, allowlist visible, initiator-face note', async () => {
@@ -609,12 +516,8 @@ describe('a2a_whoami + structured join refusals (K3 feedback, 0.6.14)', () => {
     await ctx.fiber.dispose()
   })
 
-  it('answers a joined+declared node with handle, roster teams, and its latest refusal reason', async () => {
-    const { ctx, join, whoami } = await mountedWhoami()
-    const refused = await join?.execute({ team: 'dsh/private-ops', id: 'agent-1' }, {}) as { ok: boolean; error?: string }
-    expect(refused?.error).toContain('[ALLOWLIST_DENY]')
-    const ok = await join?.execute({ team: 'dsh/review-gate', id: 'agent-1' }, {}) as { ok: boolean }
-    expect(ok?.ok).toBe(true)
+  it('answers a joined node with handle and the roster teams declared before the retirement', async () => {
+    const { ctx, whoami } = await mountedWhoami({}, { 'agent-1': ['dsh/review-gate'] })
     const answer = await whoami?.execute({}, { agent: { id: SessionId('agent-1') } }) as {
       node: { team?: string; joined: boolean; live: boolean }
       teams: { roster: string[]; canvas: string[] }
@@ -627,22 +530,6 @@ describe('a2a_whoami + structured join refusals (K3 feedback, 0.6.14)', () => {
     expect(answer?.node.team).toMatch(/^dsh\//)
     expect(answer?.teams.roster).toEqual(['dsh/review-gate'])
     expect(answer?.teams.canvas).toEqual([])
-    expect(answer?.lastRefusals[0]?.team).toBe('dsh/private-ops')
-    expect(answer?.lastRefusals[0]?.reason).toContain('[ALLOWLIST_DENY]')
-    await ctx.fiber.dispose()
-  })
-
-  it('join refusals carry reason codes with model-executable next steps (no CLI pointers)', async () => {
-    const { ctx, join } = await mountedWhoami({ teamJoinAllowlist: ['*'] })
-    const notJoined = await join?.execute({ team: 'dsh/anything', id: 'session-ghost-0000-0000-0000-000000000000' }, {}) as { ok: boolean; error?: string }
-    expect(notJoined?.error).toContain('[NOT_JOINED]')
-    expect(notJoined?.error).toContain('a2a_whoami')
-    expect(notJoined?.error).not.toContain('a2a-collab')
-    expect(notJoined?.error).toContain('human operator')
-    const canvas = await join?.execute({ team: 'dsh/canvas/ops', id: 'agent-1' }, {}) as { ok: boolean; error?: string }
-    expect(canvas?.error).toContain('[CANVAS_TEAM]')
-    const empty = await join?.execute({ team: '', id: '' }, {}) as { ok: boolean; error?: string }
-    expect(empty?.error).toContain('[BAD_ARGUMENTS]')
     await ctx.fiber.dispose()
   })
 

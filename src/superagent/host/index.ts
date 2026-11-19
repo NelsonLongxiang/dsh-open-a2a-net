@@ -38,14 +38,14 @@ import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, grantClass, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
-import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
+import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 import { searchTeam } from './search.ts'
 import { A2aReceipts, END_RECEIPT_GRACE_MS } from './receipts.ts'
 export { END_RECEIPT_GRACE_MS } from './receipts.ts'
 /** How long a declined tool request stays declined before the tool may be asked about again (design tool-requests T4). */
 export const TOOL_ASK_AGAIN_MS = 24 * 3_600_000
 import { agentLedEnd, clip, TEXT_CAP, presetRefusal, notTakenText, OTHER_TICKETS_SHOWN, ORIGIN_LINE_NOTE, OBSERVER_LINE, candidateCard, YGL_WRITE, yglCardLines, yglRouterLine } from './cards.ts'
-import { teamYglProject } from './ygl-home.ts'
+import { teamYglProject, teamYglScope, YGL_UNKNOWN } from './ygl-home.ts'
 import { NamedDispatch, WAIT, SWAP } from './named-dispatch.ts'
 import { RootDispatch, childLabel, isChildTeam } from './root-dispatch.ts'
 import { splitTeamRef } from '../../canvas-member.ts'
@@ -152,6 +152,7 @@ export class SuperagentHost {
       memberNotes: (member, ticket) => this.memberNotes(member, ticket),
       deliver: (member, text, kind, ticketId, run) => this.deliverToMember(member, text, kind, ticketId, run), engine: () => this.engine,
       paused: () => this.settingsValue.paused,
+      ready: () => this.yglReady(),
       cancelTurn: member => this.d.cancelTurn?.(member) === true,
       reportFor: (ticketId, member, state, summary) => { this.engine.report(ticketId, { state, summary: clip(summary, 2_000) }); this.relayReport(ticketId, state, summary); this.pass(); void member },
       ticket: id => this.store.tickets.get(id), trigger: id => this.store.triggers.get(id), logger: d.logger,
@@ -199,7 +200,7 @@ export class SuperagentHost {
       logger: d.logger,
     })
     this.receipts = new A2aReceipts({ store: this.store, a2a: this.a2a, a2aOn: () => this.settingsValue.sources.a2a, now: () => this.now(), seatOf: ticketId => this.seatOf(ticketId),
-      parentOf: ticketId => this.splits.parentOf(ticketId), splitView: ticketId => this.splitView(ticketId), senderHold: triggerId => this.senderHold(triggerId), logger: d.logger })
+      parentOf: ticketId => this.splits.parentOf(ticketId), splitView: ticketId => this.splitView(ticketId), senderHold: triggerId => this.senderHold(triggerId), ...(d.receiptLedger !== undefined ? { ledger: d.receiptLedger } : {}), logger: d.logger })
     this.prs = new PrFollower({
       path: join(dir, 'pr-follow.json'), tickets: () => this.store.tickets.list(), engine: () => this.engine, gh: d.gh ?? defaultGh,
       allowed: () => this.settingsValue.allowed.github, paused: () => this.settingsValue.paused, logger: d.logger,
@@ -212,7 +213,9 @@ export class SuperagentHost {
     })
     this.ruleChanges = new RuleChanges(join(dir, 'rule-changes.json'))
     this.settingsHistory = new SettingsHistory(join(dir, 'settings-history.json'))
-    this.decisions = new DecisionBook(join(dir, 'decisions.json'), ticketId => { const ticket = this.store.tickets.get(ticketId); return ticket !== undefined && ticket.ended === undefined })
+    // The book prunes decided cards by age: on the host's clock, the one the cards are stamped with (a real clock here would
+    // drop a card the host decided "just now" whenever the two disagree, e.g. a host or test with an injected clock).
+    this.decisions = new DecisionBook(join(dir, 'decisions.json'), ticketId => { const ticket = this.store.tickets.get(ticketId); return ticket !== undefined && ticket.ended === undefined }, () => Date.parse(this.now()))
     this.healthReminders = new HealthReminders(
       (question, key, at) => { const out = this.decisions.propose({ source: 'health', by: 'health', question, reason: key, at, spec: { level: 'P2', options: ['去处理', '先忽略 24 小时'], recommended: '去处理' } }); return out.ok ? out.id : undefined },
       cardId => this.decisions.withdraw(cardId),
@@ -307,6 +310,8 @@ export class SuperagentHost {
     // initialized yet (a TDZ crash took the plugin down on hosts with models set - review of #566). A microtask runs
     // after apply() finishes; the catch inside applyModels is the second fence.
     queueMicrotask(() => { this.applyModels() })
+    // #739 review R1: what waited on the ygl-trees version read goes out once it settles (resumeHeld), or now if it has.
+    queueMicrotask(() => { this.resumeHeld() })
     this.started = true
     this.syncA2a()
     this.pass()
@@ -473,11 +478,12 @@ export class SuperagentHost {
     if (op === 'read') { this.executor.memberRead(entry.ref); return { ok: true } }
     if (op === 'rules-propose') { const r = (report ?? {}) as Record<string, unknown>; return this.proposeRules(memberScope(entry.ref), entry.ref, r.value, typeof r.reason === 'string' ? r.reason : '') }
     if (op === 'rules-apply') { const r = (report ?? {}) as { person?: PersonMessage }; return this.applyRules(memberScope(entry.ref), entry.ref, r.person) }
+    if (op === 'ticket-request') { const r = (report ?? {}) as Record<string, unknown>; return this.requestForMember(entry.ref, typeof r.text === 'string' ? r.text : '', true) }
     if (op === 'ack' || op === 'handback') {
       const r = (report ?? {}) as Record<string, unknown>
       return this.takeUp(entry.ref, op, r.trigger_id, r.text)
     }
-    if (op !== 'report') return { ok: false, code: 'op', error: 'op must be report, ack, handback, rules-propose, rules-apply, read, idle or error' }
+    if (op !== 'report') return { ok: false, code: 'op', error: 'op must be report, ack, handback, rules-propose, rules-apply, ticket-request, read, idle or error' }
     const r = (report ?? {}) as Record<string, unknown>
     if (typeof r.state !== 'string' || !['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(r.state) || typeof r.summary !== 'string' || r.summary.trim() === '') return { ok: false, code: 'report', error: 'a report needs a state and a summary' }
     // #688 G1: a Pi seat's question is a decision card, as a local member's a2a_ticket_report requires (C1/C2): no bare question.
@@ -774,12 +780,19 @@ export class SuperagentHost {
   /** This team's ygl-trees project (design Y1c), named after its canvas; none while the team has no canvas. */
   yglProject(): string | undefined { return this.settingsValue.canvas === undefined ? undefined : teamYglProject(this.settingsValue.canvas) }
   /** Ask the host to make the team's project (idempotent, cached there); never in the way of the work. */
+  /** This team's kb scope (design Y1e); none while the team has no canvas, or the installed ygl-trees has no kb scopes. */
+  yglScope(): string | undefined { return this.settingsValue.canvas === undefined || this.yglCaps().kbScope !== true ? undefined : teamYglScope(this.settingsValue.canvas) }
+  private yglCaps() { return this.d.yglCapabilities?.() ?? YGL_UNKNOWN }
+  /** Whether cards that depend on the installed ygl-trees may go out yet (#739 review R1). */
+  private yglReady(): boolean { return this.d.yglReady?.() !== false }
+  /** Send what the ygl-trees barrier held: undelivered candidates and waiting launches. */
+  resumeHeld(): void { if (!this.yglReady()) return; this.flushCandidates(); this.executor.launch() }
   private ensureYglProject(): void { const project = this.yglProject(); if (project !== undefined) { try { this.d.ensureYglProject?.(project) } catch { /* best effort */ } } }
   private yglRouterLines(router: string): string[] {
     const project = this.yglProject()
     if (project === undefined || this.d.hasTool?.(router, 'mcp__ygl__read') !== true) return []
     this.ensureYglProject()
-    return [yglRouterLine(project)]
+    return [yglRouterLine(project, this.yglScope())]
   }
 
   private teamCardLines(): string[] {
@@ -809,7 +822,7 @@ export class SuperagentHost {
     for (const rule of (profile?.rules ?? []).filter(r => r.enabled)) lines.push(`your rule ${rule.name}: ${clip(rule.text, 600)}`)
     if (profile !== undefined) lines.push('If this ticket does not fit your role and rules, report blocked and say why; the router will choose again.')
     // The team's memory, in the card the member acts on (owner 2026-11-10: a persona line alone was not followed).
-    if (this.d.hasTool?.(member, YGL_WRITE) === true) { this.ensureYglProject(); lines.push(...yglCardLines(this.yglProject())) }
+    if (this.d.hasTool?.(member, YGL_WRITE) === true) { this.ensureYglProject(); lines.push(...yglCardLines(this.yglProject(), { scope: this.yglScope(), caps: this.yglCaps() })) }
     for (const name of ticket.mandate.basis.rules ?? []) {
       const rule = this.settingsValue.rules.find(r => r.name === name)
       if (rule !== undefined) lines.push(`accepted on team rule ${rule.name}: ${clip(rule.text, 600)}`)
@@ -896,8 +909,8 @@ export class SuperagentHost {
     return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
   }
 
-  /** What an observer filed that is still undecided or on an open ticket. */
-  private observerOpen(actor: string): Trigger[] {
+  /** What an observer or a member filed that is still undecided or on an open ticket. */
+  private proposerOpen(actor: string): Trigger[] {
     const ids = new Set<string>()
     for (const thread of this.store.threads.list()) for (const id of [...thread.pending, ...(thread.evaluating?.triggerIds ?? [])]) ids.add(id)
     for (const ticket of this.store.tickets.list()) if (ticket.ended === undefined && ticket.mandate?.actor.id === actor) for (const id of ticket.origin?.triggerIds ?? []) ids.add(id)
@@ -907,13 +920,42 @@ export class SuperagentHost {
   /** File an observer's own request (design D15). It reaches the router as any request does; the host only keeps a loop from flooding it. */
   requestForObserver(session: string, text: string): Record<string, unknown> {
     if (!this.isObserver(session)) return { ok: false, code: 'not-observer', error: 'a2a_ticket_request serves only the sessions on this team created under the observer preset' }
-    const open = this.observerOpen(observerActor(session))
+    return this.fileProposal(observerActor(session), text, { observer: session })
+  }
+
+  /**
+   * #717: file a plain member's proposal of new work. It is an agent's request, as an observer's is: it reaches the router as a
+   * candidate and the router alone accepts, attaches or ignores it and chooses who works it. It does not touch, end or widen
+   * any ticket the member holds. An observer's goes on as its own (actor `observer:`); a local member of this team files as
+   * `member:<session>`, a remote member's arrives from its host as `member:<ref>` (remoteEvent).
+   * @param member - the calling local session, or a remote member's ref.
+   * @param text - what needs doing and why.
+   * @param remote - whether `member` is a remote member's ref its pinned host vouched for.
+   * @returns the request, the same one for an identical open text, or why not.
+   */
+  requestForMember(member: string, text: string, remote = false): Record<string, unknown> {
+    if (!remote && this.isObserver(member)) return this.requestForObserver(member, text)
+    const known = remote ? this.settings.remoteMembers.some(r => r.ref === member && r.platform !== PI_PLATFORM) : this.settings.members.includes(member)
+    if (!known) return { ok: false, code: 'not-member', error: 'a2a_ticket_request serves only the members and observers of this team' }
+    return this.fileProposal(memberActor(member), text, { member })
+  }
+
+  /** One agent's request (D15–D17, #717): an identical open text returns the same request, and at most OBSERVER_OPEN_MAX stay open. */
+  private fileProposal(actor: string, text: string, via: Exclude<WorkbenchVia, 'cli'>): Record<string, unknown> {
+    const open = this.proposerOpen(actor)
     const repeated = open.find(t => t.text === text.trim())
     if (repeated !== undefined) return { ok: true, trigger_id: repeated.id, reused: true }
     if (open.length >= OBSERVER_OPEN_MAX) return { ok: false, code: 'too-many-open', error: `you already have ${String(open.length)} requests open; wait for one to end before filing another` }
-    const filed = this.request(text, undefined, { observer: session })
+    const filed = this.request(text, undefined, via)
     if (!filed.ok) return { ok: false, code: 'refused', error: filed.error }
     return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
+  }
+
+  /** #717, member host side: a served member's proposal goes to the team host it serves, signed, as its reports do. */
+  async forwardProposal(member: string, text: string): Promise<Record<string, unknown>> {
+    const serves = this.settingsValue.serves
+    if (serves === undefined || !serves.members.includes(member) || this.d.signedPost === undefined || this.d.handleOf === undefined) return { ok: false, code: 'not-member', error: 'this session serves no team' }
+    try { return await this.d.signedPost(serves.url, '/a2a/superagent-team', { op: 'ticket-request', member: this.d.handleOf(member), report: { text } }) } catch (error) { return { ok: false, code: 'unreachable', error: String(error).slice(0, 200) } }
   }
 
   /**
@@ -1448,7 +1490,8 @@ export class SuperagentHost {
 
   private flushCandidates(): void {
     const router = this.settingsValue.router
-    if (router === undefined || this.settingsValue.paused) return
+    // #739 review R1: a candidate card names the team's kb scope, which waits on the ygl-trees version read.
+    if (router === undefined || this.settingsValue.paused || !this.yglReady()) return
     for (const [evalId, entry] of this.candidates) {
       if (entry.delivered) continue
       const open = this.store.tickets.list().filter(t => !t.ended)
@@ -1658,7 +1701,7 @@ export class SuperagentHost {
     const id = `wb-${randomUUID()}`
     return {
       id, source: 'workbench', threads: [{ source: 'workbench', id: threadId }],
-      actor: { source: 'workbench', id: via === undefined ? WORKBENCH_OWNER : via === 'cli' ? WORKBENCH_CLI : observerActor(via.observer) }, human: via === undefined, addressed: 'direct', at: this.now(), text: body,
+      actor: { source: 'workbench', id: via === undefined ? WORKBENCH_OWNER : via === 'cli' ? WORKBENCH_CLI : 'member' in via ? memberActor(via.member) : observerActor(via.observer) }, human: via === undefined, addressed: 'direct', at: this.now(), text: body,
       channel: { source: 'workbench', thread: threadId, address: { trigger: id } }, meta: {},
     }
   }
@@ -1670,7 +1713,9 @@ export class SuperagentHost {
    * @param now - the clock, in milliseconds.
    * @returns the team's problems.
    */
-  health(now = Date.now()): Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> {
+  // #722: default to the host's clock, the one routerFailure.at and the engine's updatedAt are stamped with (as #721 did for the
+  // decision book); the real clock here misreported a ticket quiet for days whenever the host's clock was injected.
+  health(now = Date.parse(this.now())): Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> {
     const out: Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> = []
     const loaded = this.d.sessionLoaded
     if (loaded === undefined || !this.teamBound()) return out
@@ -1695,6 +1740,8 @@ export class SuperagentHost {
     const repliesOf = (thread: string): StoredMessage[] => messages.filter(row => row.message.channel.source === 'workbench' && row.message.channel.thread === thread)
     return {
       health: this.health(),
+      // Design Y1d/Y1e: what the installed ygl-trees can do, and this team's project and kb scope.
+      ygl: { ...this.yglCaps(), ...(this.yglProject() !== undefined ? { project: this.yglProject() } : {}), ...(this.yglScope() !== undefined ? { scope: this.yglScope() } : {}) },
       settings: this.settings,
       ...(this.canvasProblem() !== undefined ? { canvasProblem: this.canvasProblem() } : {}),
       ...(this.servesProblem() !== undefined ? { servesProblem: this.servesProblem() } : {}),

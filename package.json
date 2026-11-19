@@ -89,7 +89,10 @@
   },
   "scripts": {
     "prepare": "pnpm build",
-    "build": "tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsdown && node scripts/copy-skill.mjs",
+    "build:presets": "node scripts/build-agent-presets.mjs --write",
+    "verify:presets": "node scripts/build-agent-presets.mjs --check",
+    "verify:presets-runtime": "node scripts/verify-agent-presets-runtime.mjs",
+    "build": "pnpm build:presets && tsc -p tsconfig.json && tsc -p tsconfig.client.json && tsdown && node scripts/copy-skill.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p pi/extension/tsconfig.json",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
@@ -102,7 +105,7 @@
     "reanchor:arch": "node scripts/reanchor-architecture.mjs",
     "verify:nexus": "node scripts/verify-nexus-ci.mjs && npm --prefix nexus-stage run build && npm --prefix nexus-stage run test && git diff --exit-code -- assets/nexusDist/assets && git diff --ignore-cr-at-eol --exit-code -- assets/nexusDist/index.html",
     "verify": "node scripts/verify-temp-clean.mjs",
-    "verify:core": "pnpm verify:storefront && pnpm typecheck && pnpm verify:docs && pnpm build && pnpm test && pnpm test:build-layout && pnpm verify:nexus"
+    "verify:core": "pnpm verify:presets && pnpm verify:storefront && pnpm typecheck && pnpm verify:docs && pnpm build && pnpm test && pnpm test:build-layout && pnpm verify:nexus"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.1",

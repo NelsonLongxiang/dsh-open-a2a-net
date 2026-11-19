@@ -72,7 +72,7 @@ describe('PR143 review: owner-settings hot apply', () => {
         ok: boolean; note?: string
       }
       expect(answer?.ok).toBe(true)
-      expect(answer?.note ?? '').toContain('teamScopeInfo on')
+      expect(answer?.note ?? '').toContain('teamScope on')
     } finally { await ctx.fiber.dispose() }
   }, 30_000)
 
@@ -101,11 +101,43 @@ describe('PR143 review: owner-settings hot apply', () => {
     const { ctx, agent, port } = await mounted({ peers: [PEER] })
     const probe = async () => await ctx.tools.get('a2a_probe')?.execute({ url: PEER }, { signal: new AbortController().signal, agent }) as { ok: boolean; results: Array<{ error?: string }> }
     try {
-      expect((await probe()).results[0]?.error ?? '').toContain('refused (not probed): teamScopeInfo on')
+      expect((await probe()).results[0]?.error ?? '').toContain('refused (not probed): teamScope on')
       await ownerScope(port, false)
       expect((await probe()).results[0]?.error ?? '').not.toContain('refused (not probed)')
       await ownerScope(port, true)
-      expect((await probe()).results[0]?.error ?? '').toContain('refused (not probed): teamScopeInfo on')
+      expect((await probe()).results[0]?.error ?? '').toContain('refused (not probed): teamScope on')
     } finally { await ctx.fiber.dispose() }
   }, 30_000)
+})
+
+describe('one teamScope switch (owner ruling 2026-11-18, simplify D3)', () => {
+  const who = async (extra: Partial<Config>) => {
+    const { ctx, agent, port } = await mounted(extra)
+    // mounted() turns the switch on through the panel (legacy name); read the boot value from a fresh mount instead.
+    void port
+    try {
+      return await ctx.tools.get('a2a_whoami')?.execute({}, { signal: new AbortController().signal, agent }) as { teamScope?: boolean; teamScopeRouting?: boolean }
+    } finally { await ctx.fiber.dispose() }
+  }
+  it('the panel write turns both halves on, whatever the deprecated keys said at boot', async () => {
+    expect(await who({ teamScopeRouting: false, teamScopeInfo: false })).toMatchObject({ teamScope: true, teamScopeRouting: true })
+  })
+  it('teamScope in the config wins over the deprecated per-half keys', async () => {
+    const home = mkdtempSync(joinPath(tmpdir(), 'pr143-scope-'))
+    const ctx = new Context()
+    await ctx.plugin(SystemPrompt); await ctx.plugin(ToolRuntime); await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 }); await ctx.plugin(FakeAgentsService)
+    const agent = { id: SessionId('session-0123456789abcdef'), session: { events: [] }, steer(): void {} } as unknown as Agent
+    ;(ctx.get('agents') as unknown as FakeAgentsService).map.set(String(agent.id), agent)
+    apply(ctx, { apiKey: '', session: 'host-scope', team: 'dsh', routeTimeoutMs: 5_000, flushTimeoutMs: 300_000, announce: false, agentName: 'scope-host', peers: [], delegates: [], sessionNodes: true, wakeJoinedOnBoot: false, dshHome: home, cardTtlMs: 172_800_000, teamScope: false, teamScopeRouting: true, teamScopeInfo: true } as Config)
+    ctx.emit('agent/created', { agent })
+    try {
+      const port = (ctx as unknown as { webServer: { port: number } }).webServer.port
+      await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/join`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: String(agent.id) }) })).text()
+      const answer = await ctx.tools.get('a2a_whoami')?.execute({}, { signal: new AbortController().signal, agent }) as { teamScope?: boolean; teamScopeRouting?: boolean }
+      expect(answer).toMatchObject({ teamScope: false, teamScopeRouting: false })
+      const read = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/owner-settings`)).json() as { teamScope: boolean }
+      expect(read.teamScope).toBe(false)
+    } finally { await ctx.fiber.dispose() }
+  })
 })

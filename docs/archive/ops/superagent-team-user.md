@@ -3,7 +3,7 @@
 > **不推行（属主 2026-11-12）**：「各节点啊，无需新开系统用户，这太麻烦了」。本页不再续写，也不是工作台市场上线的前置条件，保留在这里只作历史记录。
 > - 团队会话照旧和宿主跑在同一个系统用户下，所以成员能读到这个用户能读的所有文件。这个风险属主已知。
 > - 改用不需要新用户的办法来收：
->   - 市场 MCP 令牌只放在宿主进程的内存里，见 [superagent-team-mcp](../design/superagent-team-mcp.md)；
+>   - 市场 MCP 令牌只放在宿主进程的内存里，见 [superagent-team-mcp](../../design/superagent-team-mcp.md)；
 >   - 凭据访问留痕并提决策卡（#612）；
 >   - 成员人设里写明只用交给它的工具和凭据。
 
@@ -106,7 +106,7 @@ sudo -u dsh-member -i "<dsh>" plugin --profile member add @nelsonlongxiang/dsh-o
     wakeJoinedOnBoot: true
 ```
 
-团队宿主要接市场时，把市场地址也加进 `dsh-team` 的 `peers`（见 [superagent-market-team.md](superagent-market-team.md)）。
+团队宿主要接市场时，把市场地址也加进 `dsh-team` 的 `peers`（见 [superagent-market-team.md](../../ops/superagent-market-team.md)）。
 
 ## 5. 启动：用干净的环境
 
@@ -153,7 +153,7 @@ sudo mkdir -p /Users/Shared/dsh-team-ygl && sudo chown dsh-member:dsh-share /Use
      -d '{"action":"serve","team":"<zone>/canvas/<canvas>@<fp8>","members":["<成员会话 id>"]}'
    ```
 
-5. 在 `dsh-team` 上绑定团队：`POST /__dsh_a2a/superagent/teams {"canvas":"<canvas>","router":"<总工会话 id>"}`，再按 [superagent-market-team.md](superagent-market-team.md) 配 bot 名单、接单规则和准入。
+5. 在 `dsh-team` 上绑定团队：`POST /__dsh_a2a/superagent/teams {"canvas":"<canvas>","router":"<总工会话 id>"}`，再按 [superagent-market-team.md](../../ops/superagent-market-team.md) 配 bot 名单、接单规则和准入。
 
 控制路由要属主口令或回环信任；改团队规则要在已登录的 DSH 界面里操作。
 

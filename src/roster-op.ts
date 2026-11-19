@@ -27,6 +27,9 @@ export function rosterOp(d: RosterOpDeps, raw: unknown): RosterOpResult {
   const audit = (id: string, ok: boolean, why: string): void => d.audit(action, team, id, ok, why)
   const reject = (error: string): RosterOpResult => { audit(typeof b.id === 'string' ? b.id : actor, false, error); return { ok: false, error } }
   if (typeof name !== 'string' || name !== name.trim() || name.length < 1 || name.length > 40 || name.includes('/') || name.includes('*') || name.startsWith('roster:') || /^\d+$/.test(name) || /[\r\n]/.test(name) || team.length > TEAM_NAME_MAX) return reject('name must be one exact local roster name (no slash or canvas path)')
+  // Owner ruling 2026-11-18: roster teams are retired. A team is a canvas team; a roster declared before can still lose a
+  // member or be dissolved (shrink only), for one version.
+  if (op === 'create' || op === 'add-member') return reject('roster teams are retired: build a canvas team on the board (or ask the team builder); an existing roster can only lose members or be dissolved')
   if (op === 'create' && d.canvasExists(name)) return reject('a canvas team already uses this name')
   if (op !== 'create' && op !== 'add-member' && op !== 'remove-member' && op !== 'dissolve') return reject('invalid roster operation')
   const current = d.store.membersOf(team)

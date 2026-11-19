@@ -90,6 +90,24 @@ describe('the P0 card (T3, T4)', () => {
   })
 })
 
+describe('the decision book keeps time by the host', () => {
+  // The cards are stamped with the host's clock; pruning by the real clock dropped a card decided "just now" once the two were
+  // over 30 days apart (DECIDED_KEEP_MS), so the tests above, pinned to November 2026, would fail from December on.
+  it('a declined request decided on the host\'s clock stays declined, whatever the calendar says', async () => {
+    let clock = Date.parse('2020-01-01T00:00:00.000Z')
+    const m = await team(() => new Date(clock).toISOString())
+    m.h.requestTool('session-m', 'member', 'gitbash')
+    const [card] = m.h.decisionCards().filter(c => c.source === 'tool')
+    expect(m.h.decide(card!.id, 'choose', '拒绝')).toMatchObject({ ok: true, granted: false })
+    clock += 3_600_000
+    expect(m.h.requestTool('session-m', 'member', 'gitbash')).toContain('declined')
+    // Past DECIDED_KEEP_MS on the host's clock the decided card is pruned, as before: the window is the host's, not the wall's.
+    clock += 31 * 24 * 3_600_000
+    expect(m.h.requestTool('session-m', 'member', 'gitbash')).toContain('P0 decision card')
+    await m.h.stop()
+  })
+})
+
 describe('the setting (T1, T5)', () => {
   it('validates names, keeps an unnamed role, and needs the owner', () => {
     const one = parseSettings({ extraTools: { member: ['gitbash'] } }, DEFAULT_SETTINGS)
@@ -117,6 +135,10 @@ describe('asking by name (T3)', () => {
     expect(card!.reason).toContain('想看有哪些团队')
     expect(await ask('session-m', { name: 'a2a_route', why: 'x' })).toMatchObject({ ok: false, code: 'not-grantable' })
     expect(await ask('session-m', { name: 'bash', why: 'x' })).toMatchObject({ ok: true, granted: true })
+    // Redundancy review 2026-11-18: a member never raises a card — a grant would not apply to it (its guard reads no grants).
+    const before = m.h.decisionCards().filter(c => c.source === 'tool').length
+    expect(await ask('session-m', { name: 'send_message', why: 'x' })).toMatchObject({ ok: false, code: 'not-grantable' })
+    expect(m.h.decisionCards().filter(c => c.source === 'tool').length).toBe(before)
     expect(await ask('session-x', { name: 'a2a_teams', why: 'x' })).toMatchObject({ ok: false, code: 'not-team' })
     await m.h.stop()
   })

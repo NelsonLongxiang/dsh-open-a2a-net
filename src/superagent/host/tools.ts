@@ -12,7 +12,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import { UserError, type Outcome, type ReplyRequest } from '../upstream/dsh-superagent/src/core/index.ts'
 import type { SuperagentHost } from './index.ts'
-import { OBSERVER_OPEN_MAX, observerOfActor } from './policy.ts'
+import { OBSERVER_OPEN_MAX, proposerKind } from './policy.ts'
 import { grantableTool, memberBoundary, roleTools } from './role-tools.ts'
 import { parseDecision } from './decisions.ts'
 
@@ -85,8 +85,9 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
     else if (kind === 'stop') {
       const ticketId = str(item.ticket_id)
       if (ticketId === undefined) return { ok: false, trigger_id: triggerId, code: 'missing', error: 'stop needs ticket_id' }
-      // An observer's request is explicit so that it can be accepted; a stop stays a person's.
-      if (candidate?.triggers.some(t => t.actor.source === 'workbench' && observerOfActor(t.actor.id) !== undefined) === true) return { ok: false, trigger_id: triggerId, code: 'observer-stop', error: "an observer's request cannot stop a ticket: accept, attach or ignore it" }
+      // An observer's or a member's request is explicit so that it can be accepted; a stop stays a person's (D16, #717).
+      const proposer = candidate?.triggers.map(t => proposerKind(t.actor)).find(k => k !== undefined)
+      if (proposer !== undefined) return { ok: false, trigger_id: triggerId, code: `${proposer}-stop`, error: `${proposer === 'observer' ? "an observer's" : "a member's"} request cannot stop a ticket: accept, attach or ignore it` }
       outcome = { kind: 'stop', ticketId, reason }
     } else return { ok: false, trigger_id: triggerId, code: 'kind', error: 'kind must be accept, attach, stop or ignore' }
     const decision = host.engine.decide(triggerId, { ...outcome, ...(evalId !== undefined ? { evalId } : {}) })
@@ -490,22 +491,25 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
 
   ctx.tools.register(defineTool({
     name: 'a2a_ticket_request',
-    description: `Team observer only: open a ticket for work you noticed that nobody has asked for yet. Say in text what needs doing and why. The host files it in your name, as an agent's request and never a person's, and the router accepts and assigns it like any other. It cannot stop or change a ticket; at most ${String(OBSERVER_OPEN_MAX)} of yours may be open at once.`,
+    description: `Team member or observer: propose work you noticed that nobody has asked for yet; you need not hold a ticket. Say in text what needs doing and why. The host files it in your name, as an agent's request and never a person's, and the router decides whether to accept, attach or ignore it and who works it. Filing it does not assign it to you or let you start it, and it does not end, stop, change or widen any ticket (a question about your own ticket goes on a2a_ticket_report; another team's help on a2a_outbound_request). An identical open text returns the same request; at most ${String(OBSERVER_OPEN_MAX)} of yours may be open at once.`,
     parameters: { text: { type: 'string', required: true, description: 'What needs doing and why, for the router and the member who gets it.' } },
     output: { ...anyProps, render: (_args, value) => said('a2a_ticket_request', value) },
     presentCall: () => ({ card: 'generic', title: 'a2a_ticket_request', kind: 'other', rawInput: {} }),
     execute: async (args: { text?: string }, exec): Promise<Record<string, JsonValue>> => {
       const h = host(exec)
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
-      if (h === undefined || me === undefined) return { ok: false, code: 'not-observer', error: 'a2a_ticket_request serves only the sessions on this team created under the observer preset' }
-      return json(h.requestForObserver(me, String(args.text ?? ''))) as Record<string, JsonValue>
+      if (h === undefined || me === undefined) return { ok: false, code: 'not-member', error: 'a2a_ticket_request serves only the members and observers of this team' }
+      const text = String(args.text ?? '')
+      // A session serving another host's team proposes there, through the same signed forward as its reports.
+      const out = h.settings.serves?.members.includes(me) === true ? await h.forwardProposal(me, text) : h.requestForMember(me, text)
+      return json(out) as Record<string, JsonValue>
     },
   }))
 
   // Design tool-requests T3: a tool the role's list hides can still be asked for by name; the owner decides on a P0 card.
   ctx.tools.register(defineTool({
     name: 'a2a_tool_request',
-    description: 'Team session only: ask the owner to let this team use a tool that is not on your role\'s list (for example a shell a plugin on this host provides). Name the tool exactly and say why you need it. The owner decides on a P0 decision card; once approved the tool appears in your list. Tools that leave the team (routes, sessions, subagents) are never granted.',
+    description: 'Team router only: ask the owner to let this team use a tool that is not on your role\'s list (for example a shell a plugin on this host provides). Name the tool exactly and say why you need it. The owner decides on a P0 decision card; once approved the tool appears in your list. Tools that leave the team (routes, sessions, subagents) are never granted.',
     parameters: { name: { type: 'string', required: true, description: 'The exact tool name.' }, why: { type: 'string', required: true, description: 'What you need it for, in a sentence.' } },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_tool_request', value) },
     presentCall: args => ({ card: 'generic', title: `a2a_tool_request ${String(args.name)}`, kind: 'other', rawInput: args }),
@@ -516,8 +520,11 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       if (h === undefined || me === undefined || role === undefined) return { ok: false, code: 'not-team', error: 'a2a_tool_request serves only the sessions of a superagent team on this host' }
       const name = String(args.name ?? '').trim()
       if (h.grantedTools(me).includes(name) || roleTools(role).includes(name)) return { ok: true, granted: true, note: `${name} is already yours to use` }
-      // T6: a member or an observer already has every tool but the boundary and what the owner blocked.
-      if (role !== 'router' && !memberBoundary(role, name) && !(h.settings.blockedTools ?? []).includes(name)) return { ok: true, granted: true, note: `${name} is already yours to use: members have every tool of this host except those that leave the team` }
+      // T6: a member or an observer already has every tool but the boundary and what the owner blocked; a grant would never
+      // apply to it (its guard reads no grants), so it never raises a card (redundancy review 2026-11-18).
+      if (role !== 'router' && memberBoundary(role, name)) return { ok: false, code: 'not-grantable', error: `${name} leaves the team: members and observers work with their host's tools and say what they lack in their report` }
+      if (role !== 'router' && (h.settings.blockedTools ?? []).includes(name)) return { ok: false, code: 'blocked', error: `the owner has blocked ${name} for this team's members` }
+      if (role !== 'router') return { ok: true, granted: true, note: `${name} is already yours to use: members have every tool of this host except those that leave the team` }
       if (!grantableTool(role, name)) return { ok: false, code: 'not-grantable', error: `${name} is not something a team session may be granted (it would leave the team, or it belongs to another role)` }
       return { ok: true, requested: true, note: h.requestTool(me, role, name, String(args.why ?? '')) }
     },

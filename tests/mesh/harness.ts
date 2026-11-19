@@ -179,6 +179,9 @@ function meshConfig(options: MeshNodeOptions): Config {
     sessionNodes: options.sessionNodes ?? false,
     teamScopeRouting: options.teamScopeRouting ?? true,
     teamScopeInfo: options.teamScopeInfo ?? true,
+    // #64 step 1: production closes the OriginClaim window by default; mesh fixtures post unsigned deliveries straight at
+    // a node to play a caller, so they keep it open unless a test closes it (origin-claim-window.spec.ts pins closed).
+    originClaimWindow: options.originClaimWindow ?? true,
     wakeJoinedOnBoot: options.wakeJoinedOnBoot ?? false,
     wakePrewarmDelayMs: options.wakePrewarmDelayMs ?? 0,
     wakePrewarmQuietMs: options.wakePrewarmQuietMs ?? 0,
@@ -301,9 +304,10 @@ export interface GhostNode {
   close(): Promise<void>
 }
 
-export async function ghostNode(card: A2aPeerCard): Promise<GhostNode> {
-  const server: Server = createServer((req, res) => {
+export async function ghostNode(card: A2aPeerCard, delayMs = 0): Promise<GhostNode> {
+  const server: Server = createServer(async (req, res) => {
     if (req.url === '/.well-known/agent-card.json') {
+      if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs)) // a slow peer (#61 probe verdict)
       const body = JSON.stringify(card)
       res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) })
       res.end(body)

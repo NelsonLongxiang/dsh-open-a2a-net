@@ -50,11 +50,11 @@ describe('role tool visibility reads the agent\'s own scope', () => {
     expect(['subagent', 'a2a_route', 'superagent_route'].filter(visible)).toEqual([])
   })
 
-  it('the router sees only its superagent tools', async () => {
+  it('the router sees its superagent tools and its reads (owner 2026-11-18), nothing that writes or runs', async () => {
     const { ctx, agent, key } = await host()
     const roles = new RoleTools({ roleOf: () => 'router', agentOf: () => undefined, logger: { warn: () => {} } })
     roles.sync(agent)
-    expect(['bash', 'read', 'a2a_route', 'a2a_ticket_report', 'superagent_route'].filter(name => ctx.tools.get(name, key) !== undefined)).toEqual(['superagent_route'])
+    expect(['bash', 'read', 'a2a_route', 'a2a_ticket_report', 'superagent_route'].filter(name => ctx.tools.get(name, key) !== undefined)).toEqual(['read', 'superagent_route'])
   })
 
   it('without a scope key nothing is hidden (the guard still refuses), and it says so', async () => {

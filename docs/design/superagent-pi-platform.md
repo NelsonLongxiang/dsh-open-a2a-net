@@ -2,8 +2,10 @@
 
 > 状态：设计稿 v2。属主 2026-11-13 已同意 R4 修订（P1）；v2 按 PR #676 评审意见改了
 > B1–B3（声明进签名 core、回报鉴权接 CLI claim 与 pin key、home 限团队宿主）。档位**高档**，
-> 按 [superagent-a2a-plan](superagent-a2a-plan.md) 通用规则须 design_pass，实现 PR 须在 exact
+> 按 [superagent-a2a-plan](../archive/design/superagent-a2a-plan.md) 通用规则须 design_pass，实现 PR 须在 exact
 > head 非自我评审。本文只提案，不改任何行为。
+>
+> 实现核对（2026-11-18，next/0.8 `44907c00`）：PR-A #676、PR-B #685、PR-C #688 都已合入（`src/superagent/platforms/pi.ts`），本稿已实现。
 
 配套：[superagent-v5-canvas-team](superagent-v5-canvas-team.md)（R4 被本文修订）、
 [superagent-a2a-spec](superagent-a2a-spec.md)。
