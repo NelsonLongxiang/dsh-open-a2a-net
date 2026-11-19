@@ -1,9 +1,19 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createReceiverRecovery, createSenderRecovery, recoveryOwnerResponse, type RecoveryJson, type RecoveryOutbound } from '../src/request-recovery-panel'
 import { createSuperagentPane, type SaState } from '../src/wb-superagent'
 import { createWorkbench } from '../src/workbench'
 
 const workbenches: ReturnType<typeof createWorkbench>[] = []
+// jsdom here has no localStorage (opaque origin): every test gets an empty in-memory one, so `localStorage.length === 0`
+// still proves the recovery panel persists nothing.
+function memoryStorage(): Storage {
+  const m = new Map<string, string>()
+  return {
+    get length() { return m.size }, clear: () => { m.clear() }, getItem: (k) => m.get(k) ?? null,
+    key: (i) => [...m.keys()][i] ?? null, removeItem: (k) => { m.delete(k) }, setItem: (k, v) => { m.set(k, String(v)) },
+  }
+}
+beforeEach(() => { Object.defineProperty(window, 'localStorage', { value: memoryStorage(), configurable: true }) })
 afterEach(() => { for (const wb of workbenches.splice(0)) wb.dispose(); document.body.replaceChildren(); localStorage.clear(); vi.restoreAllMocks() })
 const row: RecoveryOutbound = { card: 'card-one', task: 'direct-old', ticketId: 'ticket-one', address: 'beta/aaaaaaaa', text: 'exact original text', state: 'failed' }
 function proposal() { return { signature: 'sender-signature', binding: { version: 1, requestId: 'rr-request-one', ticketId: row.ticketId, originalCards: [row.card, 'card-two'], originalTasks: [row.task, 'direct-two'], taskId: 'recover-one', contextId: 'context-one', caller: 'superagent-team/0123456789abcdef', senderHome: 'https://sender.test', senderKey: 'sender-public', cliKey: 'cli-public', receiverHome: 'https://receiver.test', receiverKey: 'receiver-public', receiverSession: 'session-aaaaaaaa-full', target: row.address, message: '[original header]\n' + row.text, approvalAt: '2026-11-15T00:00:00Z', approvalDigest: 'a'.repeat(64), senderReconciliation: 'sender original chain checked' } } }
