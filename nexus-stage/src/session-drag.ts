@@ -13,9 +13,10 @@ export const SESSION_DRAG_TYPE = 'application/x-dsh-session'
 
 /** Make one rail row draggable as a local session. */
 export function makeSessionDraggable(item: HTMLElement, sessionId: string): void {
+  item.title = `${item.title === '' ? sessionId : item.title.replace(/ · 可拖入画布队$/, '')} · 可拖入画布队`
+  if (item.draggable) return // Stable directory rows re-use their one native drag listener.
   item.draggable = true
   item.classList.add('is-draggable')
-  item.title = `${item.title === '' ? sessionId : item.title} · 可拖入画布队`
   item.addEventListener('dragstart', ev => {
     if (ev.dataTransfer === null) return
     ev.dataTransfer.setData(SESSION_DRAG_TYPE, sessionId)

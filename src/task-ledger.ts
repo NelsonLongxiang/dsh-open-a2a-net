@@ -24,6 +24,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { writeTaskLedger } from './task-ledger-persistence.ts'
 import { safeObservationCode } from './nudge-observability.ts'
 import { parseTaskDelivery, TASK_DELIVERY_CAP, TASK_DELIVERY_RETENTION_MS, type TaskDelivery } from './task-delivery.ts'
+import { deliveryCapacitySnapshot, deliveryRetainedByRule, DeliveryCapacityError, type DeliveryCapacitySnapshot } from './task-delivery-capacity.ts'
 import { parseReminder, REMINDER_LONG_MS, type ReminderState } from './reconciliation-state.ts'
 import { parseReceiptOutbox, receiptBirth, receiptPayloadHash, receiptLaneMatchesBirth, type ReceiptOutboxRecord } from './receipt-outbox.ts'
 import { holdsRow, parseReceipt, RECEIPT_DISPOSITIONS, RECEIPT_OUTCOMES, type ReceiptDisposition, type ReceiptOutcomeV2 } from './receipt.ts'
@@ -97,9 +98,19 @@ export class TaskLedger {
       return old
     }
     if(record.taskExpected===true)this.protectReceiptCapacity(record.taskId)
-    this.deliveries=this.deliveries.filter(row=>this.tasks.some(t=>t.taskId===row.taskId)||this.now()-row.createdAt<=TASK_DELIVERY_RETENTION_MS)
-    if(this.deliveries.length>=TASK_DELIVERY_CAP)throw Error('task delivery correspondence capacity reached; refusing untracked delivery')
+    // #713: one clock sample and the one retention rule the capacity view uses; a refusal carries that view, and nothing was enqueued.
+    const now=this.now(),bound=new Set(this.tasks.map(t=>t.taskId))
+    this.deliveries=this.deliveries.filter(row=>deliveryRetainedByRule(row,bound,now))
+    if(this.deliveries.length>=TASK_DELIVERY_CAP)throw new DeliveryCapacityError(this.capacityAt(now))
     this.deliveries.push(parsed);this.trimOwed();this.persist();return {...parsed}
+  }
+  /**
+   * #713: how full the retained task-delivery correspondence window is, as a detached numeric view. Read-only: no sweep, no
+   * prune, no persist. Damaged or unpersisted state reads `unavailable`, never a healthy empty window.
+   */
+  deliveryCapacityState(): DeliveryCapacitySnapshot { return this.capacityAt(this.now()) }
+  private capacityAt(now:number): DeliveryCapacitySnapshot {
+    return deliveryCapacitySnapshot({deliveries:this.deliveries,taskIds:new Set(this.tasks.map(t=>t.taskId)),now,health:{ledgerDamaged:this.counters.damaged!==undefined,deliveryRestoreError:this.deliveryRestoreError,persistenceOK:this.writeFailure===undefined,conserved:this.conservation().conserved}})
   }
   updateDelivery(taskId:string, state:TaskDelivery['state']): void {
     const row=this.deliveries.find(r=>r.taskId===taskId);if(!row)throw Error('unknown task delivery correspondence')

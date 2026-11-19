@@ -18,6 +18,8 @@ export default defineConfig({
       },
     },
     exclude: [
+      // Node's built-in test runner owns the filesystem/CLI layout checks.
+      'tests/repository-layout.test.mjs',
       // Node's built-in runner owns the storefront metadata gate.
       'tests/market-metadata.test.mjs',
       // nexus-stage carries its own suite, consumed by the root gate via
