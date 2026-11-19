@@ -1,6 +1,6 @@
-# Direct flood guard — #91 transitional brake
+# Direct flood guard — #91 ingress brake
 
-Status: transitional guard with F4 file-channel migration advice. File-channel F1–F3 shipped in 0.6.32; this change does not claim a fleet upgrade or that the WSL incident has stopped. Unconditional JPFILE-PART rejection remains a separate, high-grade rollout after the fleet upgrades.
+Status: final form (2026-11-18). File-channel F1–F4 shipped from 0.6.32 on and the fleet runs 0.8 previews, so the transitional 16-part allowance is gone: every JPFILE-PART message is refused. Files go through the file channel (`a2a_file_send` / `a2a-net file send`).
 
 ## Wire contract
 
@@ -16,22 +16,16 @@ cryptographic binding between caller_session and the envelope.
   aggregated across all targets. This is stricter than L9's caller-target
   criterion. 16/min is the current review-seat L9 threshold, not a hidden
   configurable value. Refusals do not extend the window.
-- A recognized JPFILE-PART v1 body must have bounded nonempty transfer_id and
-  file_id plus integer part_i/part_n. Declared part_n above 16 is refused.
-  Accepted unique (file_id, part_i) coordinates also count cumulatively by
-  (caller, transfer_id), across files; the 17th is refused even after a
-  minute or with a dishonest per-file total. Duplicate coordinates carried
-  under a fresh task id are refused, not reinjected.
-- Sender and transfer maps are each capped at 1024 entries. Active entries
-  are never discarded to admit another key; full state refuses visibly.
-  Sender history expires after a minute; transfer history after 24h from
-  first acceptance. State is boot-local and resets at restart. This is not
-  a durable per-transfer accounting guarantee across restarts.
+- Any message containing `[JPFILE-PART` (well-formed or not, any version) is
+  refused with reason `file-channel-required`. A refused part spends no
+  sender quota and leaves no per-transfer state.
+- The sender map is capped at 1024 entries. Active entries are never
+  discarded to admit another key; full state refuses visibly. Sender history
+  expires after a minute. State is boot-local and resets at restart.
 
 Refusal retains the existing structured-error HTTP 200 path and returns
 code -32008, task_id, delivered:false, TASK_STATE_FAILED and reason:
-sender-rate-limited / file-parts-exceeded / file-part-invalid /
-file-part-duplicate / flood-state-full. The same fresh idempotency key gets
+sender-rate-limited / file-channel-required / flood-state-full. The same fresh idempotency key gets
 a failed outcome for /a2a/query, and activity records a failed inbound event.
 It never becomes an owed receipt or a false delivered result.
 
@@ -41,7 +35,7 @@ Every JPFILE-PART message reaching the guard (including malformed variants) adds
 { "advice": { "reason": "use-file-channel", "message": "Files must use the file channel, not session messages: a2a_file_send { paths, team }; CLI: a2a-net file send <path…> <team>." } }
 ```
 
-`use-file-channel` is migration advice, not a new refusal code: accepted parts within the existing 16-part and sender budgets remain accepted with the same success fields. Refusals retain their original `reason` (for example `file-parts-exceeded`) and code `-32008`; their error text also includes `use-file-channel` and both send commands. All later response exits, including CLI mailbox, sync, async and target-queue refusal, carry the advice without changing their verdict. Ordinary messages acquire no advice. Admission/budget/idempotency refusals that occur before the guard keep their existing responses. This does not make all JPFILE-PART messages invalid yet.
+The refusal of a part keeps code `-32008` and reason `file-channel-required`; its error text also includes `use-file-channel` and both send commands. Ordinary messages acquire no advice. Admission/budget/idempotency refusals that occur before the guard keep their existing responses. Before 2026-11-18 up to 16 parts per transfer were accepted with this advice; that allowance is removed.
 
 ## Boundaries and incident evidence
 
@@ -67,8 +61,10 @@ This summary is not the raw session log. Sender stop order
 
 Real HTTP tests pin sync/async pre-steer refusal, failed query visibility,
 activity records, independent host budgets, admission unchanged, replay 409,
-malformed parts, duplicate coordinates and cross-file limits. Injected-clock
-unit tests pin minute rollover, 24h transfer lifetime and state-cap refusal.
+and the refusal of every JPFILE-PART form (well-formed, oversized, malformed,
+repeated) with no quota spent. A signed cancellation whose text carries a part
+still stops the task, but the session gets the host's own stop notice, never
+the part. Injected-clock unit tests pin minute rollover and state-cap refusal.
 Run pnpm verify with its real exit code captured (never the exit of tail).
 Merge, review/test stamps, deployment authorization, restart consent and
 post-deployment behavioral verification are separate gates. No restart or

@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "6cc83f5952f3334872116fa36cf2a19173ee42d03a112294b82ed2b139a73c79",
+    "src/index.ts": "8d96648ea86b3c7314a094ca291ae6a73a8689e60ca584aca04d875dc0fa1dc9",
     "src/faces/admin.ts": "599217bf0f166fb352592780eaa1cdcccee3c51b0d5458c524cd2e16d70d0209",
     "src/canvas-store.ts": "ce935c601af66a524949ccb006310c6b106be159718c0a7839c41fd210c20826",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
@@ -18,7 +18,7 @@
     "nexus-stage/src/world.ts": "8191581b4551b3b5ea3658a4a640fcb68cea0311d500743884de666441501cd0",
     "nexus-stage/src/planning-overlap.ts": "f4e7ecf5af229f6107191f35be2b5a10ebab921b175ba0950f577458dacc5019",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
-    "src/flood-guard.ts": "b4f92c9ce3237019ab3c7ab71f0624c3306e8c316cb15d119d4e7c57f65e604f",
+    "src/flood-guard.ts": "5aa2646647229114617859b0e1f0f5db504a25063a2cc0af833a46547da725df",
     "src/faces/wire.ts": "e02d36e33d9c60434cc39a2b4481eb8213be0ea6a2136398e0d447751acfdee9",
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
     "src/task-auth.ts": "3fdd98071c6106721e348b567507f826385474c825df106bde9324e3105d2b0f",
@@ -63,7 +63,7 @@
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:3102",
+      "ref": "src/index.ts:3103",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
@@ -147,7 +147,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:3621",
+      "ref": "src/index.ts:3622",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4577",
+      "ref": "src/index.ts:4578",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -267,7 +267,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:3978",
+      "ref": "src/index.ts:3979",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -279,13 +279,13 @@
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2741",
+      "ref": "src/index.ts:2742",
       "expect": "const result=await receiptOutbox.send(record.taskId)"
     },
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2751",
+      "ref": "src/index.ts:2752",
       "expect": "function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {"
     },
     {
@@ -339,7 +339,7 @@
     {
       "page": "p1-arch",
       "cell": "f6",
-      "ref": "src/flood-guard.ts:90",
+      "ref": "src/flood-guard.ts:55",
       "expect": "export function createFloodGuard("
     },
     {
