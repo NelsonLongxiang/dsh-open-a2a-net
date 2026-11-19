@@ -6,7 +6,7 @@
  * CLI's deposit and mailbox across its own restart (owner request 2026-11-04: the network must not
  * depend on a DSH instance staying up).
  */
-import { mkdtempSync } from '../temp-dirs.ts'
+import { cleanupBeforeTempDirs, mkdtempSync } from '../temp-dirs.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { generateKeyPairSync } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
@@ -56,6 +56,7 @@ describe('a2a-net serve: a standalone network node', () => {
     const nodeHome = mkdtempSync(join(tmpdir(), 'serve-node-'))
     const opts = nodeConfig({ team: 'alpha', agentName: 'standalone', session: 'standalone-a', peers: ['http://127.0.0.1:' + pb], settlementAuth: 'enforce', teamScopeRouting: true, teamScopeInfo: true, cardCacheTtlMs: 0, forwardDirect: true }, { port: String(pa), home: nodeHome })
     let a = await startNode(opts)
+    cleanupBeforeTempDirs(() => a.close())
     const b: MeshNode = await bootNode({ name: 'B', session: 'serve-target', team: 'beta', agentId: targetId, port: pb, peers: [aUrl], sessionNodes: true, teamScopeRouting: true, teamScopeInfo: true, settlementAuth: 'enforce', forwardDirect: true, cardCacheTtlMs: 0 } as never)
     const cliHome = mkdtempSync(join(tmpdir(), 'serve-cli-'))
     try {

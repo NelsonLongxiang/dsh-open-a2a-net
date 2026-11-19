@@ -3,6 +3,7 @@ import { capacityRefusalFields, type CapacityRefusal } from './task-delivery-cap
 import { DEFAULT_HOP_BUDGET, guardHeader, mintGuard } from './recursion-guard.ts'
 import { briefOf, type OutboundBirth, type TaskLedger, type TaskRecord } from './task-ledger.ts'
 import { parseReceipt } from './receipt.ts'
+import {peerPayloadFingerprint} from './idempotency-store.ts'
 import { splitCanvasOwner } from './canvas-id.ts'
 import { splitQualifiedMember } from './canvas-member.ts'
 import { claimCovers, type TaskAuthorization } from './task-auth.ts'
@@ -48,6 +49,7 @@ export interface DirectForwardDeps {
   ledger: TaskLedger
   activity(team: string, peer: string, ok: boolean): void
 }
+const peerDispatchFingerprint=(r:ForwardRequest)=>peerPayloadFingerprint({caller:r.caller,team:r.team,message:JSON.stringify([r.message,r.contextId??'']),noWait:r.noWait})
 export function createDirectForward(d: DirectForwardDeps) {
   return async (request: ForwardRequest): Promise<A2aRouteResult> => {
     const refuse = (why: string, next?: string): A2aRouteResult => ({ ok: false, code: -32000, task_id: request.taskId, error: 'not forwarded: ' + why, ...(next !== undefined ? { next } : {}) })
@@ -83,12 +85,14 @@ export function createDirectForward(d: DirectForwardDeps) {
       const receipt = parseReceipt(request.message) !== null
       const release = receipt ? () => {} : d.births.begin(request.taskId)
       if (release === undefined) return refuse('forward receipt correlation capacity is full', 'wait for in-flight forwards to settle, then send again with a new task id')
+      let retained=false,reserved=false
       try {
+        if(!receipt)try{d.ledger.reserveDispatch(request.taskId,peerDispatchFingerprint(request));reserved=true}catch{return refuse('durable dispatch capacity unavailable; nothing forwarded')}
         // The same selected-peer snapshot supplies both return-link gate and settlement birth.
         const answer = await d.dispatch(url, plainTeam === request.team ? request : { ...request, team: plainTeam }, guard)
         const result = !answer.ok && answer.ownBudgetExhausted === true ? { ...answer, code: -32005 } : answer
         d.activity(plainTeam, url, result.ok)
-        if(!result.ok&&result.acceptance==='unknown')return{...result,task_id:request.taskId}
+        if(!result.ok&&result.acceptance==='unknown'){retained=true;return{...result,task_id:request.taskId}}
         if (result.ok || result.code === -32005) {
           // A receipt owes no receipt; native bridge rounds have no A2A receipt contract.
           // Match routeTrunk/trackOwedTask rather than manufacturing an unpayable debt.
@@ -107,7 +111,7 @@ export function createDirectForward(d: DirectForwardDeps) {
         else if (!result.ok && result.capacityRefusals !== undefined) capacityCounted += result.capacityRefusals
         failures.push(url + ': ' + result.error)
         if (result.code === -32002 || result.code === -32003) return { ...result, task_id: request.taskId }
-      } finally { release() }
+      }catch{retained=true;return {ok:false,acceptance:'unknown',task_id:request.taskId,error:'original forwarded dispatch or final ledger commit is unresolved; reconcile the original task, do not resend',code:-32000}}finally{release();if(reserved&&!retained)try{d.ledger.releaseDispatch(request.taskId)}catch{/* original persisted reservation remains, never authorizes replay */}}
     }
     const noReceiver = failures.some(f => f.includes('lists no receiving member'))
     const next = noReceiver ? `the owner's canvas ${plainTeam} lists no member besides you; ask its owner to add one, or route to a member's own handle` : failures.length === 0 ? `no linked peer lists ${request.team}; check the name with \`a2a-net teams\`` : undefined
