@@ -180,8 +180,10 @@ Files do not go through session messages: use the file channel below, never JPFI
 - B signs its auto-receipt as the member that did the work. Its destination prefers an online CLI household on that host (an owner-controlled fact); otherwise it returns only to the pinned home, never another directory advertiser. In the normal single-home setup it settles A’s single forwarded outbound row on-chain under `enforce` and enters the CLI mailbox (`a2a-net inbox`). `--sync` returns B’s final reply. The transport still has a 15s synchronous patience window, not a full model-turn budget. For forwarded or long work, prefer `a2a-net route <team> <message>` (async by default) then `a2a-net inbox --wait --renew`. A `--sync` transport expiry is `-32005`; the target still auto-receipts the original task after finishing. Reconcile by task id/inbox instead of treating a new direct pong as its receipt or resending blindly.
 - With forwarding off or any prerequisite missing, the original "No live DSH session node accepts team" error includes the reason it was not forwarded. Receiving hosts never forward the forwarded request again.
 - Admission: a deposited handle is a node fact of its home host (N3); that fact alone grants no remote scope or admission. Operator canvas membership and B’s home pin are still required. Global self-description is never a link.
-- `a2a-net report <message…>` is a one-way report to the host's process team
+- `a2a-net tell-host <message…>` is a one-way message to the host's process team
   (addressed to the zone the home's state face names, `dsh` if it names none).
+  `a2a-net report` is its old name, kept for one version (it prints a notice);
+  it is not the `a2a_report` tool, which writes the host's report ring.
 - A message that starts with `-` goes after `--`. Flag values never become
   part of the message.
 - Async output is one line (`delivered → <team> · task <id> · <receipt>`);

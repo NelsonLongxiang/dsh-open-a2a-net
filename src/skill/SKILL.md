@@ -133,10 +133,9 @@ renders the same data for humans.
   direct delivery is not relayed, except the one-hop forward for an
   authenticated online CLI deposited on that home (`forwardDirect`, links on
   both sides; setup.md §3) — `a2a_route` from a session routes to peers itself.
-- `[PATTERN_NO_MINT]` / `[ALLOWLIST_DENY]` on `a2a_team_join` — only an EXACT
-  allowlisted name joins; adding that name is the owner's act of creating
-  the team. `[CANVAS_TEAM]` — canvas membership is assigned in the workbench,
-  never by the roster tool.
+- No tool joins a team: a team is a canvas team that the owner composes on
+  the workbench board or through the team builder's blueprint (roster
+  self-join retired 2026-11-18).
 
 ## Details
 

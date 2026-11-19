@@ -27,7 +27,7 @@ capability flags) plus unsigned serve-fresh fields.
   likely fail at transport.
 - `a2a_teams` also exposes remote `canvasOrg` groups as group rows with the
   publisher's `origin` and `via` (#159); they do not become extra session
-  nodes in state `remote`. With `teamScopeInfo` on, a remote canvas row is
+  nodes in state `remote`. With `teamScope` on, a remote canvas row is
   included only when it names an unambiguously resolved joined session on this
   host. A remote session row is included the same way: when that host's own
   canvas holds the session beside a joined session of this host, the row

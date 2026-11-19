@@ -45,14 +45,14 @@ it('ships generated inline router text without changing preset ids or compositio
 
 it('adds only the shared boundary to original worker personas and leaves the builder unchanged', () => {
   // Target next/0.8 78e077c; preserve its member-proposal text and original worker semantics.
-  const originalPrefixes = { member: '94788823990a698e9d29812acd0d97a2f0ed103290bf09fba583e49b0784f611', observer: '8093867d8c7d5612bc183542093c8ff5026ba74c847dadd1346870d9f83b958f' }
+  const originalPrefixes = { member: 'f34cf9d7580fa7d0a88c7e2da3e1bfa1542043b9dc4fca483bdda832c60de9d4', observer: '9d89c6b736d0e37634d776bbd79db41845dae516411d8ad36f53bb8234c54df1' }
   for (const [role, sha] of Object.entries(originalPrefixes)) {
     const original = readFileSync(new URL('src/superagent/prompts/' + role + '.md', root), 'utf8')
     expect(digest(original)).toBe(sha)
     expect(persona(presets.find(row => row.config?.id === 'superagent-' + role)!).prefix).toBe(presetPrompt(role))
     expect(presetPrompt(role).startsWith(original.trimEnd() + '\n\n')).toBe(true)
   }
-  expect(digest(persona(presets.find(row => row.config?.id === 'superagent-builder')!).prefix)).toBe('f51862d6928b0facc965802135eded05331136b3e6d6b3dc89111f0fd2546f5f')
+  expect(digest(persona(presets.find(row => row.config?.id === 'superagent-builder')!).prefix)).toBe('9d646ebaf36c2d0aafcf2a05c481a4241f54977a177be44f69fd64a6f5c84053')
 })
 
 it('retains upstream member initiative as a proposal, never a self-assignment or an external send', () => {

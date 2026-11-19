@@ -23,6 +23,7 @@ import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, type Role } from './role
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
 import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, observerActor, observerOfActor, proposerKind, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 import type { PersonMessage, WorkbenchVia } from './deps.ts'
+import { YGL_UNKNOWN, type YglCapabilities } from './ygl-home.ts'
 
 
 /**
@@ -146,7 +147,12 @@ export const YGL_WRITE = 'mcp__ygl__write'
  * names it: the member selects it for its own session first (ygl-trees' MCP brief ignores an explicit project, ygl-trees#260)
  * and passes it on every other call, so the team's records stay in one project and no member makes another.
  */
-export function yglCardLines(project?: string): string[] {
+/**
+ * The ygl-trees steps on an assignment card. What the installed ygl-trees can do decides two lines (design Y1d/Y1e): from
+ * 0.123.0 the explicit project is enough and the `project use` step goes; from 0.126.0, with a team scope, kb notes are
+ * written to the team's scope and searched there first, then among the notes from before scopes. Unknown keeps today's steps.
+ */
+export function yglCardLines(project?: string, opts: { readonly scope?: string; readonly caps?: YglCapabilities } = {}): string[] {
   if (project === undefined) return [
     'team memory (ygl-trees), as part of this ticket:',
     '- first: mcp__ygl__read domain agent action brief (if it answers ambiguous project: mcp__ygl__write domain project action use, then again), and domain kb action search on this ticket\'s subject; build on what earlier work found',
@@ -154,14 +160,26 @@ export function yglCardLines(project?: string): string[] {
     '- before ready: kb add what the next session should reuse, and pass the ids you wrote in ygl on a2a_ticket_report',
   ]
   const named = JSON.stringify(project)
+  const caps = opts.caps ?? YGL_UNKNOWN
+  const scope = caps.kbScope ? opts.scope : undefined
+  const search = scope === undefined
+    ? `domain kb action search on this ticket's subject with project ${named}`
+    : `domain kb action search on this ticket's subject with scope ${JSON.stringify(scope)} (this team's notes), then again with scope "" (notes from before team scopes)`
+  const first = caps.briefHonorsProject
+    ? `- first: mcp__ygl__read domain agent action brief with project ${named}, and ${search}; build on what earlier work found`
+    : `- first: mcp__ygl__write domain project action use name ${named} (it selects the project for your session only), then, as a separate call, mcp__ygl__read domain agent action brief, and ${search}; build on what earlier work found`
   return [
     `team memory (ygl-trees), as part of this ticket. This team's project is ${named}: use it, pass project ${named} on every read and write, and make no other project.`,
-    `- first: mcp__ygl__write domain project action use name ${named} (it selects the project for your session only), then, as a separate call, mcp__ygl__read domain agent action brief, and domain kb action search on this ticket's subject with project ${named}; build on what earlier work found`,
+    first,
     '- as you go: with mcp__ygl__write, record each source you rely on and the exact lines you quote as evidence, and each judgement as a claim linked to them',
-    '- before ready: kb add what the next session should reuse, and pass the ids you wrote in ygl on a2a_ticket_report',
+    scope === undefined
+      ? '- before ready: kb add what the next session should reuse, and pass the ids you wrote in ygl on a2a_ticket_report'
+      : `- before ready: kb add what the next session should reuse, with scope ${JSON.stringify(scope)}, and pass the ids you wrote in ygl on a2a_ticket_report`,
   ]
 }
 /** The steps without a project, for callers from before Y1c. */
 export const YGL_CARD_LINES: readonly string[] = yglCardLines()
 /** The line on a router's candidate card that names the team's project (Y1c). */
-export const yglRouterLine = (project: string): string => `team memory: this team's ygl-trees project is ${JSON.stringify(project)}; pass it as project when you search there before deciding.`
+export const yglRouterLine = (project: string, scope?: string): string => scope === undefined
+  ? `team memory: this team's ygl-trees project is ${JSON.stringify(project)}; pass it as project when you search there before deciding.`
+  : `team memory: this team's ygl-trees project is ${JSON.stringify(project)}; before deciding, search its kb notes with scope ${JSON.stringify(scope)}, then with scope "" (notes from before team scopes).`

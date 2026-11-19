@@ -10,7 +10,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { SuperagentHost, type SuperagentHostDeps } from './index.ts'
-export { ensureTeamYglHome, ensureTeamYglProject } from './ygl-home.ts'
+export { ensureTeamYglHome, ensureTeamYglProject, refreshYglCapabilities, startWhenYglKnown, yglCapabilities, yglSettled } from './ygl-home.ts'
 
 const TEAM_ID = /^[0-9a-f]{8}$/
 
@@ -100,5 +100,7 @@ export class SuperagentTeams {
   }
 
   start(): void { this.started = true; for (const team of this.all()) team.start() }
+  /** What waited on the ygl-trees version read (candidates, launches) goes out now (#739 R1 barrier). */
+  resumeHeld(): void { if (this.started) for (const team of this.all()) team.resumeHeld() }
   async stop(): Promise<void> { this.started = false; await Promise.all(this.all().map(team => team.stop())) }
 }

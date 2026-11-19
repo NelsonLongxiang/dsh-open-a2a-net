@@ -5,8 +5,8 @@
  * declares its members — and is published serve-fresh on the host card so
  * a team's roster rebuilds as the union of member declarations (desired
  * state, no central directory; the S2 half of the team-roster iteration).
- * Joins are allowlist-gated at the tool layer; the store is pure storage.
- * Plain JSON, one writer (the a2a_team_join / a2a_team_leave tools), read
+ * Roster self-join is retired (owner ruling 2026-11-18): nothing adds to the
+ * store any more; the owner's board can only shrink or dissolve a roster. Read
  * fresh by the state route.
  * @module @nelsonlongxiang/dsh-open-a2a-net/team-store
  */

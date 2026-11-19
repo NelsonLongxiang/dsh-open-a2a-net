@@ -509,7 +509,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
   // Design tool-requests T3: a tool the role's list hides can still be asked for by name; the owner decides on a P0 card.
   ctx.tools.register(defineTool({
     name: 'a2a_tool_request',
-    description: 'Team session only: ask the owner to let this team use a tool that is not on your role\'s list (for example a shell a plugin on this host provides). Name the tool exactly and say why you need it. The owner decides on a P0 decision card; once approved the tool appears in your list. Tools that leave the team (routes, sessions, subagents) are never granted.',
+    description: 'Team router only: ask the owner to let this team use a tool that is not on your role\'s list (for example a shell a plugin on this host provides). Name the tool exactly and say why you need it. The owner decides on a P0 decision card; once approved the tool appears in your list. Tools that leave the team (routes, sessions, subagents) are never granted.',
     parameters: { name: { type: 'string', required: true, description: 'The exact tool name.' }, why: { type: 'string', required: true, description: 'What you need it for, in a sentence.' } },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_tool_request', value) },
     presentCall: args => ({ card: 'generic', title: `a2a_tool_request ${String(args.name)}`, kind: 'other', rawInput: args }),
@@ -520,8 +520,11 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       if (h === undefined || me === undefined || role === undefined) return { ok: false, code: 'not-team', error: 'a2a_tool_request serves only the sessions of a superagent team on this host' }
       const name = String(args.name ?? '').trim()
       if (h.grantedTools(me).includes(name) || roleTools(role).includes(name)) return { ok: true, granted: true, note: `${name} is already yours to use` }
-      // T6: a member or an observer already has every tool but the boundary and what the owner blocked.
-      if (role !== 'router' && !memberBoundary(role, name) && !(h.settings.blockedTools ?? []).includes(name)) return { ok: true, granted: true, note: `${name} is already yours to use: members have every tool of this host except those that leave the team` }
+      // T6: a member or an observer already has every tool but the boundary and what the owner blocked; a grant would never
+      // apply to it (its guard reads no grants), so it never raises a card (redundancy review 2026-11-18).
+      if (role !== 'router' && memberBoundary(role, name)) return { ok: false, code: 'not-grantable', error: `${name} leaves the team: members and observers work with their host's tools and say what they lack in their report` }
+      if (role !== 'router' && (h.settings.blockedTools ?? []).includes(name)) return { ok: false, code: 'blocked', error: `the owner has blocked ${name} for this team's members` }
+      if (role !== 'router') return { ok: true, granted: true, note: `${name} is already yours to use: members have every tool of this host except those that leave the team` }
       if (!grantableTool(role, name)) return { ok: false, code: 'not-grantable', error: `${name} is not something a team session may be granted (it would leave the team, or it belongs to another role)` }
       return { ok: true, requested: true, note: h.requestTool(me, role, name, String(args.why ?? '')) }
     },

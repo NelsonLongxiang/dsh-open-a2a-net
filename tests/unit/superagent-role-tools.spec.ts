@@ -15,7 +15,7 @@ describe('role tool lists', () => {
   it('pins what the router and a member may call', () => {
     expect(ROUTER_TOOLS).toEqual(['schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view', 'schedule_update', 'schedule_delete', 'a2a_whoami', 'mcp__ygl__read', 'read', 'glob', 'grep', 'skill', 'a2a_tool_request', 'a2a_outbound_request', 'superagent_route', 'superagent_split', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
     expect(MEMBER_TOOLS).toEqual(['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list', 'job_kill',
-      'web_search', 'web_fetch', 'skill', 'todo_write', 'schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view', 'schedule_update', 'schedule_delete', 'a2a_whoami', 'mcp__ygl__read', 'mcp__ygl__write', 'mcp__ygl__verify', 'mcp__ygl__doctor', 'a2a_tool_request', 'a2a_outbound_request', 'a2a_decision_decide', 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_ticket_request', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch'])
+      'web_search', 'web_fetch', 'skill', 'todo_write', 'schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view', 'schedule_update', 'schedule_delete', 'a2a_whoami', 'mcp__ygl__read', 'mcp__ygl__write', 'mcp__ygl__verify', 'mcp__ygl__doctor', 'a2a_outbound_request', 'a2a_decision_decide', 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_ticket_request', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch'])
   })
 
   it('no role may open or reach sessions, or route or report over A2A', () => {
@@ -34,6 +34,9 @@ describe('role tool lists', () => {
     // Owner 2026-11-18: the router reads files and loads skills, and still writes nothing.
     for (const name of ['read', 'glob', 'grep', 'skill']) expect(roleToolRefusal('router', name), `router ${name}`).toBeUndefined()
     for (const name of ['write', 'edit', 'pwsh', 'job_output']) expect(roleToolRefusal('router', name), `router ${name}`).toBeDefined()
+    // Tool requests are the router's alone (redundancy review 2026-11-18).
+    expect(roleToolRefusal('router', 'a2a_tool_request')).toBeUndefined()
+    expect(roleToolRefusal('member', 'a2a_tool_request')).toBeDefined()
     expect(roleToolRefusal('router', 'a2a_ticket_report')).toBeDefined()
     expect(roleToolRefusal('member', 'superagent_route')).toBeDefined()
     // The runtime's transport is not a capability: each call it makes is guarded on its own.
@@ -121,6 +124,27 @@ describe('RoleTools', () => {
     known.push('superagent_route', 'superagent_status')
     tools.sync(r)
     expect(log.slice(1)).toEqual(['lift', 'restrict schedule_list,superagent_route,superagent_status'])
+  })
+
+  it('a short restriction is made again on every later sync and warns only once (warnedShort, #584)', () => {
+    const log: string[] = []
+    const warned: string[] = []
+    const tools = new RoleTools({ roleOf: () => 'router', agentOf: () => undefined, logger: { warn: (f, ...a) => { warned.push([f, ...a].join(' ')) } } })
+    // The sync ran while only these of the router's tools were visible (a session restored as the host starts), so the applied
+    // list is one `superagent_*` short of the role's own tools: every later sync re-makes it, and the warning is not repeated.
+    const known = ['bash', 'schedule_list', 'superagent_route']
+    const r: RoleAgent = { id: 'r', ctx: { [Symbol('dsh.scope')]: {}, tools: { get: name => (known.includes(name) ? {} : undefined), restrict: f => { log.push(`restrict ${f.allow!.join(',')}`); return () => { log.push('lift') } } } } } as never
+    tools.sync(r); tools.sync(r); tools.sync(r)
+    expect(log).toEqual(['restrict schedule_list,superagent_route', 'lift', 'restrict schedule_list,superagent_route', 'lift', 'restrict schedule_list,superagent_route'])
+    expect(warned.filter(line => line.includes('does not see'))).toHaveLength(1)
+    expect(warned.join()).toContain('made again at its next turn')
+    // Once the scope has the rest of the team's tools the restriction is complete: made once more, then left alone, and still
+    // one warning for the whole run.
+    known.push(...TEAM_TOOLS.filter(name => !known.includes(name)))
+    const complete = ROUTER_TOOLS.filter(name => known.includes(name)).join(',')
+    tools.sync(r); tools.sync(r)
+    expect(log.slice(5)).toEqual(['lift', `restrict ${complete}`])
+    expect(warned.filter(line => line.includes('does not see'))).toHaveLength(1)
   })
 
   it('a complete restriction is not made again on every sync', () => {

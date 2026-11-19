@@ -193,6 +193,19 @@ describe('a2a-net CLI: route / report talk to the right host with the right mess
     expect((await runCli(['report', 'hello'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: old.url })).code).toBe(0)
     expect(old.seen.find(s => s.path === '/a2a/direct')?.body.team).toBe('dsh')
   })
+  it('tell-host is the name; report still works for one version and says it is deprecated (redundancy review 2026-11-18)', async () => {
+    const host = await stubHost(path => path.startsWith('/__dsh_a2a/state') ? { status: 200, body: { zone: 'alpha' } } : delivered)
+    servers.push(host.server)
+    const HOME = tmpHomeDir()
+    await runCli(['init', 'scout'], { HOME, A2A_CLI_HOME: HOME })
+    const told = await runCli(['tell-host', 'hello'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })
+    expect(told.code).toBe(0)
+    expect(String((told as { stderr?: string }).stderr ?? '')).not.toContain('deprecated')
+    expect(host.seen.filter(s => s.path === '/a2a/direct').at(-1)?.body.message).toBe('[a2a-net cli report] hello')
+    const old = await runCli(['report', 'hello'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })
+    expect(old.code).toBe(0)
+    expect(String((old as { stderr?: string }).stderr ?? '')).toContain('deprecated: use a2a tell-host')
+  })
 
   it('host and key resolve from $A2A_HOME / $A2A_KEY, and from the home saved by init --home', async () => {
     const host = await stubHost(() => delivered)

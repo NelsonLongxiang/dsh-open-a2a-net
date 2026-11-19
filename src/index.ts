@@ -35,7 +35,6 @@ export function resolveCallerLabel(input: {
   return input.sessionLabel
 }
 import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
-import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef, legacyBareMember } from './canvas-store.ts'
 import { childRegistration, linkRootRequester } from './canvas-root.ts'
 import { inactiveContextError } from './context-live.ts'
@@ -151,7 +150,7 @@ import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiri
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
 import { touchesRules } from './superagent/host/owner-proof.ts'
-import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject } from './superagent/host/teams.ts'
+import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, startWhenYglKnown, yglCapabilities, yglSettled } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { IntakeOrigins } from './intake-origins.ts'
 import { redeliverLost, TaskBodies } from './task-bodies.ts'
@@ -637,7 +636,11 @@ export function apply(ctx: Context, config: Config): void {
   // Truthiness matches the ORIGINAL read site (`if (config.teamScopeInfo)`):
   // literal compositions without the schema default carry undefined, which
   // reads as the OPEN plane — `!== false` would silently scope them.
-  let ownerTeamScopeInfo = config.teamScopeInfo === true
+  // Owner ruling 2026-11-18 (simplify D3): one `teamScope` switch for both halves, hot-applied; while it is absent the two
+  // deprecated per-half keys decide, each for its own half, so an existing configuration keeps its meaning for one version.
+  let ownerTeamScopeInfo = (config.teamScope ?? config.teamScopeInfo) === true
+  let ownerTeamScopeRouting = (config.teamScope ?? config.teamScopeRouting) === true
+  if (config.teamScope === undefined && (config.teamScopeInfo === false || config.teamScopeRouting === false)) logger.warn('a2a: teamScopeInfo / teamScopeRouting are deprecated; set teamScope (one switch for routing and information)')
   let ownerAnnounceRestartPending = false
   // S2: node-declared team memberships — the roster half of the
   // team-roster iteration. Joins ride the allowlist-gated tools; the store
@@ -687,11 +690,6 @@ export function apply(ctx: Context, config: Config): void {
    */
   const lanIp = selectLanIPv4(networkInterfaces())
 
-  // Session groups: user-named buckets for the panel's session listing,
-  // persisted beside the join intents so they survive restarts.
-  // Deprecated as of 0.6.6 — canvas teams are the grouping face now; this
-  // store only stays readable for old panels.
-  const groupStore = new GroupStore(join(home, 'a2a', 'groups.json'))
   // Canvas teams: user-composed multi-member routing groups. A session node
   // may sit in many teams; routing to <team>/canvas/<name> resolves the
   // first live member or wakes the first cold one (member order = priority).
@@ -1838,7 +1836,7 @@ export function apply(ctx: Context, config: Config): void {
       registerAdminFaces(webServer, {
         reminderDiagnostics:()=>({...idleReminders.diagnostics}),
         nudgeEscalations:()=>nudgeObservations.snapshot(),
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
+        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
         sessionPresetOf,
@@ -1883,6 +1881,8 @@ export function apply(ctx: Context, config: Config): void {
         set ownerAllowlist(v) { ownerAllowlist = v },
         get ownerTeamScopeInfo() { return ownerTeamScopeInfo },
         set ownerTeamScopeInfo(v) { ownerTeamScopeInfo = v },
+        get ownerTeamScopeRouting() { return ownerTeamScopeRouting },
+        set ownerTeamScopeRouting(v) { ownerTeamScopeRouting = v },
         get ownerAnnounceRestartPending() { return ownerAnnounceRestartPending },
         set ownerAnnounceRestartPending(v) { ownerAnnounceRestartPending = v },
       })
@@ -1907,7 +1907,7 @@ export function apply(ctx: Context, config: Config): void {
         // async: wait:false is honored (steer + delivered, no final hold);
         // the signed capability turns async dialing into a deterministic
         // check instead of a timeout race against pre-0.5.2 peers.
-        // roster: the team-roster face (a2a_team_join/leave, card
+        // roster: the team-roster face (card
         // teamMemberships, team-scope routing admission) ships — peers read
         // its absence as a pre-roster legacy node (0.5.43 and older).
         // superagent named dispatch: a host running superagent teams reads a request's [A2A dispatch] line (for, rework), so a
@@ -2116,6 +2116,11 @@ export function apply(ctx: Context, config: Config): void {
     localSessionOf: handle => localSessionOfHandle(handle),
     onRolesChanged: () => { syncRoleTools() },
     ensureYglProject: name => { void ensureTeamYglProject(name, { logger }) },
+    yglCapabilities,
+    yglReady: yglSettled,
+    // Owner ruling 2026-11-18: what the team still owes a requester is read from this one ledger (the team identity publishes
+    // with --owes, so each request it receives has an inbound row here); its own memory is only the fallback without a row.
+    receiptLedger: task => taskLedger.inboundReceiptState(task),
     // Design v5: the team is a canvas team this host owns. Its local sessions in canvas order, and its remote session slots
     // with the key the canvas pinned and the base URL of the linked peer whose signed card carries that key.
     // Pi platform P1/P2/P3: whether a CLI handle is a Pi seat deposited here, and the mailbox delivery to one.
@@ -2193,7 +2198,15 @@ export function apply(ctx: Context, config: Config): void {
   let superagentHomeUrl: string | undefined
   if (superagentHost !== undefined) {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
-    ctx.effect(() => { superagentTeams!.start(); void ensureTeamYglHome({ logger }); return () => { void superagentTeams!.stop() } }, 'a2a: superagent engine passes')
+    ctx.effect(() => {
+      void ensureTeamYglHome({ logger })
+      // Design Y1d (#739 review R1): the engines start at boot, as before #739 (a late start's recovery restarted assignments
+      // the team had already begun, 2026-11-18); the ygl barrier holds candidates and launches until the bounded version
+      // read settles, and what it held goes out then.
+      superagentTeams!.start()
+      const cancel = startWhenYglKnown(() => { superagentTeams!.resumeHeld() }, { logger })
+      return () => { cancel(); void superagentTeams!.stop() }
+    }, 'a2a: superagent engine passes')
     registerSuperagentTools(ctx, id => superagentTeams!.ofSession(id))
     // superagent-builder BS1: the team builder's inventory and rule templates (read-only).
     registerBuilderTools(ctx, id => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET, () => ({
@@ -3015,7 +3028,7 @@ export function apply(ctx: Context, config: Config): void {
   // disagree. Records are read at decision time, never copied.
   const admissionRecords: AdmissionRecords = {
     zone: config.team,
-    get teamScopeRouting() { return config.teamScopeRouting },
+    get teamScopeRouting() { return ownerTeamScopeRouting },
     id8,
     canvasTeamOf,
     memberships: () => teamMemberships.list(),
@@ -3193,7 +3206,7 @@ export function apply(ctx: Context, config: Config): void {
     const handle = (session: string): string => `${config.team}/${id8(session)}`
     return {
       zone: config.team,
-      scope: [config.teamScopeRouting, config.originClaimWindow === true],
+      scope: [ownerTeamScopeRouting, config.originClaimWindow === true],
       joined: joinedSessions.list().map(handle),
       roster: teamMemberships.list().flatMap(entry => entry.teams.map(team => [handle(entry.session), team] as const)),
       // Local members by their handle (design §2.3), remote refs as they are stored.
@@ -3307,6 +3320,7 @@ export function apply(ctx: Context, config: Config): void {
 
   whenWebServerSettled((webServer) => {
     registerWireFaces(webServer, {
+      teamScopeRouting: () => ownerTeamScopeRouting,
       ctx,
       logger,
       config,
@@ -3871,6 +3885,7 @@ export function apply(ctx: Context, config: Config): void {
     // disables owner-settings hot-apply (whoami allowlist / teams scoping).
     get ownerAllowlist() { return ownerAllowlist },
     get ownerTeamScopeInfo() { return ownerTeamScopeInfo },
+    get ownerTeamScopeRouting() { return ownerTeamScopeRouting },
     teamAuditRing, reportRing, a2aJoinGateRefusal, observeAuthorization,
     settlePeerCard, client, listDirectoryTeams, canvasTeamsOfSession, localHandleResolver, canvasMigrationState,
     SWEEP_CONCURRENCY,
@@ -3885,10 +3900,6 @@ export function apply(ctx: Context, config: Config): void {
     // module's call-time read live instead of snapshotting at construction.
     get ownerAllowlist() { return ownerAllowlist },
   })
-  actTools.registerTeamJoin()
-
-  actTools.registerTeamLeave()
-
   actTools.registerExposure()
 
   actTools.registerReport()
@@ -4117,7 +4128,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     if (caller !== undefined && cliDeposits.get(caller) !== undefined) {
       if (!config.forwardDirect) missing.push('home forwardDirect is off')
       if (config.isolated) missing.push('home is isolated')
-      const scope = config.teamScopeRouting ? await outboundScope(senderScopeRecords, caller, caller, team) : { ok: true as const }
+      const scope = ownerTeamScopeRouting ? await outboundScope(senderScopeRecords, caller, caller, team) : { ok: true as const }
       if (!scope.ok) missing.push('sender scope: ' + scope.error)
       for (const owner of owners.filter(row => row.team === team && !row.local)) {
         if (!owner.members.includes(caller)) missing.push(owner.owner + ': caller is not an advertised canvas member')
@@ -4130,7 +4141,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const forwardDirect = createDirectForward({
     births: forwardingBirths,
     enabled: () => config.forwardDirect === true, isolated: () => config.isolated, deposited: handle => cliDeposits.get(handle) !== undefined,
-    scope: (handle, team) => config.teamScopeRouting ? forwardScope(cardAuthorizedSend, () => outboundScope(senderScopeRecords, handle, handle, team), handle, team) : Promise.resolve({ ok: true as const }),
+    scope: (handle, team) => ownerTeamScopeRouting ? forwardScope(cardAuthorizedSend, () => outboundScope(senderScopeRecords, handle, handle, team), handle, team) : Promise.resolve({ ok: true as const }),
     candidates: async (team, failures, caller) => { const fetch = memoizedCardFetch(); return { urls: await directoryPeerCandidates(fetch, team, failures, { id: caller, handle: caller }), card: fetch } },
     dispatch: (url, request, guard) => dispatchPeerCandidate(url, request.team, request.message, request.contextId, new AbortController().signal, request.caller, request.noWait, request.taskId, request.caller, guard),
     ledger: taskLedger, activity: (team, peer, ok) => recordActivity('fwd', team, peer, ok),
@@ -4149,7 +4160,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const senderScopeRecords: OutboundScopeRecords = {
     zone: config.team, id8, teamsOf: id => teamMemberships.teamsOf(id), membersOf: team => teamMemberships.membersOf(team),
     canvasNames: () => canvasStore.list(), canvasMembers: name => canvasStore.membersOf(name), canvasTeam: canvasTeamOf,
-    memberHandle: ref => splitQualifiedMember(ref)?.handle ?? ref,
+    // A local member sits by its session id: map it to its handle too, as inbound admission does (sameZoneAdmission matches
+    // either shape), so two canvas teammates on this host can route to each other's handle — what a shared roster used to
+    // cover before roster self-join was retired (owner ruling 2026-11-18).
+    memberHandle: ref => splitQualifiedMember(ref)?.handle ?? (ref.includes('/') ? ref : `${config.team}/${id8(ref)}`),
     peerOrgs: function* () { for (const hit of cardCache.values()) if (hit.card?.canvasOrg) yield hit.card.canvasOrg.map(row=>({...row,members:row.members.map(ref=>splitQualifiedMember(ref)&&localHandleResolver()(ref)!==undefined?splitQualifiedMember(ref)!.handle:ref)})) },
     warmPeers: () => mapBounded(resolutionPeers(), SWEEP_CONCURRENCY, cachedCardFetch),
   }
@@ -4208,7 +4222,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // and the initiator face stay exempt, like the join gate; discovery
       // (a2a_teams) stays open so a teamless node can still see what to join.
       let scopedCanvasCaller: { id: string; handle: string } | undefined
-      if (config.teamScopeRouting && agent !== undefined) {
+      if (ownerTeamScopeRouting && agent !== undefined) {
         const scopeCaller = String(agent.id)
         let initiator = false
         try {
