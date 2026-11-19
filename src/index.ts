@@ -552,9 +552,6 @@ export function apply(ctx: Context, config: Config): void {
   // the same home as the node key.
   const home = config.dshHome === '' ? resolveDshHome() : resolveDshHome(config.dshHome)
   const peerStore = new PeerStore(config.peers, join(home, 'a2a', 'peers.json'))
-  // Restored team role guards can resolve canvas members during construction.
-  // Their resolver must see an initialized (initially empty) peer cache.
-  const cardCache = new Map<string, CardCacheEntry>()
   // Node identity (docs/design/node-identity.md, N1): human-named nodes and their prompt versions.
   const nodeStore = new NodeStore(join(home, 'a2a'))
   // Restored live sessions synchronize role tools during apply. Their canvas lookup reads this cache through both
