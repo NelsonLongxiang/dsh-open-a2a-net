@@ -419,7 +419,7 @@
 
 ### 修复
 
-- 绕过 ygl-trees 的「ambiguous project」（#587）：ygl-trees 的 MCP 在 `agent brief` 和 `project show` 上丢掉显式的 project（ygl-trees#260，0.122.0 仍在），工作区里有多个项目时，每张工单的第一步都会失败。成员和观察者的人设与派单卡写明：遇到这个报错，先用 `mcp__ygl__write domain project action use` 为本会话选中项目，再调一次（每个团队会话有自己的选择，不影响其他会话）；总工只读，改用带 project 的 `kb search`。
+- 绕过 ygl-trees 的「ambiguous project」（#587）：ygl-trees 的 MCP 在 `agent brief` 和 `project show` 上丢掉显式的 project（ygl-trees#260，0.122.0 仍在），工作区里有多个项目时，每张工单的第一步都会失败。派单卡写明报错补救：遇到这个报错，先用 `mcp__ygl__write domain project action use` 为本会话选中项目，再调一次（每个团队会话有自己的选择，不影响其他会话）；人设是预防式写法：先为本会话选中团队项目，每次调用都带 project。总工只读，改用带 project 的 `kb search`。
 
 ### 本版已披露限制
 
