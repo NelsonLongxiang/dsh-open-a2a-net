@@ -35,7 +35,6 @@ export function resolveCallerLabel(input: {
   return input.sessionLabel
 }
 import { encodePublicKey, signCard, verifyCard, type CardCore } from './card.ts'
-import { GroupStore } from './group-store.ts'
 import { CanvasStore, canvasNameReserved, isRemoteMemberRef, legacyBareMember } from './canvas-store.ts'
 import { childRegistration, linkRootRequester } from './canvas-root.ts'
 import { inactiveContextError } from './context-live.ts'
@@ -65,11 +64,12 @@ import { ReconciliationReminders, type ReminderAgent } from './reconciliation-re
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
 import {FollowupAcceptanceUnknown,ACCEPTANCE_UNKNOWN_NOTE,ACCEPTANCE_INSERTED_NOTE} from './followup-admission.ts'
-import { runReceiptLadder } from './receipt-ladder.ts'
-import { receiptFailure, retryReceiptDelivery, transientReceiptFailure, receiptRetryWait, readReceiptReplay, RECEIPT_RETRYABLE } from './receipt-retry.ts'
+import { capacityRefusalOf, capacityRefusalNote, capacityRefusalFields, type CapacityRefusal } from './task-delivery-capacity.ts'
+import { ReceiptOutbox, receiptBirth, receiptTransportId, receiptPayloadHash, type ReceiptOutboxRecord, type ReceiptLane, type ReceiptAttemptResult } from './receipt-outbox.ts'
+import { receiptFailure, readReceiptReplay, RECEIPT_RETRYABLE, RECEIPT_NOT_INSERTED, RECEIPT_CONFIRMED, RECEIPT_PRECONNECT_REFUSED } from './receipt-retry.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { refuseIfBudgetExhausted } from './recursion-guard.ts'
-import { createFloodGuard } from './flood-guard.ts'
+import { createFloodGuard, fileChannelAdvice } from './flood-guard.ts'
 import { createQueueGuard, queueFullRefusal, QUEUE_FULL_NEXT, WIRE_ERROR_QUEUE_FULL } from './queue-guard.ts'
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
@@ -139,6 +139,7 @@ import { MAX_LAYOUT_BODY_BYTES, WIRE_ERROR_PAYLOAD_TOO_LARGE, withinRouteBodyCap
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from './runtime.ts'
 import { registerAdminFaces } from './faces/admin.ts'
 import { scopeHints } from './scope-hints.ts'
+import { WindowMeasure } from './window-measure.ts'
 import { registerNodeFaces } from './faces/nodes.ts'
 import { NodeStore } from './node-store.ts'
 import { createNodeBinder, NodeBindings } from './node-bind.ts'
@@ -150,7 +151,7 @@ import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiri
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
 import { touchesRules } from './superagent/host/owner-proof.ts'
-import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject } from './superagent/host/teams.ts'
+import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, startWhenYglKnown, yglCapabilities, yglSettled } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { IntakeOrigins } from './intake-origins.ts'
 import { redeliverLost, TaskBodies } from './task-bodies.ts'
@@ -159,6 +160,9 @@ import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerFileFaces } from './faces/files.ts'
 import { registerSuperagentFaces } from './faces/superagent.ts'
+import {RequestRecoveryStore} from './request-recovery.ts'
+import {RequestRecoveryRuntime} from './request-recovery-runtime.ts'
+import {registerRequestRecoveryFace} from './faces/request-recovery.ts'
 import { SidebarSends } from './sidebar-sends.ts'
 import { PI_PLATFORM, piDeliverable, piSeatAdmission } from './superagent/platforms/pi.ts'
 import { cancelAgentTurn, memberTurnFrom, personMessageFrom, selectSessionModel, stageCardFiles } from './superagent/session-reads.ts'
@@ -190,7 +194,7 @@ export const name = 'a2a'
 export const inject = ['tools', 'timer', 'systemPrompt']
 
 import { Config } from './config.ts'
-import { canvasOwnerFingerprint, splitCanvasOwner } from './canvas-id.ts'
+import { canvasOwnerFingerprint, splitCanvasOwner, homeCanvasTeam } from './canvas-id.ts'
 import { forwardReceiptBasis, teamReceiptBasis } from './direct-forward.ts'
 import { NudgeObservability } from './nudge-observability.ts'
 export { Config }
@@ -551,6 +555,9 @@ export function apply(ctx: Context, config: Config): void {
   const peerStore = new PeerStore(config.peers, join(home, 'a2a', 'peers.json'))
   // Node identity (docs/design/node-identity.md, N1): human-named nodes and their prompt versions.
   const nodeStore = new NodeStore(join(home, 'a2a'))
+  // Restored live sessions synchronize role tools during apply. Their canvas lookup reads this cache through both
+  // localHandleResolver (seeded peers) and remote-member resolution, before the later discovery faces are registered.
+  const cardCache = new Map<string, CardCacheEntry>()
   // Peer boundary model (docs/design/peer-boundary-model.md) — connection
   // layer. referralLearning off freezes the seed set: referrals are neither
   // learned nor offered. A non-empty peerAllowlist admits a referral only
@@ -636,7 +643,11 @@ export function apply(ctx: Context, config: Config): void {
   // Truthiness matches the ORIGINAL read site (`if (config.teamScopeInfo)`):
   // literal compositions without the schema default carry undefined, which
   // reads as the OPEN plane — `!== false` would silently scope them.
-  let ownerTeamScopeInfo = config.teamScopeInfo === true
+  // Owner ruling 2026-11-18 (simplify D3): one `teamScope` switch for both halves, hot-applied; while it is absent the two
+  // deprecated per-half keys decide, each for its own half, so an existing configuration keeps its meaning for one version.
+  let ownerTeamScopeInfo = (config.teamScope ?? config.teamScopeInfo) === true
+  let ownerTeamScopeRouting = (config.teamScope ?? config.teamScopeRouting) === true
+  if (config.teamScope === undefined && (config.teamScopeInfo === false || config.teamScopeRouting === false)) logger.warn('a2a: teamScopeInfo / teamScopeRouting are deprecated; set teamScope (one switch for routing and information)')
   let ownerAnnounceRestartPending = false
   // S2: node-declared team memberships — the roster half of the
   // team-roster iteration. Joins ride the allowlist-gated tools; the store
@@ -686,11 +697,6 @@ export function apply(ctx: Context, config: Config): void {
    */
   const lanIp = selectLanIPv4(networkInterfaces())
 
-  // Session groups: user-named buckets for the panel's session listing,
-  // persisted beside the join intents so they survive restarts.
-  // Deprecated as of 0.6.6 — canvas teams are the grouping face now; this
-  // store only stays readable for old panels.
-  const groupStore = new GroupStore(join(home, 'a2a', 'groups.json'))
   // Canvas teams: user-composed multi-member routing groups. A session node
   // may sit in many teams; routing to <team>/canvas/<name> resolves the
   // first live member or wakes the first cold one (member order = priority).
@@ -879,11 +885,21 @@ export function apply(ctx: Context, config: Config): void {
   // executes at most once inside the 24h window — same-key replays answer
   // refused-but-idempotent, same-key different-payload answers conflict.
   const idempotencyStore = new IdempotencyStore(join(home, 'a2a', 'idempotency.json'))
+  const requestRecovery=new RequestRecoveryRuntime({key:nodePrivateKey,home:()=>originOf(ownCardUrl),ledger:taskLedger,idempotency:idempotencyStore,
+    store:new RequestRecoveryStore(join(home,'a2a','request-recovery.json')),
+    peer:async url=>{const card=await fetchPeerCard(url);if(card)cardCache.set(url,{at:Date.now(),card});return card},linked:(url,key)=>intakeHostLinked(url,key),
+    cli:(url,caller)=>client.fetchCard(url+'/a2a/cli/'+encodeURIComponent(caller)),
+    localCli:caller=>{const row=cliDeposits.get(caller);if(!row)return undefined;try{const v=verifyCard(JSON.parse(row.cardJson),Date.now());return v.ok?v.card:undefined}catch{return undefined}},
+    target:team=>resolveAgentForTeam(team),
+    targetValid:(agent,team)=>sessionTeamOf(agent)===team&&joinedSessions.has(String(agent.id))&&archivedSessionFilter()?.(String(agent.id))!==true&&superagentRouterRefusal(undefined,String(agent.id))===undefined,
+    post:async(url,path,body)=>{const target=url+path,text=JSON.stringify(body),key=outboundKeyFor(url,linkKeyMap,config.apiKey);const res=await peerFetch(target,{method:'POST',headers:{'Content-Type':'application/json',...(key?{'X-API-Key':key}:{}),...originClaimHeaders({url:target,method:'POST',body:text})},body:text,signal:AbortSignal.timeout(15000)});if(!res.ok){void res.body?.cancel().catch(()=>{});throw Error('recovery peer refused HTTP '+res.status)}return await res.json() as Record<string,unknown>},
+  })
+
   // Requests a person sent from a session's team tab to another instance, and their receipts (kept for the tab).
   const sidebarSends = new SidebarSends(join(home, 'a2a', 'sidebar-sends.json'))
   const refuseIfFlooded = createFloodGuard(idempotencyStore, recordActivity)
   const ownTask = (taskId: string): boolean => taskLedger.list().some(r => r.taskId === taskId) || taskLedger.archive().some(r => r.taskId === taskId)
-  const refuseIfQueueFull = createQueueGuard(() => taskLedger.list(), () => config.targetQueueCap, ownTask, idempotencyStore, recordActivity, id=>reminderView(taskLedger.reminderState(id)))
+  const refuseIfQueueFull = createQueueGuard(() => taskLedger.list(), () => config.targetQueueCap, ownTask, idempotencyStore, recordActivity, id=>reminderView(taskLedger.reminderState(id)),()=>taskLedger.receiptCapacityAvailable())
 
   // Unmasked-identity suppression: gossip mirrors peer lists back and forth,
   // so a URL whose fetch just proved it serves this node — or an already
@@ -1837,9 +1853,10 @@ export function apply(ctx: Context, config: Config): void {
       registerAdminFaces(webServer, {
         reminderDiagnostics:()=>({...idleReminders.diagnostics}),
         nudgeEscalations:()=>nudgeObservations.snapshot(),
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, groupStore, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
+        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
+        sessionPresetOf,
         rootChildrenOpen: canvas => { const open = new Map<string, number>(); for (const row of superagentTeams?.all().find(team => team.settings.canvas === canvas)?.root.open() ?? []) open.set(row.child, (open.get(row.child) ?? 0) + 1); return open },
         rootIdentityOf: canvas => superagentTeams?.all().find(team => team.settings.canvas === canvas)?.a2a.address,
         rootChildRegistration: (canvas, childRef, rootHandle) => childRegistration({ keyOf: ref => canvasStore.ownerKeyOf(ref), ownKey: encodePublicKey(createPublicKey(nodePrivateKey)), cards: [...cardCache.values()].map(entry => ({ card: entry.card ?? {} })) }, childRef, rootHandle),
@@ -1868,6 +1885,7 @@ export function apply(ctx: Context, config: Config): void {
         get cardCache() { return cardCache },
         get remoteRowsCache() { return remoteRowsCache },
         get legacyInboundCount() { return legacyInboundCount },
+        originClaimWindowMeasure: () => windowMeasure.view(),
         get unboundInboundCount() { return unboundInboundCount },
         get boundMissInboundCount() { return boundMissInboundCount },
         get boundMissRecent() { return boundMissRecent },
@@ -1880,6 +1898,8 @@ export function apply(ctx: Context, config: Config): void {
         set ownerAllowlist(v) { ownerAllowlist = v },
         get ownerTeamScopeInfo() { return ownerTeamScopeInfo },
         set ownerTeamScopeInfo(v) { ownerTeamScopeInfo = v },
+        get ownerTeamScopeRouting() { return ownerTeamScopeRouting },
+        set ownerTeamScopeRouting(v) { ownerTeamScopeRouting = v },
         get ownerAnnounceRestartPending() { return ownerAnnounceRestartPending },
         set ownerAnnounceRestartPending(v) { ownerAnnounceRestartPending = v },
       })
@@ -1904,7 +1924,7 @@ export function apply(ctx: Context, config: Config): void {
         // async: wait:false is honored (steer + delivered, no final hold);
         // the signed capability turns async dialing into a deterministic
         // check instead of a timeout race against pre-0.5.2 peers.
-        // roster: the team-roster face (a2a_team_join/leave, card
+        // roster: the team-roster face (card
         // teamMemberships, team-scope routing admission) ships — peers read
         // its absence as a pre-roster legacy node (0.5.43 and older).
         // superagent named dispatch: a host running superagent teams reads a request's [A2A dispatch] line (for, rework), so a
@@ -2113,6 +2133,11 @@ export function apply(ctx: Context, config: Config): void {
     localSessionOf: handle => localSessionOfHandle(handle),
     onRolesChanged: () => { syncRoleTools() },
     ensureYglProject: name => { void ensureTeamYglProject(name, { logger }) },
+    yglCapabilities,
+    yglReady: yglSettled,
+    // Owner ruling 2026-11-18: what the team still owes a requester is read from this one ledger (the team identity publishes
+    // with --owes, so each request it receives has an inbound row here); its own memory is only the fallback without a row.
+    receiptLedger: task => taskLedger.inboundReceiptState(task),
     // Design v5: the team is a canvas team this host owns. Its local sessions in canvas order, and its remote session slots
     // with the key the canvas pinned and the base URL of the linked peer whose signed card carries that key.
     // Pi platform P1/P2/P3: whether a CLI handle is a Pi seat deposited here, and the mailbox delivery to one.
@@ -2167,6 +2192,17 @@ export function apply(ctx: Context, config: Config): void {
     stageFiles: (id, paths, canvas) => stageCardFiles({ blobStore, from: originOf(ownCardUrl), cwd: (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd, team: `${config.team}/canvas/${canvas}`, by: id }, paths),
     memberTurn: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : memberTurnFrom(id, sessionEventsOf(agent), ctx.get('jobs' as never)) },
     teamSend: args => teamCanvasSend(args),
+    narrowRecovery:{identity:caller=>requestRecovery.identity(caller),proposal:binding=>requestRecovery.proposal(binding),transport:(permit,mode,current)=>requestRecovery.transport(permit,mode,current),receipt:(binding,caller,message)=>requestRecovery.receipt(binding,caller,message)},
+    outboundOutcome: ({ sender, task, address, message }) => {
+      const verdict = idempotencyStore.query(task, peerPayloadFingerprint({ caller: sender, team: homeCanvasTeam(address, ownCanvasFingerprint), message, noWait: true }))
+      if (!verdict.found) return { delivery: 'unknown' }
+      const row = taskLedger.find(task)
+      if (verdict.status === 'completed') return { delivery: 'accepted' }
+      // Forwarded/in-flight ledger rows may have unknown acceptance; they veto a retry, not certify delivery.
+      if (row !== undefined) return { delivery: 'unknown' }
+      if (verdict.status === 'failed' && verdict.delivery === 'not-sent') return { delivery: 'not-sent' }
+      return { delivery: 'unknown' }
+    },
     memberDeclares: (ref, capability) => { const member = splitQualifiedMember(ref); return member !== undefined && callerCapability(member.handle, capability) },
     callerDeclares: (caller, capability) => callerCapability(caller, capability),
     rosterSend: async (ref, text, taskId) => { await dispatchAnywhere(ref, text, session, undefined, AbortSignal.timeout(15_000), true, taskId) },
@@ -2190,7 +2226,15 @@ export function apply(ctx: Context, config: Config): void {
   let superagentHomeUrl: string | undefined
   if (superagentHost !== undefined) {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
-    ctx.effect(() => { superagentTeams!.start(); void ensureTeamYglHome({ logger }); return () => { void superagentTeams!.stop() } }, 'a2a: superagent engine passes')
+    ctx.effect(() => {
+      void ensureTeamYglHome({ logger })
+      // Design Y1d (#739 review R1): the engines start at boot, as before #739 (a late start's recovery restarted assignments
+      // the team had already begun, 2026-11-18); the ygl barrier holds candidates and launches until the bounded version
+      // read settles, and what it held goes out then.
+      superagentTeams!.start()
+      const cancel = startWhenYglKnown(() => { superagentTeams!.resumeHeld() }, { logger })
+      return () => { cancel(); void superagentTeams!.stop() }
+    }, 'a2a: superagent engine passes')
     registerSuperagentTools(ctx, id => superagentTeams!.ofSession(id))
     // superagent-builder BS1: the team builder's inventory and rule templates (read-only).
     registerBuilderTools(ctx, id => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET, () => ({
@@ -2356,7 +2400,8 @@ export function apply(ctx: Context, config: Config): void {
     const agent=receiverId ? ctx.get('agents')?.get(SessionId(receiverId)) : row ? (resolveAgentForTeam(row.deliveredTo??row.team)??canvasLiveAgent(parseCanvasTeamName(row.team))) : undefined
     if(!agent) {taskLedger.recordWithdrawalResult(taskId,'no-agent');return {removed:false,steered:false,withdrawalResult:'no-agent'}}
     const notice=cancelNoticeText(taskId)
-    steerRelay(agent,text.includes('If this task reaches you later from the queue, do not execute it.')?text:notice,sender)
+    // #733 review R1: a stop notice that carries a retired file chunk is replaced by the host's own notice; the stop itself still lands.
+    steerRelay(agent,text.includes('If this task reaches you later from the queue, do not execute it.')&&fileChannelAdvice(text)===undefined?text:notice,sender)
     const withdrawalResult=withdrawFailed?'withdraw-failed-steered':'claimed-steered'
     taskLedger.recordWithdrawalResult(taskId,withdrawalResult)
     return {removed:false,steered:true,withdrawalResult}
@@ -2471,7 +2516,8 @@ export function apply(ctx: Context, config: Config): void {
     if (spent !== undefined && spent > 1) return
     nudgeBudget.set(key, spent ?? 0)
     const timer = setTimeout(() => {
-      if (!taskLedger.isPending(taskId)) {
+      const currentDebt=taskLedger.find(taskId)
+      if (!taskLedger.isPending(taskId)||currentDebt?.answeredAt!==undefined||currentDebt?.receiptDelivery==='receipt-undelivered') {
         nudgeBudget.delete(key)
         return
       }
@@ -2550,6 +2596,185 @@ export function apply(ctx: Context, config: Config): void {
   const requestReminderScan = ():void => {queueMicrotask(()=>idleReminders.scan())}
   ctx.effect(()=>{const timer=ctx.timer.interval(()=>idleReminders.scan(),REMINDER_SCAN_MS);requestReminderScan();return ()=>{idleReminders.stop();timer()}},'a2a: persistent idle reconciliation reminders')
 
+  const receiptLocalKey = encodePublicKey(createPublicKey(nodePrivateKey))
+  const depositKey = (handle:string):string|undefined => {
+    try {const row=cliDeposits.get(handle);return row?String((JSON.parse(row.cardJson) as {publicKey?:unknown}).publicKey??'')||undefined:undefined}catch{return undefined}
+  }
+  function receiptReturnLane(row:TaskRecord,target:string):ReceiptLane {
+    const incomingKey=taskLedger.deliveryFor(row.taskId)?.callerKey
+    const household=CLI_HANDLE_RE.test(target)?cliDeposits.heldKey(target):undefined
+    if(household&&(depositKey(target)!==undefined||canvasStore.cliHomeOf(target)===undefined))return {kind:'local-cli',key:household}
+    const pinnedCliCarrier=CLI_HANDLE_RE.test(target)&&row.auth?.caller_key!==undefined&&row.auth.claim!==undefined&&canvasStore.cliHomeOf(target)===row.auth.claim.origin
+    if(row.direction==='inbound'&&row.auth?.claim!==undefined&&(row.auth.proof==='origin-claim'||pinnedCliCarrier)) {
+      const url=row.auth.carrier_url??row.auth.claim.origin
+      const key=incomingKey
+      if(key&&key!==receiptLocalKey)return {kind:'peer',url,key,...(row.auth.caller_key?{cliKey:row.auth.caller_key}:{})}
+    }
+    if(CLI_HANDLE_RE.test(target)) {
+      const key=cliDeposits.heldKey(target)
+      return key?{kind:'local-cli',key}:{kind:'unresolved'}
+    }
+    const local=localHandleResolver()(target)
+    return local!==undefined?{kind:'local-session',sessionId:local}:{kind:'unresolved'}
+  }
+  function reserveAuthoredReceipt(target:Agent,row:TaskRecord,to:string,text:string,automatic:boolean):ReceiptOutboxRecord {
+    const old=taskLedger.receiptFor(row.taskId)
+    if(old) {
+      if(old.authorId!==String(target.id)||old.target!==to||(!automatic&&old.text!==text))throw Error('another terminal receipt is already retained')
+      return old // Explicit receipt wins over the later automatic summary of the same turn.
+    }
+    const authorTeam=sessionTeamOf(target),caller=automatic?(row.auth?.target.includes('/')?authorTeam:session):authorTeam
+    const receipt={version:1 as const,taskId:row.taskId,authorId:String(target.id),authorTeam,target:to,text,transportId:receiptTransportId(row.taskId,to,text),caller,payer:automatic?session:authorTeam,localKey:receiptLocalKey,birth:receiptBirth(row,taskLedger.deliveryFor(row.taskId)?.callerKey),...(taskLedger.deliveryFor(row.taskId)?.callerKey?{sourceKey:taskLedger.deliveryFor(row.taskId)!.callerKey}:{}),lane:receiptReturnLane(row,to),...(row.contextId!==undefined?{contextId:row.contextId}:{}),createdAt:Date.now(),deadline:Date.now()+23*60*60_000,attempts:0,nextAt:Date.now(),phase:'ready' as const}
+    return taskLedger.prepareReceipt({...receipt,payloadHash:receiptPayloadHash(receipt)})
+  }
+  const receiptValidationStamps=new Map<string,string>()
+  function receiptAuthorityStamp(record:ReceiptOutboxRecord):string {
+    const author=sessionNodes.get(record.authorId)??reminderAgents().find(a=>String(a.id)===record.authorId)
+    return JSON.stringify([allowlistVersionNow(),config.isolated,session,receiptLocalKey,author?sessionTeamOf(author):'',archivedSessionFilter()?.(record.authorId)===true,superagentTeams?.ofSession(record.authorId)!==undefined,record.lane.kind==='local-session'?localHandleResolver()(record.target):'',record.lane.kind==='local-cli'?depositKey(record.target):'',CLI_HANDLE_RE.test(record.target)?canvasStore.cliHomeOf(record.target):'',resolutionPeers()])
+  }
+  const receiptTimers=new Set<()=>void>()
+  const receiptOutbox=new ReceiptOutbox({
+    ledger:taskLedger,
+    validate:async(record,row)=>{
+      const stamp=receiptAuthorityStamp(record)
+      const allow=()=>{if(stamp!==receiptAuthorityStamp(record))return {ok:false as const,code:'RECEIPT_AUTHORITY_CHANGED',retry:false};receiptValidationStamps.set(record.transportId,stamp);return {ok:true as const}}
+      const refuse=(code:string,retry=false)=>({ok:false as const,code,retry})
+      if(record.localKey!==receiptLocalKey||receiptBirth(row,taskLedger.deliveryFor(row.taskId)?.callerKey)!==record.birth||record.sourceKey!==taskLedger.deliveryFor(row.taskId)?.callerKey)return refuse('RECEIPT_IDENTITY_CHANGED')
+      if(config.isolated)return refuse('RECEIPT_ROUTE_UNAVAILABLE',true)
+      const author=sessionNodes.get(record.authorId)??reminderAgents().find(a=>String(a.id)===record.authorId)
+      if(!author||sessionTeamOf(author)!==record.authorTeam||archivedSessionFilter()?.(record.authorId)===true)return refuse('RECEIPT_AUTHOR_UNAVAILABLE',true)
+      if(superagentTeams?.ofSession(record.authorId)!==undefined)return refuse('RECEIPT_AUTHORITY_CHANGED')
+      const frozenReturn=row.direction==='inbound'&&row.auth?.proof==='origin-claim'&&row.auth.receipt_target===record.target
+      if(row.auth!==undefined&&(!frozenReturn||row.auth.admission_rule==='remote-ref-cli')) {
+        const admission=row.auth.admission_rule==='remote-ref-cli'?recheckRemoteCliAuthorization(admissionRecords,row.auth):recheckCallerAdmission(admissionRecords,row.auth.caller,row.auth.target,row.auth.ingress==='local')
+        if(!admission.ok)return refuse('RECEIPT_AUTHORITY_CHANGED')
+      }
+      if(record.payer!==session) {
+        let initiator=false;try{initiator=ctx.get('agents')?.requireInitiator()===author}catch{/* no initiator */}
+        const frozenReturn=row.direction==='inbound'&&row.auth?.proof==='origin-claim'&&row.auth.receipt_target===record.target
+        if(config.teamScopeRouting&&!initiator&&!frozenReturn) {
+          const scope=await outboundScope(senderScopeRecords,record.authorId,record.authorTeam,record.target)
+          if(!scope.ok)return refuse('RECEIPT_AUTHORITY_CHANGED')
+        }
+      }
+      let lane=record.lane
+      if(lane.kind==='unresolved'&&record.attempts===0) {
+        const urls=await directoryPeerCandidates(memoizedCardFetch(),record.target,[])
+        const cards=await Promise.all(urls.map(async url=>({url,card:await cachedCardFetch(url)})))
+        const available=cards.filter((x):x is {url:string;card:A2aPeerCard}=>x.card!==undefined)
+        const keys=new Set(available.map(x=>x.card.publicKey))
+        if(keys.size!==1||!available.length)return refuse('RECEIPT_ROUTE_UNAVAILABLE',true)
+        lane={kind:'peer',url:available[0]!.url,key:available[0]!.card.publicKey}
+        taskLedger.bindReceiptLane(record.taskId,record.transportId,lane)
+      }
+      if(lane.kind==='unresolved')return refuse('RECEIPT_RETURN_PROOF_MISSING')
+      if(lane.kind==='local-cli') {
+        const key=depositKey(record.target)
+        return !key?refuse('RECEIPT_ROUTE_UNAVAILABLE',true):key===lane.key?allow():refuse('RECEIPT_IDENTITY_CHANGED')
+      }
+      if(lane.kind==='local-session') {
+        const receiver=sessionNodes.get(lane.sessionId)
+        if(!receiver||localHandleResolver()(record.target)!==lane.sessionId)return refuse('RECEIPT_ROUTE_UNAVAILABLE',true)
+        return joinedFaceAdmissionRefusal(record.caller,record.target)===undefined&&superagentRouterRefusal(undefined,record.target)===undefined&&teamAddressRefusal(record.target,record.text)===undefined?allow():refuse('RECEIPT_AUTHORITY_CHANGED')
+      }
+      const pinned=CLI_HANDLE_RE.test(record.target)?canvasStore.cliHomeOf(record.target):undefined
+      if(pinned!==undefined&&originOf(pinned)!==originOf(lane.url))return refuse('RECEIPT_IDENTITY_CHANGED')
+      if(!resolutionPeers().some(url=>originOf(url)===originOf(lane.url)))return refuse('RECEIPT_AUTHORITY_CHANGED')
+      const card=await fetchPeerCard(lane.url)
+      if(!card)return refuse('RECEIPT_ROUTE_UNAVAILABLE',true)
+      if(card.publicKey!==lane.key)return refuse('RECEIPT_IDENTITY_CHANGED')
+      cardCache.set(lane.url,{at:Date.now(),card})
+      if(CLI_HANDLE_RE.test(record.target)) {
+        const online=await client.fetchCard(lane.url+'/a2a/cli/'+encodeURIComponent(record.target))
+        if(!lane.cliKey)return refuse('RECEIPT_RETURN_PROOF_MISSING')
+        if(!online||online.team!==record.target)return refuse('RECEIPT_ROUTE_UNAVAILABLE',true)
+        if(online.publicKey!==lane.cliKey)return refuse('RECEIPT_IDENTITY_CHANGED')
+      }
+      // The original authenticated return home is a receipt-only lane, not a discovery membership grant.
+      return frozenReturn||peerAdmissionLinkState(lane.url).link==='linked'||!config.teamScopeRouting?allow():refuse('RECEIPT_AUTHORITY_CHANGED')
+    },
+    deliver:async(record,reconcile):Promise<ReceiptAttemptResult>=>{
+      const fail=(code:string,retry:boolean,unknown=false):ReceiptAttemptResult=>({confirmed:false,code,retry,...(unknown?{unknown:true as const}:{})})
+      const stamp=receiptValidationStamps.get(record.transportId);receiptValidationStamps.delete(record.transportId)
+      if(stamp===undefined||stamp!==receiptAuthorityStamp(record))return fail('RECEIPT_AUTHORITY_CHANGED',false)
+      const lane=record.lane
+      if(lane.kind==='unresolved')return fail('RECEIPT_RETURN_PROOF_MISSING',false)
+      if(lane.kind==='local-cli') {
+        const prior=cliDeposits.readMail(record.target).find(row=>row.task_id===record.transportId)
+        if(reconcile&&!prior)return fail('RECEIPT_ACCEPTANCE_UNKNOWN',true,true)
+        try {
+          const evicted=cliDeposits.mailReceipt(record.target,record.caller,record.text,{taskId:record.transportId,contextId:record.contextId,proof:'in-process',receiptFor:record.taskId,admission:'local-exempt'})
+          for(const gone of evicted)if(gone.task_id)taskLedger.evictInbound(gone.task_id,taskLedger.find(gone.task_id)?.team??record.target)
+        } catch {return fail('RECEIPT_MAILBOX_COMMIT_FAILED',true)}
+        return {confirmed:true}
+      }
+      if(lane.kind==='local-session') {
+        const receiver=sessionNodes.get(lane.sessionId)
+        if(!receiver)return fail('RECEIPT_ROUTE_UNAVAILABLE',true)
+        const prior=taskLedger.deliveryFor(record.transportId)
+        if(reconcile&&(!prior||prior.state==='reserved'))return fail('RECEIPT_ACCEPTANCE_UNKNOWN',true,true)
+        if(prior&&(prior.state==='cancelled'||prior.state==='failed'))return fail('RECEIPT_PRIOR_TERMINAL',false)
+        const header='[A2A direct] (task '+record.transportId+') 未验证（in-process） '+sanitizeFromClause(record.caller)+' (routed to '+record.target+') sent:'
+        followupRelay(receiver,header+'\n\n'+record.text,record.caller,record.authorId,record.transportId,undefined,false)
+        const persisted=taskLedger.deliveryFor(record.transportId)
+        return persisted&&(persisted.state==='enqueued'||persisted.state==='claimed')?{confirmed:true}:fail('RECEIPT_LOCAL_INSERTION_UNCONFIRMED',true,true)
+      }
+      const qualified=splitCanvasOwner(record.target)
+      const wireTeam=qualified.owner===canvasOwnerFingerprint(lane.key)?qualified.team:record.target
+      if(reconcile) {
+        const fingerprint=peerPayloadFingerprint({caller:record.caller,message:record.text,noWait:true,team:wireTeam})
+        const verdict=await client.queryOutcome(lane.url,record.transportId,fingerprint,new AbortController().signal)
+        if(verdict?.found&&verdict.status==='completed'&&verdict.receiptDelivery==='delivered')return {confirmed:true}
+        if(verdict?.found&&verdict.status==='completed'&&verdict.receiptDelivery==='refused')return fail('RECEIPT_SETTLEMENT_REFUSED',false)
+        if(verdict?.found&&verdict.status==='failed')return fail('RECEIPT_PRIOR_FAILED',false)
+        // A fixed id can be replayed safely only while its first claim is still retained, never after unknown/expiry.
+        if(!verdict?.found||verdict.status!=='pending')return fail('RECEIPT_ACCEPTANCE_UNKNOWN',true,true)
+        return fail('RECEIPT_PRIOR_PENDING',true,true)
+      }
+      const result=await client.routeDirect(lane.url,record.target,record.text,record.contextId,new AbortController().signal,record.caller,true,record.transportId)
+      recordActivity('out',record.target,lane.url,result.ok)
+      if(!result.ok&&result.code===WIRE_ERROR_REPLAY_REJECTED) {
+        const prior=await client.queryOutcome(lane.url,record.transportId,peerPayloadFingerprint({caller:record.caller,message:record.text,noWait:true,team:wireTeam}),new AbortController().signal)
+        return prior?.found&&prior.status==='completed'&&prior.receiptDelivery==='delivered'?{confirmed:true}:fail('RECEIPT_REPLAY_UNCONFIRMED',true,true)
+      }
+      // #747 review M1: an unknown acceptance outranks a no-insertion capability, even an inconsistent one: query, never repost.
+      if(!result.ok&&result[RECEIPT_NOT_INSERTED]===true&&result.acceptance!=='unknown')return fail('RECEIPT_NOT_INSERTED',true)
+      // #708 R1: a connection refused before it opened inserted nothing; the same frozen transport is resent when due, never queried forever.
+      if(!result.ok&&result[RECEIPT_PRECONNECT_REFUSED]===true&&result.acceptance!=='unknown')return fail('RECEIPT_PRECONNECT_REFUSED',true)
+      if(result.ok&&result.settlementRefused===true)return fail('RECEIPT_SETTLEMENT_REFUSED',false)
+      if(result.ok&&(result[RECEIPT_CONFIRMED]!==true||result.acceptance==='inserted'||result.receiverBookkeeping==='failed'))return fail('RECEIPT_ACCEPTANCE_UNKNOWN',true,true)
+      if(result.ok)return result.task_id!==record.transportId?fail('RECEIPT_TRANSPORT_ID_MISMATCH',false,true):result.settlementRefused===true?fail('RECEIPT_SETTLEMENT_REFUSED',false):{confirmed:true}
+      if(result.acceptance==='unknown'||result.code===-32005)return fail('RECEIPT_ACCEPTANCE_UNKNOWN',true,true)
+      if(result.code===-32011||result[RECEIPT_RETRYABLE]===true)return fail('RECEIPT_TRANSPORT_UNCONFIRMED',true,true)
+      return fail(result.code===-32002?'RECEIPT_PAYLOAD_CONFLICT':'RECEIPT_DELIVERY_REFUSED',false)
+    },
+    settle:record=>{
+      const row=taskLedger.find(record.taskId)
+      if(!row)return taskLedger.archive().some(r=>r.taskId===record.taskId&&r.endedBy==='receipt')
+      if(row.direction==='inbound')return settleOwnInbound(record.text,record.target,{caller:record.payer,proof:'in-process',ingress:'local'})&&taskLedger.find(record.taskId)===undefined
+      const judge=settlementJudgeFor({caller:record.payer,proof:'in-process',ingress:'local'},parseReceipt(record.text),true)
+      return taskLedger.resolveFromMessage(record.text,judge)!==undefined
+    },
+    notify:record=>{logger.warn('a2a: receipt delivery blocked ref=%s; retained original return only',nudgeRef(record.taskId));requestReminderScan()},
+    schedule:ms=>{
+      let dispose:()=>void
+      dispose=ctx.timer.timeout(()=>{receiptTimers.delete(dispose);void receiptOutbox.scan()},ms);receiptTimers.add(dispose)
+    },
+    warn:code=>logger.warn('a2a: receipt outbox %s',code),
+  })
+  ctx.effect(()=>{const timer=ctx.timer.interval(()=>{void receiptOutbox.scan()},REMINDER_SCAN_MS);queueMicrotask(()=>{void receiptOutbox.scan()});return ()=>{receiptOutbox.stop();timer();for(const stop of receiptTimers)stop();receiptTimers.clear();receiptValidationStamps.clear()}},'a2a: durable original receipt return')
+  async function deliverRetainedReceipt(record:ReceiptOutboxRecord):Promise<Record<string,JsonValue>> {
+    try {
+      const result=await receiptOutbox.send(record.taskId)
+      return result.confirmed?{ok:true,team:record.target,reply:'original receipt delivered',task_id:record.transportId,context_id:record.contextId??'',task_status:'TASK_STATE_COMPLETED',receipt:'none',peer_content:record.lane.kind==='peer'}:{ok:false,error:'receipt retained; delivery blocked ('+result.code+'); do not redo the original work or replace this receipt',code:-32000,task_id:record.transportId,receipt:'none',peer_content:false}
+    }catch{return {ok:false,error:'receipt delivery could not be confirmed; reconcile the retained original transport, do not resend the work',code:-32000,receipt:'none',peer_content:false}}
+  }
+  function sendAuthoredReceipt(author:Agent,row:TaskRecord,to:string,text:string):Promise<Record<string,JsonValue>> {
+    let record:ReceiptOutboxRecord
+    try {record=reserveAuthoredReceipt(author,row,to,text,false)}catch{return Promise.resolve({ok:false,error:'original receipt could not be durably reserved; no delivery attempted',code:-32000,receipt:'none',peer_content:false})}
+    return deliverRetainedReceipt(record)
+  }
+
   function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {
     if (!callerTeam || callerTeam === '') return
     // Never synthesize a receipt for a receipt: answering an envelope by mail
@@ -2577,7 +2802,6 @@ export function apply(ctx: Context, config: Config): void {
       // session has no product, and hook 3 would otherwise ledger the
       // placeholder as one on the same-node loop-back.
       if (placeholder === true) return
-      taskLedger.markAnswered(taskId, sessionTeamOf(target))
       // Idempotency: a row THIS ledger tracks must still be pending
       // (settled/dead rows never re-send). A foreign task id (an inbound
       // route the caller tracks on ITS node) has no local row — the final
@@ -2596,45 +2820,10 @@ export function apply(ctx: Context, config: Config): void {
         onBehalfOf: sessionTeamOf(target),
         ...(row?.auth !== undefined ? { authRef: authorizationRef(row.auth) } : {}),
       })
-      // Three-tier hard order (work-order P2): caller lane first; on failure
-      // escalate ONCE to the owner mailbox — the outcome never evaporates
-      // just because the original waiter died. Archive holds truth regardless.
-      // The deliver closure is a FULL dispatch (local first, then the
-      // directory walk with failover, throwing when nothing delivers): the
-      // callback address may be another node's team, and a local-only
-      // closure would silently no-op there — runReceiptLadder reads a
-      // settled undefined as tier-1 success, so the receipt would vanish
-      // without a log.
-      const transportId='r-'+createHash('sha256').update(taskId+'\0'+callerTeam+'\0'+receipt).digest('base64url').slice(0,12)
-      const deliverReceipt=async(team:string):Promise<void>=>{
-        const peerCaller=row?.auth?.target.includes('/')===true?sessionTeamOf(target):undefined
-        const delivered=await dispatchAnywhere(team,receipt,session,undefined,new AbortController().signal,true,transportId,peerCaller)
-        if(team===callerTeam&&delivered.settlementRefused!==true&&!settleOwnInbound(receipt,callerTeam,{caller:session,proof:'in-process',ingress:'local'}))throw receiptFailure({error:'task ledger write failed after receipt delivery',code:-32011})
+      if(row!==undefined) {
+        const retained=reserveAuthoredReceipt(target,row,callerTeam,receipt,true) // throws synchronously: the final waiter remains for a later idle
+        void deliverRetainedReceipt(retained)
       }
-      /* Legacy permanent-failure ladder remains the owner-settlement policy. */
-      const ladder=()=>runReceiptLadder(
-        {
-          deliver: deliverReceipt,
-          // Unknown admission must stop the owner lane; unlike a transport transient,
-          // it is not retryable by retryReceiptDelivery and retains the original debt.
-          transient:error=>error instanceof FollowupAcceptanceUnknown||transientReceiptFailure(error),
-          ownerTeam: config.team,
-          log: (stage, error) => {
-            // N2 (observability): throttled per task to avoid ping-pong noise.
-            const key = `receipt:${taskId}`
-            if ((receiptWarnAt.get(key) ?? 0) + 60_000 > Date.now()) return
-            receiptWarnAt.set(key, Date.now())
-            logger.warn(`a2a: receipt autosend ${stage} for task ${taskId} failed: ${String(error).slice(0, 120)}`)
-          },
-        },
-        callerTeam,
-      )
-      const wait=(ms:number)=>receiptRetryWait(ctx,ms)
-      void retryReceiptDelivery({
-        attempt:()=>ladder(),
-        notify:async()=>{await dispatchAnywhere(config.team,'[A2A receipt delivery notice] ref '+nudgeRef(taskId)+'; delivery to the original caller is temporarily unconfirmed; host retry is responsible. This notice is not a receipt and does not settle work.',session,undefined,new AbortController().signal,true)},
-        pending:()=>row===undefined||taskLedger.isPending(taskId),wait,log:()=>{logger.warn('a2a: receipt delivery temporarily unconfirmed ref=%s',nudgeRef(taskId))},
-      }).catch(()=>{/* permanent ladder failure remains visible in the original owed row */})
     }, { taskId, steerFloor }, 'receipt')
   }
 
@@ -2680,7 +2869,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number,acceptance?:'inserted'|void) => void, callerKey?: string): Promise<
-    { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; status?: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; localMiss?: true }
+    { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; status?: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; localMiss?: true; refusal?: CapacityRefusal }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
@@ -2721,7 +2910,7 @@ export function apply(ctx: Context, config: Config): void {
    * @returns the agent's final reply, or the explicit failure.
    */
   function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number,acceptance?:'inserted'|void) => void, callerKey?: string): Promise<
-    { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown' }
+    { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; refusal?: CapacityRefusal }
   > {
     // superagent v4: whatever address resolved to it (a canvas team, the node team), the router takes no A2A work.
     if (superagentTeams?.ofSession(String(agent.id)) !== undefined) {
@@ -2777,6 +2966,8 @@ export function apply(ctx: Context, config: Config): void {
         waiter.timeoutDisposer?.()
         if(error instanceof AdmittedBookkeepingError){resolve({ok:true,reply:ADMITTED_BOOKKEEPING_NOTE,receiverBookkeeping:'failed',placeholder:true});return}
         if(error instanceof FollowupAcceptanceUnknown){resolve({ok:false,error:ACCEPTANCE_UNKNOWN_NOTE,acceptance:'unknown'});return}
+        // #713 A2: reserve refused before enqueue — this occurrence was not sent; say so, typed.
+        const refusal=capacityRefusalOf(error);if(refusal){resolve({ok:false,error:capacityRefusalNote(refusal),refusal});return}
         resolve({ ok: false, error: `The DSH session rejected the message: ${String(error)}` })
       }
     })
@@ -2793,10 +2984,20 @@ export function apply(ctx: Context, config: Config): void {
    *  closing originClaimUnboundWindow; boundMissInbound: those of them whose
    *  bound form missed (a peer dials us by a name not in our audiences). */
   let unboundInboundCount = 0, boundMissInboundCount = 0
+  /** #64 step 2: the same three counts by UTC day on disk, so the 7-day zero measure survives restarts. */
+  const windowMeasure = new WindowMeasure(join(home, 'a2a', 'origin-claim-window.json'), Date.now, message => logger.warn(message))
+  {
+    // A day the host runs is a measured day even when nothing arrives: touch it hourly (cheap no-op once it exists).
+    const timer = setInterval(() => { windowMeasure.touch() }, 3_600_000)
+    timer.unref?.()
+    // close() writes anything left and marks the run clean; an unclean run's days are invalid on the next boot.
+    ctx.effect(() => () => { clearInterval(timer); windowMeasure.close() }, 'a2a: OriginClaim window measure day tick')
+  }
   /** Which verified callers missed, and the origin they dialled: what to add to originClaimAudiences (#64). */
   const boundMissRecent: Array<{ caller: string; audience: string; count: number; lastAt: number }> = []
   const noteBoundMiss = (miss: { caller: string; audience: string }): void => {
     boundMissInboundCount += 1
+    windowMeasure.note('boundMiss')
     const at = boundMissRecent.findIndex(row => row.caller === miss.caller && row.audience === miss.audience)
     const row = at >= 0 ? boundMissRecent.splice(at, 1)[0]! : { ...miss, count: 0, lastAt: 0 }
     boundMissRecent.unshift({ ...row, count: row.count + 1, lastAt: Date.now() })
@@ -2834,7 +3035,7 @@ export function apply(ctx: Context, config: Config): void {
       freshCard: true,
       audiences: [ownCardUrl, ...config.originClaimAudiences ?? []],
       unboundOpen: config.originClaimUnboundWindow !== false,
-      onUnbound: () => { unboundInboundCount += 1 },
+      onUnbound: () => { unboundInboundCount += 1; windowMeasure.note('unbound') },
       onBoundMiss: noteBoundMiss,
       loopbackArrival: (config.originClaimUrl ?? '') === '',
       now: Date.now(),
@@ -3002,7 +3203,7 @@ export function apply(ctx: Context, config: Config): void {
   // disagree. Records are read at decision time, never copied.
   const admissionRecords: AdmissionRecords = {
     zone: config.team,
-    get teamScopeRouting() { return config.teamScopeRouting },
+    get teamScopeRouting() { return ownerTeamScopeRouting },
     id8,
     canvasTeamOf,
     memberships: () => teamMemberships.list(),
@@ -3180,7 +3381,7 @@ export function apply(ctx: Context, config: Config): void {
     const handle = (session: string): string => `${config.team}/${id8(session)}`
     return {
       zone: config.team,
-      scope: [config.teamScopeRouting, config.originClaimWindow !== false],
+      scope: [ownerTeamScopeRouting, config.originClaimWindow === true],
       joined: joinedSessions.list().map(handle),
       roster: teamMemberships.list().flatMap(entry => entry.teams.map(team => [handle(entry.session), team] as const)),
       // Local members by their handle (design §2.3), remote refs as they are stored.
@@ -3209,7 +3410,7 @@ export function apply(ctx: Context, config: Config): void {
       cause,
       rows: () => taskLedger.list(),
       // A local-candidate record (#139) is judged as the local candidate admits; every other one by the wire face.
-      judge: (caller, target, ingress, auth, taskId) => auth.admission_rule === 'remote-ref-cli' ? recheckRemoteCliAuthorization(admissionRecords, auth) : auth.admission_rule === 'superagent-intake' ? recheckSuperagentIntake(target, caller, auth, taskId) : (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
+      judge: (caller, target, ingress, auth, taskId) => auth.admission_rule === 'request-recovery' ? (requestRecovery.authority(auth.basis[0]??'',caller,target,taskId)?{ok:true,via:'peer-org',rule:'request-recovery',basis:auth.basis}:{ok:false,refusal:'original one-request authority revoked or corrupt'}) : auth.admission_rule === 'remote-ref-cli' ? recheckRemoteCliAuthorization(admissionRecords, auth) : auth.admission_rule === 'superagent-intake' ? recheckSuperagentIntake(target, caller, auth, taskId) : (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
     })
     if (entry === undefined) return
     const revoke = entry.tasks.filter(task => task.verdict === 'would-revoke').length
@@ -3294,17 +3495,20 @@ export function apply(ctx: Context, config: Config): void {
 
   whenWebServerSettled((webServer) => {
     registerWireFaces(webServer, {
+      teamScopeRouting: () => ownerTeamScopeRouting,
       ctx,
       logger,
       config,
       cliDeposits,
       keepTaskBody,
+      requestRecovery,
       canvasStore, canvasMemberForWrite,
       teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
       teamCanvasBound: (canvas: string) => superagentTeams?.ofCanvas(canvas) !== undefined,
       superagentInbound: team => superagentRouterRefusal(undefined, team),
       superagentIntake: team => superagentTeams?.all().some(host => host.a2aAddress === team) === true,
       sidebarReceipt: (team, message, caller, settled) => sidebarSends.take(team, message, caller, settled),
+      sidebarClaims: (team, message) => sidebarSends.claims(team, message),
       teamMailboxOf: team => teamMailboxOf(team),
       teamAddressRefusal: (team, message) => teamAddressRefusal(team, message),
       canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
@@ -3321,7 +3525,7 @@ export function apply(ctx: Context, config: Config): void {
       diagnoseCanvas: (team, reason, caller) => diagnoseCanvas(team, reason, caller),
       callerLinkedToThisHost, get ownCardUrl() { return ownCardUrl },
       recordActivity,
-      bumpLegacyInbound: () => { legacyInboundCount += 1 },
+      bumpLegacyInbound: () => { legacyInboundCount += 1; windowMeasure.note('legacy') },
       a2aCallerRefusal,
       a2aCallerAdmission,
       allowlistVersionNow,
@@ -3567,7 +3771,6 @@ export function apply(ctx: Context, config: Config): void {
    * writes rare. Concurrent callers for one URL join a single in-flight
    * fetch (single-flight) instead of racing N requests.
    */
-  const cardCache = new Map<string, CardCacheEntry>()
   // superagent's HTTP faces live in src/faces/superagent.ts (#570 line ratchet); registered after cardCache exists: whenWebServerSettled may run its callback at once.
   if (superagentHost !== undefined && superagentTeams !== undefined) whenWebServerSettled((webServer) => {
     registerSuperagentFaces(webServer, {
@@ -3578,6 +3781,7 @@ export function apply(ctx: Context, config: Config): void {
       linkRequester: (canvas: string, handle: string, home: unknown) => linkRootRequester({ store: canvasStore, deposited: h => cliDeposits.directoryRows().some(row => row.team === h), pinHome: cliHomeForAdd }, canvas, handle, home),
     })
   })
+  whenWebServerSettled(webServer=>registerRequestRecoveryFace(webServer,{ctx,controlRoute,readJsonBody,recovery:requestRecovery}))
   const cardCacheInFlight = new Map<string, Promise<A2aPeerCard | undefined>>()
   // #114 S6: the change hooks and the boot observation start only once every
   // record admission reads exists (the peer-org basis reads cardCache above).
@@ -3751,7 +3955,10 @@ export function apply(ctx: Context, config: Config): void {
       cardCache.set(url, { at: Date.now(), card })
       if (peerAdmissionLinkState(url).link !== 'linked') continue
       const row = card.sessionTeams?.find(item => item.team === handle)
-      if (row !== undefined) return { origin: home, viaUrl: claim.callerUrl, bound: true, online: row.offline === false }
+      if (row !== undefined) {
+        const cliCard=row.offline===false?await client.fetchCard(home+'/a2a/cli/'+encodeURIComponent(handle)):undefined
+        return {origin:home,viaUrl:claim.callerUrl,bound:true,online:row.offline===false&&cliCard?.team===handle,...(cliCard?.team===handle?{key:cliCard.publicKey}:{})}
+      }
     }
     return { origin: home, viaUrl: claim.callerUrl, bound: true, online: false }
   }
@@ -3858,6 +4065,7 @@ export function apply(ctx: Context, config: Config): void {
     // disables owner-settings hot-apply (whoami allowlist / teams scoping).
     get ownerAllowlist() { return ownerAllowlist },
     get ownerTeamScopeInfo() { return ownerTeamScopeInfo },
+    get ownerTeamScopeRouting() { return ownerTeamScopeRouting },
     teamAuditRing, reportRing, a2aJoinGateRefusal, observeAuthorization,
     settlePeerCard, client, listDirectoryTeams, canvasTeamsOfSession, localHandleResolver, canvasMigrationState,
     SWEEP_CONCURRENCY,
@@ -3872,10 +4080,6 @@ export function apply(ctx: Context, config: Config): void {
     // module's call-time read live instead of snapshotting at construction.
     get ownerAllowlist() { return ownerAllowlist },
   })
-  actTools.registerTeamJoin()
-
-  actTools.registerTeamLeave()
-
   actTools.registerExposure()
 
   actTools.registerReport()
@@ -4104,7 +4308,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     if (caller !== undefined && cliDeposits.get(caller) !== undefined) {
       if (!config.forwardDirect) missing.push('home forwardDirect is off')
       if (config.isolated) missing.push('home is isolated')
-      const scope = config.teamScopeRouting ? await outboundScope(senderScopeRecords, caller, caller, team) : { ok: true as const }
+      const scope = ownerTeamScopeRouting ? await outboundScope(senderScopeRecords, caller, caller, team) : { ok: true as const }
       if (!scope.ok) missing.push('sender scope: ' + scope.error)
       for (const owner of owners.filter(row => row.team === team && !row.local)) {
         if (!owner.members.includes(caller)) missing.push(owner.owner + ': caller is not an advertised canvas member')
@@ -4117,7 +4321,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const forwardDirect = createDirectForward({
     births: forwardingBirths,
     enabled: () => config.forwardDirect === true, isolated: () => config.isolated, deposited: handle => cliDeposits.get(handle) !== undefined,
-    scope: (handle, team) => config.teamScopeRouting ? forwardScope(cardAuthorizedSend, () => outboundScope(senderScopeRecords, handle, handle, team), handle, team) : Promise.resolve({ ok: true as const }),
+    scope: (handle, team) => ownerTeamScopeRouting ? forwardScope(cardAuthorizedSend, () => outboundScope(senderScopeRecords, handle, handle, team), handle, team) : Promise.resolve({ ok: true as const }),
     candidates: async (team, failures, caller) => { const fetch = memoizedCardFetch(); return { urls: await directoryPeerCandidates(fetch, team, failures, { id: caller, handle: caller }), card: fetch } },
     dispatch: (url, request, guard) => dispatchPeerCandidate(url, request.team, request.message, request.contextId, new AbortController().signal, request.caller, request.noWait, request.taskId, request.caller, guard),
     ledger: taskLedger, activity: (team, peer, ok) => recordActivity('fwd', team, peer, ok),
@@ -4136,7 +4340,10 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
   const senderScopeRecords: OutboundScopeRecords = {
     zone: config.team, id8, teamsOf: id => teamMemberships.teamsOf(id), membersOf: team => teamMemberships.membersOf(team),
     canvasNames: () => canvasStore.list(), canvasMembers: name => canvasStore.membersOf(name), canvasTeam: canvasTeamOf,
-    memberHandle: ref => splitQualifiedMember(ref)?.handle ?? ref,
+    // A local member sits by its session id: map it to its handle too, as inbound admission does (sameZoneAdmission matches
+    // either shape), so two canvas teammates on this host can route to each other's handle — what a shared roster used to
+    // cover before roster self-join was retired (owner ruling 2026-11-18).
+    memberHandle: ref => splitQualifiedMember(ref)?.handle ?? (ref.includes('/') ? ref : `${config.team}/${id8(ref)}`),
     peerOrgs: function* () { for (const hit of cardCache.values()) if (hit.card?.canvasOrg) yield hit.card.canvasOrg.map(row=>({...row,members:row.members.map(ref=>splitQualifiedMember(ref)&&localHandleResolver()(ref)!==undefined?splitQualifiedMember(ref)!.handle:ref)})) },
     warmPeers: () => mapBounded(resolutionPeers(), SWEEP_CONCURRENCY, cachedCardFetch),
   }
@@ -4162,7 +4369,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       a2aJoinGateRefusal(agent === undefined ? undefined : { agent })
       // #282 S2: an owner-qualified canvas id. Our own fingerprint is our canvas; a foreign one never
       // lands on a same-named local canvas, and the directory walk keeps only that owner.
-      const requestedMember=splitQualifiedMember(String(args.team ?? '').trim())
+      const requestedReceiptTarget=String(args.team ?? '').trim()
+      const requestedMember=splitQualifiedMember(requestedReceiptTarget)
       if(requestedMember && localHandleResolver()(String(args.team).trim())!==undefined) args={...args,team:requestedMember.handle}
       const ownerQualified = splitCanvasOwner(String(args.team ?? '').trim())
       const foreignOwner = ownerQualified.owner !== undefined && ownerQualified.owner !== ownCanvasFingerprint ? ownerQualified.owner : undefined
@@ -4173,9 +4381,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       }
       // A receipt may use only its own frozen return lane; local answer state is not delivery proof.
       const answer = parseReceipt(args.message)
+      if(answer!==null&&taskLedger.archive().some(row=>row.taskId===answer.taskId&&row.endedBy==='receipt'))return {ok:false,error:'original task already settled; no duplicate receipt sent',code:-32000,receipt:'none',peer_content:false}
       const receiptRow=answer===null?undefined:taskLedger.find(answer.taskId)
-      if(agent!==undefined&&answer!==null) {
-        try {taskLedger.markAnswered(answer.taskId,sessionTeamOf(agent))}catch{return {ok:false,error:'task ledger write failed; receipt was not sent',code:-32000,peer_content:false}}
+      const retainedTarget=receiptRow?.auth?.receipt_target??receiptRow?.sender?.id??(receiptRow?.peer.startsWith('local:')?receiptRow.peer.slice(6):undefined)
+      const originalReceiver=agent!==undefined&&receiptRow?.status==='pending'&&(receiptRow.direction==='inbound'||receiptRow.peer==='local')&&(receiptRow.deliveredTo??receiptRow.team)===sessionTeamOf(agent)&&(receiptRow.receiverSessionId===undefined||receiptRow.receiverSessionId===String(agent.id))
+      if(originalReceiver&&answer!==null&&!holdsRow(answer.envelope)&&retainedTarget===requestedReceiptTarget) {
+        return sendAuthoredReceipt(agent!,receiptRow!,requestedReceiptTarget,args.message)
       }
       const ownReceipt=agent!==undefined&&receiptRow?.status==='pending'&&receiptRow.direction==='inbound'&&receiptRow.receiptExpected!==false&&receiptRow.auth?.receipt_target===args.team&&(receiptRow.deliveredTo??receiptRow.team)===sessionTeamOf(agent)&&(receiptRow.receiverSessionId===undefined||receiptRow.receiverSessionId===String(agent.id))
       if(ownReceipt&&receiptRow.auth?.proof==='origin-claim'&&receiptRow.auth.claim!==undefined) {
@@ -4195,7 +4406,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // and the initiator face stay exempt, like the join gate; discovery
       // (a2a_teams) stays open so a teamless node can still see what to join.
       let scopedCanvasCaller: { id: string; handle: string } | undefined
-      if (config.teamScopeRouting && agent !== undefined) {
+      if (ownerTeamScopeRouting && agent !== undefined) {
         const scopeCaller = String(agent.id)
         let initiator = false
         try {
@@ -4247,10 +4458,17 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // the target correlates with the route's own result verbatim.
       const taskId = `direct-${Math.random().toString(16).slice(2, 10)}`
       const routedReceipt = parseReceipt(args.message) !== null
+      if(!routedReceipt&&!taskLedger.receiptCapacityAvailable())return localRoute({ok:false,error:'receipt-protected capacity is full; nothing delivered',code:WIRE_ERROR_QUEUE_FULL})
+      let retainDispatch=false
+      if(!routedReceipt)try{taskLedger.reserveDispatch(taskId,peerPayloadFingerprint({caller:callerSession??session,message:JSON.stringify([args.message,args.context_id??'',callbackAddress??'']),noWait:args.async===true,team:args.team}))}catch{return localRoute({ok:false,error:'original dispatch could not reserve durable ledger capacity; nothing delivered',code:WIRE_ERROR_QUEUE_FULL})}
+      try {
       // Candidate order: this host's own teams first (an in-process steer —
       // cheapest possible and immune to nested-signal aborts), then direct
       // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
+      // #713 A2: candidates refused for their host's full correspondence window (a fact about each such host, not the network).
+      const capacityRefusals: CapacityRefusal[] = []
+      let capacityCounted = 0
       if (signal?.aborted) return localRoute({ ok: false, error: 'route aborted before dispatch', code: -32000 })
       const outcome = foreignOwner !== undefined ? undefined : await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress, agent === undefined ? undefined : String(agent.id))
       const localBirth = localBirths.get(taskId)
@@ -4262,7 +4480,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           // gh#198: host-built delivery notes, or a reply from a clean local session (resolved as routeIntoAgent does), are this host's alone.
           return ((outcome.bridge === undefined && (outcome.task_status === 'TASK_STATE_DELIVERED' || outcome.task_status === 'TASK_STATE_ABORTED_WAIT' || (t => t !== undefined && nodeTaint.of(String(t.id)) === '')(resolveAgentForTeam(args.team) ?? canvasLiveAgent(parseCanvasTeamName(args.team))))) ? localRoute(outcome) : outcome) as unknown as Record<string, JsonValue>
         }
-        if(outcome.acceptance==='unknown')return localRoute(outcome) as unknown as Record<string,JsonValue>
+        if(outcome.acceptance==='unknown'){retainDispatch=true;return localRoute(outcome) as unknown as Record<string,JsonValue>}
+        if (outcome.refusal) capacityRefusals.push(outcome.refusal)
         failures.push(`local: ${outcome.error}`)
       }
       // Failover seam for canvas teams: after the local tiers miss, the
@@ -4308,7 +4527,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           peerAsync = card !== undefined && caps?.async === true
         }
         const result = await dispatchPeerCandidate(candidate, target, args.message, args.context_id, signal, callerSession, peerAsync, taskId, callbackAddress)
-        if(!result.ok&&result.acceptance==='unknown')return result as unknown as Record<string,JsonValue>
+        if(!result.ok&&(result.acceptance==='unknown'||result.code===-32005)){retainDispatch=true;return result as unknown as Record<string,JsonValue>}
         if (result.ok || signal.aborted) {
           // A receipt the creditor refused (its enforce verdict) pays nothing here either (review of PR #149 P2-2).
           if (result.ok && routedReceipt) {
@@ -4327,11 +4546,14 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           }
           return { ...result, ...(result.ok ? { team: args.team } : {}) } as unknown as Record<string, JsonValue>
         }
+        if (!result.ok && result.refusal) capacityRefusals.push(result.refusal)
+        else if (!result.ok && result.capacityRefusals !== undefined) capacityCounted += result.capacityRefusals
         failures.push(`${candidate}: ${result.error}`)
       }
       if (failures.length > 0) logger.warn(`route to team "${args.team}" exhausted its candidates: ${failures.join('; ')}`)
       const verdict = routeVerdict(args.team, failures, candidatePool.length)
-      return { ...verdict, error: await diagnoseCanvas(args.team, verdict.error, callerSession) }
+      return { ...verdict, error: await diagnoseCanvas(args.team, verdict.error, callerSession), ...capacityRefusalFields(capacityRefusals, failures.length, capacityCounted) } as unknown as Record<string, JsonValue>
+      }catch{retainDispatch=true;return {ok:false,acceptance:'unknown',task_id:taskId,error:'original dispatch or its final ledger commit is unresolved; reconcile this task id and retained reservation, do not resend the work',code:-32000,receipt:'none',peer_content:false}}finally{if(!routedReceipt&&!retainDispatch)try{taskLedger.releaseDispatch(taskId)}catch{logger.warn('a2a: dispatch reservation release remains blocked')}}
   }
 
   /**
@@ -4377,7 +4599,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // gh#224: a full target queue refuses a same-host delivery as the wire face does (receipts, CLI mailboxes pass).
     // p1-mailbox-owes (S33): a deposit that declares it owes receipts is under the cap like a session.
     // superagent v4: a request to the team's A2A address is a Trigger; the engine's worker slots govern it, not this cap.
-    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(mailTeam) !== undefined && !cliDeposits.owes(mailTeam)) || superagentHost?.a2aAddress === mailTeam, ownTask)
+    const queueRefusal = parseReceipt(message)===null&&!taskLedger.receiptCapacityAvailable(taskIdFromCaller)?'receipt-protected capacity is full; nothing delivered':queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(mailTeam) !== undefined && !cliDeposits.owes(mailTeam)) || superagentHost?.a2aAddress === mailTeam, ownTask)
     if (queueRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL, next: QUEUE_FULL_NEXT }
@@ -4505,6 +4727,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         endRoute(flight)
         recordActivity('out', team, 'local', false)
         if(error instanceof FollowupAcceptanceUnknown)return{ok:false,error:ACCEPTANCE_UNKNOWN_NOTE,acceptance:'unknown',task_id:taskId,code:-32000}
+        const refusal=capacityRefusalOf(error);if(refusal)return{ok:false,error:capacityRefusalNote(refusal),refusal,task_id:taskId,code:-32000}
         return { ok: false, error: `waking or steering the session for team "${team}" failed: ${String(error)}`, code: -32000 }
       }
     }
@@ -4615,6 +4838,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const reading = readReceiptReplay(await client.queryOutcome(url, taskIdFromCaller, fingerprint, signal))
       if (reading === 'delivered') return { ok: true, team, reply: 'receipt already delivered: the receiver answered an idempotency replay for this transport id', task_id: taskIdFromCaller, context_id: contextId ?? '', task_status: 'TASK_STATE_COMPLETED', receipt: 'none' }
       if (reading === 'retry') return { ...result, [RECEIPT_RETRYABLE]: true }
+      if (reading === 'unknown') return { ...result, acceptance:'unknown', error:'receipt replay is not delivery evidence; reconcile the original transport, do not resend the work' }
       return { ...result, error: `${result.error} (the receiver recorded the prior attempt of this receipt as failed)` }
     }
     return result

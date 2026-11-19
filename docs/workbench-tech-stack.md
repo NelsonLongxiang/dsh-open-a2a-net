@@ -63,7 +63,6 @@ WorkbenchMode = 'canvas' | 'data'（依 board.available() 每 poll 派生；canv
 | `/__dsh_a2a/tasks/cancel` | POST `{task_id,reason}` | 台账在途任务取消：账面结算为 `archived[].endedBy=cancelled`，并尽力向持有该任务的本机活会话注入停止通知（返回 `steered`） |
 | `/__dsh_a2a/canvas` | POST | CanvasAction 中的队伍写（create/remove/add-member/remove-member；成员可为本机 joined 会话或 `zone/id8` 远端句柄） |
 | `/__dsh_a2a/join` · `/leave` | POST | 节点入网/退网（规划视图节点菜单） |
-| `/__dsh_a2a/groups` | POST | 会话分组标签（0.6.6 起已弃用，画布队取代；为旧面板保留） |
 | `/__dsh_a2a/dispatch` | POST | 工作台快速派单（L3） |
 | `/__dsh_a2a/owner-settings` | GET/POST | 属主设置面板（`teamJoinAllowlist` / `teamScopeInfo` / `announce`） |
 | `/__dsh_a2a/session-log` · `/remote-session-log` | GET | 聊天抽屉会话日志（本机 / 远端） |

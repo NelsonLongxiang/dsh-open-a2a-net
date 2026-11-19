@@ -11,8 +11,17 @@ import type { LayoutViewport } from './viewport'
 import type { SessionLite, TeamLite } from './world'
 
 /** Minimal session/team shapes consumed here (topology rows satisfy them). */
-export interface PlanningSession extends SessionLite {}
-export interface PlanningTeam extends TeamLite { kind?: 'roster'; root?: boolean; children?: ReadonlyArray<import('./world.ts').RootChildRow> }
+export interface PlanningSession extends SessionLite {
+  /** #650: the agent preset a live local session runs (the state's `preset`; absent when unknown). */
+  preset?: string
+}
+export interface PlanningTeam extends TeamLite {
+  kind?: 'roster'; root?: boolean; children?: ReadonlyArray<import('./world.ts').RootChildRow>
+  /** #650: the team's canvas address `<zone>/canvas/<name>@<fp8>` (the form add-team takes); never derived from the frame name. */
+  id?: string
+  /** #650: a superagent team taking requests on this host (the card's canvasOrg marker of the same name). */
+  superagentTeam?: boolean
+}
 
 export interface PlanningInput {
   sessions: ReadonlyArray<PlanningSession>
@@ -26,7 +35,7 @@ export interface PlanningInput {
   remoteTeams?: ReadonlyArray<RemoteTeamRow>
   /** gh#41 fleet planning: each tracked peer's published canvas org —
    *  rendered as REMOTE team frames (read + cross-host regulation). */
-  peerOrg?: ReadonlyArray<{ url: string; unreachable?: boolean; org: ReadonlyArray<{ name: string; team: string; members: readonly string[] }> }>
+  peerOrg?: ReadonlyArray<{ url: string; unreachable?: boolean; org: ReadonlyArray<{ name: string; team: string; members: readonly string[]; /** #650: `<zone>/canvas/<name>@<fp8>` and the card's markers. */ id?: string; superagentTeam?: boolean; root?: boolean }> }>
 }
 
 /** Screen-width class a viewport is remembered under (window width, not board width — collapsing the rail must not switch buckets). */
@@ -72,6 +81,8 @@ export interface PlanningDeps {
   onNodePick?(id: string): void
   /** Wall clock for the inFlight age labels (tests pin it; default Date.now). */
   now?(): number
+  /** #650: the owner routes 组成 root 团队 writes and reads through; absent, ≥2 selected frames fall back to 建队. */
+  compose?: import('./planning-root-compose').ComposeIo
 }
 
 /** Pointer-like event surface the handlers consume (real events satisfy it). */

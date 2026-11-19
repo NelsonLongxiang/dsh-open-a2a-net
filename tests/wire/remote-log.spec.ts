@@ -47,6 +47,7 @@ async function mount(extra: Partial<Config> = {}): Promise<Mounted> {
   mkdirSync(join(home, 'a2a'), { recursive: true })
   apply(ctx, {
     apiKey: '',
+    originClaimWindow: true, // #64: fixture posts unsigned deliveries (production default is closed)
     session: 'remote-log-test',
     team: 'dsh',
     teamScopeRouting: true,

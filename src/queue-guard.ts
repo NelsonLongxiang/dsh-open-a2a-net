@@ -64,9 +64,12 @@ export function createQueueGuard(
   outcomes: Pick<IdempotencyStore, 'recordOutcome'>,
   recordActivity: (dir: 'in' | 'out', team: string, peer: string, ok: boolean) => void,
   reminder: (taskId:string)=>Record<string,unknown> = () => ({}),
+  capacity:()=>boolean=()=>true,
 ): (caller: string, message: string, team: string, taskId: string, mailbox: boolean, res: ServerResponse) => boolean {
   return (caller, message, team, taskId, mailbox, res) => {
-    const error = queueFullRefusal(rows(), team, message, cap(), mailbox, ownTask)
+    const receipt=parseReceipt(message)
+    const protectedRefusal=!mailbox&&!ownTask(taskId)&&!(receipt&&ownTask(receipt.taskId))&&!capacity()?'receipt-protected capacity is full; no new work delivered; retained results require reconciliation':undefined
+    const error = protectedRefusal??queueFullRefusal(rows(), team, message, cap(), mailbox, ownTask)
     if (error === undefined) return false
     outcomes.recordOutcome(taskId, { status: 'failed', error })
     recordActivity('in', team, caller, false)

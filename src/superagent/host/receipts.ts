@@ -29,8 +29,19 @@ import type { SuperagentHostDeps, PersonMessage, WorkbenchVia } from './deps.ts'
 
 /** How long an ended ticket's request waits for the router's own result before the host sends the ending receipt. */
 export const END_RECEIPT_GRACE_MS = 5 * 60_000
-/** Tickets that ended longer ago than this get no ending receipt (the requester's acknowledged row is gone by then). */
+/**
+ * Tickets that ended longer ago than this get no ending receipt (the requester's acknowledged row is gone by then). Only a
+ * fallback since 2026-11-18: when the task ledger has the request's row, the row decides (owner ruling, one book).
+ */
 export const END_RECEIPT_HORIZON_MS = 8 * 86_400_000
+
+/**
+ * What this host's task ledger says of an A2A request the team identity received (owner ruling 2026-11-18: the receipts the
+ * team owes are read from the one ledger, not a second book). `owed`: no receipt yet; `acknowledged`: acknowledged, the
+ * outcome still owed; `settled`: its formal receipt went out; undefined: the ledger has no row for it (then the in-process
+ * memory and {@link END_RECEIPT_HORIZON_MS} decide, as before).
+ */
+export type LedgerOwed = 'owed' | 'acknowledged' | 'settled' | undefined
 /**
  * A message the team could not judge (its Eval ended `unavailable` and nothing queued it again) waits this long before
  * its sender is told, so the owner can still ask for a fresh judgement first (once told, the sender has the outcome).
@@ -55,6 +66,8 @@ export interface A2aReceiptsDeps {
    * `declined` when the owner said no, undefined when it is not held (it is refused as before).
    */
   readonly senderHold?: (triggerId: string) => 'hold' | 'taken' | 'declined' | undefined
+  /** The task ledger's state of a request the team identity received; see {@link LedgerOwed}. */
+  readonly ledger?: (task: string) => LedgerOwed
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
 }
 
@@ -75,6 +88,10 @@ export class A2aReceipts {
   private readonly endReceipted = new Set<string>()
   private outcomeReceipting = false
   private readonly outcomeReceipted = new Set<string>()
+  /** The ledger's word on a task (undefined: it has no row, the in-process rules apply). */
+  private ledgerOf(task: string): LedgerOwed { try { return this.d.ledger?.(task) } catch { return undefined } }
+  /** Whether the ledger already holds an acknowledgement or the formal receipt for a task. */
+  private acknowledgedInLedger(task: string): boolean { const state = this.ledgerOf(task); return state === 'acknowledged' || state === 'settled' }
 
   /**
    * superagent v4 (requester acknowledgement): the A2A request a live ticket was accepted from gets one `acknowledged`
@@ -91,11 +108,11 @@ export class A2aReceipts {
       const trigger = this.d.store.triggers.get(ticket.origin.triggerId)
       const address = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel?.address : undefined
       const task = address?.task
-      if (address !== undefined && task !== undefined && !this.ackSettled.has(task)) due.push({ task, ticketId: ticket.id, address, text: clip(`已接下，工单「${ticket.title}」完成后回执结果。Accepted as ticket «${ticket.title}»; the result follows.`, 400) })
+      if (address !== undefined && task !== undefined && !this.ackSettled.has(task) && !this.acknowledgedInLedger(task)) due.push({ task, ticketId: ticket.id, address, text: clip(`已接下，工单「${ticket.title}」完成后回执结果。Accepted as ticket «${ticket.title}»; the result follows.`, 400) })
       // A message delivered into this ticket as a follow-up is taken up, not finished: its formal outcome follows when the ticket ends.
       for (const followUp of this.followUpsOf(ticket)) {
         const followTask = followUp.channel.address.task
-        if (followTask === undefined || this.ackSettled.has(followTask) || this.outcomeReceipted.has(followUp.triggerId) || this.d.a2a.answered(followTask)) continue
+        if (followTask === undefined || this.ackSettled.has(followTask) || this.acknowledgedInLedger(followTask) || this.outcomeReceipted.has(followUp.triggerId) || this.d.a2a.answered(followTask)) continue
         due.push({ task: followTask, ticketId: ticket.id, address: followUp.channel.address, text: clip(`已转给工单「${ticket.title}」的成员，工单结束后回执结果。Passed to the member of ticket «${ticket.title}»; the result follows when it ends.`, 400) })
       }
     }
@@ -136,7 +153,9 @@ export class A2aReceipts {
       for (const { key, channel } of targets) {
         if (this.endReceipted.has(key)) continue
         const task = channel?.address.task
-        if (channel === undefined || task === undefined || this.d.a2a.answered(task) || since > END_RECEIPT_HORIZON_MS) { this.endReceipted.add(key); continue }
+        const ledger = task === undefined ? undefined : this.ledgerOf(task)
+        // The ledger decides when it has the row: settled is done; owed or acknowledged is still owed, however old.
+        if (channel === undefined || task === undefined || ledger === 'settled' || this.d.a2a.answered(task) || (ledger === undefined && since > END_RECEIPT_HORIZON_MS)) { this.endReceipted.add(key); continue }
         if (since >= grace) due.push({ ticket, channel, key })
       }
     }
@@ -201,7 +220,8 @@ export class A2aReceipts {
       const trigger = this.d.store.triggers.get(triggerId)
       const channel = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel : undefined
       const task = channel?.address.task
-      if (channel === undefined || task === undefined || this.d.a2a.answered(task) || now - Date.parse(trigger!.at) > END_RECEIPT_HORIZON_MS) { this.outcomeReceipted.add(triggerId); return }
+      const ledger = task === undefined ? undefined : this.ledgerOf(task)
+      if (channel === undefined || task === undefined || ledger === 'settled' || this.d.a2a.answered(task) || (ledger === undefined && now - Date.parse(trigger!.at) > END_RECEIPT_HORIZON_MS)) { this.outcomeReceipted.add(triggerId); return }
       due.set(triggerId, { channel, ...make() })
     }
     const holding: string[] = []
@@ -262,7 +282,7 @@ export class A2aReceipts {
     const due = triggerIds.flatMap((triggerId) => {
       const trigger = this.d.store.triggers.get(triggerId)
       const address = trigger?.source === 'a2a' && trigger.human !== true ? trigger.channel?.address : undefined
-      return address?.task !== undefined && !this.ackSettled.has(address.task) ? [{ task: address.task, address }] : []
+      return address?.task !== undefined && !this.ackSettled.has(address.task) && !this.acknowledgedInLedger(address.task) ? [{ task: address.task, address }] : []
     })
     if (due.length === 0) return
     this.holdAcking = true

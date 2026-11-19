@@ -8,11 +8,30 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { TaskLedger } from '../../src/task-ledger.ts'
 import { FollowupDelivery } from '../../src/followup-delivery.ts'
+import {receiptBirth,receiptPayloadHash,receiptTransportId,type ReceiptOutboxRecord} from '../../src/receipt-outbox.ts'
 const fault=vi.hoisted(()=>({fail:false}))
 vi.mock('node:fs',async original=>{const fs=await original<typeof import('node:fs')>();return {...fs,renameSync:(...args:Parameters<typeof fs.renameSync>)=>{if(fault.fail)throw Object.assign(Error('disk full'),{code:'ENOSPC'});return fs.renameSync(...args)}}})
 afterEach(()=>{fault.fail=false;vi.restoreAllMocks()})
 function setup(){const file=join(mkdtempSync(join(tmpdir(),'followup-delivery-')),'tasks.json'),ledger=new TaskLedger(file),followup=vi.fn(),steer=vi.fn(),agent={id:SessionId('session-aaaaaaaa11112222'),followup,steer} as unknown as Agent,taint=vi.fn(),warn=vi.fn(),dispatcher=new FollowupDelivery({ledger,taint,warn});return{file,ledger,followup,steer,agent,taint,warn,dispatcher}}
 describe('#356 persistent sourced followup admission',()=>{
+ it('F2 reserves a task birth slot before reentrant work can protect the rest, and restore keeps the reservation',()=>{
+  const f=setup()
+  f.followup.mockImplementation(()=>{
+   for(let i=0;i<63;i++){
+    const taskId='protected-'+i,target='beta/bbbbbbbb',authorTeam='alpha/aaaaaaaa',text='[A2A receipt] task '+taskId+' full result'
+    f.ledger.trackInbound(taskId,authorTeam,target,'ctx',true,'work',undefined,undefined,String(f.agent.id))
+    const record:Omit<ReceiptOutboxRecord,'payloadHash'>={version:1,taskId,authorId:String(f.agent.id),authorTeam,target,text,transportId:receiptTransportId(taskId,target,text),caller:authorTeam,payer:authorTeam,localKey:'key',birth:receiptBirth(f.ledger.find(taskId)!),lane:{kind:'local-session',sessionId:'session-caller'},contextId:'ctx',createdAt:Date.now(),deadline:Date.now()+3600000,attempts:0,nextAt:Date.now(),phase:'ready'}
+    f.ledger.prepareReceipt({...record,payloadHash:receiptPayloadHash(record)})
+   }
+   expect(()=>f.ledger.trackInbound('steal-slot','alpha/aaaaaaaa','beta/bbbbbbbb')).toThrow('receipt-protected')
+  })
+  f.dispatcher.deliver(f.agent,'original work',undefined,undefined,'reserved-birth',undefined,true)
+  const restored=new TaskLedger(f.file)
+  expect(restored.receiptCapacityAvailable()).toBe(false)
+  restored.trackInbound('reserved-birth','alpha/aaaaaaaa','beta/bbbbbbbb',undefined,true,'original work',undefined,undefined,String(f.agent.id))
+  expect(restored.list()).toHaveLength(64);expect(restored.find('reserved-birth')).toBeDefined();expect(restored.receipts()).toHaveLength(63);expect(restored.conservation().conserved).toBe(true)
+ })
+
  it('task-purpose orphan correspondence survives restore and refuses replay without inventing task state',()=>{
   const f=setup();f.dispatcher.deliver(f.agent,'work',undefined,undefined,'orphan',undefined,true)
   const restored=new TaskLedger(f.file),d=new FollowupDelivery({ledger:restored,taint:vi.fn(),warn:vi.fn()})

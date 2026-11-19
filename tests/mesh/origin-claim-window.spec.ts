@@ -21,7 +21,7 @@ import TimerService from '@deepseek-ai/cordis-plugin-timer'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { apply, type Config } from '../../src/index.ts'
+import { apply, Config as ConfigSchema, type Config } from '../../src/index.ts'
 
 interface Mounted { ctx: Context; port: number; home: string; dispose: () => Promise<void> }
 
@@ -112,8 +112,21 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('M1 originClaimWindow pins', () => {
-  it('window OPEN (default): an envelope-absent delivery walks on and the legacyInbound counter ticks on the state face', async () => {
+  it('#64: the window is CLOSED by default — an unset originClaimWindow rejects an envelope-absent delivery (schema default false too)', async () => {
+    expect(ConfigSchema({} as never).originClaimWindow).toBe(false)
     const m = await mount()
+    try {
+      const reply = await postDirect(m.port)
+      expect(reply.routed).not.toBe(true)
+      expect(String(reply.error)).toContain('untrusted-origin')
+      expect(await stateLegacy(m.port)).toBe(0)
+    } finally {
+      await m.dispose()
+    }
+  }, 20_000)
+
+  it('window OPEN (originClaimWindow: true, the operator\'s reopen): an envelope-absent delivery walks on and the legacyInbound counter ticks on the state face', async () => {
+    const m = await mount({ originClaimWindow: true })
     try {
       expect(await stateLegacy(m.port)).toBe(0)
       const reply = await postDirect(m.port)
@@ -143,7 +156,7 @@ describe('M1 originClaimWindow pins', () => {
   }, 20_000)
 
   it('a PRESENT-but-invalid envelope rejects in BOTH window states (no dual-track: shape never substitutes for signature)', async () => {
-    const open = await mount()
+    const open = await mount({ originClaimWindow: true })
     try {
       const badHeaders = { 'X-A2A-Caller': 'dsh', 'X-A2A-Caller-Url': 'http://127.0.0.1:9', 'X-A2A-Caller-Ts': String(Date.now()), 'X-A2A-CALLER-SIG': Buffer.from('forged').toString('base64') }
       const refusedOpen = await postDirect(open.port, badHeaders)
@@ -161,6 +174,32 @@ describe('M1 originClaimWindow pins', () => {
       expect(String(refusedClosed.error)).toContain('untrusted-origin')
     } finally {
       await closed.dispose()
+    }
+  }, 30_000)
+})
+
+describe('#64 step 2: the restart-proof window measure', () => {
+  it('an envelope-absent delivery lands in today\'s bucket on the state face and is still there after a restart on the same home', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'm1-measure-'))
+    const today = new Date().toISOString().slice(0, 10)
+    const measure = async (port: number): Promise<{ since: string; days: Array<{ day: string; legacy: number }> }> =>
+      ((await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/__dsh_a2a/state`)).json()) as { originClaimWindow: { since: string; days: Array<{ day: string; legacy: number }> } }).originClaimWindow
+    const first = await mount({ originClaimWindow: true, dshHome: home })
+    try {
+      expect((await measure(first.port)).days[0]).toMatchObject({ day: today, legacy: 0 })
+      expect((await postDirect(first.port)).routed).toBe(true)
+      expect((await measure(first.port)).days[0]).toMatchObject({ day: today, legacy: 1 })
+    } finally {
+      await first.dispose()
+    }
+    const second = await mount({ originClaimWindow: true, dshHome: home })
+    try {
+      expect(await stateLegacy(second.port)).toBe(0)
+      const after = await measure(second.port)
+      expect(after.since).toBe(today)
+      expect(after.days[0]).toMatchObject({ day: today, legacy: 1 })
+    } finally {
+      await second.dispose()
     }
   }, 30_000)
 })

@@ -11,7 +11,7 @@
 
 ## Files
 
-- **Files do not go through session messages.** Use `a2a_file_send { paths, team }` (up to 16 files, 64 MiB each), then `a2a_file_fetch { ref }` on the received `[A2A file] v1 …` reference. CLI: `a2a-net file send <path…> <team>` and `a2a-net file fetch "<reference line>"`. Do not base64/chunk files into JPFILE-PART messages. During compatibility rollout, accepted legacy parts carry `advice.reason: use-file-channel`; over-limit parts still fail with `-32008` / `file-parts-exceeded` and the same advice. Do not resend rejected parts in a loop.
+- **Files do not go through session messages.** Use `a2a_file_send { paths, team }` (up to 16 files, 64 MiB each), then `a2a_file_fetch { ref }` on the received `[A2A file] v1 …` reference. CLI: `a2a-net file send <path…> <team>` and `a2a-net file fetch "<reference line>"`. Do not base64/chunk files into JPFILE-PART messages. Every JPFILE-PART message is refused with `-32008` / `file-channel-required` and `advice.reason: use-file-channel`; switch to the file channel, do not resend parts.
 
 ## Routing
 

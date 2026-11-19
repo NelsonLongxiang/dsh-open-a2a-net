@@ -41,7 +41,7 @@ async function mount(): Promise<{ port: number; dispose: () => Promise<void> }> 
   mkdirSync(join(home, 'a2a'), { recursive: true })
   writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: ['session-aaaabbbbccccdddd'] }), 'utf8')
   apply(ctx, {
-    apiKey: '', session: 'gh60-test', team: 'dsh', routeTimeoutMs: 60_000, flushTimeoutMs: 300_000,
+    apiKey: '', originClaimWindow: true /* #64: unsigned fixture deliveries */, session: 'gh60-test', team: 'dsh', routeTimeoutMs: 60_000, flushTimeoutMs: 300_000,
     announce: false, agentName: 'gh60 node', peers: [], delegates: [], sessionNodes: true,
     wakeJoinedOnBoot: false, wakePrewarmDelayMs: 0, wakePrewarmQuietMs: 0, wakeBootStaggerMs: 3_000,
     stateColdRowsTtlMs: 5_000, cardCacheTtlMs: 60_000, cardCacheNegativeTtlMs: 30_000,

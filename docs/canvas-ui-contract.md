@@ -5,6 +5,16 @@
 > **v1.1 对齐注记（2026-10-27，按 master ae7e24d 代码复核）**：v1 锁定后 host 已做两处 shape 扩展而未升文档版本——
 > ① 成员数组为**双形**：本机成员 `{id, team, joined, live}`，远端成员 `{id, team, remote: true}`（0.6.6 c858050 统一画布队模型引入）；
 > ② `canvas` 字段由 host **恒下发**（不再以存在性作开关）。下文 shape 已按现状改写；按本文第 5 条，这属于事后补登的契约变更。
+>
+> **v1.2 待补（2026-11-18，next/0.8 `44907c00`）**：v1.1 之后，host 又给画布载荷加了几个字段，例如 `revision`、`memberSlots`、`retainedMembers` 和成员来源（provenance），本文还没写进去。在补齐之前，以 `src/faces/admin.ts`、`src/canvas-store.ts` 的现行代码为准。
+
+> **v1.3 增补（2026-11-18，#650 组成 root 团队）**：以下字段为加法，旧字段不变：
+> - `canvas.teams[].id`：该队的画布地址 `<zone>/canvas/<name>@<fp8>`（#282 S2 起已下发，此处补登）。它就是 `add-team` 的 `team` 入参形式，板面取子团队地址只读它，不再由框名拼。
+> - `canvas.teams[].superagentTeam: true`：本机该画布绑定了 superagent 团队且其 A2A 来源开着（可作子团队）；与名片 `canvasOrg[].superagentTeam` 同名同义。不是则缺省。
+> - `canvas.teams[].root: true` 与 `children[]`（R8/S3，见 `docs/design/superagent-root-team.md`）。
+> - `peerOrg[].org[]` 同样带 `id`，并在对端名片标了时带 `superagentTeam: true` / `root: true`。
+> - `sessions[].preset`：本机活会话所用的 agent 预设 id（不可知时缺省），供总工选择器只列团队绑定会接受的会话。
+> - 写面 `create` 新增可选入参 `requireNew: true`（见下表）。
 
 ## 读面：`GET /__dsh_a2a/state` → `canvas` 载荷
 
@@ -36,7 +46,7 @@ canvas?: {
 
 | action | 入参 | 返回 |
 |---|---|---|
-| `create` | `{ action, name }`（trim 后 1..40，拒 `/` 与纯数字） | `{ ok, name, teams }`；拒绝时 `{ ok:false, error }` |
+| `create` | `{ action, name, requireNew? }`（trim 后 1..40，拒 `/` 与纯数字）。不带 `requireNew` 时同名幂等；带 `requireNew: true` 时同名已存在即拒（v1.3） | `{ ok, name, created, teams }`，`created` 表示本次调用确实新建并已落盘；拒绝时 `{ ok:false, created:false, error }` |
 | `remove` | `{ action, name }` | `{ ok, teams }`（连成员一起消失） |
 | `add-member` | `{ action, name, id }`（id 为本机 session 时必须 joined：live 节点或已记意图；id 含 `/` 时视为远端句柄，只做形状校验：无首尾 `/`、无 `//`、无空白；否则 `ok:false`） | `{ ok, teams, members }`（重复添加幂等 ok:true） |
 | `remove-member` | `{ action, name, id }` | `{ ok, teams, members }` |
@@ -48,7 +58,7 @@ canvas?: {
 3. **上限**：64 队 × 32 成员/队；超限 host 拒绝且 `ok:false`——UI 不预校验上限数字，以 host 判定为准。
 4. **确定性路由语义**：成员序=优先级；路由解析活成员优先→冷 joined 唤醒。UI 用 live 标记着色（实心=活，空心=cold），不承诺"下一个投给谁"之外的语义。
 5. **锁版本**：本文档对应 host 实现基线 PR #13（6534a0a）及其后画布微补丁（最近对齐 master 画布域复核 2026-09-02）。任何 shape 变更 = 破坏性契约变更，需单独评审。
-6. **`{x,y}` 的量纲语义**（2026-08-28 评审裁决，`feedback/2026-08-27-nexus-canvas-ux/review-node-position.md` 方向 A）：布局文档（`/__dsh_a2a/canvas-layout`）中的 `nodes.{x,y}` 是 **2D 规划画布的卡片中心，px 计**；`frames.{x,y,w,h}` 同量纲。其它消费方（如 3D 观测视角）**不得按绝对量纲消费**，须自行重投影（质心归零 + 等比缩放进自身包络）。shape 不变，本条为语义澄清。
+6. **`{x,y}` 的量纲语义**（2026-08-28 评审裁决，[节点位置评审 · 方向 A（固定历史提交）](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/e759897e425f1b44693d148e8effc07ceffcc1a8/feedback/2026-08-27-nexus-canvas-ux/review-node-position.md)）：布局文档（`/__dsh_a2a/canvas-layout`）中的 `nodes.{x,y}` 是 **2D 规划画布的卡片中心，px 计**；`frames.{x,y,w,h}` 同量纲。其它消费方（如 3D 观测视角）**不得按绝对量纲消费**，须自行重投影（质心归零 + 等比缩放进自身包络）。shape 不变，本条为语义澄清。
 
 ## v1 设计系统对齐（ui-ux-pro-max 审计，2026-08-26）
 

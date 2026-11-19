@@ -17,6 +17,7 @@
  */
 import type { RailTone } from './wb-rail'
 import { buildTeamFields, type TeamRule } from './wb-superagent-settings'
+import { createSenderRecovery, type RecoveryOutbound } from './request-recovery-panel'
 
 type Json = Record<string, unknown>
 
@@ -67,13 +68,25 @@ export interface SaSettings {
 export interface SaTeamRow { readonly id: string; readonly canvas?: string; readonly waiting?: number }
 
 /** A problem the host found (design reliability R6). */
-export interface SaHealth { readonly code: string; readonly session?: string; readonly ticketId?: string; readonly title?: string; readonly minutes?: number }
+export interface SaHealth { readonly code: string; readonly session?: string; readonly ticketId?: string; readonly title?: string; readonly minutes?: number; readonly reason?: string; readonly repo?: string; readonly count?: number }
 
 /** The words for a problem the host found. */
 export function healthText(problem: SaHealth, sessionName: (id: string) => string = id => id): string {
   if (problem.code === 'router-not-loaded') return `总工会话 ${sessionName(problem.session ?? '')} 没有加载：需求送不到它，打开这个会话即可`
   if (problem.code === 'member-not-loaded') return `成员会话 ${sessionName(problem.session ?? '')} 没有加载：工单派不给它，打开这个会话即可`
   if (problem.code === 'ticket-quiet') return `工单「${problem.title ?? problem.ticketId ?? ''}」已经 ${String(problem.minutes ?? 0)} 分钟没有动静`
+  if (problem.code === 'tickets-queued') {
+    const who = sessionName(problem.session ?? '')
+    const waits = problem.reason === 'member-busy' ? `在等成员 ${who}，它手上的工单没结束；可让总工改派给空闲成员`
+      : problem.reason === 'member-absent' ? `在等成员 ${who}，它已不在团队里；请总工改派`
+      : problem.reason === 'no-repo-member' ? `只能派给负责仓库 ${problem.repo ?? ''} 的成员，团队里没有这样的成员；在设置里给成员填仓库，或请总工改派`
+      : problem.reason === 'repo-busy' ? `只能派给负责仓库 ${problem.repo ?? ''} 的成员，他们都在忙`
+      : problem.reason === 'delivery-refused' ? `派给成员 ${who} 时被拒绝，还在重试；看看这个成员的会话或它所在主机是否接收，或请总工改派`
+      : problem.reason === 'launch-stalled' ? '有空闲成员，但这些工单一直没派出去，原因不明；可请总工改派，或查看主机日志'
+      : problem.reason === 'at-cap' ? '团队已到同时运行的上限'
+      : '所有成员都在忙'
+    return `${String(problem.count ?? 1)} 张工单排队超过 ${String(problem.minutes ?? 0)} 分钟（最久的是「${problem.title ?? problem.ticketId ?? ''}」）：${waits}`
+  }
   return problem.code
 }
 
@@ -92,6 +105,8 @@ export interface SaState {
   readonly canvasProblem?: string
   readonly pullRequestProblem?: string
   readonly reviews?: ReadonlyArray<{ ticketId: string; head: string; verdict?: { pass: boolean } }>
+  /** Transport attempts are separate from the ticket's member assignment. */
+  readonly outbound?: ReadonlyArray<Omit<RecoveryOutbound, 'task'> & { task?: string; error?: string; approval?: unknown; attempts?: ReadonlyArray<{ task: string; delivery: string; error?: string }> }>
   /** v5 acceptance F4: why a session this host serves another team with cannot take work (wrong preset). */
   readonly servesProblem?: string
   readonly canvases?: readonly string[]
@@ -153,7 +168,8 @@ export function problemsOf(state: SaState, now: number): SaProblem[] {
   if (state.settings.router === undefined) out.push({ tone: 'danger', text: '还没有指定总工：需求会停在候选里，没人决定（到「设置」里选）' })
   if (state.settings.members.length === 0 && state.settings.remoteMembers.length === 0) out.push({ tone: 'warn', text: '成员池是空的：在画布团队里加成员，接下的工单才有人做' })
   if (state.settings.paused) out.push({ tone: 'warn', text: '执行已暂停：新工单不会派给成员' })
-  for (const problem of state.health ?? []) out.push({ tone: problem.code === 'ticket-quiet' ? 'warn' : 'danger', text: healthText(problem) })
+  // A queued group that waiting cannot clear (its member left, no member has its repository) is danger; the rest are warn.
+  for (const problem of state.health ?? []) out.push({ tone: problem.code === 'ticket-quiet' || (problem.code === 'tickets-queued' && problem.reason !== 'member-absent' && problem.reason !== 'no-repo-member') ? 'warn' : 'danger', text: healthText(problem) })
   if (state.pullRequestProblem !== undefined) out.push({ tone: 'warn', text: `读取 PR 状态失败，稍后重试：${state.pullRequestProblem}` })
   for (const [entry, health] of Object.entries(state.a2a.health)) if (health.state === 'error') out.push({ tone: 'danger', text: `A2A Source（${entry}）出错：${health.detail ?? ''}` })
   for (const thread of state.threads) {
@@ -244,6 +260,8 @@ function ago(iso: string, now: number): string {
 
 export interface SuperagentPane {
   readonly root: HTMLElement
+  /** Outer workbench navigation invalidates recovery readiness without cancelling server work. */
+  setRecoveryVisible(visible: boolean): void
   /** Feed one poll: the team's state (null when the host runs no superagent) and the local sessions. */
   update(state: SaState | null, sessions: readonly SaSession[], now: number): { badge: string; tone?: RailTone }
   select(view: SaView): void
@@ -326,6 +344,8 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   /** The team just asked for: until its state arrives the old one's view is gone, so nothing can be written from it. */
   let pendingTeam: string | undefined
   function switchTeam(id: string): void {
+    for (const form of recoveryForms.values()) form.invalidate()
+    recoveryForms.clear()
     pendingTeam = id
     settingsDirty = false
     settingsForm = undefined
@@ -430,6 +450,16 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     return row?.name !== undefined && row.name !== '' ? `${row.name}（${id.replace(/^session-/, '').slice(0, 8)}）` : id
   }
 
+  const recoveryForms = new Map<string, ReturnType<typeof createSenderRecovery>>()
+  let recoveryVisible = true
+  function setRecoveryVisible(visible: boolean): void {
+    if (visible === recoveryVisible) return
+    recoveryVisible = visible
+    for (const form of recoveryForms.values()) form.invalidate()
+    recoveryForms.clear(); builtFrom = ''
+    if (visible) render()
+  }
+
   function ticketCard(ticket: SaTicket, opts: { answer?: boolean } = {}): HTMLElement {
     const person = ticket.stage?.stage === 'person'
     const card = el('div', `wb-led-card wb-sa-ticket${person ? ' is-warn' : ''}${ticket.ended !== undefined ? ' is-muted' : ''}`)
@@ -439,7 +469,10 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     card.appendChild(head)
     kv(card, '范围', ticket.mandate.scope)
     const { source, id: actorId } = ticket.mandate.actor
-    kv(card, '授权', source === 'workbench' && actorId.startsWith('observer:') ? `观察者开单 · ${sessionName(actorId.slice('observer:'.length))}` : `${ticket.mandate.strength === 'explicit' ? '明确请求' : '推断'} · ${source}:${actorId}`)
+    // #717: a plain member's proposal (`member:<session or ref>`) is shown as such, never as the owner's request.
+    kv(card, '授权', source === 'workbench' && actorId.startsWith('observer:') ? `观察者开单 · ${sessionName(actorId.slice('observer:'.length))}`
+      : source === 'workbench' && actorId.startsWith('member:') ? `成员提议 · ${sessionName(actorId.slice('member:'.length))}`
+      : `${ticket.mandate.strength === 'explicit' ? '明确请求' : '推断'} · ${source}:${actorId}`)
     const binding = last?.executor.bindings.find(b => b.ticketId === ticket.id)
     if (binding !== undefined) kv(card, '成员', sessionName(binding.member))
     for (const f of ticket.follows ?? []) if (f.thread.startsWith('github:')) kv(card, 'PR', `${f.thread.slice(7)}${f.closed !== undefined ? ` · ${f.closed.outcome === 'merged' ? '已合并' : '已关闭'}` : ' · 等待合并'}`)
@@ -449,6 +482,42 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const report = latestReport(ticket)
     if (report !== undefined) kv(card, '报告', `${REPORT[report.state] ?? report.state} · ${report.summary}`)
     if (ticket.ended?.reason !== undefined) kv(card, '结束', ticket.ended.reason)
+    for (const outbound of last?.outbound?.filter(row => row.ticketId === ticket.id) ?? []) {
+      const detail = el('div', 'wb-sa-hint')
+      detail.dataset.outbound = outbound.card
+      const states: Record<string, string> = { waiting: '等待批准', sending: '发送中／待对账', unknown: '接纳未知', failed: '确认未发出或旧失败', sent: '已发送，等回执', answered: '已回执', declined: '未批准' }
+      detail.append(el('strong', undefined, '对外请求：' + outbound.address), el('div', undefined, states[outbound.state] ?? outbound.state))
+      if (outbound.task !== undefined) detail.append(el('div', undefined, 'task ' + outbound.task))
+      if (outbound.error !== undefined) detail.append(el('div', undefined, outbound.error))
+      detail.append(el('pre', 'wb-sa-hint', outbound.text))
+      if (ticket.ended === undefined && !outbound.narrowRecovery && outbound.task !== undefined && ['failed', 'unknown', 'sending'].includes(outbound.state)) {
+        const task = outbound.task
+        const act = (action: string, label: string): HTMLButtonElement => {
+          const button = el('button', 'wb-btn', label)
+          button.type = 'button'
+          button.addEventListener('click', () => {
+            if (action === 'outbound-retry' && typeof window.confirm === 'function' && !window.confirm('只恢复原批准的目标与原文。服务端必须确认原尝试未投递；未知或已送达不会重发。继续？')) return
+            button.disabled = true
+            void send({ action, card_id: outbound.card, task_id: task }, undefined, action === 'outbound-retry' ? '外发已处理，请查看原尝试和回执' : '已对账，未请求再次发送').finally(() => { button.disabled = false })
+          })
+          return button
+        }
+        detail.append(act('outbound-reconcile', '核对原外发'))
+        const lastAttempt = outbound.attempts?.at(-1)
+        if (outbound.approval !== undefined && lastAttempt?.task === task && lastAttempt.delivery === 'not-sent') detail.append(act('outbound-retry', '恢复原批准外发'))
+        else detail.append(el('div', undefined, '尚无明确未投递证据：先核对，不新卡、不重批、不重派。'))
+      }
+      if (!ticket.ended && outbound.state === 'failed' && outbound.task) {
+        const teamId = last?.selectedTeam ?? '', row = { ...outbound, task: outbound.task }, formKey = JSON.stringify([teamId, row.card, row.task])
+        let form = recoveryForms.get(formKey)
+        if (!form) {
+          form = createSenderRecovery({ row, teamId, act: deps.act, refresh: deps.refresh, closed: () => { recoveryForms.delete(formKey); builtFrom = ''; deps.refresh() }, current: () => recoveryVisible && pendingTeam === undefined && (last?.selectedTeam ?? '') === teamId && last?.settings.sources.a2a === true && last.settings.paused === false && last?.tickets.some(t => t.id === row.ticketId && !t.ended) === true && last?.outbound?.some(r => r.card === row.card && r.task === row.task && r.state === 'failed' && r.ticketId === row.ticketId && r.address === row.address && r.text === row.text) === true })
+          recoveryForms.set(formKey, form)
+        }
+        form.sync(row); detail.append(form.root)
+      }
+      card.append(detail)
+    }
     kv(card, '更新', `${ago(ticket.updatedAt, now)} · ${ticket.id}`)
     if (ticket.ended === undefined) {
       const actions = el('div', 'wb-sa-actions')
@@ -473,7 +542,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       }
       const retryable = ticket.delivery !== undefined || (person && (ticket.stage?.action === 'blocked' || ticket.stage?.action === 'failed'))
       if (retryable) {
-        const retry = el('button', 'wb-btn', '重试')
+        const retry = el('button', 'wb-btn', '重试工单（不重发外发）')
         retry.type = 'button'
         retry.addEventListener('click', () => { void send({ action: 'retry', ticket_id: ticket.id }, undefined, '已重试') })
         actions.appendChild(retry)
@@ -766,7 +835,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     reset.addEventListener('click', () => { settingsDirty = false; render() })
     const actions = el('div', 'wb-sa-actions')
     actions.append(save, reset)
-    form.append(actions, el('div', 'wb-sa-hint', '团队就是一支画布团队：在画布上建队、增删成员（含远端成员），这里只绑定画布并从中指定总工。总工用 superagent-router 预设，本机成员用 superagent-member 预设，能自己开工单的观察者用 superagent-observer 预设；团队里的会话不再加入别的画布。'))
+    form.append(actions, el('div', 'wb-sa-hint', '团队就是一支画布团队：在画布上建队、增删成员（含远端成员），这里只绑定画布并从中指定总工。总工用 superagent-router 预设，本机成员用 superagent-member 预设，能自己开工单的观察者用 superagent-observer 预设（成员也能提议新工作，由总工决定接不接、派给谁）；团队里的会话不再加入别的画布。'))
     return form
   }
 
@@ -788,6 +857,8 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   }
 
   function select(next: SaView): void {
+    for (const form of recoveryForms.values()) form.invalidate()
+    recoveryForms.clear()
     view = next
     try { window.localStorage.setItem(VIEW_KEY, next) } catch { /* per-viewer convenience only */ }
     render()
@@ -800,7 +871,8 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     if (id === '') return
     pendingFocus = { kind, id }
     const wanted: SaView = kind === 'ticket' ? 'tickets' : 'request'
-    if (view !== wanted) { view = wanted; render() } else { render() }
+    if (view !== wanted) { for (const form of recoveryForms.values()) form.invalidate(); recoveryForms.clear(); view = wanted }
+    render()
   }
 
   function applyFocus(): void {
@@ -832,6 +904,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       if (state !== null && state.selectedTeam !== pendingTeam) return { badge: '' }
       pendingTeam = undefined
     }
+    if (last && (!state || (last.selectedTeam ?? '') !== (state.selectedTeam ?? ''))) { for (const form of recoveryForms.values()) form.invalidate(); recoveryForms.clear() }
     last = state
     sessions = rows
     now = at
@@ -858,7 +931,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   root.addEventListener('pointerdown', () => { pressing = true })
   for (const type of ['pointerup', 'pointercancel']) document.addEventListener(type, () => { pressing = false })
   render()
-  return { root, update, select }
+  return { root, update, select, setRecoveryVisible }
 }
 
 const REPORT: Readonly<Record<string, string>> = { progress: '进展', waiting: '等待', ready: '已就绪', blocked: '受阻', failed: '失败', dropped: '无需做' }

@@ -11,6 +11,7 @@ import TimerService from '@deepseek-ai/cordis-plugin-timer'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { apply, type Config } from '../../src/index.ts'
+import { TeamMembershipStore } from '../../src/team-store.ts'
 
 const A = 'session-aaaaaaaa11111111', B = 'session-bbbbbbbb22222222'
 class FakeAgents extends Service {
@@ -20,10 +21,13 @@ class FakeAgents extends Service {
   get(id: unknown): Agent | undefined { return this.agents.find(a => String(a.id) === String(id)) }
   requireInitiator(): never { throw new Error('no initiator') }
 }
-async function mounted(existingCanvas?: string, allowlist: string[] = []) {
+async function mounted(existingCanvas?: string, allowlist: string[] = [], rosters: Record<string, readonly string[]> = {}) {
   const home = mkdtempSync(join(tmpdir(), 'a2a-roster-web-'))
   mkdirSync(join(home, 'a2a'))
   writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: [A, B] }))
+  // Roster teams are retired (owner ruling 2026-11-18): one declared before is seeded on disk, as an old host has it.
+  const store = new TeamMembershipStore(join(home, 'a2a', 'teams.json'))
+  for (const [id, teams] of Object.entries(rosters)) for (const team of teams) store.add(id, team)
   if (existingCanvas !== undefined) writeFileSync(join(home, 'a2a', 'canvas.json'), JSON.stringify({ teams: [{ name: existingCanvas, members: [] }] }))
   const ctx = new Context()
   await ctx.plugin(SystemPrompt)
@@ -49,26 +53,26 @@ async function mounted(existingCanvas?: string, allowlist: string[] = []) {
 }
 
 describe('#199 roster control HTTP and shared membership', () => {
-  it('creates roster declarations and routes between two local members, then dissolves both declarations and name', async () => {
-    const m = await mounted()
+  it('an existing roster still routes between its two local members; it can shrink and dissolve, never be created or grown (retired 2026-11-18)', async () => {
+    const m = await mounted(undefined, ['dsh/生产服务组'], { [A]: ['dsh/生产服务组'], [B]: ['dsh/生产服务组'] })
     try {
       expect((await m.post({ op: 'create', name: '生产服务组', ids: [A, B] }, '')).status).toBe(401)
-      const created = await m.post({ op: 'create', name: '生产服务组', ids: [A, B] })
-      expect(created).toMatchObject({ status: 200, body: { ok: true, team: 'dsh/生产服务组', members: [A, B] } })
+      const created = await m.post({ op: 'create', name: '另一组', ids: [A, B] })
+      expect(created).toMatchObject({ status: 200, body: { ok: false, error: expect.stringContaining('retired') } })
       const st = await m.state()
       expect(st.registry.teams).toContainEqual(expect.objectContaining({ team: 'dsh/生产服务组', members: [A, B] }))
-      expect(st.registry.teamAudit.some(row => row.id === 'human:owner' && row.actor === 'human:owner')).toBe(true)
       const who = await m.ctx.tools.get('a2a_whoami')?.execute({}, { agent: m.a }) as { teams: { roster: string[] } }
       expect(who.teams.roster).toContain('dsh/生产服务组')
       for (const action of ['create', 'add-member']) for (const name of ['生产服务组', ' 生产服务组 ']) {
         const reply = await fetch(m.base + '/__dsh_a2a/canvas', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Key': 'test-key' }, body: JSON.stringify({ action, name, id: A }) })
         expect((await reply.json() as { ok: boolean }).ok).toBe(false)
       }
-      expect((await m.post({ op: 'remove-member', name: '生产服务组', id: B })).body).toMatchObject({ ok: true, members: [A] })
-      expect((await m.post({ op: 'add-member', name: '生产服务组', id: B })).body).toMatchObject({ ok: true, members: [A, B] })
       const routed = await m.ctx.tools.get('a2a_route')?.execute({ team: 'dsh/bbbbbbbb', message: 'ping', async: true }, { agent: m.a, signal: new AbortController().signal }) as { ok: boolean; error?: string }
       expect(routed.ok, routed.error).toBe(true)
       expect(m.b.steer).toHaveBeenCalled()
+      expect((await m.post({ op: 'remove-member', name: '生产服务组', id: B })).body).toMatchObject({ ok: true, members: [A] })
+      expect((await m.post({ op: 'add-member', name: '生产服务组', id: B })).body).toMatchObject({ ok: false, error: expect.stringContaining('retired') })
+      expect((await m.state()).registry.teamAudit.some(row => row.id === 'human:owner' && row.actor === 'human:owner')).toBe(true)
       expect((await m.post({ op: 'dissolve', name: '生产服务组' })).body.ok).toBe(true)
       expect((await m.state()).registry.teams).not.toContainEqual(expect.objectContaining({ team: 'dsh/生产服务组' }))
       const after = await m.ctx.tools.get('a2a_whoami')?.execute({}, { agent: m.a }) as { teams: { roster: string[] } }

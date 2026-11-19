@@ -2,6 +2,8 @@
 
 Status: **approved by the owner 2026-11-12 (「那么开始规划并安排执行吧」), being built.** The points below were taken as recommended.
 
+Implementation check (2026-11-18, next/0.8 `44907c00`): these slices are merged: S0 `sdk/wire` (#647), S1 (#646), S2 (#649), the core of the S3 board (#660) and S5 (#652, #654, #659). Left: `sdk/owner` and the R8 switch to it, the rest of the S3 board (#650), and the S4 live run, which has no recorded result.
+
 - **Asked by the owner (2026-11-12):** with about ten superagent teams, a layer above them is needed to take work in and dispatch it to the teams. The owner's first idea was a root team with its own router, whose members are the routers of the teams.
 - **What this document proposes instead:** a root team whose members are the teams themselves, reached by their canvas addresses. Each team's router stays in its own team and keeps judging what that team takes.
 

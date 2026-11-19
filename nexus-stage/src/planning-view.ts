@@ -41,6 +41,8 @@ import {
 import { clampViewport, fitView, panBy, screenToWorld, worldTransformCss, zoomAt, type LayoutViewport } from './viewport'
 import { dropDispatch, localXY } from './planning-drop'
 import { buildChildChip, childChipTitle } from './planning-root'
+import { createFrameSelection } from './planning-frame-selection'
+import { createRootCompose } from './planning-root-compose'
 import { boardBounds, fitBelowHud, hudBottomOf } from './planning-fit'
 import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters, NODE_W, NODE_H } from './world'
 import { applyAction, settleAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
@@ -126,17 +128,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   // by targeting cards directly).
   const frameLayer = document.createElement('div')
   frameLayer.className = 'p-layer p-frames'
-  /** The selected frame keeps its resize handles visible without hover. */
-  let selectedFrame: string | undefined
-  const markSelectedFrame = (name: string | undefined): void => {
-    if (selectedFrame !== undefined) {
-      frameEls.get(selectedFrame)?.classList.remove('selected')
-    }
-    selectedFrame = name
-    if (name !== undefined) {
-      frameEls.get(name)?.classList.add('selected')
-    }
-  }
+  // Frame multi-selection is presentation-only, never a membership or layout write.
+  const frameSelection = createFrameSelection(() => frameEls, () => { model.setSelection([]); renderNodes() })
   const nodeLayer = document.createElement('div')
   nodeLayer.className = 'p-layer p-nodes'
   nodeLayer.setAttribute('role', 'listbox')
@@ -169,7 +162,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     zoomLabel,
     mkButton('＋', '放大', () => zoomCenter(1.2)),
     sep(),
-    mkButton('建队', '组成团队（G）：先框选至少 2 个节点', () => menus.startCreateFromSelection()),
+    mkButton('建队', '组成团队（G）：先框选至少 2 个节点；选中至少 2 个团队框（Shift 点框头）则组成 root 团队', () => buildTeam()),
     // gh#48 (owner order, review-seat spec): one-click tidy — inside every
     // team frame, the members that belong to EXACTLY that one team re-seat
     // into a padded grid flow (the frame grows downward, bounded); members
@@ -248,7 +241,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   noticeStack.setAttribute('role', 'log')
   noticeStack.setAttribute('aria-live', 'polite')
 
-  root.append(grid, world, marquee, toolbar, status, legend, noticeStack)
+  // Share a wrapping HUD row so a long toolbar never sits under the status control.
+  const hud = document.createElement('div')
+  hud.className = 'p-hud'
+  hud.append(toolbar, status)
+  root.append(grid, world, marquee, hud, legend, noticeStack)
 
   // ── viewport application ──
   let viewW = 0
@@ -440,6 +437,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     for (const [name, el] of [...frameEls]) {
       if (!seen.has(name)) { el.remove(); frameEls.delete(name) }
     }
+    frameSelection.sync(); compose.paint()
   }
 
   // ── keyed diff: nodes ──
@@ -561,6 +559,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     if (roster && (a.type === 'create-team' || a.type === 'add-member') && a.ids.some(id => model.getNode(id)?.remote === true || !lastSessions.some(s => s.id === id && s.joined === true))) {
       notice('error', 'roster 只接受本机已入网会话，远端或未入网成员未写入'); return
     }
+    if (a.type === 'create-team' && a.ids.some(id => model.getNode(id)?.remote !== true && !lastSessions.some(s => s.id === id && s.joined === true))) {
+      notice('error', '本机会话已离开网络或目录，请重新选择后组建团队'); return
+    }
     // gh#20 W-B: the SERVER sees zone/id8 remote handles where the model
     // keeps its peer-<host> node id — the canvas member contract is
     // session-id-or-remote-ref. Translation happens here, one boundary;
@@ -660,7 +661,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     anchorFor: (t) => (t.kind === 'node' ? nodeEls.get(t.id) : frameEls.get(t.name)) ?? null,
     emit: emitAction,
     notice,
+    frameItems: name => compose.menuItems(name, menus.menuItem),
   })
+  // #650: ≥2 selected team frames make 建队 (G) compose a root team; otherwise it is the session team as before.
+  const compose = createRootCompose({ root, signal, io: deps.compose, notice, frames: () => frameEls, composed: () => frameSelection.clear() })
+  const buildTeam = (): void => { if (!compose.open(frameSelection.names())) menus.startCreateFromSelection() }
 
   // ── 节点列表 drawer (planning-nodelist) ──
   let lastSessions: ReadonlyArray<PlanningSession> = []
@@ -677,7 +682,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   attachSessionDrop(root, {
     signal, frames: () => frameEls,
     frameAt: (clientX, clientY) => { const p = localXY(root, { clientX, clientY }); return innermostFrameAt(new Map(model.allFrames()), screenToWorld(vp, p.x, p.y)) },
-    drop: (team, id) => model.getNode(id)?.memberships.some(m => m.team === team) === true ? notice('info', '该会话已在这个队里') : emitAction({ type: 'add-member', team, ids: [id] }),
+    drop: (team, id) => {
+      if (!lastSessions.some(session => session.id === id && session.joined === true)) { notice('error', '该会话已离开网络，请刷新后重新选择'); return }
+      if (model.getNode(id)?.memberships.some(m => m.team === team) === true) notice('info', '该会话已在这个队里')
+      else emitAction({ type: 'add-member', team, ids: [id] })
+    },
   })
 
   /** Center the viewport on one canvas node (the 已组队 row's 定位). */
@@ -706,7 +715,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       ev.preventDefault()
       return
     }
-    if (target !== null && target.closest('button, input, textarea, select, .p-toolbar, .p-search, .p-lamp, .p-status, .p-legend') !== null) return // HUD chrome owns its presses (no marquee / preventDefault: that stole the search box's focus — and, first, its native right-click menu)
+    if (target !== null && target.closest('button, input, textarea, select, .p-toolbar, .p-search, .p-lamp, .p-status, .p-legend, .p-nodelist, .p-menu') !== null) return // HUD chrome owns its presses (no marquee / preventDefault: that stole the search box's focus — and, first, its native right-click menu)
     undoBefore = layoutUndo.capture() // committed at pointerUp only if this press moved something
     const p = localXY(root, ev)
     // 右键按下：按住拖动 = 平移（Figma 惯例），原地抬起 = 上下文菜单。
@@ -731,21 +740,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       return
     }
     const handleEl = target !== null ? target.closest<HTMLElement>('.p-frame-handle') : null
-    // Selection clearing: any press NOT on the selected frame's own chrome
-    // (head/handle/body) drops the frame selection.
-    if (selectedFrame !== undefined) {
-      const selFrameEl = frameEls.get(selectedFrame)
-      const onSelectedChrome = target !== null && selFrameEl !== undefined &&
-        (selFrameEl.contains(target) || selFrameEl === target)
-      const onSelectedHead = headEl !== null && headEl.dataset.frame === selectedFrame
-      if (!onSelectedChrome && !onSelectedHead) markSelectedFrame(undefined)
-    }
+    frameSelection.beforePointer(target)
     if (handleEl !== null && ev.button === 0) {
       // Frame resize (owner ruling): record the frame's current rect and
       // the world-space origin; the move branch re-solves the rect per
       // direction with a minimum size clamp.
       const name = handleEl.dataset.frame ?? ''
-      markSelectedFrame(name)
+      frameSelection.select(name)
       const rect = model.getFrame(name)
       if (rect === undefined) return
       gesture = { kind: 'frame-resize', name, dir: handleEl.dataset.dir ?? 'se', startRect: { ...rect }, origin: screenToWorld(vp, p.x, p.y), moved: false }
@@ -767,7 +768,8 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       const name = headEl.dataset.frame ?? ''
       // Selecting a frame keeps its resize handles visible (hover-only
       // handles vanished the moment the pointer left).
-      markSelectedFrame(name)
+      frameSelection.select(name, ev.shiftKey)
+      if (ev.shiftKey) return // #650: a Shift press only toggles the selection, never starts a drag (no layout write)
       const snap = model.beginFrameDrag(name)
       if (snap === undefined) return
       gesture = { kind: 'frame', name, snap, origin: screenToWorld(vp, p.x, p.y), moved: false }
@@ -997,6 +999,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
     if (ev.key === ' ' && ev.target === root) { spaceDown = true; ev.preventDefault(); return }
     // 键盘全等路径（WCAG 2.2 Dragging Movements）：
+    if (frameSelection.keyboard(ev)) return
     const headTarget = (ev.target as Element | null)?.closest?.('.p-frame-head') ?? null
     if ((ev.key === 'Enter' || ev.key === ' ') && headTarget !== null) {
       ev.preventDefault()
@@ -1005,6 +1008,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       return
     }
     if (ev.key === ' ' && (ev.target as Element | null)?.classList?.contains('p-node')) {
+      frameSelection.clear()
       const el = ev.target as HTMLElement
       const id = el.dataset.id ?? ''
       const current = model.selectedIds()
@@ -1022,13 +1026,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     }
     if (ev.key === 'Delete' || ev.key === 'Backspace') { ev.preventDefault(); deleteFocused(); return }
     if (ev.altKey && (ev.key === 'ArrowUp' || ev.key === 'ArrowDown')) { ev.preventDefault(); altMove(ev.key === 'ArrowUp'); return }
-    if (ev.key === 'g' || ev.key === 'G') { menus.startCreateFromSelection(); return }
+    if (ev.key === 'g' || ev.key === 'G') { buildTeam(); return }
     if (ev.key === '0') { fitToContent(); return }
     if (ev.key === '=' || ev.key === '+') { zoomCenter(1.2); return }
     if (ev.key === '-') { zoomCenter(1 / 1.2); return }
     if (ev.key === 'Escape') {
       if (menus.isMenuOpen()) { menus.closeMenu(); render(); return } // menu > clear selection
-      model.setSelection([])
+      model.setSelection([]); frameSelection.clear()
       render()
       return
     }
@@ -1119,6 +1123,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   function reconcile(input: PlanningInput): void {
     // gh#41: remote-frame registry shared with serverAction (drop fork).
     lastTeams = input.teams
+    compose.update(input)
     rosterFramesRef = new Set([...input.teams.filter(t => t.kind === 'roster').map(t => t.name), ...[...rosterFramesRef].filter(n => pendingTeams.has(n))])
     lastPeers = input.peers ?? []
     federation.setInFlight(input.inFlight ?? [])

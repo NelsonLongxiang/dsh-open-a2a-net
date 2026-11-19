@@ -116,89 +116,19 @@ describe('建队 flow', () => {
     expect(v.root.querySelector('.p-frame[data-name="先锋"]')).not.toBeNull()
   })
 
-  it('#199: the create gesture defaults to canvas, can choose roster, and persists the separate frame key', async () => {
+  it('roster teams are retired (owner ruling 2026-11-18): the create dialog offers canvas teams only', () => {
     const { v, actions } = view()
     v.reconcile(baseInput)
     selectTwo(v)
     v.seam.key(key({ key: 'g', target: v.root }))
     const dialog = v.root.querySelector<HTMLElement>('.p-dialog')!
     const kind = dialog.querySelector<HTMLElement>('[role="radiogroup"][aria-label="团队类型"]')!
-    const option = (k: string): HTMLButtonElement => kind.querySelector<HTMLButtonElement>(`button[data-kind="${k}"]`)!
-    // Both choices are visible buttons; canvas is preselected.
-    expect(option('canvas').getAttribute('aria-checked')).toBe('true')
-    expect(option('roster').getAttribute('aria-checked')).toBe('false')
-    expect(option('roster').textContent).toBe('roster 网络队')
-    option('roster').click()
-    expect(option('roster').getAttribute('aria-checked')).toBe('true')
-    expect(option('canvas').getAttribute('aria-checked')).toBe('false')
-    expect(dialog.querySelector('.p-dialog-hint')?.textContent).toContain('只收本机已入网的会话')
+    expect(Array.from(kind.querySelectorAll<HTMLButtonElement>('button')).map(b => b.dataset.kind)).toEqual(['canvas'])
+    expect(kind.querySelector('button[data-kind="roster"]')).toBeNull()
     const input = dialog.querySelector<HTMLInputElement>('input')!
     input.value = '生产服务组'
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    expect(actions[0]).toEqual({ type: 'create-team', name: 'roster:生产服务组', ids: ['a', 'b'], created: true, roster: true })
-    const frame = v.root.querySelector<HTMLElement>('.p-frame[data-name="roster:生产服务组"]')!
-    expect(frame.classList.contains('is-roster')).toBe(true)
-    expect(frame.querySelector('.ttl')?.textContent).toBe('网络队 · roster · 生产服务组')
-    expect(JSON.stringify(v.snapshotDoc())).toContain('roster:生产服务组')
-  })
-
-  it('#199: the type toggle answers the arrow keys and keeps one tab stop', () => {
-    const { v } = view()
-    v.reconcile(baseInput)
-    selectTwo(v)
-    v.seam.key(key({ key: 'g', target: v.root }))
-    const dialog = v.root.querySelector<HTMLElement>('.p-dialog')!
-    const group = dialog.querySelector<HTMLElement>('[role="radiogroup"]')!
-    group.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
-    expect(group.querySelector('button[data-kind="roster"]')?.getAttribute('aria-checked')).toBe('true')
-    expect(Array.from(group.querySelectorAll<HTMLButtonElement>('button')).map(b => b.tabIndex)).toEqual([-1, 0])
-    group.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
-    expect(group.querySelector('button[data-kind="canvas"]')?.getAttribute('aria-checked')).toBe('true')
-    expect(dialog.querySelector('.p-dialog-hint')?.textContent).toContain('canvas 队')
-  })
-
-  it('#199: roster name wildcard is refused in the visible create dialog', () => {
-    const { v, actions } = view()
-    v.reconcile(baseInput)
-    selectTwo(v)
-    v.seam.key(key({ key: 'g', target: v.root }))
-    const dialog = v.root.querySelector<HTMLElement>('.p-dialog')!
-    dialog.querySelector<HTMLButtonElement>('button[data-kind="roster"]')!.click()
-    const input = dialog.querySelector<HTMLInputElement>('input')!
-    input.value = 'prefix*'
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    expect(dialog.querySelector('.p-dialog-err')?.textContent).toContain('通配符')
-    expect(actions).toHaveLength(0)
-  })
-
-  it('#199: a refused roster create rolls the optimistic roster frame back without hiding canvas teammates', async () => {
-    const { v, actions, settle } = view()
-    v.reconcile(baseInput)
-    selectTwo(v)
-    v.seam.key(key({ key: 'g', target: v.root }))
-    const dialog = v.root.querySelector<HTMLElement>('.p-dialog')!
-    dialog.querySelector<HTMLButtonElement>('button[data-kind="roster"]')!.click()
-    const input = dialog.querySelector<HTMLInputElement>('input')!
-    input.value = '生产服务组'
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    expect(actions).toHaveLength(1)
-    expect(v.root.querySelector('.p-frame[data-name="roster:生产服务组"]')).not.toBeNull()
-    await settle(false)
-    expect(v.root.querySelector('.p-frame[data-name="roster:生产服务组"]')).toBeNull()
-  })
-
-  it('#199: roster cannot mint a name already used by canvas and dissolution asks for confirmation', () => {
-    const { v, actions } = view(true)
-    v.reconcile(arrangedInput)
-    selectTwo(v)
-    v.seam.key(key({ key: 'g', target: v.root }))
-    const dialog = v.root.querySelector<HTMLElement>('.p-dialog')!
-    dialog.querySelector<HTMLButtonElement>('button[data-kind="roster"]')!.click()
-    const input = dialog.querySelector<HTMLInputElement>('input')!
-    input.value = '甲'
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    expect(dialog.querySelector('.p-dialog-err')?.textContent).toContain('同名 canvas')
-    expect(actions).toHaveLength(0)
+    expect(actions[0]).toEqual({ type: 'create-team', name: '生产服务组', ids: ['a', 'b'], created: true })
   })
 
   it('#199: roster dissolution requires confirmation from the frame menu and Delete key', () => {

@@ -68,6 +68,10 @@ export function peerPayloadFingerprint(input: {
 /** The settled outcome of the execution that earned a claim (W7 slice 2). */
 export interface TaskOutcome {
   readonly status: 'completed' | 'failed'
+  /** Only an explicit local pre-dispatch refusal may authorize outbound recovery. */
+  readonly delivery?: 'not-sent'
+  /** Positive receipt-only delivery evidence, never inferred from generic completion. */
+  readonly receiptDelivery?: 'delivered' | 'refused'
   /** The settled round text (completed rows). */
   readonly reply?: string
   /** The failure prose (failed rows). */
@@ -89,6 +93,7 @@ export type StoredQueryVerdict =
   | {
     readonly found: true
     readonly status: 'completed'
+    readonly receiptDelivery?: 'delivered' | 'refused'
     readonly reply: string
     /** Settle time (epoch ms); the endpoint maps it to wire ISO. */
     readonly settledAt: number
@@ -98,6 +103,7 @@ export type StoredQueryVerdict =
     readonly found: true
     readonly status: 'failed'
     readonly error: string
+    readonly delivery?: 'not-sent'
     /** Settle time (epoch ms); the endpoint maps it to wire ISO. */
     readonly settledAt: number
     readonly truncated?: boolean
@@ -169,6 +175,8 @@ function restoreOutcome(raw: unknown): TaskOutcome | undefined {
   if (candidate.status === 'failed' && typeof candidate.error !== 'string') return undefined
   return {
     status: candidate.status,
+    ...(candidate.status === 'failed' && candidate.delivery === 'not-sent' ? { delivery: 'not-sent' as const } : {}),
+    ...(candidate.status==='completed'&&(candidate.receiptDelivery==='delivered'||candidate.receiptDelivery==='refused')?{receiptDelivery:candidate.receiptDelivery}:{}),
     ...(typeof candidate.reply === 'string' ? { reply: candidate.reply } : {}),
     ...(typeof candidate.error === 'string' ? { error: candidate.error } : {}),
     ...(candidate.truncated === true ? { truncated: true } : {}),
@@ -302,14 +310,20 @@ export class IdempotencyStore {
     if (existing.outcome === undefined || existing.settledAt === undefined) return { found: true, status: 'pending' }
     const truncation = existing.outcome.truncated === true ? { truncated: true } : {}
     return existing.outcome.status === 'completed'
-      ? { found: true, status: 'completed', reply: existing.outcome.reply ?? '', settledAt: existing.settledAt, ...truncation }
-      : { found: true, status: 'failed', error: existing.outcome.error ?? '', settledAt: existing.settledAt, ...truncation }
+      ? { found: true, status: 'completed', reply: existing.outcome.reply ?? '', settledAt: existing.settledAt, ...(existing.outcome.receiptDelivery?{receiptDelivery:existing.outcome.receiptDelivery}:{}), ...truncation }
+      : { found: true, status: 'failed', error: existing.outcome.error ?? '', settledAt: existing.settledAt, ...(existing.outcome.delivery === 'not-sent' ? { delivery: 'not-sent' as const } : {}), ...truncation }
   }
 
   /** Whether one key currently sits inside the window (diagnostics). */
   has(taskId: string): boolean {
     this.prune(this.now())
     return this.rows.has(taskId)
+  }
+
+  /** Recovery veto only: an exact retained payload under ANY task id is evidence, never resend authority. */
+  hasFingerprint(fingerprint:string):boolean {
+    this.prune(this.now())
+    return [...this.rows.values()].some(row=>row.fingerprint===fingerprint)
   }
 
   /** Drop expired keys; runs on every entry point, never timer-driven. */
