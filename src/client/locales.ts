@@ -60,6 +60,8 @@ export type A2aNetKey =
   | 'team.healthQueuedNoRepo'
   | 'team.healthQueuedRepoBusy'
   | 'team.healthQueuedCap'
+  | 'team.healthQueuedRefused'
+  | 'team.healthQueuedStalled'
   | 'team.healthQueuedAllBusy'
   | 'team.decisionsCount'
   | 'team.tab'
@@ -125,6 +127,8 @@ export const zh: Record<A2aNetKey, string> = {
   'team.healthQueuedNoRepo': '只能派给负责仓库 {repo} 的成员，团队里没有这样的成员',
   'team.healthQueuedRepoBusy': '只能派给负责仓库 {repo} 的成员，他们都在忙',
   'team.healthQueuedCap': '团队已到同时运行的上限',
+  'team.healthQueuedRefused': '派给成员 {session} 时被拒绝，还在重试；看看这个成员的会话或它所在主机是否接收',
+  'team.healthQueuedStalled': '有空闲成员，但这些工单一直没派出去，原因不明；可请总工改派',
   'team.healthQueuedAllBusy': '所有成员都在忙',
   'team.decisionsCount': '待你决定（{count}）',
   'team.tab': '团队',
@@ -203,6 +207,8 @@ export const en: Record<A2aNetKey, string> = {
   'team.healthQueuedNoRepo': 'only members working in {repo} can take them, and the team has none',
   'team.healthQueuedRepoBusy': 'only members working in {repo} can take them, and they are all busy',
   'team.healthQueuedCap': 'the team is at its limit of tickets running at once',
+  'team.healthQueuedRefused': 'delivery to member {session} was refused and is being retried; check that member\'s session or its host',
+  'team.healthQueuedStalled': 'a member is free, yet these tickets have not gone out; the cause is not known, the router can reassign',
   'team.healthQueuedAllBusy': 'every member is busy',
   'team.decisionsCount': 'Waiting for your decision ({count})',
   'team.tab': 'Team',

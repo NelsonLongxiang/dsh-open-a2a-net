@@ -6,13 +6,13 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { QUIET_MINUTES } from '../../src/superagent/host/index.ts'
 
-async function team(loaded: Set<string>, settled = () => true) {
+async function team(loaded: Set<string>, settled = () => true, deliver: (id: string, text: string) => boolean = () => true) {
   const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
   const { routeItem } = await import('../../src/superagent/host/tools.ts')
   const clock = { ms: Date.parse('2026-11-10T00:00:00Z') }
   const h = new SuperagentHost({
     canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', 'session-a'], remote: [] } : undefined, home: mkdtempSync(join(tmpdir(), 'sa-health-')), logger: { info: () => {}, warn: () => {} },
-    deliverToSession: () => true, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id,
+    deliverToSession: deliver, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id,
     sessionLoaded: (id: string) => loaded.has(id), bootSettled: settled, now: () => new Date(clock.ms).toISOString(),
   } as never)
   expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
@@ -134,6 +134,49 @@ describe('queued tickets (field report 2026-11-19: eleven queued for days beside
     // The tool says what the host does: a ticket not started yet moves at any time.
     expect(registered.get('superagent_assign')!.description).toContain('has not started yet')
     expect(m.h.assignTicket(second, 'session-a')).toMatchObject({ ok: true })
+    await m.h.stop()
+  })
+})
+
+describe('queued tickets beside a free member (#744 review R1)', () => {
+  it('names a ticket whose delivery to a free member keeps being refused, with the member', async () => {
+    let attempts = 0
+    const m = await team(new Set(['session-r', 'session-a']), () => true, (id, text) => { if (id === 'session-a' && text.startsWith('[superagent assignment]')) { attempts++; return false } return true })
+    const ticket = m.open()
+    await vi.waitFor(() => { expect(attempts).toBeGreaterThan(0) })
+    m.h.executor.launch()
+    await vi.waitFor(() => { expect(attempts).toBeGreaterThan(1) })
+    expect(m.h.executor.list()).toEqual([])
+    expect(m.h.executor.queued()).toEqual([expect.objectContaining({ ticketId: ticket, reason: 'delivery-refused', member: 'session-a', refusedAt: expect.any(String) })])
+    m.clock.ms += (QUIET_MINUTES + 5) * 60_000
+    expect(m.h.health().filter(p => p.code === 'tickets-queued')).toEqual([expect.objectContaining({ reason: 'delivery-refused', session: 'session-a', count: 1, ticketId: ticket })])
+    expect(m.h.queueOf(ticket)).toMatchObject({ reason: 'delivery-refused', member: 'session-a' })
+    const { problemText } = await import('../../src/superagent/host/health-reminders.ts')
+    expect(problemText(m.h.health().find(p => p.code === 'tickets-queued')!)).toContain('被拒绝')
+    await m.h.stop()
+  })
+
+  it('names a launch that has not happened within the quiet time as stalled, and stays quiet before it', async () => {
+    const { queuedProblems, queueReason } = await import('../../src/superagent/host/index.ts')
+    const t0 = Date.parse('2026-11-19T00:00:00Z')
+    const q = [{ ticketId: 't1', assignmentId: 'a1', reason: 'launching' as const }, { ticketId: 't2', assignmentId: 'a2', reason: 'paused' as const }]
+    const since = (): string => new Date(t0).toISOString()
+    expect(queuedProblems(q, since, id => id, t0 + (QUIET_MINUTES - 1) * 60_000)).toEqual([])
+    expect(queuedProblems(q, since, id => id, t0 + (QUIET_MINUTES + 1) * 60_000)).toEqual([{ code: 'tickets-queued', reason: 'launch-stalled', count: 1, ticketId: 't1', title: 't1', minutes: QUIET_MINUTES + 1 }])
+    expect(queueReason('launching', 5)).toBe('launching')
+    expect(queueReason('launching', QUIET_MINUTES)).toBe('launch-stalled')
+    const { problemText } = await import('../../src/superagent/host/health-reminders.ts')
+    expect(problemText({ code: 'tickets-queued', reason: 'launch-stalled', count: 1, minutes: 61, title: 't1' })).toContain('原因不明')
+  })
+
+  it('a paused team reports its queue as paused, not as a stall', async () => {
+    const m = await team(new Set(['session-r', 'session-a']))
+    const first = m.open()
+    await vi.waitFor(() => { expect(m.h.executor.bindingOf('session-a')?.ticketId).toBe(first) })
+    const second = m.open()
+    expect(m.h.saveSettings({ paused: true }, () => true)).toMatchObject({ ok: true })
+    expect(m.h.executor.queued()).toEqual([expect.objectContaining({ ticketId: second, reason: 'paused' })])
+    expect(m.h.health(m.clock.ms + (QUIET_MINUTES + 5) * 60_000).filter(p => p.code === 'tickets-queued')).toEqual([])
     await m.h.stop()
   })
 })
