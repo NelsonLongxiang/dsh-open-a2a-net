@@ -12,6 +12,8 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { A2aClient, type A2aFetch } from '../../src/a2a-client.ts'
 import { TaskLedger } from '../../src/task-ledger.ts'
+import { createDirectForward, ForwardBirths } from '../../src/direct-forward.ts'
+import type { A2aPeerCard } from '../../src/types.ts'
 import { FollowupDelivery } from '../../src/followup-delivery.ts'
 import { TASK_DELIVERY_CAP as CAP, TASK_DELIVERY_RETENTION_MS as TTL, type TaskDelivery } from '../../src/task-delivery.ts'
 import { DeliveryCapacityError, capacityRefusalOf, parseCapacityRefusal, capacityRefusalFields, capacityRefusalNote, type CapacityRefusal, type DeliveryCapacitySnapshot } from '../../src/task-delivery-capacity.ts'
@@ -105,5 +107,57 @@ describe('#713 A2 typed capacity refusal', () => {
     expect(taint).not.toHaveBeenCalled()
     expect(ledger.deliveryFor('new-task')).toBeUndefined()
     expect(readFileSync(file, 'utf8')).toBe(bytes)
+  })
+})
+
+describe('#747 review: count-only results and acceptance evidence outrank a capacity claim', () => {
+  const answering = (status: number, body: unknown): A2aFetch => async () => ({ ok: status < 400, status, text: async () => JSON.stringify(body) })
+  const route = (fetch: A2aFetch) => new A2aClient({ apiKey: '', sessionId: 'cap', fetch, schedule: () => () => undefined }).routeDirect('http://peer.example', 'beta/01234567', 'work', undefined, undefined, undefined, true, 'task-747')
+
+  it.each([200, 503])('R2: an inserted/delivered body with a refusal reads unknown, never not-sent (HTTP %i)', async status => {
+    for (const evidence of [{ acceptance: 'inserted' }, { delivered: true }, { routed: true }, { acceptance: 'unknown' }]) {
+      const result = await route(answering(status, { error: 'x', code: -32000, refusal, ...evidence })) as any
+      expect(result.ok).toBe(false)
+      expect(result.acceptance).toBe('unknown')
+      expect(result.refusal).toBeUndefined()
+      expect(result.error).not.toContain('nothing was sent')
+      expect(result.task_id).toBe('task-747')
+    }
+  })
+
+  it.each([200, 503])('R1: a count-only capacity result keeps its bounded count (HTTP %i); bad counts are dropped', async status => {
+    expect(await route(answering(status, { error: 'forwarding failed', code: -32004, capacityRefusals: 2 }))).toMatchObject({ ok: false, capacityRefusals: 2 })
+    for (const bad of [0, -1, 1.5, 5000, '2', null]) expect((await route(answering(status, { error: 'x', capacityRefusals: bad })) as any).capacityRefusals).toBeUndefined()
+  })
+
+  it('R1: an aggregate keeps counts from count-only candidates', () => {
+    expect(capacityRefusalFields([], 1, 2)).toEqual({ capacityRefusals: 2 })
+    expect(capacityRefusalFields([refusal], 2, 2)).toEqual({ capacityRefusals: 3 })
+    expect(capacityRefusalFields([refusal], 1, 0)).toEqual({ refusal, capacityRefusals: 1 })
+  })
+
+  it('R2: real client → direct-forward: a first candidate answering 503 unknown stops the route; the second is never called', async () => {
+    const calls: string[] = []
+    const client = new A2aClient({ apiKey: '', sessionId: 'cap', schedule: () => () => undefined,
+      fetch: async url => { calls.push(url); return url.startsWith('https://first') ? { ok: false, status: 503, text: async () => JSON.stringify({ error: 'receipt is in the session but local settlement commit failed', code: -32011, acceptance: 'unknown', task_id: 'fwd-747' }) } : { ok: true, status: 200, text: async () => JSON.stringify({ error: 'full', code: -32000, refusal }) } } })
+    const ledger = new TaskLedger('')
+    const forward = createDirectForward({ births: new ForwardBirths(), enabled: () => true, isolated: () => false, deposited: () => true, scope: async () => ({ ok: true }),
+      candidates: async () => ({ urls: ['https://first.invalid', 'https://second.invalid'], card: async () => ({ publicKey: 'key', session: 'host' } as A2aPeerCard) }),
+      dispatch: (url, r) => client.routeDirect(url, r.team, r.message, r.contextId, undefined, r.caller, r.noWait, r.taskId), ledger, activity: () => {} })
+    const out = await forward({ team: 'beta/01234567', caller: 'ops-cli/a1b2c3d4e5f60718', taskId: 'fwd-747', message: 'hello', contextId: 'ctx', noWait: true, localCliProof: true, guarded: false }) as any
+    expect(out).toMatchObject({ ok: false, acceptance: 'unknown', task_id: 'fwd-747' })
+    expect(out.refusal).toBeUndefined()
+    expect(calls.some(u => u.startsWith('https://second'))).toBe(false)
+  })
+
+  it('R1: direct-forward keeps a count-only candidate count in its aggregate', async () => {
+    const results = [{ ok: false as const, error: 'a', capacityRefusals: 2 }, { ok: false as const, error: 'b', refusal }]
+    let i = 0
+    const forward = createDirectForward({ births: new ForwardBirths(), enabled: () => true, isolated: () => false, deposited: () => true, scope: async () => ({ ok: true }),
+      candidates: async () => ({ urls: ['https://p0.test', 'https://p1.test'], card: async () => ({ publicKey: 'key', session: 'host' } as A2aPeerCard) }),
+      dispatch: async () => results[i++]!, ledger: new TaskLedger(''), activity: () => {} })
+    const out = await forward({ team: 'beta/01234567', caller: 'ops-cli/a1b2c3d4e5f60718', taskId: 'agg-747', message: 'hello', contextId: 'ctx', noWait: true, localCliProof: true, guarded: false }) as any
+    expect(out).toMatchObject({ ok: false, code: -32004, capacityRefusals: 3 })
+    expect(out.refusal).toBeUndefined()
   })
 })

@@ -75,7 +75,7 @@ it('control: the same route to a host with room is delivered and carries no refu
   } finally { await m.dispose() }
 }, 60_000)
 
-it('a receipt to a full host is refused typed and settles nothing there', async () => {
+it('a receipt for an id that was never owed, sent to a full host, is refused typed and inserted nowhere', async () => {
   const m = await pair(true)
   try {
     const before = await state(m.b)

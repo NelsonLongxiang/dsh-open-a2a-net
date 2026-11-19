@@ -65,6 +65,7 @@ export function createDirectForward(d: DirectForwardDeps) {
     if (!scope.ok) return refuse('target is outside sender scope: ' + scope.error, `ask this host's operator to link ${request.team} here: drag it (or one of its members) into a canvas team on this host`)
     const failures: string[] = []
     const capacityRefusals: CapacityRefusal[] = []
+    let capacityCounted = 0
     const directory = await d.candidates(request.team, failures, request.caller)
     const guard = guardHeader({ ...mintGuard(), hopBudget: DEFAULT_HOP_BUDGET - 1 })
     for (const url of directory.urls) {
@@ -103,13 +104,14 @@ export function createDirectForward(d: DirectForwardDeps) {
         // The shared dispatcher's sync recovery query may prove a definitive failed
         // outcome; like routeTrunk, that is an eligible miss, not an uncertain -32005.
         if (!result.ok && result.refusal) capacityRefusals.push(result.refusal)
+        else if (!result.ok && result.capacityRefusals !== undefined) capacityCounted += result.capacityRefusals
         failures.push(url + ': ' + result.error)
         if (result.code === -32002 || result.code === -32003) return { ...result, task_id: request.taskId }
       } finally { release() }
     }
     const noReceiver = failures.some(f => f.includes('lists no receiving member'))
     const next = noReceiver ? `the owner's canvas ${plainTeam} lists no member besides you; ask its owner to add one, or route to a member's own handle` : failures.length === 0 ? `no linked peer lists ${request.team}; check the name with \`a2a-net teams\`` : undefined
-    return { ok: false, code: -32004, task_id: request.taskId, error: 'forwarding to "' + request.team + '" failed: ' + (failures.join('; ') || 'no eligible peer candidate'), ...(next !== undefined ? { next } : {}), ...capacityRefusalFields(capacityRefusals, failures.length) }
+    return { ok: false, code: -32004, task_id: request.taskId, error: 'forwarding to "' + request.team + '" failed: ' + (failures.join('; ') || 'no eligible peer candidate'), ...(next !== undefined ? { next } : {}), ...capacityRefusalFields(capacityRefusals, failures.length, capacityCounted) }
   }
 }
 

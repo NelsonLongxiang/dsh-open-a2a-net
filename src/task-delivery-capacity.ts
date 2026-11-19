@@ -153,8 +153,23 @@ export function capacityRefusalNote(refusal: CapacityRefusal): string {
 /**
  * #713 A2: what an exhausted multi-candidate route says about capacity refusals. The typed refusal rides along only when
  * it was the one and only failure; otherwise just the count, so one host's full window never reads as everyone's.
+ * `counted` is candidates whose own answer was already a count (a forwarded multi-candidate route, #747 review R1).
  */
-export function capacityRefusalFields(refusals: readonly CapacityRefusal[], failures: number): { refusal?: CapacityRefusal; capacityRefusals?: number } {
-  if (refusals.length === 0) return {}
-  return refusals.length === 1 && failures === 1 ? { refusal: refusals[0]!, capacityRefusals: 1 } : { capacityRefusals: refusals.length }
+export function capacityRefusalFields(refusals: readonly CapacityRefusal[], failures: number, counted = 0): { refusal?: CapacityRefusal; capacityRefusals?: number } {
+  const total = refusals.length + counted
+  if (total === 0) return {}
+  return refusals.length === 1 && counted === 0 && failures === 1 ? { refusal: refusals[0]!, capacityRefusals: 1 } : { capacityRefusals: total }
+}
+
+/** #747 review R1: a peer's count-only capacity fact, bounded: a positive safe integer no larger than any route could see. */
+export function parseCapacityCount(raw: unknown): number | undefined {
+  return typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 1 && raw <= 1024 ? raw : undefined
+}
+
+/**
+ * #747 review R2: does a failure body carry any evidence that the message was accepted (or may have been)? Such a body is
+ * never a not-sent capacity refusal: the stronger fact wins, and contradictory input reads as unknown.
+ */
+export function deliveryEvidence(raw: { acceptance?: unknown; delivered?: unknown; routed?: unknown }): boolean {
+  return raw.acceptance === 'unknown' || raw.acceptance === 'inserted' || raw.delivered === true || raw.routed === true
 }

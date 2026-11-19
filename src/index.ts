@@ -4286,6 +4286,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const failures: string[] = []
       // #713 A2: candidates refused for their host's full correspondence window (a fact about each such host, not the network).
       const capacityRefusals: CapacityRefusal[] = []
+      let capacityCounted = 0
       if (signal?.aborted) return localRoute({ ok: false, error: 'route aborted before dispatch', code: -32000 })
       const outcome = foreignOwner !== undefined ? undefined : await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress, agent === undefined ? undefined : String(agent.id))
       const localBirth = localBirths.get(taskId)
@@ -4364,11 +4365,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           return { ...result, ...(result.ok ? { team: args.team } : {}) } as unknown as Record<string, JsonValue>
         }
         if (!result.ok && result.refusal) capacityRefusals.push(result.refusal)
+        else if (!result.ok && result.capacityRefusals !== undefined) capacityCounted += result.capacityRefusals
         failures.push(`${candidate}: ${result.error}`)
       }
       if (failures.length > 0) logger.warn(`route to team "${args.team}" exhausted its candidates: ${failures.join('; ')}`)
       const verdict = routeVerdict(args.team, failures, candidatePool.length)
-      return { ...verdict, error: await diagnoseCanvas(args.team, verdict.error, callerSession), ...capacityRefusalFields(capacityRefusals, failures.length) } as unknown as Record<string, JsonValue>
+      return { ...verdict, error: await diagnoseCanvas(args.team, verdict.error, callerSession), ...capacityRefusalFields(capacityRefusals, failures.length, capacityCounted) } as unknown as Record<string, JsonValue>
   }
 
   /**
