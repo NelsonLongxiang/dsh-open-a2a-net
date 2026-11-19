@@ -31,6 +31,8 @@ export interface MenusDeps {
   anchorFor(target: MenuTarget): HTMLElement | null
   emit(a: CanvasAction): void
   notice(kind: 'error' | 'info', text: string): void
+  /** #650: extra frame-menu items (「加入 root「R」」, the keyboard twin of dropping a frame on a root). */
+  frameItems?(frame: string): HTMLButtonElement[]
 }
 
 export interface PlanningMenus {
@@ -105,7 +107,8 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
       canvas: 'canvas 队：画布上的协作组，可以加入远端成员。',
       roster: 'roster 网络队：只收本机已入网的会话；队名会写进属主的精确允许名单。',
     } as const
-    const kindButtons = (['canvas', 'roster'] as const).map(value => {
+    // Roster teams are retired (owner ruling 2026-11-18): the board builds canvas teams only.
+    const kindButtons = (['canvas'] as const).map(value => {
       const b = document.createElement('button')
       b.type = 'button'
       b.dataset.kind = value
@@ -305,6 +308,7 @@ export function createPlanningMenus(d: MenusDeps): PlanningMenus {
       // superagent-root-team S3: the owner marks a team as a root (or unmarks it) right where the team lives.
       const root = d.isRoot(target.name)
       items.push(menuItem(root ? `取消根团队「${titleOf(target.name)}」` : `设为根团队「${titleOf(target.name)}」`, true, () => d.emit({ type: 'set-root', name: target.name, root: !root })))
+      items.push(...d.frameItems?.(target.name) ?? [])
     } else {
       const id = target.id
       if (level === 'root') {

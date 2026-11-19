@@ -716,6 +716,21 @@ export class TaskLedger {
     return this.tasks.find(entry => entry.taskId === taskId)
   }
 
+  /**
+   * What this ledger says of a request this host received (owner ruling 2026-11-18: the superagent team reads the receipts
+   * it owes from this one book). `owed` / `acknowledged` while the inbound row is open; `settled` only when a receipt (or an
+   * echoed answer) ended it; undefined when there is no row, or it ended without the result going out (mailbox eviction,
+   * abandon, cancel: #741 review R1), so the caller's own rules decide.
+   */
+  inboundReceiptState(taskId: string): 'owed' | 'acknowledged' | 'settled' | undefined {
+    const row = this.find(taskId)
+    if (row !== undefined && row.direction === 'inbound') return row.acknowledgedAt !== undefined ? 'acknowledged' : 'owed'
+    const archived = this.archived.find(entry => entry.taskId === taskId && entry.direction === 'inbound')
+    if (archived === undefined) return undefined
+    const end = archivedEndedBy(archived)
+    return end === 'receipt' || end === 'echo' ? 'settled' : undefined
+  }
+
   /** #114 S4: refused / would-be-refused settlements, newest first. */
   settlementRefusals(): readonly SettlementRefusalRecord[] {
     return [...this.refusals]

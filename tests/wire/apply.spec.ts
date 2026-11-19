@@ -5,12 +5,11 @@
  * all against a fake agents service. Client wire behavior is covered by
  * client.spec.ts against src/a2a-client.ts seams.
  */
-import { cleanupBeforeTempDirs, mkdtempSync } from '../temp-dirs.ts'
+import { mkdtempSync, cleanupBeforeTempDirs } from '../temp-dirs.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { generateKeyPairSync } from 'node:crypto'
-import { lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
-import { tmpdir } from 'node:os'
+import { generateKeyPairSync, createHash } from 'node:crypto'
+import { mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -23,6 +22,8 @@ import { signCard } from '../../src/card.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE } from '../../src/transport-caps.ts'
 import { apply, Config as ConfigSchema, type A2aSchedule, type Config } from '../../src/index.ts'
 import { envelopeFor } from './envelope.ts'
+import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { NodeStore } from '../../src/node-store.ts'
 
 /** Fake agents registry: one recoverable root agent or none. */
 class FakeAgentsService extends Service {
@@ -120,13 +121,17 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     remoteRowsTtlMs: 15_000,
     cardTtlMs: 172_800_000,
     ...overrides,
+    // Apply last so an explicit undefined cannot erase the owned default.
+    // A deliberate empty string still reaches the dedicated resolver case.
     dshHome: overrides.dshHome ?? tmpHome(),
   }
 }
 
 /** Per-test DSH home so announce keygen never touches the developer's home. */
 function tmpHome(): string {
-  return mkdtempSync(join(tmpdir(), 'dsh-a2a-key-'))
+  const parent = join(process.cwd(), 'tmp')
+  mkdirSync(parent, { recursive: true })
+  return mkdtempSync(join(parent, 'dsh-a2a-key-'))
 }
 
 function runContext(): ToolRunContext {
@@ -196,6 +201,51 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+})
+
+describe('C2-R1 ordinary apply factory home isolation', () => {
+  const mount = async (config = makeConfig()) => {
+    const ctx = new Context()
+    cleanupBeforeTempDirs(() => ctx.fiber.dispose())
+    await ctx.plugin(SystemPrompt); await ctx.plugin(ToolRuntime); await ctx.plugin(TimerService)
+    await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
+    apply(ctx, config)
+    const home = config.dshHome === '' ? resolveDshHome() : resolveDshHome(config.dshHome)
+    return { ctx, home, key: createHash('sha256').update(readFileSync(join(home, 'a2a', 'node-key.pem'))).digest('hex') }
+  }
+  it('gives ordinary nodes independent homes, keys and persistent stores without touching ambient home', async () => {
+    const ambient = tmpHome()
+    writeFileSync(join(ambient, 'sentinel'), 'untouched')
+    vi.stubEnv('DSH_HOME', ambient)
+    const hosts: Array<Awaited<ReturnType<typeof mount>>> = []
+    try {
+      const a = await mount(); hosts.push(a)
+      const b = await mount(makeConfig({ dshHome: undefined })); hosts.push(b)
+      expect(a.home).not.toBe(b.home)
+      expect(a.home).not.toBe(ambient); expect(b.home).not.toBe(ambient)
+      expect(a.key).not.toBe(b.key)
+      const store = new NodeStore(join(a.home, 'a2a'))
+      expect(store.create({ name: 'only-a' }, 'fixture-isolation')).toMatchObject({ ok: true })
+      expect(new NodeStore(join(b.home, 'a2a')).get('only-a')).toBeUndefined()
+      expect(readdirSync(ambient)).toEqual(['sentinel'])
+      expect(readFileSync(join(ambient, 'sentinel'), 'utf8')).toBe('untouched')
+    } finally { for (const host of hosts) await host.ctx.fiber.dispose(); vi.unstubAllEnvs() }
+  })
+  it('preserves explicit same-home restart key and durable node state', async () => {
+    const home = tmpHome(), ambient = tmpHome()
+    writeFileSync(join(ambient, 'sentinel'), 'untouched')
+    vi.stubEnv('DSH_HOME', ambient)
+    const hosts: Array<Awaited<ReturnType<typeof mount>>> = []
+    try {
+      const a = await mount(makeConfig({ dshHome: home })); hosts.push(a)
+      expect(new NodeStore(join(home, 'a2a')).create({ name: 'survives' }, 'fixture-isolation')).toMatchObject({ ok: true })
+      await a.ctx.fiber.dispose()
+      const b = await mount(makeConfig({ dshHome: home })); hosts.push(b)
+      expect(b.home).toBe(home); expect(b.key).toBe(a.key)
+      expect(new NodeStore(join(home, 'a2a')).get('survives')).toMatchObject({ name: 'survives' })
+      expect(readdirSync(ambient)).toEqual(['sentinel'])
+    } finally { for (const host of hosts) await host.ctx.fiber.dispose(); vi.unstubAllEnvs() }
+  })
 })
 
 describe('a2a plugin announce (peer discovery)', () => {
@@ -272,21 +322,26 @@ describe('a2a plugin announce (peer discovery)', () => {
   })
 
   it('publishes with the default DSH home when dshHome is empty', async () => {
-    const prev = process.env.DSH_HOME
-    process.env.DSH_HOME = tmpHome()
+    const home = tmpHome()
+    writeFileSync(join(home, 'sentinel'), 'owned default-home fixture')
+    vi.stubEnv('DSH_HOME', home)
     const ctx = new Context()
+    cleanupBeforeTempDirs(() => ctx.fiber.dispose())
     try {
       await ctx.plugin(TimerService)
       await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
       await ctx.plugin(SystemPrompt)
       await ctx.plugin(ToolRuntime)
+      // Only this case deliberately exercises the real empty-home resolver.
       apply(ctx, makeConfig({ announce: true, dshHome: '' }))
       const port = (ctx as unknown as { webServer: WebServer }).webServer.port
-      expect((await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).status).toBe(200)
-      await ctx.fiber.dispose()
+      expect((await globalThis.fetch('http://127.0.0.1:' + String(port) + '/.well-known/agent-card.json')).status).toBe(200)
+      expect(resolveDshHome()).toBe(home)
+      expect(readFileSync(join(home, 'a2a', 'node-key.pem'), 'utf8')).toContain('PRIVATE KEY')
+      expect(readFileSync(join(home, 'sentinel'), 'utf8')).toBe('owned default-home fixture')
     } finally {
-      if (prev === undefined) delete process.env.DSH_HOME
-      else process.env.DSH_HOME = prev
+      await ctx.fiber.dispose()
+      vi.unstubAllEnvs()
     }
   })
 
@@ -401,70 +456,6 @@ describe('a2a plugin announce (peer discovery)', () => {
 })
 
 describe('a2a plugin decentralized routing (peers)', () => {
-  it.each([false, true])('normalizes optional fixture homes before composing nodes (own-undefined=%s)', ownUndefined => {
-    const overrides: Partial<Config> = ownUndefined ? { dshHome: undefined } : {}
-    expect(Object.hasOwn(overrides, 'dshHome')).toBe(ownUndefined)
-    const first = makeConfig(overrides), second = makeConfig({ ...overrides })
-    expect(typeof first.dshHome).toBe('string')
-    expect(first.dshHome).not.toBe('')
-    expect(typeof second.dshHome).toBe('string')
-    expect(second.dshHome).not.toBe(first.dshHome)
-    for (const home of [first.dshHome, second.dshHome]) {
-      expect(dirname(resolve(home))).toBe(resolve(tmpdir()))
-      expect(lstatSync(home).isDirectory()).toBe(true)
-      expect(lstatSync(home).isSymbolicLink()).toBe(false)
-    }
-    expect(makeConfig({ dshHome: first.dshHome }).dshHome).toBe(first.dshHome)
-    expect(makeConfig({ dshHome: '' }).dshHome).toBe('')
-  })
-  it('isolates default fixture nodes while an explicit home preserves idempotency across restart', async () => {
-    const first = makeConfig(), second = makeConfig()
-    // Reject a default/inherited home before constructing any plugin on the old fixture.
-    expect(first.dshHome).not.toBe('')
-    expect(second.dshHome).not.toBe(first.dshHome)
-    expect(makeConfig({ dshHome: first.dshHome }).dshHome).toBe(first.dshHome)
-    expect(makeConfig({ dshHome: '' }).dshHome).toBe('')
-    const boot = async (config: Config) => {
-      const ctx = new Context()
-      cleanupBeforeTempDirs(() => ctx.fiber.dispose())
-      await ctx.plugin(SystemPrompt)
-      await ctx.plugin(ToolRuntime)
-      await ctx.plugin(TimerService)
-      await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
-      apply(ctx, { ...config, sessionNodes: true })
-      const port = (ctx as unknown as { webServer: WebServer }).webServer.port
-      const base = 'http://127.0.0.1:' + String(port)
-      return {
-        ctx,
-        state: async () => {
-          const response = await fetch(base + '/__dsh_a2a/state'), body = await response.text()
-          expect(response.status, body).toBe(200)
-          return JSON.parse(body) as { idempotency: { window: number } }
-        },
-        send: async (message: string) => await fetch(base + '/a2a/direct', {
-          method: 'POST', body: JSON.stringify({ team: 'dsh', message, task_id: 'fixture-independent-key' }),
-        }),
-      }
-    }
-    const a = await boot(first), b = await boot(second)
-    try {
-      expect((await a.state()).idempotency.window).toBe(0)
-      expect((await b.state()).idempotency.window).toBe(0)
-      await expect((await a.send('first node only')).json()).resolves.toMatchObject({ error: 'No live DSH agent is available to accept this message.' })
-      expect((await a.state()).idempotency.window).toBe(1)
-      expect((await b.state()).idempotency.window).toBe(0)
-      await expect((await b.send('same key, independent node')).json()).resolves.toMatchObject({ error: 'No live DSH agent is available to accept this message.' })
-      expect((await b.state()).idempotency.window).toBe(1)
-      await a.ctx.fiber.dispose()
-      const restarted = await boot(makeConfig({ dshHome: first.dshHome }))
-      try {
-        expect((await restarted.state()).idempotency.window).toBe(1)
-        const conflict = await restarted.send('changed on the same explicit home')
-        expect(conflict.status).toBe(409)
-        await expect(conflict.json()).resolves.toMatchObject({ replay: false, error: 'task id reused with a different payload' })
-      } finally { await restarted.ctx.fiber.dispose() }
-    } finally { await a.ctx.fiber.dispose(); await b.ctx.fiber.dispose() }
-  })
   it('serves a direct route with no agents service composed at all', async () => {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)

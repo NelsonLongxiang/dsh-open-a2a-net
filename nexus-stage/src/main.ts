@@ -124,6 +124,15 @@ const planning = createPlanningView({
     void poll()
     return ok
   },
+  // #650: 组成 root 团队 writes through the owner's canvas and superagent-teams routes; the next poll shows the result.
+  compose: {
+    async call(path, body) {
+      const res = await controlFetch(path, body === undefined ? { cache: 'no-store' } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const parsed: unknown = await res.json().catch(() => undefined)
+      if (body !== undefined) void poll()
+      return { status: res.status, body: parsed }
+    },
+  },
 })
 
 const saveLoop = createSaveLoop({
@@ -597,9 +606,11 @@ async function poll(): Promise<void> {
         url: r.url as string,
         ...(r.unreachable === true ? { unreachable: true } : {}),
         org: (r.org as unknown[])
-          .filter((e): e is { name?: unknown; team?: unknown; members?: unknown } => e !== null && typeof e === 'object')
+          .filter((e): e is { name?: unknown; team?: unknown; members?: unknown; id?: unknown; superagentTeam?: unknown; root?: unknown } => e !== null && typeof e === 'object')
           .filter(e => typeof e.team === 'string' && e.team !== '')
-          .map(e => ({ name: typeof e.name === 'string' ? e.name : '', team: e.team as string, members: Array.isArray(e.members) ? e.members.filter((m): m is string => typeof m === 'string') : [] })),
+          .map(e => ({ name: typeof e.name === 'string' ? e.name : '', team: e.team as string, members: Array.isArray(e.members) ? e.members.filter((m): m is string => typeof m === 'string') : [],
+            // #650: the address add-team takes and the card's markers, for 组成 root 团队.
+            ...(typeof e.id === 'string' && e.id !== '' ? { id: e.id } : {}), ...(e.superagentTeam === true ? { superagentTeam: true } : {}), ...(e.root === true ? { root: true } : {}) })),
       }))
     planning.reconcile({ sessions: allSessions, teams, peerCount: peers.length, peers, inFlight, remoteTeams, peerOrg })
     mountScopeHints().update(parseScopeHints(body.scopeHints))

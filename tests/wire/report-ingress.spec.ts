@@ -5,10 +5,6 @@
  * limited per session, message-capped.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { dirname, join, resolve } from 'node:path'
-import { lstatSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { cleanupBeforeTempDirs, mkdtempSync } from '../temp-dirs.ts'
 import { Context, Service } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -18,6 +14,12 @@ import WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { apply, type Config } from '../../src/index.ts'
+import { mkdtempSync, cleanupBeforeTempDirs } from '../temp-dirs.ts'
+import { mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { join } from 'node:path'
+import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { NodeStore } from '../../src/node-store.ts'
 
 class FakeAgentsService extends Service {
   agent: Agent | undefined
@@ -33,6 +35,12 @@ class FakeAgentsService extends Service {
   roots(): Agent[] {
     return this.agent === undefined ? [] : [this.agent]
   }
+}
+
+function tmpHome(): string {
+  const parent = join(process.cwd(), 'tmp')
+  mkdirSync(parent, { recursive: true })
+  return mkdtempSync(join(parent, 'dsh-report-home-'))
 }
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
@@ -63,7 +71,9 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     remoteRowsTtlMs: 15_000,
     cardTtlMs: 172_800_000,
     ...overrides,
-    dshHome: overrides.dshHome ?? mkdtempSync(join(tmpdir(), 'a2a-report-host-')),
+    // Apply last so an explicit undefined cannot erase the owned default.
+    // A deliberate empty string still reaches the dedicated resolver case.
+    dshHome: overrides.dshHome ?? tmpHome(),
   }
 }
 
@@ -71,7 +81,7 @@ interface ReportFace {
   reports: Array<{ at: number; level: string; message: string; session: string; task?: string }>
 }
 
-async function mountHost(): Promise<{ ctx: Context; home: string; port: () => number; report: ToolDefinition | undefined }> {
+async function mountHost(overrides: Partial<Config> = {}): Promise<{ ctx: Context; home: string; port: () => number; report: ToolDefinition | undefined }> {
   const ctx = new Context()
   cleanupBeforeTempDirs(() => ctx.fiber.dispose())
   await ctx.plugin(SystemPrompt)
@@ -79,10 +89,11 @@ async function mountHost(): Promise<{ ctx: Context; home: string; port: () => nu
   await ctx.plugin(TimerService)
   await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   await ctx.plugin(FakeAgentsService)
-  const config = makeConfig()
+  const config = makeConfig(overrides)
   apply(ctx, config)
   return {
-    ctx, home: config.dshHome,
+    ctx,
+    home: config.dshHome === '' ? resolveDshHome() : resolveDshHome(config.dshHome),
     port: () => (ctx as unknown as { webServer: WebServer }).webServer.port,
     report: ctx.tools.get('a2a_report'),
   }
@@ -93,39 +104,41 @@ async function getReports(port: number): Promise<ReportFace['reports']> {
   return body.reports
 }
 
-describe('a2a_report unjoined-node ingress', () => {
-  it.each([false, true])('normalizes optional fixture homes before composing nodes (own-undefined=%s)', ownUndefined => {
-    const overrides: Partial<Config> = ownUndefined ? { dshHome: undefined } : {}
-    expect(Object.hasOwn(overrides, 'dshHome')).toBe(ownUndefined)
-    const first = makeConfig(overrides), second = makeConfig({ ...overrides })
-    expect(typeof first.dshHome).toBe('string')
-    expect(first.dshHome).not.toBe('')
-    expect(typeof second.dshHome).toBe('string')
-    expect(second.dshHome).not.toBe(first.dshHome)
-    for (const home of [first.dshHome, second.dshHome]) {
-      expect(dirname(resolve(home))).toBe(resolve(tmpdir()))
-      expect(lstatSync(home).isDirectory()).toBe(true)
-      expect(lstatSync(home).isSymbolicLink()).toBe(false)
-    }
-    expect(makeConfig({ dshHome: first.dshHome }).dshHome).toBe(first.dshHome)
-    expect(makeConfig({ dshHome: '' }).dshHome).toBe('')
-  })
-  it('keeps same-session report hosts on independent homes, keys and report state', async () => {
-    const a = await mountHost(), b = await mountHost()
+describe('C2-R1 ordinary report factory home isolation', () => {
+  it('gives ordinary nodes independent homes, keys and persistent stores without touching ambient home', async () => {
+    const ambient = tmpHome()
+    writeFileSync(join(ambient, 'sentinel'), 'untouched')
+    vi.stubEnv('DSH_HOME', ambient)
+    const hosts: Array<Awaited<ReturnType<typeof mountHost>>> = []
     try {
-      expect(a.home).not.toBe('')
-      expect(b.home).not.toBe(a.home)
-      expect(readFileSync(join(a.home, 'a2a', 'node-key.pem'), 'utf8'))
-        .not.toBe(readFileSync(join(b.home, 'a2a', 'node-key.pem'), 'utf8'))
-      const caller = { agent: { id: SessionId('same-fixture-reporter') } }
-      await expect(a.report?.execute({ message: 'only first' }, caller)).resolves.toMatchObject({ ok: true })
-      expect((await getReports(a.port())).map(row => row.message)).toEqual(['only first'])
-      expect(await getReports(b.port())).toEqual([])
-      await expect(b.report?.execute({ message: 'only second' }, caller)).resolves.toMatchObject({ ok: true })
-      expect((await getReports(b.port())).map(row => row.message)).toEqual(['only second'])
-      expect((await getReports(a.port())).map(row => row.message)).toEqual(['only first'])
-    } finally { await a.ctx.fiber.dispose(); await b.ctx.fiber.dispose() }
+      const a = await mountHost(); hosts.push(a)
+      const b = await mountHost({ dshHome: undefined }); hosts.push(b)
+      expect(a.home).not.toBe(b.home)
+      expect(a.home).not.toBe(ambient); expect(b.home).not.toBe(ambient)
+      const key = (home: string) => createHash('sha256').update(readFileSync(join(home, 'a2a', 'node-key.pem'))).digest('hex')
+      expect(key(a.home)).not.toBe(key(b.home))
+      expect(new NodeStore(join(a.home, 'a2a')).create({ name: 'report-a' }, 'fixture-isolation')).toMatchObject({ ok: true })
+      expect(new NodeStore(join(b.home, 'a2a')).get('report-a')).toBeUndefined()
+      expect(readdirSync(ambient)).toEqual(['sentinel'])
+      expect(readFileSync(join(ambient, 'sentinel'), 'utf8')).toBe('untouched')
+    } finally { for (const host of hosts) await host.ctx.fiber.dispose(); vi.unstubAllEnvs() }
   })
+  it('preserves explicit same-home restart identity and durable state', async () => {
+    const home = tmpHome(), hosts: Array<Awaited<ReturnType<typeof mountHost>>> = []
+    try {
+      const a = await mountHost({ dshHome: home }); hosts.push(a)
+      const key = readFileSync(join(home, 'a2a', 'node-key.pem'))
+      expect(new NodeStore(join(home, 'a2a')).create({ name: 'report-restart' }, 'fixture-isolation')).toMatchObject({ ok: true })
+      await a.ctx.fiber.dispose()
+      const b = await mountHost({ dshHome: home }); hosts.push(b)
+      expect(b.home).toBe(home)
+      expect(readFileSync(join(home, 'a2a', 'node-key.pem')).equals(key)).toBe(true)
+      expect(new NodeStore(join(home, 'a2a')).get('report-restart')).toMatchObject({ name: 'report-restart' })
+    } finally { for (const host of hosts) await host.ctx.fiber.dispose() }
+  })
+})
+
+describe('a2a_report unjoined-node ingress', () => {
   it('an unjoined session can report — the join gate exemption is the point', async () => {
     const { ctx, port, report } = await mountHost()
     // The calling session is NOT a joined node and the fake has no

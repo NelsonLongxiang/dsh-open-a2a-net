@@ -7,6 +7,12 @@ itself on ONE home host, and receives through a mailbox; nothing wakes.
 `a2a-net help` prints the command map, `a2a-net tools` the alignment with the
 model tools.
 
+## Superagent transport is not a session escape hatch
+
+The host may run this CLI for the team's dedicated `superagent-team/<16 hex>` mailbox identity: deposit renewal, approved outbound sends, registered-child dispatch and correlated replies. This is a host implementation of the team workflow, not the router/member calling a second communication tool. See [the channel guide](superagent-communication.md#cli).
+
+A team session must not initialize/borrow that identity, read its key, impersonate the owner, or use `route`/control HTTP to bypass role tools, outbound approval or receiver links. A CLI signature proves an agent key, not human consent. A Pi CLI seat is separately owner-registered as a worker and reports its own assignment through its seat contract; it does not thereby get unrestricted team-to-team sending.
+
 ## Identity and home host
 
 - `a2a-net init <name> [--uuid 16hex] [--home URL] [--force]` creates an
@@ -174,8 +180,10 @@ Files do not go through session messages: use the file channel below, never JPFI
 - B signs its auto-receipt as the member that did the work. Its destination prefers an online CLI household on that host (an owner-controlled fact); otherwise it returns only to the pinned home, never another directory advertiser. In the normal single-home setup it settles A’s single forwarded outbound row on-chain under `enforce` and enters the CLI mailbox (`a2a-net inbox`). `--sync` returns B’s final reply. The transport still has a 15s synchronous patience window, not a full model-turn budget. For forwarded or long work, prefer `a2a-net route <team> <message>` (async by default) then `a2a-net inbox --wait --renew`. A `--sync` transport expiry is `-32005`; the target still auto-receipts the original task after finishing. Reconcile by task id/inbox instead of treating a new direct pong as its receipt or resending blindly.
 - With forwarding off or any prerequisite missing, the original "No live DSH session node accepts team" error includes the reason it was not forwarded. Receiving hosts never forward the forwarded request again.
 - Admission: a deposited handle is a node fact of its home host (N3); that fact alone grants no remote scope or admission. Operator canvas membership and B’s home pin are still required. Global self-description is never a link.
-- `a2a-net report <message…>` is a one-way report to the host's process team
+- `a2a-net tell-host <message…>` is a one-way message to the host's process team
   (addressed to the zone the home's state face names, `dsh` if it names none).
+  `a2a-net report` is its old name, kept for one version (it prints a notice);
+  it is not the `a2a_report` tool, which writes the host's report ring.
 - A message that starts with `-` goes after `--`. Flag values never become
   part of the message.
 - Async output is one line (`delivered → <team> · task <id> · <receipt>`);
@@ -322,7 +330,7 @@ Files do not go through session messages: use the file channel below, never JPFI
     debt is booked for it), so its receipt settles nothing there; the
     caller still gets it, with `disposition` on its mailbox row. A receipt
     settles a debt only where the caller tracked one.
-  - Added fields (market N1c/N1d, [receipt-envelope-fields](../../../docs/design/receipt-envelope-fields.md)):
+  - Added fields (market N1c/N1d, [receipt-envelope-fields](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/def0342b8e459ed7f25fbaf3fd96660970f9dda7/docs/design/receipt-envelope-fields.md)):
     `--by SEAT [--by-name N] [--by-team T] [--by-role router|member|observer] [--by-seat-id ID]`
     says who took the work up (the router until a member holds the work; `--by-seat-id`
     is the seat's stable id, the roster's `seatId`, which outlives its session), and
@@ -338,7 +346,7 @@ Files do not go through session messages: use the file channel below, never JPFI
     [--tickets JSON]` sends progress step N (the one line is its summary)
     on task id `progress-<task_id>-<N>`, with the tickets the request
     became. Like `--acknowledged`, it marks the caller's row and settles
-    nothing ([superagent-market-progress-roster](../../../docs/design/superagent-market-progress-roster.md)).
+    nothing ([superagent-market-progress-roster](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/def0342b8e459ed7f25fbaf3fd96660970f9dda7/docs/design/superagent-market-progress-roster.md)).
     An older receiver settles the row on it, so send it only to a caller
     that declares `progressReceipts`; a team's host face refuses others
     (exit 4).

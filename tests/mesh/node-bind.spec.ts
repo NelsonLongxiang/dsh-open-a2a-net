@@ -1207,7 +1207,7 @@ describe('N4 — node_update_self under the session taint (owner ruling 2026-11-
   }, 20_000)
 
   it('signal 1 — an in-process A2A delivery from a TAINTED session taints the target: its later writes queue though its log looks clean', async () => {
-    // Admission is not what this pins: both sessions declare one exact allowlisted team (S3 roster). The
+    // Admission is not what this pins: both sessions sit in one canvas team (team-x). The
     // tracked peer (scoping off) is what taints the sender first (gh#198: a clean sender's delivery is local).
     const m = await mount(undefined, undefined, { teamJoinAllowlist: ['core'], peers: ['http://peer-x.test:3080'], teamScopeInfo: false })
     try {
@@ -1217,7 +1217,6 @@ describe('N4 — node_update_self under the session taint (owner ruling 2026-11-
       m.publish(b)
       expect((await m.post('/__dsh_a2a/join', { id: B })).status).toBe(200)
       const tools = m.ctx.get('tools') as unknown as { get: (n: string) => { execute: (a: unknown, e: unknown) => Promise<unknown> } | undefined }
-      for (const agent of [a, b]) expect(((await tools.get('a2a_team_join')?.execute({ team: 'core', id: String(agent.id) }, { signal: new AbortController().signal, agent })) as { ok?: boolean } | undefined)?.ok).toBe(true)
       expect((await m.post('/__dsh_a2a/canvas', { action: 'create', name: 'team-x' })).status).toBe(200)
       for (const id of [A, B]) expect((await m.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'team-x', id })).status).toBe(200)
       // B reads a status that lists a peer: tainted ('a2a-status').
@@ -1294,7 +1293,6 @@ describe('N4 — node_update_self under the session taint (owner ruling 2026-11-
       expect((await m.post('/__dsh_a2a/join', { id: A })).status).toBe(200)
       // This host's own admission refusal (teamless caller) is host text: not remote.
       expect((await run(m, b, 'a2a_route', { team: 'dsh/canvas/team-x', message: 'x' }, 'call-refused')).value).toEqual(expect.objectContaining({ ok: false, peer_content: false }))
-      for (const agent of [a, b]) expect((await run(m, agent, 'a2a_team_join', { team: 'core', id: String(agent.id) }, `join-${String(agent.id)}`)).value?.ok).toBe(true)
       expect((await m.post('/__dsh_a2a/canvas', { action: 'create', name: 'team-x' })).status).toBe(200)
       for (const id of [A, B]) expect((await m.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'team-x', id })).status).toBe(200)
       const routed = await run(m, b, 'a2a_route', { team: 'dsh/canvas/team-x', message: '本机协作', async: true }, 'call-route')
@@ -1321,7 +1319,6 @@ describe('N4 — node_update_self under the session taint (owner ruling 2026-11-
       const a = Object.assign(makeAgent(m.ctx, A), { steer: (msg: unknown) => { a.session.events.push({ type: 'user/message', data: msg },{type:'assistant/message',data:{message:{content:[{type:'text',text:'attributed own answer'}]}}});m.ctx.emit('agent/status',{agent:a,status:'idle'}) } })
       m.publish(a)
       expect((await m.post('/__dsh_a2a/join', { id: A })).status).toBe(200)
-      for (const agent of [a, b]) expect((await run(m, agent, 'a2a_team_join', { team: 'core', id: String(agent.id) }, `join-${String(agent.id)}`)).value?.ok).toBe(true)
       expect((await m.post('/__dsh_a2a/canvas', { action: 'create', name: 'team-y' })).status).toBe(200)
       for (const id of [A, B]) expect((await m.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'team-y', id })).status).toBe(200)
       const clean = await run(m, b, 'a2a_route', { team: 'dsh/canvas/team-y', message: '问一下' }, 'call-sync-1')

@@ -19,12 +19,10 @@ describe('receipt auto-synthesis', () => {
       for (const id of [String(worker.id), String(caller.id)]) {
         const response = await fetch(n.baseUrl + '/__dsh_a2a/join', { method: 'POST', body: JSON.stringify({ id }) })
         expect(response.status).toBe(200)
-        await fetch(n.baseUrl + '/__dsh_a2a/canvas', { method: 'POST', body: JSON.stringify({ action: 'add-member', name: 'ops', id }) })
+        const added = await (await fetch(n.baseUrl + '/__dsh_a2a/canvas', { method: 'POST', body: JSON.stringify({ action: 'add-member', name: 'ops', id }) })).json() as { ok: boolean }
+        expect(added.ok, JSON.stringify(added)).toBe(true)
       }
-      for (const member of [worker, caller]) {
-        const joined = await n.ctx.tools.get('a2a_team_join')!.execute({ team: 'dsh/receipt-test', id: String(member.id) }, runContext(member)) as { ok: boolean }
-        expect(joined.ok, JSON.stringify(joined)).toBe(true)
-      }
+      // Both already share the canvas team 'ops' (roster self-join is retired, owner ruling 2026-11-18).
       worker.steer = vi.fn(payload => {
         const session = worker.session as unknown as { events: unknown[] }
         session.events.push({ type: 'user/message', data: { content: typeof payload === 'string' ? [{ type: 'text', text: payload }] : (payload as any).content } })
