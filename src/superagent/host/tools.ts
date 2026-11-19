@@ -222,10 +222,12 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       }
       if (args.kind === 'ticket') {
         const ticket = h.ticket(String(args.ticket_id ?? ''))
-        return ticket === undefined ? { ok: false, code: 'unknownTicket', error: h.wrongId('ticket', String(args.ticket_id ?? '')) } : { ok: true, ticket: json(ticket) }
+        if (ticket === undefined) return { ok: false, code: 'unknownTicket', error: h.wrongId('ticket', String(args.ticket_id ?? '')) }
+        const queue = h.queueOf(ticket.id)
+        return { ok: true, ticket: json(ticket), ...(queue !== undefined ? { queue: json(queue) } : {}) }
       }
       if (args.kind === 'tickets') {
-        const tickets = h.store.tickets.list().slice(0, 50).map(t => ({ id: t.id, title: t.title, ended: t.ended ?? null, stage: h.ticket(t.id)?.stage ?? null, origin: t.origin }))
+        const tickets = h.store.tickets.list().slice(0, 50).map(t => ({ id: t.id, title: t.title, ended: t.ended ?? null, stage: h.ticket(t.id)?.stage ?? null, origin: t.origin, queue: h.queueOf(t.id) ?? null }))
         return { ok: true, tickets: json(tickets) }
       }
       if (args.kind === 'decisions') return { ok: true, decisions: json(h.recentDecisions()) }
@@ -360,7 +362,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
 
   ctx.tools.register(defineTool({
     name: 'superagent_assign',
-    description: 'Team router only: give a ticket to another member, when it waits for a member who left or its member reported it cannot go on.',
+    description: 'Team router only: give a ticket to another member. A ticket that has not started yet (stage working / queued) can be given to any member at any time, e.g. when it waits for a busy member (superagent_read shows what it waits for under queue). A running ticket moves only when its member left or reported it cannot go on.',
     parameters: { ticket_id: { type: 'string', required: true }, member: { type: 'string', required: true, description: 'The member\'s name or id.' } },
     output: { ...anyProps, render: (_args, value) => said('superagent assign', value) },
     presentCall: args => ({ card: 'generic', title: `superagent assign ${String(args.ticket_id)}`, kind: 'other', rawInput: args }),
@@ -590,7 +592,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
         if (t === undefined) return null
         const report = t.assignments.at(-1)?.report
         return json({ id: t.id, title: t.title, scope: t.mandate?.scope ?? null, stage: t.ended !== undefined ? { stage: 'ended', outcome: t.ended.outcome } : h.ticket(t.id)?.stage ?? null,
-          report: report === undefined ? null : { state: report.state, summary: report.summary, at: report.at }, question: t.attention?.question ?? null, updatedAt: t.updatedAt })
+          report: report === undefined ? null : { state: report.state, summary: report.summary, at: report.at }, question: t.attention?.question ?? null, updatedAt: t.updatedAt, queue: h.queueOf(t.id) ?? null })
       }
       const mine = (): string[] => h.store.tickets.list().filter(t => t.ended === undefined && h.executor.memberOfTicket(t.id)?.member === me).map(t => t.id)
       if (args.kind === 'mine') return { ok: true, tickets: mine().map(summary) }

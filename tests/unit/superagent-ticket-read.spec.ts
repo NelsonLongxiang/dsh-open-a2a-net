@@ -44,7 +44,7 @@ describe('a2a_ticket_read', () => {
   })
   it('an observer reads the team and its decisions', async () => {
     const m = await team()
-    expect(await m.read('session-o', { kind: 'team' })).toMatchObject({ ok: true, tickets: [expect.objectContaining({ id: m.ticket })] })
+    expect(await m.read('session-o', { kind: 'team' })).toMatchObject({ ok: true, tickets: [expect.objectContaining({ id: m.ticket, queue: null })] })
     expect(await m.read('session-o', { kind: 'decisions' })).toMatchObject({ ok: true })
     expect(await m.read('session-o', { kind: 'ticket', ticket_id: m.ticket })).toMatchObject({ ok: true })
     await m.h.stop()

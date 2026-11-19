@@ -54,6 +54,15 @@ export type A2aNetKey =
   | 'team.healthMcpUnavailable'
   | 'team.healthMember'
   | 'team.healthQuiet'
+  | 'team.healthQueued'
+  | 'team.healthQueuedBusy'
+  | 'team.healthQueuedAbsent'
+  | 'team.healthQueuedNoRepo'
+  | 'team.healthQueuedRepoBusy'
+  | 'team.healthQueuedCap'
+  | 'team.healthQueuedRefused'
+  | 'team.healthQueuedStalled'
+  | 'team.healthQueuedAllBusy'
   | 'team.decisionsCount'
   | 'team.tab'
   | 'team.guide'
@@ -112,6 +121,15 @@ export const zh: Record<A2aNetKey, string> = {
   'team.healthMcpUnavailable': '团队 MCP 服务器 {server} 换不到席位令牌，成员对它的调用会失败（详情见团队页健康）',
   'team.healthMember': '成员会话 {session} 没有加载，工单派不给它，打开这个会话即可',
   'team.healthQuiet': '工单「{title}」已经 {minutes} 分钟没有动静',
+  'team.healthQueued': '{count} 张工单排队超过 {minutes} 分钟（最久的是「{title}」）：{why}',
+  'team.healthQueuedBusy': '在等成员 {session}，它手上的工单没结束；可让总工改派给空闲成员',
+  'team.healthQueuedAbsent': '在等成员 {session}，它已不在团队里；请总工改派',
+  'team.healthQueuedNoRepo': '只能派给负责仓库 {repo} 的成员，团队里没有这样的成员',
+  'team.healthQueuedRepoBusy': '只能派给负责仓库 {repo} 的成员，他们都在忙',
+  'team.healthQueuedCap': '团队已到同时运行的上限',
+  'team.healthQueuedRefused': '派给成员 {session} 时被拒绝，还在重试；看看这个成员的会话或它所在主机是否接收',
+  'team.healthQueuedStalled': '有空闲成员，但这些工单一直没派出去，原因不明；可请总工改派',
+  'team.healthQueuedAllBusy': '所有成员都在忙',
   'team.decisionsCount': '待你决定（{count}）',
   'team.tab': '团队',
   'team.guide': '处理团队等你决定的事，或给团队提需求，不用离开当前对话',
@@ -183,6 +201,15 @@ export const en: Record<A2aNetKey, string> = {
   'team.healthMcpUnavailable': 'Team MCP server {server}: no seat token can be had, so members\' calls to it fail (details in the team health)',
   'team.healthMember': 'Member session {session} is not loaded, so tickets cannot reach it. Open that session',
   'team.healthQuiet': 'Ticket “{title}” has had no activity for {minutes} minutes',
+  'team.healthQueued': '{count} ticket(s) queued for over {minutes} minutes (oldest: “{title}”): {why}',
+  'team.healthQueuedBusy': 'waiting for member {session}, whose current ticket has not ended; the router can reassign to an idle member',
+  'team.healthQueuedAbsent': 'waiting for member {session}, who is no longer on the team; ask the router to reassign',
+  'team.healthQueuedNoRepo': 'only members working in {repo} can take them, and the team has none',
+  'team.healthQueuedRepoBusy': 'only members working in {repo} can take them, and they are all busy',
+  'team.healthQueuedCap': 'the team is at its limit of tickets running at once',
+  'team.healthQueuedRefused': 'delivery to member {session} was refused and is being retried; check that member\'s session or its host',
+  'team.healthQueuedStalled': 'a member is free, yet these tickets have not gone out; the cause is not known, the router can reassign',
+  'team.healthQueuedAllBusy': 'every member is busy',
   'team.decisionsCount': 'Waiting for your decision ({count})',
   'team.tab': 'Team',
   'team.guide': 'Decide what your teams wait for, or send them a request, without leaving this conversation',
