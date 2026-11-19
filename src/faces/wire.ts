@@ -30,6 +30,7 @@ import { parseReceipt, taskIdRefusal } from '../receipt.ts'
 import {receiptMailboxBirth,receiptMailboxHash,type ReceiptMailboxCommit} from '../receipt-mailbox.ts'
 import { buildAuthorization, claimCovers, nextOf, refusalOf, type Admission, type AuthProof, type RemoteCliProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from '../admitted-bookkeeping.ts'
+import { capacityRefusalOf, capacityRefusalNote, type CapacityRefusal } from '../task-delivery-capacity.ts'
 import { isRootOriginUrl, type OriginClaimVerdict } from '../origin-claim.ts'
 import { hasOriginClaimFields, completeInboundVerification, verifiedInboundAdmission, WIRE_ERROR_INBOUND_VERIFICATION } from '../inbound-verification.ts'
 import type { Config } from '../index.ts'
@@ -64,7 +65,7 @@ export type ColdWake =
   | { readonly kind: 'no-match' }
 
 /** routeIntoAgent's settled answer (mirrors index.ts's local union). */
-export type RouteOutcome = { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; status?: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; localMiss?: true }
+export type RouteOutcome = { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; status?: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; localMiss?: true; refusal?: CapacityRefusal }
 
 /** What verifyOriginClaim answers (see index.ts; reason widens to string here — the faces only interpolate it). */
 export type OriginClaimResult = OriginClaimVerdict
@@ -1080,7 +1081,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             const failure = result.ok ? '' : result.acceptance==='unknown'?ACCEPTANCE_UNKNOWN_NOTE:await d.diagnoseCanvas(team, original + ' — ' + result.error, claim.ok && claim.cli === true && claim.bound && claim.caller === caller ? caller : undefined)
             if (!result.ok && result.code !== -32005 && result.acceptance!=='unknown') idempotencyStore.recordOutcome(taskId, { status: 'failed', error: failure, ...(result.delivery === 'not-sent' ? { delivery: 'not-sent' as const } : {}) })
             else if (result.ok && result.task_status === 'TASK_STATE_COMPLETED') idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: result.reply })
-            const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, acceptance:result.acceptance,consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, ...(result.receiverBookkeeping==='failed'?{receiverBookkeeping:'failed',note:ADMITTED_BOOKKEEPING_NOTE}:{}), forwarded: true } : { acceptance:result.acceptance,...(result.delivery === 'not-sent' ? { delivery: 'not-sent' } : {}),error: failure, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED', ...(result.next !== undefined ? { next: result.next } : {}) })
+            const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, acceptance:result.acceptance,consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, ...(result.receiverBookkeeping==='failed'?{receiverBookkeeping:'failed',note:ADMITTED_BOOKKEEPING_NOTE}:{}), forwarded: true } : { acceptance:result.acceptance,...(result.delivery === 'not-sent' ? { delivery: 'not-sent' } : {}),error: failure, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED', ...(result.next !== undefined ? { next: result.next } : {}), ...(!result.ok && result.acceptance !== 'unknown' && result.refusal !== undefined ? { refusal: result.refusal } : {}), ...(!result.ok && result.acceptance !== 'unknown' && result.capacityRefusals !== undefined ? { capacityRefusals: result.capacityRefusals } : {}) })
             // #298: only a reply the peer itself declares final (`reply_final`; never a host placeholder, review of
             // #305 F3), handed to the CLI in full, marks that member's later receipt a duplicate — never a delivered,
             // mailbox or bridge shape (F1), and never when the CLI gave up and closed the socket ('finish' does not fire).
@@ -1098,18 +1099,18 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             // claim records its failed outcome — otherwise a resend of the
             // same id reads `pending` from /a2a/query forever and the
             // caller is told an undelivered message already landed.
-            const refuseNoWait = (error: string, activity = true): void => {
+            const refuseNoWait = (error: string, activity = true, refusal?: CapacityRefusal): void => {
               if (activity) recordActivity('in', team, caller, false)
               if (deferSessionReceipt && !deferredSettled) {
                 // #708 R2: nothing was inserted and nothing settled — the sender may resend this exact transport later.
                 idempotencyStore.releaseUncompleted(taskId, idemFingerprint)
-                const payload = JSON.stringify({ error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED', delivered: false, receipt_delivery: 'not-inserted' })
+                const payload = JSON.stringify({ error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED', delivered: false, receipt_delivery: 'not-inserted', ...(refusal ? { refusal } : {}) })
                 res.writeHead(503, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
                 res.end(payload)
                 return
               }
               idempotencyStore.recordOutcome(taskId, { status: 'failed', error })
-              const payload = JSON.stringify({ error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED' })
+              const payload = JSON.stringify({ error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED', ...(refusal ? { refusal } : {}) })
               res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
               res.end(payload)
             }
@@ -1248,6 +1249,9 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                   res.writeHead(200,{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)});res.end(payload);return
                 }
                 if(error instanceof AdmittedBookkeepingError)steered=true
+                // #713 A2: reserve refused before enqueue (steered stays false): typed, this occurrence not sent.
+                const refusal=steered?undefined:capacityRefusalOf(error)
+                if (refusal) { refuseNoWait(capacityRefusalNote(refusal), true, refusal); return }
                 if (!steered) { refuseNoWait(`The DSH session rejected the message: ${String(error)}`); return }
                 if(!(error instanceof AdmittedBookkeepingError))taskLedger.noteAdmittedBookkeepingFailure(error)
                 logger.warn('a2a: admitted task bookkeeping failed; reconcile original delivery')
@@ -1340,7 +1344,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
                 ...(outcome.placeholder===true||outcome.ownTurn!==true?{receipt:syncTarget===undefined?'none':'routed'}:{}),
                 artifacts: [],
               })
-              : JSON.stringify({ ...(outcome.acceptance==='unknown'?{acceptance:'unknown'}:{}),error: outcome.error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED' })
+              : JSON.stringify({ ...(outcome.acceptance==='unknown'?{acceptance:'unknown'}:{}),error: outcome.error, code: -32000, team, task_id: taskId, task_status: 'TASK_STATE_FAILED', ...(outcome.refusal?{refusal:outcome.refusal}:{}) })
             res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
             res.end(payload)
           })

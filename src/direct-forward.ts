@@ -1,4 +1,5 @@
 /** H-side one-hop forwarding. Never resolves or dispatches local candidates again. */
+import { capacityRefusalFields, type CapacityRefusal } from './task-delivery-capacity.ts'
 import { DEFAULT_HOP_BUDGET, guardHeader, mintGuard } from './recursion-guard.ts'
 import { briefOf, type OutboundBirth, type TaskLedger, type TaskRecord } from './task-ledger.ts'
 import { parseReceipt } from './receipt.ts'
@@ -66,6 +67,8 @@ export function createDirectForward(d: DirectForwardDeps) {
     const scope = await d.scope(request.caller, qualifiedMember ? request.team : plainTeam)
     if (!scope.ok) return refuse('target is outside sender scope: ' + scope.error, `ask this host's operator to link ${request.team} here: drag it (or one of its members) into a canvas team on this host`)
     const failures: string[] = []
+    const capacityRefusals: CapacityRefusal[] = []
+    let capacityCounted = 0
     const directory = await d.candidates(request.team, failures, request.caller)
     const guard = guardHeader({ ...mintGuard(), hopBudget: DEFAULT_HOP_BUDGET - 1 })
     for (const url of directory.urls) {
@@ -108,13 +111,15 @@ export function createDirectForward(d: DirectForwardDeps) {
         }
         // The shared dispatcher's sync recovery query may prove a definitive failed
         // outcome; like routeTrunk, that is an eligible miss, not an uncertain -32005.
+        if (!result.ok && result.refusal) capacityRefusals.push(result.refusal)
+        else if (!result.ok && result.capacityRefusals !== undefined) capacityCounted += result.capacityRefusals
         failures.push(url + ': ' + result.error)
         if (result.code === -32002 || result.code === -32003) return { ...result, task_id: request.taskId }
       }catch{retained=true;return {ok:false,acceptance:'unknown',task_id:request.taskId,error:'original forwarded dispatch or final ledger commit is unresolved; reconcile the original task, do not resend',code:-32000}}finally{release();if(reserved&&!retained)try{d.ledger.releaseDispatch(request.taskId)}catch{/* original persisted reservation remains, never authorizes replay */}}
     }
     const noReceiver = failures.some(f => f.includes('lists no receiving member'))
     const next = noReceiver ? `the owner's canvas ${plainTeam} lists no member besides you; ask its owner to add one, or route to a member's own handle` : failures.length === 0 ? `no linked peer lists ${request.team}; check the name with \`a2a-net teams\`` : undefined
-    return { ok: false, code: -32004, task_id: request.taskId, ...(!dispatchAttempted ? { delivery: 'not-sent' as const } : {}), error: 'forwarding to "' + request.team + '" failed: ' + (failures.join('; ') || 'no eligible peer candidate'), ...(next !== undefined ? { next } : {}) }
+    return { ok: false, code: -32004, task_id: request.taskId, ...(!dispatchAttempted ? { delivery: 'not-sent' as const } : {}), error: 'forwarding to "' + request.team + '" failed: ' + (failures.join('; ') || 'no eligible peer candidate'), ...(next !== undefined ? { next } : {}), ...capacityRefusalFields(capacityRefusals, failures.length, capacityCounted) }
   }
 }
 
