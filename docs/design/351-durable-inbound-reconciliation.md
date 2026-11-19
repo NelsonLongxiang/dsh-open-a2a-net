@@ -4,6 +4,21 @@
 
 > 补记（2026-11-13）：本设计的过渡通道已于 2026-11-06 经 PR#360（`1041969`）合入 master，代码在 `src/reconciliation-reminders.ts`；上面的「待复评」是合入前的状态。
 
+## 已答复回执交付阻塞修订（2026-11-15，待本修复精确头评审）
+
+本节记录属主针对真实回执未送达反复催办要求的修复，不改写下面的历史裁定。当前观察：4个原单均已有answeredAt和receipt-undelivered，原返回身份长期不发布；普通提醒原样反复催办，短时自动回执闭包在重启后无原文可补送。未答业务、已创作回执的交付、原债最终结算必须分离。
+
+- 未答原任务继续既有持久提醒与原名额/准入规则。确认、进度及需人工答复的非终态收据不视为最终答案。
+- 已创作终态回执的交付阻塞退出普通催办；原接收者真正idle时只发一次持久化的非任务交付阻塞提示，原pending债务不消失。旧缺载荷记录仅legacy-unknown，不根据brief/失败文本重造原回执。
+- 新的manual/auto终态回执由原接收session在既有TaskLedger原子保存全文、完整摘要、原birth/context、目标与key/home、固定transportId，才进入原通道投递；不重新执行原任务，不向owner另投receipt假结账。fullSessionId/签名钥/当前准入或原home变化停核；签名/本机CLI户口/冻结返回通道的旧优先级继续。
+- 未投递的短时失败只重试同一回执ID。可能已插入、响应丢失、-32005、无query/过期/指纹不符只查询不重投；completed必须带明确receipt_delivery=delivered方可结算，普通完成文案不足。权限拒绝、冲突与过期窗口保留债务并停自动投递。
+- 持久写失败必须零投递，发后写失败保留sending/unknown；重启按原ID对账，所有host timer随stop取消。沿用单host/singlewriter账本假设，不新增分布式锁、后台schedule或可调用恢复工具。
+- 精确头cef46a53的非作者评审FAIL保留：F1邮箱提交前结账、F2容量淘汰全文丢失、F3 lane与原CLI key绑定不足。后继修复改为收件write-ahead journal先落盘再结算、保护未交付回执容量且满时前置拒绝、lane/sourceKey完整摘要及出生核对、CLI自身key独立保存并每次对比；收件成功后重启只完成同receipt结算，绝不重执行业务。空contextId与同步final保存失败的原waiter恢复也纳入真实回归。
+- 后继精确头76585803仍为FAIL并保留：F2冷唤醒await后容量变化造成先投递后记账失败，journal仅改phase可伪完成。再修订让既有TaskDelivery在实际入队前原子预留owed槽并持久保留，原任务建账消费自己的槽，其他任务不能抢占；mail journal将phase纳入摘要且仅原子完成更新可重hash。新增真实冷唤醒63/64边界、可重入建账/重启、phase-only损坏不结账不回delivered的回归。
+- 精确头f7487faa的窄复审关闭收件端槽位与phase完整性，但仍FAIL：远端调用端只有入口容量检查，POST接纳后才建owed。后继修正由会话路由与CLI转发在effect前持久预留调用方槽位，原taskId消费自己的预留；明确未接纳可释放，unknown/响应丢失/接纳后写失败保留原ID预留且不再派。卡片等待、remote响应、peerBirth建账边界、满容量零POST、预留写失败零POST、接纳后写失败与重启保留等专项回归均按原判据执行。
+- 本补丁只在隔离测试home验证；不改4条真实账、不恢复对端presence、不部署。正式验证器/RC与运行态验收独立，不以工程测试或静态评审冒充。
+
+实现、回归和当前行为说明以[路由契约](../../src/skill/references/routing.md#answered-work-with-a-blocked-receipt-return)为准。下面“answered仍普通提醒”与旧owner阶梯回执等历史条目由本修订替代，不代表原账被清除。
 ## 上下文
 
 属主认定拥堵是背压正常工作；去中心化协作要求会话本人强制对账。问题不是“欠账要自动消失”，而是空闲会话仍欠正式回执时没有持久、有限次、可见的提醒。现armAsyncNudge是投递后未读唤醒的内存预算，不能覆盖已读且空闲欠回执；final waiter退出后也不能作为忽略账本的理由。

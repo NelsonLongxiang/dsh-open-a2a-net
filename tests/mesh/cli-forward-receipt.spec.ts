@@ -253,12 +253,12 @@ describe('#234 CLI forwarded receipt roundtrip with enforce and scope on both ho
       agent.steer = (payload: any) => {
         a.steered.push(payload)
         const text = typeof payload === 'string' ? payload : payload.content?.find((block: any) => block.type === 'text')?.text ?? ''
-        if (text.startsWith('[A2A receipt]')) return
+        if (text.startsWith('[A2A receipt]') || text.startsWith('[A2A receipt delivery blocked]')) return
         agent.session.events.push({ type: 'user/message', data: { content: typeof payload === 'string' ? [{ type: 'text', text: payload }] : payload.content } })
-        setTimeout(() => { agent.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'expiry-race result' }] } } }); armed = true; a.ctx.emit('agent/status', { agent, status: 'idle' }) }, 180)
+        setTimeout(() => { agent.session.events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'expiry-race result' }] } } }); armed = true; agent.status = 'idle'; a.ctx.emit('agent/status', { agent, status: 'idle' }) }, 180)
       }
       expect((await cli(home, ['route', 'alpha/01234567', 'receipt expiry race', '--task', task])).code).toBe(0)
-      await vi.waitFor(() => { expect(secondRead, JSON.stringify({armed,reads,steered:a.steered})).toBe(true); expect(a.steered.slice(1).some(payload => JSON.stringify(payload).includes('[A2A receipt]') && JSON.stringify(payload).includes(task)), JSON.stringify(a.steered)).toBe(true) }, { timeout: 5000, interval: 80 })
+      await vi.waitFor(() => { expect(secondRead, JSON.stringify({armed,reads,steered:a.steered})).toBe(true); expect(a.steered.slice(1).some(payload => JSON.stringify(payload).includes('[A2A receipt delivery blocked]') && JSON.stringify(payload).includes(task)), JSON.stringify(a.steered)).toBe(true) }, { timeout: 5000, interval: 80 })
       expect((await post(c!, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle })).mail.some((row: any) => row.text.includes(task))).toBe(false)
     } finally { spy.mockRestore(); await a.dispose(); await b.dispose(); if (c !== undefined) await c.dispose() }
   }, 20000)

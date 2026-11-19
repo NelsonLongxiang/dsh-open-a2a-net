@@ -394,6 +394,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               ...(task.answeredAt !== undefined ? { answeredAt: task.answeredAt } : {}),
               ...(task.acknowledgedAt !== undefined ? { acknowledgedAt: task.acknowledgedAt } : {}),
               ...(task.receiptDelivery?{receiptDelivery:task.receiptDelivery}:{}),
+              ...taskLedger.receiptObservation(task.taskId),
               ...(task.consumed !== undefined ? { consumed:task.consumed,deliveryObservation:task.consumed?'consumed':'delivered-unconsumed' } : {}),
               ...(task.forwarded === true ? { forwarded: true } : {}),
               ...(task.deliveredTo !== undefined ? { deliveredTo: task.deliveredTo } : {}),
@@ -417,7 +418,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           tasksDead: taskLedger.list()
             .filter(task => task.status === 'dead')
             .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified', ...(task.answeredAt !== undefined ? { answeredAt: task.answeredAt } : {}),
-              ...(task.receiptDelivery?{receiptDelivery:task.receiptDelivery}:{}), ...(task.brief !== undefined ? { brief: task.brief } : {}), ...(task.direction !== undefined ? { direction: task.direction } : {}), ...(task.sender !== undefined ? { sender: task.sender } : {}), ...(task.auth !== undefined ? { auth: task.auth } : task.direction === 'inbound' ? { authLegacy: true } : {}) })),
+              ...(task.receiptDelivery?{receiptDelivery:task.receiptDelivery}:{}),
+              ...taskLedger.receiptObservation(task.taskId), ...(task.brief !== undefined ? { brief: task.brief } : {}), ...(task.direction !== undefined ? { direction: task.direction } : {}), ...(task.sender !== undefined ? { sender: task.sender } : {}), ...(task.auth !== undefined ? { auth: task.auth } : task.direction === 'inbound' ? { authLegacy: true } : {}) })),
           // gh#31: per-task outcomes for rows that LEFT the ledger — the
           // chat drawer used to guess (settled, abandoned or cancelled).
           // Bounded to the archive (≤64), newest first, with the

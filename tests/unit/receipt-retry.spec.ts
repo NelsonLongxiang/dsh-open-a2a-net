@@ -32,12 +32,14 @@ it('completion and host cancellation stop retries without inventing settlement',
  await retryReceiptDelivery({attempt,notify:async()=>{},pending:()=>pending,wait:async()=>false,log:()=>{}});expect(attempt).toHaveBeenCalledOnce()
  expect(receiptFailure({error:'verification',code:-32011}).transient).toBe(true);expect(receiptFailure({error:'duplicate task id within the idempotency window',code:-32003}).transient).toBe(false);expect(receiptFailure({error:'receipt attempt already pending',code:-32003,[RECEIPT_RETRYABLE]:true}).transient).toBe(true);expect(receiptFailure({error:'task id reused with a different payload',code:-32002}).transient).toBe(false);expect(receiptFailure({error:'network',[RECEIPT_RETRYABLE]:true}).transient).toBe(true);expect(receiptFailure({error:'unknown task',code:-32000}).transient).toBe(false)
 })
-it('a receipt replay (-32003) reads as delivered unless the receiver says the prior attempt is in flight, gone or failed',()=>{
- expect(readReceiptReplay(undefined)).toBe('delivered')
- expect(readReceiptReplay({found:true,status:'completed'})).toBe('delivered')
- expect(readReceiptReplay({found:false,reason:'payload-mismatch'})).toBe('delivered')
+it('receipt replay requires explicit delivered evidence; missing/expired/mismatched outcomes stay unknown',()=>{
+ expect(readReceiptReplay(undefined)).toBe('unknown')
+ expect(readReceiptReplay({found:true,status:'completed'})).toBe('unknown')
+ expect(readReceiptReplay({found:true,status:'completed',receiptDelivery:'delivered'})).toBe('delivered')
+ expect(readReceiptReplay({found:true,status:'completed',receiptDelivery:'refused'})).toBe('failed')
+ expect(readReceiptReplay({found:false,reason:'payload-mismatch'})).toBe('unknown')
  expect(readReceiptReplay({found:true,status:'pending'})).toBe('retry')
- expect(readReceiptReplay({found:false,reason:'unknown-task'})).toBe('retry')
+ expect(readReceiptReplay({found:false,reason:'unknown-task'})).toBe('unknown')
  expect(readReceiptReplay({found:true,status:'failed'})).toBe('failed')
 })
 it('a delivered replay ends the retry loop at once; other retryable codes keep their budget',async()=>{

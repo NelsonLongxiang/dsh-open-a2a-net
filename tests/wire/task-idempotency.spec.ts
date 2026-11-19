@@ -246,6 +246,19 @@ describe('idempotency outcome ledger (W7 slice 2)', () => {
     return { store: new IdempotencyStore(file, options), file }
   }
 
+  it('persists explicit receipt delivery evidence without inventing it for generic completion', () => {
+    const {store,file}=tmpStore({now:()=>1000})
+    for(const id of ['delivered','refused','ordinary'])store.claim(id,'body')
+    store.recordOutcome('delivered',{status:'completed',reply:'receipt delivered',receiptDelivery:'delivered'})
+    store.recordOutcome('refused',{status:'completed',reply:'receipt refused',receiptDelivery:'refused'})
+    store.recordOutcome('ordinary',{status:'completed',reply:'delivered'})
+    const restored=new IdempotencyStore(file,{now:()=>1000})
+    expect(restored.query('delivered','body')).toMatchObject({status:'completed',receiptDelivery:'delivered'})
+    expect(restored.query('refused','body')).toMatchObject({status:'completed',receiptDelivery:'refused'})
+    expect(restored.query('ordinary','body')).not.toHaveProperty('receiptDelivery')
+    expect(restored.query('delivered','other')).toMatchObject({found:false,reason:'payload-mismatch'})
+  })
+
   it('a recorded outcome answers the completed query; the claim stays replay-gated', () => {
     const { store } = tmpStore()
     expect(store.claim('t-1', 'hash-a')).toBe('fresh')
