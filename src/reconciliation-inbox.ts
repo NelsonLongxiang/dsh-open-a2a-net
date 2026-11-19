@@ -64,17 +64,19 @@ export class ReconciliationInbox {
   messageIdFor(agent: Agent, scope: ReconciliationScope): string { return this.prefix(agent) + taskKey(scope.kind + ':' + scope.requestId) }
   /**
    * #709 review R2: where a summary stands, read from the host itself — still queued, taken into the session (its history
-   * names it), or gone without being taken (removed as stale). Throws when the inbox or history cannot be read.
+   * shows it claimed or as a user message), or gone without being taken (removed as stale). Throws when the inbox or
+   * history cannot be read.
    */
   noticeState(agent: Agent, messageId: string): 'queued' | 'taken' | 'gone' {
     if (this.pending(agent).some(message => String(message.id) === messageId)) return 'queued'
     const session = (agent as unknown as { session?: { snapshotEvents?: () => readonly unknown[]; events?: readonly unknown[] } }).session
     const events = session?.snapshotEvents?.() ?? session?.events
     if (!Array.isArray(events)) throw Object.assign(Error('reconciliation requires a readable session history'), { code: 'REMINDER_HISTORY_UNAVAILABLE' })
+    // Only a read counts: the session claimed it or it became a user message. An `agent/inbox/spliced` insertion is only
+    // admission to the queue (#709 review) and stays in history after a removal, so it never means taken.
     const named = (event: unknown): boolean => {
-      const e = event as { type?: string; data?: { id?: unknown; message?: { id?: unknown }; inserted?: readonly { id?: unknown }[] } } | undefined
+      const e = event as { type?: string; data?: { id?: unknown; message?: { id?: unknown } } } | undefined
       return e?.type === 'user/message' && e.data?.id === messageId || e?.type === 'agent/inbox/claimed' && e.data?.message?.id === messageId
-        || e?.type === 'agent/inbox/spliced' && (e.data?.inserted ?? []).some(m => m?.id === messageId)
     }
     return events.some(named) ? 'taken' : 'gone'
   }

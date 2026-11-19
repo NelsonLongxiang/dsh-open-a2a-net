@@ -13,8 +13,9 @@ function fixture() {
   const target: any = { id: 'target', status: 'idle', session: { id: 'target', events: [] }, inbox: { nextTurn: [], nextStep: [] } }
   const sender: any = { id: 'sender', status: 'idle', session: { id: 'sender', events: [] }, inbox: { nextTurn: [], nextStep: [] } }
   for (const agent of [target, sender]) {
-    agent.followup = (message: any) => agent.inbox.nextTurn.push(message)
-    agent.inbox.remove = (id: string) => { for (const name of ['nextTurn', 'nextStep']) { const index = agent.inbox[name].findIndex((m: any) => m.id === id); if (index >= 0) { agent.inbox[name].splice(index, 1); return true } }; return false }
+    // Like DSH's inbox: admission and removal are both recorded as splices; only a claim or a user message is a read.
+    agent.followup = (message: any) => { agent.inbox.nextTurn.push(message); agent.session.events.push({ type: 'agent/inbox/spliced', data: { inserted: [{ id: message.id }] } }) }
+    agent.inbox.remove = (id: string) => { for (const name of ['nextTurn', 'nextStep']) { const index = agent.inbox[name].findIndex((m: any) => m.id === id); if (index >= 0) { agent.inbox[name].splice(index, 1); agent.session.events.push({ type: 'agent/inbox/spliced', data: { removed: [{ id }], outcome: 'canceled' } }); return true } }; return false }
   }
   /** One plugin lifetime over the same ledger file and the same host agents (a restart builds a new one). */
   const build = () => {
@@ -29,7 +30,7 @@ function fixture() {
   first.ledger.track('job', 'beta/aaaaaaaa', 'local', undefined, 'original', { kind: 'session', id: 'alpha/bbbbbbbb' })
   const f = { ...first, target, sender, advance: (ms: number) => { now += ms },
     /** The session takes the first queued message into its history (what a host does when it reads it). */
-    consume: () => { const m = target.inbox.nextTurn.shift(); if (m) target.session.events.push({ type: 'user/message', data: { id: m.id } }); return m },
+    consume: () => { const m = target.inbox.nextTurn.shift(); if (m) target.session.events.push({ type: 'agent/inbox/claimed', data: { message: { id: m.id } } }, { type: 'user/message', data: { id: m.id } }); return m },
     restart: () => { Object.assign(f, build()) } }
   return f
 }
