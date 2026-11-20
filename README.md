@@ -6,7 +6,7 @@ English | [中文](README_zh.md)
 
 **New in the preview: Superagent turns requests into team tickets—a router accepts work, fixed members execute it, progress stays visible, and owner decisions arrive as option-based cards.**
 
-> **Version boundary: Superagent teams belong to the opt-in 0.8 preview.** On 2026-11-14 npm `latest` was still 0.7.0 and `preview` was 0.8.1-preview.25. The default install does not imply the new capabilities below.
+> **Version boundary: Superagent teams belong to the opt-in 0.8 preview.** On 2026-11-20 npm `latest` was still 0.7.0 and `preview` was 0.8.1-preview.27. The default install does not imply the new capabilities below.
 
 An open-source plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). The A2A foundation handles discovery, addressing, routing and receipts between sessions and hosts. **Superagent** adds requests, scoped tickets, fixed members and human decisions on top—not just messages between multiple chats.
 
@@ -40,7 +40,7 @@ This is a workflow illustration, not a completed case study or a promise to acce
 - **External intake is opt-in.** A2A intake is controlled by the bot list and accept mode. GitHub Issue intake is off by default and requires owner-configured repositories and allowed users; this is not automatic monitoring of every issue.
 - **No silent expansion of authority.** Rule changes need human confirmation. Members cannot widen tickets, open sessions or directly dispatch to other teams; outbound team requests follow the configured approval flow.
 
-See the [released preview Superagent guide](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/6ca847560f9bc90c17be64e9558f830a4abf5113/src/skill/references/superagent.md). Root teams are still marked in progress and are not represented here as a mature capability.
+See the [released preview Superagent guide](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/0c4579c8af37805a5c9b67942eb05b12e3121fb4/src/skill/references/superagent.md) (tag `v0.8.1-preview.27`). Root teams are not presented on this page as a mature capability.
 
 ### How is this different from an ordinary canvas team?
 
