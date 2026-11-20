@@ -22,7 +22,8 @@ const SHA256 = /^[0-9a-f]{64}$/
 export const ATTACH_MAX = 16, ATTACH_BYTES_MAX = 64 * 1024 * 1024
 /**
  * How long a staged file is reused for a retried decision. The file channel keeps a grant 24 hours; a copy older than this
- * is staged again rather than sent as a reference that may expire before the team fetches it.
+ * is staged again rather than sent as a reference that may expire before the team fetches it. The DSH right bar keeps the
+ * same value in src/client/TeamDecisionsTab.tsx (this bundle imports nothing from src/); a test keeps the two equal.
  */
 export const STAGE_REUSE_MS = 23 * 60 * 60_000
 

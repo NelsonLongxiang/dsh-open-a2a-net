@@ -184,6 +184,21 @@ describe('files on a card (C8)', () => {
       expect(STAGE_REUSE_MS).toBeLessThan(24 * 60 * 60_000)
     } finally { Date.now = real }
   })
+  it('#775 review (A10, right bar): a file removed after staging is not sent with the retried decision', async () => {
+    let refuse = true
+    const h = stagingHost({ refuseDecision: () => refuse })
+    const { container } = render(<DecisionList t={t} />)
+    await screen.findByText('要不要升级？')
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [new File(['a'], 'a.txt'), new File(['b'], 'b.txt')] } })
+    fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
+    await screen.findByText(/browser owner proof required/)
+    fireEvent.click(screen.getByRole('button', { name: (en as Record<string, string>)['team.removeFile']!.replace('{name}', 'b.txt') }))
+    refuse = false
+    fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
+    await waitFor(() => { expect(h.decisions()).toHaveLength(2) })
+    expect([h.blobs('a.txt'), h.blobs('b.txt')]).toEqual([1, 1])
+    expect(h.decisions()[1]).toEqual({ id: 'd-1', how: 'approve', files: ['[A2A file] v1 a.txt'] })
+  })
   it('#771 review: two different files that share a name and size are both kept', async () => {
     serve([card({ address: 'dsh/canvas/ops' })])
     const { container } = render(<DecisionList t={t} />)
