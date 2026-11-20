@@ -28,6 +28,23 @@ async function team() {
 }
 
 describe('a2a_ticket_read', () => {
+  it('kind team puts ygl first, so 50 tickets never push it past the pruned head (3084 pilot)', async () => {
+    const m = await team()
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    for (let i = 0; i < 55; i++) {
+      const asked = m.h.request(`工单 ${String(i)}`) as { triggerId: string }
+      m.h.pass()
+      routeItem(m.h, { trigger_id: asked.triggerId, kind: 'accept', title: `工单 ${String(i)} ${'说明'.repeat(40)}`, scope: 's', reason: 'r' } as never)
+    }
+    expect(m.h.store.tickets.list().length).toBeGreaterThanOrEqual(50)
+    const out = await m.read('session-o', { kind: 'team' })
+    const text = JSON.stringify(out)
+    expect(out.ygl).toMatchObject({ project: expect.stringMatching(/^team-/) })
+    expect(Object.keys(out)[1]).toBe('ygl')
+    // The member and observer presets prune a long tool result to its first 4096 characters.
+    expect(text.indexOf('"ygl"')).toBeLessThan(200)
+    await m.h.stop()
+  })
   it('a member reads the ticket it holds, with its scope and stage', async () => {
     const m = await team()
     const mine = await m.read(m.holder, { kind: 'mine' })

@@ -631,7 +631,9 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       }
       if (!observer) return { ok: false, code: 'not-observer', error: 'kind team, decisions, health, library, templates and interventions are for observers; a member reads kind mine or ticket' }
       // The observer has no assignment card to name the team's ygl-trees project: kind team carries it (#762 review).
-      if (args.kind === 'team') return { ok: true, tickets: h.store.tickets.list().slice(0, 50).map(t => summary(t.id)), ...(h.yglProject() !== undefined ? { ygl: json({ project: h.yglProject()!, ...(h.yglScope() !== undefined ? { scope: h.yglScope()! } : {}) }) } : {}) }
+      // The ygl block comes before the tickets: the host prunes long tool results keeping the head, and the 3084 pilot's
+      // observer lost ygl.project behind 50 tickets.
+      if (args.kind === 'team') return { ok: true, ...(h.yglProject() !== undefined ? { ygl: json({ project: h.yglProject()!, ...(h.yglScope() !== undefined ? { scope: h.yglScope()! } : {}) }) } : {}), tickets: h.store.tickets.list().slice(0, 50).map(t => summary(t.id)) }
       if (args.kind === 'decisions') return { ok: true, decisions: json(h.recentDecisions()) }
       // R7a (workbench-market 18 §七 3): the host's health list, which the observer sees first.
       if (args.kind === 'health') return { ok: true, health: json(h.health()) }
