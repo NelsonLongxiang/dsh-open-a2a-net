@@ -22,7 +22,9 @@ export async function stageFiles(files: readonly File[], address: string): Promi
   const refs: string[] = []
   for (const file of files) {
     try {
-      const response = await fetch(`/__dsh_a2a/blob?to=${encodeURIComponent(address)}&name=${encodeURIComponent(file.name)}&by=owner`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
+    // The staging route takes the control credential only and records the grant under the operator `control`; it reads no
+    // `by` parameter. Whether the person is the owner is judged when the decision is made (browser owner proof), not here.
+      const response = await fetch(`/__dsh_a2a/blob?to=${encodeURIComponent(address)}&name=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
       const out = await response.json() as { ok?: boolean; ref?: string; error?: string }
       if (!response.ok || out.ok !== true || out.ref === undefined) return { refused: `${file.name}: ${out.error ?? `HTTP ${String(response.status)}`}` }
       refs.push(out.ref)

@@ -104,6 +104,8 @@ describe('files on a card (C8)', () => {
     await waitFor(() => { expect(screen.queryByText('要不要升级？')).toBeNull() })
     const urls = f.mock.calls.map(([url]) => url)
     expect(urls.find(url => url.startsWith('/__dsh_a2a/blob'))).toContain(encodeURIComponent('dsh/canvas/ops'))
+    // #772: no `by` parameter — the host never read one; the staging route's authority is the control credential.
+    expect(urls.find(url => url.startsWith('/__dsh_a2a/blob'))).not.toContain('by=')
     const decided = f.mock.calls.filter(([url, init]) => init?.method === 'POST' && !url.startsWith('/__dsh_a2a/blob')).map(([, init]) => JSON.parse(String(init!.body)) as Record<string, unknown>)
     expect(decided).toEqual([{ id: 'd-1', how: 'approve', files: [`[A2A file] v1 sha256=${'a'.repeat(64)} size=2 name=n.txt from=http://h`] }])
   })
