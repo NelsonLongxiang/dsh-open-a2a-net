@@ -45,6 +45,8 @@ describe('a2a_ticket_read', () => {
   it('an observer reads the team and its decisions', async () => {
     const m = await team()
     expect(await m.read('session-o', { kind: 'team' })).toMatchObject({ ok: true, tickets: [expect.objectContaining({ id: m.ticket, queue: null })] })
+    // #762 review: the observer has no assignment card, so kind team names the team's ygl-trees project.
+    expect((await m.read('session-o', { kind: 'team' })).ygl).toMatchObject({ project: expect.stringMatching(/^team-/) })
     expect(await m.read('session-o', { kind: 'decisions' })).toMatchObject({ ok: true })
     expect(await m.read('session-o', { kind: 'ticket', ticket_id: m.ticket })).toMatchObject({ ok: true })
     await m.h.stop()

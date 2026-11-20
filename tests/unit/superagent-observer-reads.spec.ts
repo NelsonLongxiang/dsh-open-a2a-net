@@ -47,5 +47,7 @@ describe('observer phase 1: reading the prompt-template plugin', () => {
     expect(text).toContain('adopted it, kept its own plan, or it had no effect')
     expect(text).toContain('where the owner stepped in by hand')
     expect(text).toContain('kind interventions')
+    expect(text).toContain('team-<the team\'s canvas name>')
+    expect(text).toContain('ygl.project')
   })
 })
