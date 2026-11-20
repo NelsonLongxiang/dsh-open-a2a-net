@@ -8,7 +8,16 @@ import type { CanvasAction } from './canvas-ops'
 import type { InFlightRow, PeerRow, RemoteTeamRow } from './federation'
 import type { LampState } from './layout-wire'
 import type { LayoutViewport } from './viewport'
-import type { SessionLite, TeamLite } from './world'
+import type { FrameDragSnapshot, FrameGeom, SessionLite, TeamLite } from './world'
+
+/** Internal board gesture state; event handling stays in planning-view. */
+export type Gesture =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'node'; ids: readonly string[]; clicked: string; rosterOrigin?: string; last: { x: number; y: number }; moved: boolean; el: Element | null }
+  | { readonly kind: 'frame'; name: string; snap: FrameDragSnapshot; origin: { x: number; y: number }; moved: boolean }
+  | { readonly kind: 'frame-resize'; name: string; dir: string; startRect: FrameGeom; origin: { x: number; y: number }; moved: boolean }
+  | { readonly kind: 'pan'; last: { x: number; y: number }; moved: boolean }
+  | { readonly kind: 'marquee'; origin: { x: number; y: number }; last: { x: number; y: number }; additive: boolean }
 
 /** Minimal session/team shapes consumed here (topology rows satisfy them). */
 export interface PlanningSession extends SessionLite {

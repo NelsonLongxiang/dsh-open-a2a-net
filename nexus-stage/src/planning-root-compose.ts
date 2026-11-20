@@ -36,7 +36,24 @@ export interface ComposeFrame {
   readonly unreachable?: boolean
 }
 
-type Facts = Pick<PlanningInput, 'teams' | 'peerOrg' | 'sessions'>
+export type Facts = Pick<PlanningInput, 'teams' | 'peerOrg' | 'sessions'>
+
+/** Shared menu/drop admission, re-read from the latest poll immediately before a write. */
+export function rootJoinRefusal(rootName: string, frameName: string, facts: Facts): string | undefined {
+  const root = facts.teams.find(team => team.name === rootName && team.root === true)
+  if (root === undefined) return '目标已不是 root 团队，请刷新后重选'
+  const frame = frameFacts(frameName, facts)
+  if (frame === undefined) return '团队已不在画布上，请刷新后重选'
+  if (frameName === rootName) return '团队不能加入自己'
+  const verdict = dropRefusal(root, { name: frameName, root: frame.root, superagent: frame.superagentTeam === true && frame.roster !== true })
+  if (!verdict.ok) return verdict.reason
+  if (frame.ref === undefined || frame.ref === '') return '团队没有画布地址，请刷新或升级对端后重选'
+  if (frame.unreachable === true) return '团队所在主机暂不可达，等它恢复后再加入'
+  if (root.children?.some(child => child.ref === frame.ref)) return '它已是这个 root 的子团队'
+  const owner = facts.teams.find(team => team.root === true && team.children?.some(child => child.ref === frame.ref))
+  if (owner !== undefined) return `它已是 root「${owner.name}」的子团队，请先从那里移出`
+  return undefined
+}
 
 /** The frame facts for a frame name: this host's team wins over a peer's team of the same name (as the board draws it). */
 export function frameFacts(name: string, facts: Facts): ComposeFrame | undefined {
@@ -193,6 +210,12 @@ export interface RootCompose {
   isOpen(): boolean
   /** The frame menu's 「加入 root「R」」 items for a frame (none for a root, a roster or a frame with no address). */
   menuItems(frame: string, item: (label: string, enabled: boolean, onPick: () => void) => HTMLButtonElement): HTMLButtonElement[]
+  /** The pointer and native-drop paths use the same checked join as the frame menu. */
+  join(root: string, frame: string): Promise<{ ok: boolean; error?: string }>
+  refusal(root: string, frame: string): string | undefined
+  frameError(frame: string, text: string): void
+  frame(name: string): ComposeFrame | undefined
+  roots(): ReadonlyArray<PlanningTeam>
 }
 
 export function createRootCompose(d: RootComposeDeps): RootCompose {
@@ -314,20 +337,33 @@ export function createRootCompose(d: RootComposeDeps): RootCompose {
     return true
   }
 
+  const joining = new Set<string>()
+  const refusal = (root: string, frame: string): string | undefined => d.io === undefined ? '本机没有团队写入入口' : rootJoinRefusal(root, frame, facts)
+  async function join(root: string, frame: string): Promise<{ ok: boolean; error?: string }> {
+    const reason = refusal(root, frame)
+    if (reason !== undefined) { frameError(root, reason); return { ok: false, error: reason } }
+    const ref = frameFacts(frame, facts)!.ref!
+    if (joining.has(ref)) return { ok: false, error: '这个团队正在加入，请等待原操作结果' }
+    joining.add(ref)
+    try {
+      const out = await joinRoot(deps(), root, ref)
+      if (d.signal.signal?.aborted === true) return out.ok ? { ok: true } : { ok: false, error: out.reason }
+      if (out.ok) { frameErrors.delete(root); paint(); d.notice('info', `「${frame}」已加入 root「${root}」`); return { ok: true } }
+      const error = `「${frame}」没能加入：${out.reason}`
+      frameError(root, error)
+      return { ok: false, error }
+    } finally { joining.delete(ref) }
+  }
+
   function menuItems(frame: string, item: (label: string, enabled: boolean, onPick: () => void) => HTMLButtonElement): HTMLButtonElement[] {
     const self = frameFacts(frame, facts)
     if (d.io === undefined || self === undefined || self.root === true || self.roster === true || self.ref === undefined) return []
     const ref = self.ref
     return facts.teams.filter(t => t.root === true && t.name !== frame).map((root) => {
-      const verdict = dropRefusal(root, { name: frame, ...(self.superagentTeam === true ? { superagent: true } : {}) })
+      const reason = refusal(root.name, frame)
       const already = root.children?.some(child => child.ref === ref) === true
-      const button = item(already ? `已在 root「${root.name}」里` : `加入 root「${root.name}」`, verdict.ok && !already, () => {
-        void joinRoot(deps(), root.name, ref).then((out) => {
-          if (out.ok) { frameErrors.delete(root.name); paint(); d.notice('info', `「${frame}」已加入 root「${root.name}」`) }
-          else frameError(root.name, `「${frame}」没能加入：${out.reason}`)
-        })
-      })
-      if (!verdict.ok) button.title = verdict.reason
+      const button = item(already ? `已在 root「${root.name}」里` : `加入 root「${root.name}」`, reason === undefined, () => { void join(root.name, frame) })
+      if (reason !== undefined) button.title = reason
       return button
     })
   }
@@ -337,6 +373,8 @@ export function createRootCompose(d: RootComposeDeps): RootCompose {
     paint,
     open: selected => d.io !== undefined && open(selected),
     isOpen: () => dialog !== null,
-    menuItems,
+    menuItems, join, refusal, frameError,
+    frame: name => frameFacts(name, facts),
+    roots: () => facts.teams.filter(team => team.root === true),
   }
 }
