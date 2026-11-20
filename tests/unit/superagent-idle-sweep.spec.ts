@@ -109,6 +109,11 @@ describe('T5-B: the idle sweep', () => {
     expect(m.sweep()).toMatchObject([{ code: 'session-orphan-stop', session: 'session-m' }])
     await m.h.stop()
   })
+  it('#765 follow-up: a row written in the same millisecond the Assignment began counts', async () => {
+    const m = await team({ idleSweep: true, rows: () => [{ kind: 'orphan', conclusion: 'orphan', deadline: null, at: AFTER(0) }] })
+    expect(m.sweep()).toMatchObject([{ code: 'session-orphan-stop', session: 'session-m' }])
+    await m.h.stop()
+  })
   // Mutants the review saw survive (M5, M8, plus a read that throws).
   it('M5: an ended ticket is never swept', async () => {
     const m = await team({ idleSweep: true, rows: () => [{ kind: 'orphan', conclusion: 'orphan', deadline: null, at: AFTER() }] })
