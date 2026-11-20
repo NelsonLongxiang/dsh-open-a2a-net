@@ -27,7 +27,21 @@ export const pushedSource = (source: StoredCard['source']): boolean => source ==
 export const decideAt = (cardId: string): string => `/__dsh_a2a_nexus/?tab=team&view=decisions&card=${encodeURIComponent(cardId)}`
 
 /** Text cut to the market's limit, marked as cut (the market counts UTF-16 units, as String.length does). */
-const cut = (text: string, max: number): string => text.length <= max ? text : `${text.slice(0, max - 1)}…`
+const cut = (text: string, max: number): string => {
+  if (text.length <= max) return text
+  // Never split a surrogate pair (an emoji) at the cut: a lone half is not text (#766 review).
+  let end = max - 1
+  const last = text.charCodeAt(end - 1)
+  if (last >= 0xd800 && last <= 0xdbff) end--
+  return `${text.slice(0, end)}…`
+}
+
+/**
+ * What the market compares, as its receiver cleans a string before checking it (workbench-market #898 `clean`): control
+ * characters become a space, direction controls go, the ends are trimmed. Checks run on this so two options that differ
+ * only by a direction control are refused here, not by the market (#766 review).
+ */
+export const marketClean = (text: string): string => text.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ').replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').trim()
 
 /**
  * One envelope's text, or why the card cannot go (then it is a health problem, never sent half-formed). A reason or a
@@ -36,13 +50,14 @@ const cut = (text: string, max: number): string => text.length <= max ? text : `
 export function decisionCardText(event: PushEvent, rev: number, team: string, card: StoredCard): { ok: true; text: string } | { ok: false; why: string } {
   if (!PUSH_ID.test(card.id)) return { ok: false, why: 'card id outside the market\'s id rule' }
   const options = card.options ?? []
-  if (options.length < 2 || options.length > 6 || new Set(options).size !== options.length) return { ok: false, why: 'options must be 2..6 and distinct' }
-  if (options.some(option => option.trim() === '' || option.length > PUSH_OPTION_MAX)) return { ok: false, why: 'an option is empty or longer than 300 characters' }
+  const seen = options.map(marketClean)
+  if (options.length < 2 || options.length > 6 || new Set(seen).size !== seen.length) return { ok: false, why: 'options must be 2..6 and distinct' }
+  if (seen.some(option => option === '' || option.length > PUSH_OPTION_MAX)) return { ok: false, why: 'an option is empty or longer than 300 characters' }
   const recommended = card.recommended ?? ''
-  if (!options.includes(recommended)) return { ok: false, why: 'the recommended option is not one of the options' }
+  if (!seen.includes(marketClean(recommended))) return { ok: false, why: 'the recommended option is not one of the options' }
   const level = card.level ?? 'P1'
   if (!(PUSH_LEVELS as readonly string[]).includes(level)) return { ok: false, why: 'level outside P0..P3' }
-  if (card.question.trim() === '' || card.question.length > PUSH_QUESTION_MAX) return { ok: false, why: 'question empty or longer than 2000 characters' }
+  if (marketClean(card.question) === '' || card.question.length > PUSH_QUESTION_MAX) return { ok: false, why: 'question empty or longer than 2000 characters' }
   if (!Number.isFinite(Date.parse(card.at))) return { ok: false, why: 'created_at is not a time' }
   if (event === 'decided' && (card.decided === undefined || !Number.isFinite(Date.parse(card.decided.at)))) return { ok: false, why: 'a decided event with no decision time' }
   const files = card.files ?? []
@@ -151,7 +166,8 @@ export class DecisionPush {
 
   /** Send what waits, oldest first. A market refusal that would repeat drops the event as a problem; a transport failure keeps it. */
   async tick(): Promise<void> {
-    if (this.sending || !this.d.on()) return
+    if (this.sending) return
+    if (!this.d.on()) { this.dropAll(); return }
     const kept = this.state()
     if (kept.pending.length === 0) return
     const team = this.d.team(), host = this.d.hostFingerprint()
@@ -185,11 +201,25 @@ export class DecisionPush {
    * problem each (R7a: the observer first). A later push of the same card that goes through clears it.
    */
   problems(): Array<{ cardId: string; event: PushEvent; why: string }> {
+    if (!this.d.on()) { this.dropAll(); return [] }
     const kept = this.state()
     let pruned = false
     for (const id of Object.keys(kept.refused)) if (!this.d.holds(id)) { delete kept.refused[id]; pruned = true }
     if (pruned) this.persist()
     return Object.entries(kept.refused).map(([cardId, r]) => ({ cardId, event: r.event, why: r.why }))
+  }
+
+  /**
+   * The owner turned the push off: what waits and what was refused are dropped, so turning it on again never floods the
+   * market with old events and the health check never nags about a push that is off. Revisions stay, so the next event
+   * of a card is still newer than anything the market holds.
+   */
+  private dropAll(): void {
+    const kept = this.state()
+    if (kept.pending.length === 0 && Object.keys(kept.refused).length === 0) return
+    kept.pending = []
+    kept.refused = {}
+    this.persist()
   }
 
   /** For the state and tests. */

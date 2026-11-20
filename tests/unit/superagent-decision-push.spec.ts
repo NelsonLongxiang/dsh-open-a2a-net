@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { DECISION_CARD_HEADER, PUSH_TICK_MS, decideAt, decidedOption, decisionCardText, finalRefusal, pushedSource } from '../../src/superagent/host/decision-push.ts'
+import { DECISION_CARD_HEADER, PUSH_TICK_MS, marketClean, decideAt, decidedOption, decisionCardText, finalRefusal, pushedSource } from '../../src/superagent/host/decision-push.ts'
 import { touchesRules } from '../../src/superagent/host/owner-proof.ts'
 import { problemText } from '../../src/superagent/host/health-reminders.ts'
 
@@ -70,9 +70,30 @@ describe('T8: the envelope', () => {
     expect(no({ files: [{ name: 'a', size: -1, sha256: SHA }] })).toBe(false)
     expect(no({}, 'decided'), 'a decided event without a decision').toBe(false)
   })
+  it('#766 follow-up: options are compared as the market cleans them — a direction control never makes two options distinct', () => {
+    expect(marketClean('\u202e甲\u200e ')).toBe('甲')
+    expect(decisionCardText('created', 1, 't', card({ options: ['甲', '\u202e甲'], recommended: '甲' }))).toEqual({ ok: false, why: 'options must be 2..6 and distinct' })
+    expect(decisionCardText('created', 1, 't', card({ options: ['甲', '\u2066\u2069'], recommended: '甲' })).ok).toBe(false)
+    expect(decisionCardText('created', 1, 't', card({ recommended: '\u200e甲' })).ok).toBe(true)
+    expect(decisionCardText('created', 1, 't', card({ question: '\u202e\u0001 ' })).ok).toBe(false)
+  })
+  it('#766 follow-up: a cut never splits an emoji', () => {
+    const out = decisionCardText('created', 1, 't', card({ reason: '😀'.repeat(1500), files: [{ name: '😀'.repeat(150), size: 1, sha256: SHA }] }))
+    const c = bodyOf((out as { text: string }).text).card
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+    for (const text of [c.reason as string, c.files[0].name as string]) {
+      expect(lone.test(text)).toBe(false)
+      expect(text.endsWith('…')).toBe(true)
+    }
+    expect((c.reason as string).length).toBeLessThanOrEqual(2000)
+    expect((c.files[0].name as string).length).toBeLessThanOrEqual(200)
+  })
   it('#766 review N12: a body over 32KB is never sent', () => {
-    const wide = '\u0001'.repeat(2000)
-    const out = decisionCardText('created', 1, 't', card({ question: wide, reason: wide, options: ['\u0002'.repeat(300), '\u0003'.repeat(300), '\u0004'.repeat(300), '\u0005'.repeat(300), '\u0006'.repeat(300), '\u0007'.repeat(300)], recommended: '\u0002'.repeat(300) }))
+    // Real text with control characters between (each one is six bytes of JSON) stays inside every field limit.
+    const wide = (head: string, n: number) => head + '\u0001'.repeat(n - 1)
+    const options = ['甲', '乙', '丙', '丁', '戊', '己'].map(h => wide(h, 300))
+    const files = Array.from({ length: 16 }, (_, i) => ({ name: wide(String.fromCharCode(97 + i), 200), size: 1, sha256: SHA }))
+    const out = decisionCardText('created', 1, 't', card({ question: wide('问', 2000), reason: wide('理', 2000), options, recommended: options[0], files }))
     expect(out).toEqual({ ok: false, why: 'body over 32KB' })
   })
   it('the refusals that would repeat are final; a transport failure is not', () => {
@@ -145,6 +166,28 @@ describe('T8: on the host', () => {
     expect(existsSync(join(m.home, 'superagent', 'decision-push.json'))).toBe(false)
     expect(touchesRules({ decisionPush: true })).toBe(true)
     expect(m.h.saveSettings({ decisionPush: 'on' } as never, () => true)).toMatchObject({ ok: false })
+    await m.h.stop()
+  })
+
+  it('#766 follow-up (P2): turning the push off drops what waits and what was refused; nothing old goes out when it is turned on again', async () => {
+    let refuse = true
+    const m = await team({ send: () => { if (refuse) throw Object.assign(new Error('A2A HTTP 400'), { statusCode: 400 }) } })
+    m.h.proposeDecision('observer', 'session-o', '被拒的', spec, 'r')
+    await m.h.decisionPush.tick()
+    expect(m.refusedProblems()).toHaveLength(1)
+    refuse = false
+    m.sent.length = 0
+    m.h.proposeDecision('observer', 'session-o', '排着的', spec, 'r')
+    expect(m.h.decisionPush.pending()).toHaveLength(1)
+    expect(m.h.saveSettings({ decisionPush: false }, () => true)).toMatchObject({ ok: true })
+    await m.h.decisionPush.tick()
+    expect(m.sent).toEqual([])
+    expect(m.h.decisionPush.pending()).toEqual([])
+    expect(m.refusedProblems()).toEqual([])
+    expect(m.h.saveSettings({ decisionPush: true }, () => true)).toMatchObject({ ok: true })
+    await m.h.decisionPush.tick()
+    expect(m.sent).toEqual([])
+    expect(m.refusedProblems()).toEqual([])
     await m.h.stop()
   })
 
