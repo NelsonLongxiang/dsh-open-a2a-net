@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { DECISION_CARD_HEADER, PUSH_TICK_MS, marketClean, decideAt, decidedOption, decisionCardText, finalRefusal, pushedSource } from '../../src/superagent/host/decision-push.ts'
 import { touchesRules } from '../../src/superagent/host/owner-proof.ts'
 import { problemText } from '../../src/superagent/host/health-reminders.ts'
+import { formatFileRef } from '../../src/blob-store.ts'
 
 const SHA = 'a'.repeat(64)
 const bodyOf = (text: string) => JSON.parse(text.split('\n').slice(1).join('\n'))
@@ -145,6 +146,21 @@ describe('T8: on the host', () => {
     expect(m.bodies().at(-1)).toMatchObject({ event: 'decided', card: { id: observerCard.id, decided_option: '乙' } })
     expect(m.bodies().at(-1)!.rev).toBeGreaterThan(first)
     expect(m.h.decisionPush.pending()).toEqual([])
+    await m.h.stop()
+  })
+
+  it('#771 review: the owner\'s files on a decision never leave the host — the decided envelope names none of them', async () => {
+    const m = await team()
+    const OWNER_SHA = 'f'.repeat(64)
+    const c = m.h.proposeDecision('observer', 'session-o', '问题', spec, '理由') as { id: string }
+    const ref = formatFileRef({ sha256: OWNER_SHA, size: 4242, name: 'OWNER-SECRET-合同.pdf', from: 'http://127.0.0.1:1' })
+    expect(m.h.decide(c.id, 'choose', '乙', '附上合同', [ref])).toMatchObject({ ok: true })
+    await m.h.decisionPush.tick()
+    const decided = m.sent.map(([, t]) => t).find(t => bodyOf(t).event === 'decided')!
+    expect(decided).toBeDefined()
+    for (const leak of [OWNER_SHA, 'OWNER-SECRET', encodeURIComponent('OWNER-SECRET-合同.pdf'), '4242', '附上合同', '127.0.0.1']) expect(decided, leak).not.toContain(leak)
+    // The proposer's own files (none on this card) are the only files the envelope may carry.
+    expect(bodyOf(decided).card.files).toEqual([])
     await m.h.stop()
   })
 

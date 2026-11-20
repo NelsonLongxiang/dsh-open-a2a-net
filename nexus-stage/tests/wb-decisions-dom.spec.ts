@@ -227,7 +227,8 @@ describe('the owner\'s files on a decision (C8, as the right bar)', () => {
     m.pick([file('huge.iso', 64 * 1024 * 1024 + 1)])
     expect(m.card().querySelector('.wb-sa-decision-said')!.textContent).toContain('超过 64 MB')
     expect(m.card().querySelectorAll('.wb-sa-attach-file')).toHaveLength(0)
-    m.pick([file('a.md'), file('a.md')])
+    const same = file('a.md')
+    m.pick([same, same])
     expect(m.card().querySelectorAll('.wb-sa-attach-file')).toHaveLength(1)
     m.pick(Array.from({ length: ATTACH_MAX }, (_, i) => file(`f${String(i)}.md`)))
     expect(m.card().querySelector('.wb-sa-decision-said')!.textContent).toContain('最多附 16 个文件')
@@ -251,6 +252,57 @@ describe('the owner\'s files on a decision (C8, as the right bar)', () => {
     m.setRows([row({ address: ADDRESS, level: 'P2' })])
     await m.group.refresh()
     expect(m.card().querySelectorAll('.wb-sa-attach-file')).toHaveLength(0)
+  })
+
+  it('#771 review (Z11): only a drag of files is taken — dragging text is left to the browser', async () => {
+    const m = mountFiles()
+    await m.group.refresh()
+    const drag = (type: string, types: string[], files: File[] = []): Event => {
+      const event = new Event(type, { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'dataTransfer', { value: { types, files } })
+      m.card().dispatchEvent(event)
+      return event
+    }
+    expect(drag('dragover', ['text/plain']).defaultPrevented).toBe(false)
+    expect(m.card().classList.contains('is-dragging')).toBe(false)
+    expect(drag('drop', ['text/plain'], [file('sneaky.md')]).defaultPrevented).toBe(false)
+    expect(m.card().querySelectorAll('.wb-sa-attach-file')).toHaveLength(0)
+    expect(drag('dragover', ['Files']).defaultPrevented).toBe(true)
+    drag('drop', ['Files'], [file('real.md')])
+    expect(m.card().querySelectorAll('.wb-sa-attach-file')).toHaveLength(1)
+  })
+
+  it('#771 review: two different files that share a name and size are both kept; the same file again is kept once, and said', async () => {
+    const m = mountFiles()
+    await m.group.refresh()
+    const older = new File(['aaa'], 'report.md', { lastModified: 1_000 })
+    const newer = new File(['bbb'], 'report.md', { lastModified: 2_000 })
+    m.pick([older, newer])
+    expect(m.card().querySelectorAll('.wb-sa-attach-file')).toHaveLength(2)
+    m.pick([newer])
+    expect(m.card().querySelectorAll('.wb-sa-attach-file')).toHaveLength(2)
+    expect(m.card().querySelector('.wb-sa-decision-said')!.textContent).toBe('已经附上过，没有重复添加：report.md')
+  })
+
+  it('#771 review: a decision the host refuses and the owner sends again reuses the files already staged', async () => {
+    const stage = vi.fn(async (f: File) => ({ ref: `[A2A file] v1 ${f.name}` }) as { ref: string } | { refused: string })
+    let answer: { status: number; body: Record<string, unknown> } = { status: 403, body: { ok: false, error: 'browser owner proof required' } }
+    const decide = vi.fn(async (_body: Record<string, unknown>) => answer)
+    const group = createDecisionsGroup({ list: async () => ({ decisions: [row({ address: ADDRESS, level: 'P2' })] }), decide, stage })
+    document.body.replaceChildren(group.root)
+    await group.refresh()
+    const card = (): HTMLElement => document.querySelector<HTMLElement>('[data-card="d-1"]')!
+    const input = card().querySelector<HTMLInputElement>('.wb-sa-attach input[type=file]')!
+    Object.defineProperty(input, 'files', { value: [file('a.md'), file('b.md')] })
+    input.dispatchEvent(new Event('change'))
+    button(card(), '同意推荐').click()
+    await flush()
+    expect(stage).toHaveBeenCalledTimes(2)
+    answer = { status: 200, body: { ok: true } }
+    button(card(), '同意推荐').click()
+    await flush()
+    expect(stage).toHaveBeenCalledTimes(2)
+    expect(decide).toHaveBeenLastCalledWith({ id: 'd-1', teamId: 't2', how: 'approve', files: ['[A2A file] v1 a.md', '[A2A file] v1 b.md'] })
   })
 
   it('a card with no team address takes no files: the page says so and sends nothing', async () => {
