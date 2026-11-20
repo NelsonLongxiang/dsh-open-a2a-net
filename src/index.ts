@@ -980,8 +980,17 @@ export function apply(ctx: Context, config: Config): void {
     if (face === undefined) return undefined
     // The successor face reports failure as a result value; re-throw it so
     // every caller's rejection policy (reconciler backoff, route error)
-    // keeps working unchanged.
-    return face.resolveAgent(SessionId(id)).then(result => {
+    // keeps working unchanged. #756: a face can also throw before any promise
+    // exists (an in-place reset's lifecycle guard does); that becomes a
+    // rejection too, so it reaches the same policies instead of escaping a
+    // timer callback and taking the host down.
+    let resolving: ReturnType<typeof face.resolveAgent>
+    try {
+      resolving = face.resolveAgent(SessionId(id))
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)))
+    }
+    return resolving.then(result => {
       if (result.agent !== undefined) return result.agent
       throw new Error(`materialize refused: ${result.error?.message ?? 'unknown session resolution failure'}`)
     })
@@ -1605,7 +1614,16 @@ export function apply(ctx: Context, config: Config): void {
       reconcileCancelled = true
     })
     let reconcilePostponed = 0
+    // #756: one bad pass must never take the host down. Whatever a pass throws
+    // synchronously is logged and the loop keeps its cadence; the next pass
+    // re-derives the due set from the join intents.
     const reconcileTick = (): void => {
+      try { reconcilePass() } catch (error) {
+        logger.warn(`reconcile pass failed: ${String(error).slice(0, 200)}`)
+        if (!reconcileCancelled && ctx.fiber.uid !== null) schedule(reconcileTick, Math.max(50, config.wakeReconcileIntervalMs))
+      }
+    }
+    const reconcilePass = (): void => {
       if (reconcileCancelled || ctx.fiber.uid === null) return
       const interval = Math.max(50, config.wakeReconcileIntervalMs)
       if (!config.wakeReconcile || wakeFace() === undefined) {
