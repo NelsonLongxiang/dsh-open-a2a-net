@@ -57,6 +57,7 @@ import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type SettlementJudge, type TaskRecord } from './task-ledger.ts'
 import { formatReceipt, holdsRow, parseReceipt, receiptExtras, receiptTaskId, taskIdRefusal } from './receipt.ts'
+import { holdsOpenTicket, readSelfChecks } from './superagent/host/self-check-read.ts'
 import { SuperagentHost } from './superagent/host/index.ts'
 import { registerSuperagentTools } from './superagent/host/tools.ts'
 import { BUILDER_PRESET, RoleTools, scopeKeyOf, type RoleAgent } from './superagent/host/role-tools.ts'
@@ -2121,11 +2122,7 @@ export function apply(ctx: Context, config: Config): void {
     // The team's A2A address (PR-B2b) is a CLI identity the a2a-net CLI runs against this very host.
     homeUrl: () => superagentHomeUrl,
     // T5-B: the idle sweep reads the same host's prompt-template self-check log, and only while that check is on.
-    selfChecksOf: sessionId => {
-      const svc = ctx.get('promptTemplates' as never) as { selfChecks?: (id: string) => unknown; selfCheckEnabled?: () => boolean } | undefined
-      if (typeof svc?.selfChecks !== 'function' || typeof svc.selfCheckEnabled !== 'function' || !svc.selfCheckEnabled()) return undefined
-      return svc.selfChecks(sessionId) as ReadonlyArray<{ kind: string; conclusion: string | null; deadline: string | null; at: string }>
-    },
+    selfChecksOf: sessionId => readSelfChecks(ctx.get('promptTemplates' as never), sessionId),
     claimAudience: () => (ownCardUrl !== '' ? originOf(ownCardUrl) : undefined),
     apiKey: () => config.apiKey,
     // PR-C2: remote members and served teams talk host to host, signed with this host's card key and bound to the body.
@@ -2221,7 +2218,7 @@ export function apply(ctx: Context, config: Config): void {
   // T5-B (dispatcher's PT-4 addition 1): whether a session holds an open a2a ticket, for dsh-prompt-templates' wrap-up
   // self-check. Read-only; undefined (unknown) when this host runs no superagent team.
   ctx.provide('a2aTickets' as never, {
-    hasOpenTicket: (sessionId: string): boolean | undefined => superagentTeams === undefined ? undefined : superagentTeams.all().some(team => team.executor.bindingOf(String(sessionId)) !== undefined),
+    hasOpenTicket: (sessionId: string): boolean | undefined => holdsOpenTicket(superagentTeams?.all(), sessionId),
   } as never)
   if (superagentTeams !== undefined) staffing = createStaffing({ path: join(home, 'a2a', 'superagent', 'staffing.json'), teams: superagentTeams, canvasStore, canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
     sessionValid: id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, presetOf: sessionPresetOf, memberForWrite: id => canvasMemberForWrite(id),
