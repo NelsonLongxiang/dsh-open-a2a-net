@@ -72,6 +72,9 @@ export const problemText = (problem: HealthProblem): string =>
   : problem.code === 'mcp-token-unavailable' ? `团队 MCP 服务器 ${problem.title ?? ''} 换不到席位令牌，成员对它的调用会失败：${problem.detail ?? ''}`
   : problem.code === 'member-not-loaded' ? `成员会话 ${problem.session ?? ''} 没有加载，工单派不给它，打开这个会话即可`
   : problem.code === 'tickets-queued' ? queuedText(problem)
+  : problem.code === 'session-wait-overdue' ? `成员会话 ${problem.session ?? ''} 登记的等待已过期限（${problem.detail ?? ''}，已过 ${String(problem.minutes ?? 0)} 分钟），还没有被叫醒；工单「${problem.title ?? problem.ticketId ?? ''}」`
+  : problem.code === 'session-orphan-stop' ? `成员会话 ${problem.session ?? ''} 上一次停下是孤儿停（没做完，也没登记任何会叫它回来的东西）；工单「${problem.title ?? problem.ticketId ?? ''}」`
+  : problem.code === 'session-no-selfcheck' ? `成员会话 ${problem.session ?? ''} 持单 ${String(problem.minutes ?? 0)} 分钟，一条收尾自查记录都没有（可能出错、中断或没加载）；工单「${problem.title ?? problem.ticketId ?? ''}」`
   : problem.ticketId !== undefined ? `工单 ${problem.ticketId} 很久没有动静`
   : `问题 ${problem.code}`
 

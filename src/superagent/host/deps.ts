@@ -95,6 +95,11 @@ export interface SuperagentHostDeps {
    */
   readonly templatesRead?: (path: string) => Promise<{ status: number; body: unknown }>
   /**
+   * T5-B: one session's wrap-up self-check log from the same host's dsh-prompt-templates; undefined when the plugin, its
+   * self-check, or a version with the read is not there (the sweep then says nothing about self-checks).
+   */
+  readonly selfChecksOf?: (sessionId: string) => ReadonlyArray<{ kind: string; conclusion: string | null; deadline: string | null; at: string }> | undefined
+  /**
    * Observer phase 2 (T5-A): cast a card through the same host's dsh-prompt-templates service (`ctx.promptTemplates`).
    * Undefined when the plugin, or a version with the service, is not on this host. The plugin recognizes the caller as
    * this a2a plugin; who may ask (the team's observer, into its own team's sessions) is checked here, before this call.
