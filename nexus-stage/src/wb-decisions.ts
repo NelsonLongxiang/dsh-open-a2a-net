@@ -18,11 +18,15 @@ type Json = Record<string, unknown>
 /** The card id rule (host and market): what a deep link may name. */
 export const CARD_ID = /^[A-Za-z0-9._:-]{1,64}$/
 const SHA256 = /^[0-9a-f]{64}$/
+/** The file channel's limits (src/blob-store.ts; the host's DECISION_FILES_MAX): files on one decision, bytes per file. */
+export const ATTACH_MAX = 16, ATTACH_BYTES_MAX = 64 * 1024 * 1024
 
 export interface DecisionCard {
   readonly id: string; readonly teamId: string; readonly team: string; readonly question: string; readonly level: string
   readonly options: readonly string[]; readonly recommended: string; readonly reason?: string; readonly title?: string
   readonly files: ReadonlyArray<{ readonly sha256: string; readonly size: number; readonly name: string }>
+  /** The team's canvas address: the owner's files on a decision are granted to it (C8). */
+  readonly address?: string
 }
 
 export interface DecisionsDeps {
@@ -32,6 +36,11 @@ export interface DecisionsDeps {
   decide(body: Json): Promise<{ status: number; body: Json }>
   /** GET a card's file (the owner's control route); resolves to a blob, or a reason it could not. */
   file?(href: string): Promise<Blob | string>
+  /**
+   * Stage one of the owner's files on this host's file channel, granted to the team's canvas (C8): its `[A2A file] v1`
+   * reference line, or why it could not. Absent, a decision carries no files.
+   */
+  stage?(file: File, address: string): Promise<{ ref: string } | { refused: string }>
 }
 
 /** The card a deep link names: only `tab=team`, `view=decisions` and a card id that fits the rule; anything else is ignored. */
@@ -57,6 +66,7 @@ export function cardOf(raw: unknown): DecisionCard | undefined {
   return {
     id: str(r.id), teamId: str(r.teamId), team: str(r.team), question: str(r.question), level: str(r.level) || 'P1', options, recommended: str(r.recommended),
     ...(typeof r.reason === 'string' && r.reason !== '' ? { reason: r.reason } : {}), ...(typeof r.title === 'string' && r.title !== '' ? { title: r.title } : {}), files,
+    ...(typeof r.address === 'string' && r.address !== '' ? { address: r.address } : {}),
   }
 }
 
@@ -118,6 +128,22 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
   const notes = new Map<string, string>()
   const said = new Map<string, string>()
   const busy = new Set<string>()
+  /** Per card: the owner's files picked for the decision, kept across redraws until it is sent or the card goes. */
+  const attached = new Map<string, File[]>()
+
+  /** Add picked or dropped files to a card's decision: at most 16, each at most 64 MB, a file already there once. */
+  function attach(card: DecisionCard, added: readonly File[]): void {
+    const tooBig = added.find(file => file.size > ATTACH_BYTES_MAX)
+    if (tooBig !== undefined) { said.set(card.id, `「${tooBig.name}」超过 64 MB，文件通道收不下`); draw(true); return }
+    const now = attached.get(card.id) ?? []
+    const known = new Set(now.map(file => `${file.name}:${String(file.size)}`))
+    const next = [...now]
+    for (const file of added) { const key = `${file.name}:${String(file.size)}`; if (!known.has(key)) { known.add(key); next.push(file) } }
+    if (next.length > ATTACH_MAX) { said.set(card.id, `一个决定最多附 ${String(ATTACH_MAX)} 个文件`); draw(true); return }
+    attached.set(card.id, next)
+    said.delete(card.id)
+    draw(true)
+  }
 
   function cardNode(card: DecisionCard): HTMLElement {
     const node = el('div', 'wb-led-card wb-sa-decision-card')
@@ -170,12 +196,46 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
       void send(card, { how: 'choose', ...(option !== '' ? { option } : {}), ...(note !== '' ? { note } : {}) })
     })
     actions.append(confirm)
-    node.append(words, actions)
+    node.append(words)
+    if (deps.stage !== undefined) node.append(attachRow(card, node))
+    node.append(actions)
     const line = el('div', 'wb-sa-hint wb-sa-decision-said', said.get(card.id) ?? '')
     line.setAttribute('role', 'status')
     node.append(line)
     sync(card, node)
     return node
+  }
+
+  /** The owner's files for this decision: picked with the button or dropped on the card; each one listed and removable. */
+  function attachRow(card: DecisionCard, node: HTMLElement): HTMLElement {
+    const row = el('div', 'wb-sa-attach')
+    const picker = el('input')
+    picker.type = 'file'
+    picker.multiple = true
+    picker.hidden = true
+    picker.addEventListener('change', () => { attach(card, Array.from(picker.files ?? [])); picker.value = '' })
+    const add = el('button', 'wb-btn wb-sa-attach-add', '附上文件')
+    add.type = 'button'
+    add.disabled = busy.has(card.id)
+    add.addEventListener('click', () => { picker.click() })
+    row.append(picker, add)
+    for (const file of attached.get(card.id) ?? []) {
+      const chip = el('span', 'wb-sa-attach-file')
+      chip.append(el('span', undefined, `${file.name}（${sizeText(file.size)}）`))
+      const drop = el('button', 'wb-btn wb-sa-attach-remove', '移除')
+      drop.type = 'button'
+      drop.disabled = busy.has(card.id)
+      drop.setAttribute('aria-label', `移除 ${file.name}`)
+      drop.addEventListener('click', () => { attached.set(card.id, (attached.get(card.id) ?? []).filter(f => f !== file)); draw(true) })
+      chip.append(drop)
+      row.append(chip)
+    }
+    // Only a drag of files is taken; dragging selected text stays the browser's.
+    const files = (event: DragEvent): boolean => Array.from(event.dataTransfer?.types ?? []).includes('Files')
+    node.addEventListener('dragover', event => { if (!files(event) || busy.has(card.id)) return; event.preventDefault(); node.classList.add('is-dragging') })
+    node.addEventListener('dragleave', () => { node.classList.remove('is-dragging') })
+    node.addEventListener('drop', event => { if (!files(event)) return; event.preventDefault(); node.classList.remove('is-dragging'); if (!busy.has(card.id)) attach(card, Array.from(event.dataTransfer?.files ?? [])) })
+    return row
   }
 
   /** P0 and P1 need an option, or the decision written in words. */
@@ -192,11 +252,24 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
     busy.add(card.id)
     said.delete(card.id)
     draw(true)
+    // The owner's files go with the decision as reference lines, staged to the team's canvas first (C8), like the right bar.
+    const files = attached.get(card.id) ?? []
+    const refs: string[] = []
+    if (files.length > 0) {
+      const refused = card.address === undefined ? '这张卡没有团队地址，不能附带文件' : deps.stage === undefined ? '这台主机不能附带文件' : undefined
+      if (refused !== undefined) { busy.delete(card.id); said.set(card.id, `没有提交：${refused}`); draw(true); return }
+      for (const file of files) {
+        let staged: { ref: string } | { refused: string }
+        try { staged = await deps.stage!(file, card.address!) } catch (error) { staged = { refused: String(error) } }
+        if ('refused' in staged) { busy.delete(card.id); said.set(card.id, `没有提交：文件「${file.name}」没有附上（${staged.refused}）`); draw(true); return }
+        refs.push(staged.ref)
+      }
+    }
     let out: { status: number; body: Json }
-    try { out = await deps.decide({ id: card.id, ...(card.teamId !== '' ? { teamId: card.teamId } : {}), ...body }) } catch (error) { out = { status: 0, body: { error: String(error) } } }
+    try { out = await deps.decide({ id: card.id, ...(card.teamId !== '' ? { teamId: card.teamId } : {}), ...body, ...(refs.length > 0 ? { files: refs } : {}) }) } catch (error) { out = { status: 0, body: { error: String(error) } } }
     busy.delete(card.id)
     if (out.status >= 200 && out.status < 300 && out.body.ok === true) {
-      picks.delete(card.id); notes.delete(card.id)
+      picks.delete(card.id); notes.delete(card.id); attached.delete(card.id)
       notice.textContent = '已提交，团队会收到你的决定'
       notice.hidden = false
     } else if (out.body.code === 'stale') {
@@ -221,7 +294,7 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
   }
 
   function draw(force = false): void {
-    const key = JSON.stringify([cards, [...said], [...busy], failure, loaded])
+    const key = JSON.stringify([cards, [...said], [...busy], failure, loaded, [...attached].map(([id, fs]) => [id, fs.map(f => `${f.name}:${String(f.size)}`)])])
     if (!force && key === shown) return
     shown = key
     count.textContent = String(cards.length)
@@ -252,7 +325,7 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
         cards = rows.flatMap(row => { const card = cardOf(row); return card === undefined ? [] : [card] })
         loaded = true
         // A card decided elsewhere is gone: what was typed for it goes too.
-        for (const id of [...picks.keys(), ...notes.keys(), ...said.keys()]) if (!cards.some(c => c.id === id)) { picks.delete(id); notes.delete(id); said.delete(id) }
+        for (const id of [...picks.keys(), ...notes.keys(), ...said.keys(), ...attached.keys()]) if (!cards.some(c => c.id === id)) { picks.delete(id); notes.delete(id); said.delete(id); attached.delete(id) }
         failure = ''
       } catch (error) { failure = error instanceof Error ? error.message : String(error) }
       draw()

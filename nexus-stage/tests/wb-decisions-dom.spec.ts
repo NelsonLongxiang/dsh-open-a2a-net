@@ -4,7 +4,7 @@
  * here through the same host route as the DSH right bar, and whether the person is the owner is the host's call alone.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { CARD_ID, cardOf, createDecisionsGroup, decisionLink, fileHref, oneClick, refusalText, type DecisionCard } from '../src/wb-decisions.ts'
+import { ATTACH_MAX, CARD_ID, cardOf, createDecisionsGroup, decisionLink, fileHref, oneClick, refusalText, type DecisionCard } from '../src/wb-decisions.ts'
 import { createSuperagentPane } from '../src/wb-superagent.ts'
 
 const XSS = '<img src=x onerror="window.__pwned=1">'
@@ -177,6 +177,101 @@ describe('#769 review follow-ups', () => {
     await flush()
     // One ticket waiting on the person, one observer card: two, not three.
     expect(pane.update(state, sessions, Date.now()).badge).toBe('2')
+  })
+})
+
+describe('the owner\'s files on a decision (C8, as the right bar)', () => {
+  const ADDRESS = 'dsh/canvas/ops'
+  function mountFiles(stage = vi.fn(async (file: File, _address: string) => ({ ref: `[A2A file] v1 ${file.name}` }) as { ref: string } | { refused: string })) {
+    const decide = vi.fn(async (_body: Record<string, unknown>) => ({ status: 200, body: { ok: true } as Record<string, unknown> }))
+    let rows: unknown[] = [row({ address: ADDRESS, level: 'P2' })]
+    const group = createDecisionsGroup({ list: async () => ({ decisions: rows }), decide, stage })
+    document.body.replaceChildren(group.root)
+    const card = (): HTMLElement => document.querySelector<HTMLElement>('[data-card="d-1"]')!
+    const pick = (files: File[]): void => {
+      const input = card().querySelector<HTMLInputElement>('.wb-sa-attach input[type=file]')!
+      Object.defineProperty(input, 'files', { value: files, configurable: true })
+      input.dispatchEvent(new Event('change'))
+    }
+    return { group, decide, stage, card, pick, setRows: (r: unknown[]) => { rows = r } }
+  }
+  const file = (name: string, size = 3): File => { const f = new File(['abc'], name); if (size !== 3) Object.defineProperty(f, 'size', { value: size }); return f }
+
+  it('files picked for a decision are staged to the team\'s canvas first, then go with the decision as reference lines', async () => {
+    const m = mountFiles()
+    await m.group.refresh()
+    m.pick([file('a.md'), file(`b${XSS}.txt`)])
+    expect(m.card().querySelector('img')).toBeNull()
+    expect(m.card().textContent).toContain(`b${XSS}.txt`)
+    button(m.card(), '同意推荐').click()
+    await flush()
+    expect(m.stage.mock.calls.map(([f, address]) => [f.name, address])).toEqual([['a.md', ADDRESS], [`b${XSS}.txt`, ADDRESS]])
+    expect(m.decide).toHaveBeenLastCalledWith({ id: 'd-1', teamId: 't2', how: 'approve', files: ['[A2A file] v1 a.md', `[A2A file] v1 b${XSS}.txt`] })
+  })
+
+  it('a file that will not stage stops the decision: nothing is sent, and the page says which file and why', async () => {
+    const m = mountFiles(vi.fn(async (f: File) => f.name === 'bad.bin' ? { refused: 'the file channel is full' } : { ref: 'ok' }))
+    await m.group.refresh()
+    m.pick([file('good.md'), file('bad.bin')])
+    button(m.card(), '同意推荐').click()
+    await flush()
+    expect(m.decide).not.toHaveBeenCalled()
+    expect(m.card().querySelector('.wb-sa-decision-said')!.textContent).toBe('没有提交：文件「bad.bin」没有附上（the file channel is full）')
+    // The files stay picked, so the owner can try again.
+    expect(m.card().querySelectorAll('.wb-sa-attach-file')).toHaveLength(2)
+  })
+
+  it('at most 16 files and 64 MB each; a file already picked is picked once; one can be removed', async () => {
+    const m = mountFiles()
+    await m.group.refresh()
+    m.pick([file('huge.iso', 64 * 1024 * 1024 + 1)])
+    expect(m.card().querySelector('.wb-sa-decision-said')!.textContent).toContain('超过 64 MB')
+    expect(m.card().querySelectorAll('.wb-sa-attach-file')).toHaveLength(0)
+    m.pick([file('a.md'), file('a.md')])
+    expect(m.card().querySelectorAll('.wb-sa-attach-file')).toHaveLength(1)
+    m.pick(Array.from({ length: ATTACH_MAX }, (_, i) => file(`f${String(i)}.md`)))
+    expect(m.card().querySelector('.wb-sa-decision-said')!.textContent).toContain('最多附 16 个文件')
+    expect(m.card().querySelectorAll('.wb-sa-attach-file')).toHaveLength(1)
+    m.card().querySelector<HTMLButtonElement>('.wb-sa-attach-remove')!.click()
+    expect(m.card().querySelectorAll('.wb-sa-attach-file')).toHaveLength(0)
+  })
+
+  it('picked files survive a poll, go once the decision is sent, and go with a card decided elsewhere', async () => {
+    const m = mountFiles()
+    await m.group.refresh()
+    m.pick([file('a.md')])
+    await m.group.refresh()
+    expect(m.card().querySelectorAll('.wb-sa-attach-file')).toHaveLength(1)
+    button(m.card(), '同意推荐').click()
+    await flush()
+    expect(m.card().querySelectorAll('.wb-sa-attach-file')).toHaveLength(0)
+    m.pick([file('b.md')])
+    m.setRows([])
+    await m.group.refresh()
+    m.setRows([row({ address: ADDRESS, level: 'P2' })])
+    await m.group.refresh()
+    expect(m.card().querySelectorAll('.wb-sa-attach-file')).toHaveLength(0)
+  })
+
+  it('a card with no team address takes no files: the page says so and sends nothing', async () => {
+    const decide = vi.fn(async () => ({ status: 200, body: { ok: true } as Record<string, unknown> }))
+    const group = createDecisionsGroup({ list: async () => ({ decisions: [row({ level: 'P2' })] }), decide, stage: vi.fn(async () => ({ ref: 'r' })) })
+    document.body.replaceChildren(group.root)
+    await group.refresh()
+    const card = document.querySelector<HTMLElement>('[data-card="d-1"]')!
+    const input = card.querySelector<HTMLInputElement>('.wb-sa-attach input[type=file]')!
+    Object.defineProperty(input, 'files', { value: [file('a.md')] })
+    input.dispatchEvent(new Event('change'))
+    button(document.querySelector<HTMLElement>('[data-card="d-1"]')!, '同意推荐').click()
+    await flush()
+    expect(decide).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-card="d-1"] .wb-sa-decision-said')!.textContent).toContain('没有团队地址')
+  })
+
+  it('without a stage dependency there is no attach control', async () => {
+    const m = mount(() => [row({ address: ADDRESS })])
+    await m.group.refresh()
+    expect(document.querySelector('.wb-sa-attach')).toBeNull()
   })
 })
 
