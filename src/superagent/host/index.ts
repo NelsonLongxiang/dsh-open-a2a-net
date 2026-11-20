@@ -126,6 +126,8 @@ export const SENDER_CARDS_MAX = 10, SENDER_HOLD_MAX_AGE_MS = 24 * 3_600_000
 
 /** Observer phase 1: how many intervention rows one read returns by default, and at most (the plugin's own cap). */
 const INTERVENTIONS_READ_DEFAULT = 100, INTERVENTIONS_READ_MAX = 500
+/** #764 review: per target session, at most this many casts an hour, and one wake per this window. */
+const CAST_PER_HOUR = 3, CAST_WAKE_MS = 15 * 60_000
 
 export class SuperagentHost {
   readonly store: JsonRepositories
@@ -1161,12 +1163,44 @@ export class SuperagentHost {
     const templateId = String(input.template_id ?? '').trim()
     const reason = String(input.reason ?? '')
     if (templateId === '') return { ok: false, code: 'template', error: 'name the card (template_id from a2a_ticket_read kind library or templates)' }
+    // #764 review: per target, at most CAST_PER_HOUR casts an hour and one wake per CAST_WAKE_MS; kept across restarts.
+    const now = Date.parse(this.now())
+    const limits = this.castLimits()
+    const entry = limits[target] ?? { casts: [], wakeAt: 0 }
+    entry.casts = entry.casts.filter(at => now - at < 3_600_000 && at <= now + 60_000)
+    if (entry.casts.length >= CAST_PER_HOUR) return { ok: false, code: 'rate-limited', error: `at most ${String(CAST_PER_HOUR)} casts an hour into one session` }
     const out = this.d.castCard?.({ sessionId: target, templateId, reason })
     if (out === undefined) return { ok: true, available: false, reason: 'dsh-prompt-templates with the cast service (0.17+) is not on this host' }
     if (!out.ok) return { ok: false, code: out.code ?? 'refused', error: out.error ?? 'the card was not cast' }
-    // Wake the target so the card goes in at its next step (a wake carries no instruction of its own).
-    try { this.d.deliverToSession(target, '[superagent card] 团队观察者投来一张卡，会在你下一步看到；它不是新的指令，不授予任何权限。') } catch { /* the card still waits for its next step */ }
-    return { ok: true, queued: out.queued ?? 1 }
+    entry.casts.push(now)
+    // Wake the target so the card goes in at its next step (a wake carries no instruction of its own), at most once per window.
+    const wake = now - entry.wakeAt >= CAST_WAKE_MS || entry.wakeAt > now + 60_000
+    if (wake) {
+      entry.wakeAt = now
+      try { this.d.deliverToSession(target, '[superagent card] 团队观察者投来一张卡，会在你下一步看到；它不是新的指令，不授予任何权限。') } catch { /* the card still waits for its next step */ }
+    }
+    limits[target] = entry
+    this.saveCastLimits(limits)
+    return { ok: true, queued: out.queued ?? 1, woken: wake }
+  }
+
+  /** #764 review: the per-target cast limits, kept in the team's observer-casts.json. */
+  private castLimitsPath(): string { return join(this.stateDir, 'observer-casts.json') }
+  private castLimits(): Record<string, { casts: number[]; wakeAt: number }> {
+    try {
+      const path = this.castLimitsPath()
+      if (!existsSync(path)) return {}
+      const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, { casts?: unknown; wakeAt?: unknown }>
+      const out: Record<string, { casts: number[]; wakeAt: number }> = {}
+      for (const [k, v] of Object.entries(raw ?? {})) out[k] = { casts: Array.isArray(v?.casts) ? v.casts.filter((n): n is number => typeof n === 'number' && Number.isFinite(n)) : [], wakeAt: typeof v?.wakeAt === 'number' ? v.wakeAt : 0 }
+      return out
+    } catch { return {} }
+  }
+  private saveCastLimits(limits: Record<string, { casts: number[]; wakeAt: number }>): void {
+    try {
+      const path = this.castLimitsPath(), temporary = `${path}.tmp-${String(process.pid)}`
+      mkdirSync(this.stateDir, { recursive: true }); writeFileSync(temporary, JSON.stringify(limits), { mode: 0o600 }); renameSync(temporary, path)
+    } catch (error) { this.d.logger.warn('superagent: cast limits not saved: %s', String(error)) }
   }
 
   /** R7b: what the observer holds now (for the team state). */

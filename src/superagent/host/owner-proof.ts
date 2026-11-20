@@ -9,7 +9,8 @@
  */
 import type { IncomingMessage } from 'node:http'
 
-const RULE_FIELDS = ['rules', 'dispatch', 'profiles', 'prepare', 'prompts', 'extraTools', 'approvers', 'blockedTools', 'mcp'] as const
+// observerCast (#764 review): letting the observer cast cards into sessions is the owner's call, not a shell's.
+const RULE_FIELDS = ['rules', 'dispatch', 'profiles', 'prepare', 'prompts', 'extraTools', 'approvers', 'blockedTools', 'mcp', 'observerCast'] as const
 
 /** Whether a settings write changes a rule, a role, the dispatch rules, or the command that runs on this host (reliability R4). */
 export function touchesRules(settings: unknown): boolean {
