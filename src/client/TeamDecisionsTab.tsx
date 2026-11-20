@@ -10,7 +10,8 @@ import { AttachedFiles, stageFiles, useAttachedFiles } from './team-files.tsx'
 
 /**
  * How long a staged file is reused for a retried decision: the file channel keeps a grant 24 hours, so an older copy is
- * staged again rather than sent as a reference that may expire before the team fetches it.
+ * staged again rather than sent as a reference that may expire before the team fetches it. The workbench keeps the same
+ * value in nexus-stage/src/wb-decisions.ts (a separate bundle that imports nothing from src/); a test keeps the two equal.
  */
 export const STAGE_REUSE_MS = 23 * 60 * 60_000
 
