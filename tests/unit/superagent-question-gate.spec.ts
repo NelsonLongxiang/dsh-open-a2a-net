@@ -82,6 +82,38 @@ describe('R7b: the gate', () => {
     expect(gate({ observer: 'session-o' }).g.ask('tk-1', 'session-o', '做事', '?', T0)).toBe('person')
     expect(gate({ observer: 'session-o', tell: false }).g.ask('tk-1', 'session-m', '做事', '?', T0)).toBe('person')
   })
+  it('#761 review 1: a member asking again within the hour does not restart it; the question still reaches the person', () => {
+    const { g, told } = gate({ observer: 'session-o' })
+    expect(g.ask('tk-1', 'session-m', '做事', '用哪个？', T0)).toBe('observer')
+    // Every 50 minutes for five hours: the first hour still ends at T0 + 1 h.
+    let moved: Array<{ ticketId: string; why: string }> = []
+    for (let k = 1; k <= 6 && moved.length === 0; k++) {
+      const at = T0 + k * 50 * 60_000
+      moved = g.tick(() => true, at)
+      if (moved.length === 0) expect(g.ask('tk-1', 'session-m', '做事', `第 ${String(k)} 次`, at)).toBe('observer')
+    }
+    expect(moved).toEqual([{ ticketId: 'tk-1', why: 'silent' }])
+    expect(g.held('tk-1')).toBe(false)
+    expect(told.length).toBeGreaterThan(1)
+    // Once the observer settled it, the member still asking within the hour goes to the person at once.
+    const h = gate({ observer: 'session-o' })
+    h.g.ask('tk-2', 'session-m', '做事', '?', T0)
+    h.g.acted('session-o', questionToken('tk-2'), T0 + 10 * 60_000)
+    expect(h.g.ask('tk-2', 'session-m', '做事', '还是不行', T0 + 40 * 60_000)).toBe('person')
+    expect(h.g.held('tk-2')).toBe(false)
+    expect(h.g.reachedAt('tk-2')).toBe(T0 + 40 * 60_000)
+  })
+  it('#761 review 2: settling with a request or a card opens the no-loop window too', () => {
+    for (const how of ['request', 'card']) {
+      const { g, told } = gate({ observer: 'session-o' })
+      g.ask('tk-1', 'session-m', '做事', '?', T0)
+      g.acted('session-o', `${how} ${questionToken('tk-1')}`, T0 + 5 * 60_000)
+      // The handled question ends (the member's answer arrived), then the member asks anew within the hour.
+      expect(g.tick(() => false, T0 + 10 * 60_000)).toEqual([])
+      expect(g.ask('tk-1', 'session-m', '做事', '新的问题', T0 + 20 * 60_000)).toBe('person')
+      expect(told).toHaveLength(1)
+    }
+  })
   it('survives a restart: the hour is not reset and the observer is not told again', () => {
     const store: { kept?: unknown } = {}
     const a = gate({ observer: 'session-o', store })
