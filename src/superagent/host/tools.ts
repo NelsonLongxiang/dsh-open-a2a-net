@@ -508,6 +508,24 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     },
   }))
 
+  // R7b (workbench-market 18, #880): the observer answers on a ticket with a note; it can only leave the note.
+  ctx.tools.register(defineTool({
+    name: 'a2a_ticket_note',
+    description: 'Team observer only: leave a note on one of this team\'s open tickets. It reaches the member holding the ticket as a fact for the work, like the router\'s notes; it grants nothing and cannot change, stop or reassign the ticket. Use it to answer a question with the background the member lacks, or to point to where the data already is. To settle a question the host passed you, put its [提问 <ticket>] token in the text.',
+    parameters: {
+      ticket_id: { type: 'string', required: true, description: 'The open ticket of this team.' },
+      text: { type: 'string', required: true, description: 'The note, at most 4000 characters.' },
+    },
+    output: { ...anyProps, render: (_args, value) => said('a2a_ticket_note', value) },
+    presentCall: args => ({ card: 'generic', title: `a2a_ticket_note ${String(args.ticket_id)}`, kind: 'other', rawInput: { ticket_id: args.ticket_id } }),
+    execute: async (args: { ticket_id?: string; text?: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host(exec)
+      const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
+      if (h === undefined || me === undefined) return { ok: false, code: 'not-observer', error: 'a2a_ticket_note serves only the team\'s observer' }
+      return json(h.observerNote(me, String(args.ticket_id ?? '').trim(), String(args.text ?? ''))) as Record<string, JsonValue>
+    },
+  }))
+
   // Design tool-requests T3: a tool the role's list hides can still be asked for by name; the owner decides on a P0 card.
   ctx.tools.register(defineTool({
     name: 'a2a_tool_request',

@@ -65,7 +65,7 @@ export const MEMBER_WORK_TOOLS: readonly string[] = ['read', 'write', 'edit', 'r
 export const MEMBER_TOOLS: readonly string[] = [...MEMBER_WORK_TOOLS, ...SCHEDULE_TOOLS, ...SELF_TOOLS, ...YGL_WORK_TOOLS, 'a2a_outbound_request', 'a2a_decision_decide', 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_ticket_request', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch']
 
 /** An observer's tools: a member's, and its own decision cards (design D15; since #717 every member may file a request). */
-export const OBSERVER_TOOLS: readonly string[] = [...MEMBER_TOOLS, 'a2a_decision_propose']
+export const OBSERVER_TOOLS: readonly string[] = [...MEMBER_TOOLS, 'a2a_decision_propose', 'a2a_ticket_note']
 
 /**
  * The team builder's tools (TB2): its own inventory and the rule templates, read-only files, and its own schedules and
@@ -75,7 +75,7 @@ export const OBSERVER_TOOLS: readonly string[] = [...MEMBER_TOOLS, 'a2a_decision
 export const BUILDER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, ...SELF_TOOLS, 'read', 'glob', 'grep', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw']
 
 /** The tools only a team's sessions have: a session with no role is not offered them. */
-export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS.filter(name => !SCHEDULE_TOOLS.includes(name) && !SELF_TOOLS.includes(name) && !YGL_READ_TOOLS.includes(name) && !ROUTER_READ_TOOLS.includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw']
+export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS.filter(name => !SCHEDULE_TOOLS.includes(name) && !SELF_TOOLS.includes(name) && !YGL_READ_TOOLS.includes(name) && !ROUTER_READ_TOOLS.includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_ticket_note', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw']
 
 /**
  * Design tool-requests T6 (owner 2026-11-11: granting tools one by one was too much to operate). A member or an observer may
