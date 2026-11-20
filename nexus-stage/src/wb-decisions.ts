@@ -7,6 +7,8 @@
  *
  * The market links here with `/__dsh_a2a_nexus/?tab=team&view=decisions&card=<id>`: only those three parameters are read,
  * the card id must match the card id rule, and it is never put into markup or a request path — only compared.
+ * Only the router's and the observer's cards are listed — the same cards the host pushes to the market. A member's
+ * question on a ticket is answered on its ticket card in 待你处理的工单, so it is neither shown nor counted twice.
  * Cards are attacker-shaped data (a router or observer wrote them): textContent only.
  * @module nexus-stage/wb-decisions
  */
@@ -47,6 +49,7 @@ export function cardOf(raw: unknown): DecisionCard | undefined {
   const str = (v: unknown): string => typeof v === 'string' ? v : ''
   const options = Array.isArray(r.options) ? r.options.filter((o): o is string => typeof o === 'string') : []
   if (str(r.id) === '' || str(r.question) === '' || options.length === 0) return undefined
+  if (r.source !== 'router' && r.source !== 'observer') return undefined
   const files = Array.isArray(r.files) ? r.files.flatMap(f => {
     const x = (f ?? {}) as Json
     return typeof x.sha256 === 'string' && SHA256.test(x.sha256) && typeof x.name === 'string' && typeof x.size === 'number' ? [{ sha256: x.sha256, size: x.size, name: x.name }] : []
@@ -107,6 +110,8 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
   let shown = ''
   let loaded = false
   let reading: Promise<void> | undefined
+  /** Why the last read failed; cleared by a read that works. */
+  let failure = ''
   let wanted: string | undefined
   /** Per card: the person's pick and words, kept across redraws; and what the host last said about it. */
   const picks = new Map<string, string>()
@@ -216,12 +221,13 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
   }
 
   function draw(force = false): void {
-    const key = JSON.stringify([cards, [...said], [...busy]])
+    const key = JSON.stringify([cards, [...said], [...busy], failure, loaded])
     if (!force && key === shown) return
     shown = key
     count.textContent = String(cards.length)
     list.replaceChildren(...cards.map(cardNode))
-    if (cards.length === 0) list.append(el('div', 'wb-sa-hint', loaded ? '没有等你拍板的卡' : '正在读取…'))
+    if (failure !== '') list.append(el('div', 'wb-sa-hint wb-sa-decisions-failed', `${loaded ? '刷新失败，下面是上次读到的卡' : '读不到等你拍板的卡'}：${failure}（下次轮询会再试）`))
+    if (cards.length === 0 && failure === '') list.append(el('div', 'wb-sa-hint', loaded ? '没有等你拍板的卡' : '正在读取…'))
   }
 
   /** The deep-linked card: scrolled to and flashed once it is here; once the cards are read and it is not, say so. */
@@ -247,7 +253,8 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
         loaded = true
         // A card decided elsewhere is gone: what was typed for it goes too.
         for (const id of [...picks.keys(), ...notes.keys(), ...said.keys()]) if (!cards.some(c => c.id === id)) { picks.delete(id); notes.delete(id); said.delete(id) }
-      } catch { /* the next poll reads again */ }
+        failure = ''
+      } catch (error) { failure = error instanceof Error ? error.message : String(error) }
       draw()
       place()
     })().finally(() => { reading = undefined })
