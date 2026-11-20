@@ -243,12 +243,14 @@ export class SuperagentHost {
     // T8 step 1: the roster's recipients, transport and canvas address; the outbox is kept across restarts.
     const pushPath = join(dir, 'decision-push.json')
     this.decisionPush = new DecisionPush({
+      on: () => this.settingsValue.decisionPush === true,
+      holds: cardId => this.decisions?.get(cardId) !== undefined,
       team: () => { const s = this.settings; if (s.canvas === undefined) return undefined; const router = s.router ?? s.members[0]; const zone = router === undefined ? undefined : (d.handleOf?.(router) ?? router).split('/')[0]; return zone === undefined || zone === '' ? undefined : { canvas: s.canvas, address: `${zone}/canvas/${s.canvas}` } },
       remotes: canvas => (d.canvasTeam?.(canvas)?.remote ?? []).map(r => r.ref),
       declares: (ref, capability) => d.memberDeclares?.(ref, capability) === true,
       send: async (ref, text, taskId) => { if (d.rosterSend === undefined) throw new Error('no roster send on this host'); await d.rosterSend(ref, text, taskId) },
       hostFingerprint: () => d.hostFingerprint?.(),
-      load: () => existsSync(pushPath) ? JSON.parse(readFileSync(pushPath, 'utf8')) as unknown : undefined,
+      load: () => { try { return existsSync(pushPath) ? JSON.parse(readFileSync(pushPath, 'utf8')) as unknown : undefined } catch { return undefined } },
       save: kept => { mkdirSync(dir, { recursive: true }); const tmp = `${pushPath}.tmp-${randomUUID()}`; writeFileSync(tmp, JSON.stringify(kept), { mode: 0o600 }); renameSync(tmp, pushPath) },
       nowMs: () => Date.parse(this.now()), logger: d.logger,
     })
@@ -1968,6 +1970,8 @@ export class SuperagentHost {
     }
     // A queued ticket has no binding, so the quiet check above never sees it: say what it has waited for, and for how long.
     out.push(...queuedProblems(this.executor.queued(), q => this.queuedSince(q), id => this.store.tickets.get(id)?.title ?? id, now))
+    // T8: a decision card the market refused (or this host could not shape for it) stays visible: one problem per team and card.
+    for (const refused of this.decisionPush.problems()) out.push({ code: 'decision-push-refused', title: `${this.settings.canvas ?? ''}/${refused.cardId}`, detail: refused.why })
     return out
   }
 

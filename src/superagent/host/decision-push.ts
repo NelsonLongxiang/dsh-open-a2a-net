@@ -12,8 +12,10 @@
 import type { StoredCard } from './decisions.ts'
 
 export const DECISION_CARD_HEADER = '[A2A decision-card] v1'
-/** The market's limits (v1 final). */
+/** The market's limits (v1 final; workbench-market #898 parseDecisionCardDoc): checked here so nothing it would refuse is sent. */
 export const PUSH_BODY_MAX = 32 * 1024, PUSH_ID = /^[A-Za-z0-9._:-]{1,64}$/, PUSH_QUESTION_MAX = 2000, PUSH_FILES_MAX = 16, PUSH_DECIDE_AT_MAX = 300
+export const PUSH_REASON_MAX = 2000, PUSH_OPTION_MAX = 300, PUSH_FILE_NAME_MAX = 200, PUSH_LEVELS = ['P0', 'P1', 'P2', 'P3'] as const
+const SHA256 = /^[0-9a-f]{64}$/
 /** How often the outbox is looked at, and how many events it keeps at most. */
 export const PUSH_TICK_MS = 10_000, PUSH_PENDING_MAX = 200
 export type PushEvent = 'created' | 'decided' | 'dropped'
@@ -24,23 +26,38 @@ export const pushedSource = (source: StoredCard['source']): boolean => source ==
 /** The path the market links to for deciding: the workbench, team tab, decisions view, this card. */
 export const decideAt = (cardId: string): string => `/__dsh_a2a_nexus/?tab=team&view=decisions&card=${encodeURIComponent(cardId)}`
 
-/** One envelope's text, or why the card cannot go (then it is logged and skipped, never sent half-formed). */
+/** Text cut to the market's limit, marked as cut (the market counts UTF-16 units, as String.length does). */
+const cut = (text: string, max: number): string => text.length <= max ? text : `${text.slice(0, max - 1)}…`
+
+/**
+ * One envelope's text, or why the card cannot go (then it is a health problem, never sent half-formed). A reason or a
+ * file name over the market's limit is cut and sent; anything else the market would refuse stops the card here.
+ */
 export function decisionCardText(event: PushEvent, rev: number, team: string, card: StoredCard): { ok: true; text: string } | { ok: false; why: string } {
   if (!PUSH_ID.test(card.id)) return { ok: false, why: 'card id outside the market\'s id rule' }
   const options = card.options ?? []
   if (options.length < 2 || options.length > 6 || new Set(options).size !== options.length) return { ok: false, why: 'options must be 2..6 and distinct' }
-  if (card.question.length > PUSH_QUESTION_MAX) return { ok: false, why: 'question longer than 2000 characters' }
-  const files = (card.files ?? []).slice(0, PUSH_FILES_MAX + 1)
+  if (options.some(option => option.trim() === '' || option.length > PUSH_OPTION_MAX)) return { ok: false, why: 'an option is empty or longer than 300 characters' }
+  const recommended = card.recommended ?? ''
+  if (!options.includes(recommended)) return { ok: false, why: 'the recommended option is not one of the options' }
+  const level = card.level ?? 'P1'
+  if (!(PUSH_LEVELS as readonly string[]).includes(level)) return { ok: false, why: 'level outside P0..P3' }
+  if (card.question.trim() === '' || card.question.length > PUSH_QUESTION_MAX) return { ok: false, why: 'question empty or longer than 2000 characters' }
+  if (!Number.isFinite(Date.parse(card.at))) return { ok: false, why: 'created_at is not a time' }
+  if (event === 'decided' && (card.decided === undefined || !Number.isFinite(Date.parse(card.decided.at)))) return { ok: false, why: 'a decided event with no decision time' }
+  const files = card.files ?? []
   if (files.length > PUSH_FILES_MAX) return { ok: false, why: 'more than 16 files' }
+  if (files.some(f => !SHA256.test(f.sha256) || !Number.isSafeInteger(f.size) || f.size < 0 || f.name.trim() === '')) return { ok: false, why: 'a file without a name, size or sha256 digest' }
   const link = decideAt(card.id)
   if (link.length > PUSH_DECIDE_AT_MAX) return { ok: false, why: 'decide_at too long' }
   const body = {
     event, rev, decide_at: link,
     card: {
-      id: card.id, team, proposer_kind: card.source as 'router' | 'observer', level: card.level ?? 'P1', question: card.question, options,
-      recommended: card.recommended ?? '', ...(card.reason !== undefined ? { reason: card.reason } : {}),
-      files: files.map(f => ({ name: f.name, size: f.size, sha256: f.sha256 })), created_at: card.at,
-      ...(event === 'decided' && card.decided !== undefined ? { decided_at: card.decided.at, decided_option: decidedOption(card.decided.text, options) } : {}),
+      id: card.id, team, proposer_kind: card.source as 'router' | 'observer', level, question: card.question, options,
+      recommended, ...(card.reason !== undefined ? { reason: cut(card.reason, PUSH_REASON_MAX) } : {}),
+      files: files.map(f => ({ name: cut(f.name, PUSH_FILE_NAME_MAX), size: f.size, sha256: f.sha256 })), created_at: card.at,
+      // A decision in words only (no option chosen) is null: the market takes null or one of the options, never ''.
+      ...(event === 'decided' && card.decided !== undefined ? { decided_at: card.decided.at, decided_option: decidedOption(card.decided.text, options) || null } : {}),
     },
   }
   const text = `${DECISION_CARD_HEADER}\n${JSON.stringify(body)}`
@@ -55,19 +72,32 @@ export function decidedOption(text: string, options: readonly string[]): string 
   return options.includes(chosen) ? chosen : ''
 }
 
-/** A refusal the market will repeat for the same body: drop it rather than retry (v1: 400, 401, 403, 429). */
-export const finalRefusal = (error: unknown): boolean => /\b(400|401|403|429)\b|decision-card-invalid|too-many-waiting/.test(String(error))
+/**
+ * A refusal the market will repeat for the same body: drop it rather than retry (v1: 400, 401, 403, 429). Read from the
+ * status code when the error carries one, else from the HTTP status or the market's error code in its text — never from
+ * a bare number, which could be a length or a count.
+ */
+export function finalRefusal(error: unknown): boolean {
+  const status = (error as { statusCode?: unknown } | null)?.statusCode
+  if (typeof status === 'number') return [400, 401, 403, 429].includes(status)
+  return /\bHTTP (400|401|403|429)\b|decision-card-invalid|decision-card-too-large|untrusted-origin|team-not-bound|too-many-waiting/.test(String(error))
+}
 
 interface Pending { readonly cardId: string; readonly event: PushEvent; readonly rev: number; readonly text: string }
-interface Kept { revs: Record<string, number>; pending: Pending[] }
+interface Refused { readonly event: PushEvent; readonly why: string; readonly at: string }
+interface Kept { revs: Record<string, number>; pending: Pending[]; refused: Record<string, Refused> }
 
 export interface DecisionPushDeps {
+  /** Whether the owner has turned the push on (team setting `decisionPush`); off, nothing is queued, kept or sent. */
+  readonly on: () => boolean
   /** The team's canvas, and the canvas address the roster reports (`<zone>/canvas/<name>`); undefined when unbound. */
   readonly team: () => { canvas: string; address: string } | undefined
   readonly remotes: (canvas: string) => readonly string[]
   readonly declares: (ref: string, capability: string) => boolean
   readonly send: (ref: string, text: string, taskId: string) => Promise<void>
   readonly hostFingerprint: () => string | undefined
+  /** Whether the host still holds the card (a refusal about a card the host no longer has is no longer a problem). */
+  readonly holds: (cardId: string) => boolean
   readonly load: () => unknown
   readonly save: (kept: Kept) => void
   readonly nowMs: () => number
@@ -84,32 +114,44 @@ export class DecisionPush {
     if (this.kept !== undefined) return this.kept
     let raw: Partial<Kept> | undefined
     try { raw = this.d.load() as Partial<Kept> | undefined } catch { raw = undefined }
+    const record = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
     this.kept = {
-      revs: raw?.revs !== null && typeof raw?.revs === 'object' ? Object.fromEntries(Object.entries(raw.revs).filter(([, v]) => typeof v === 'number')) : {},
+      revs: record(raw?.revs) ? Object.fromEntries(Object.entries(raw.revs).filter(([, v]) => typeof v === 'number')) as Record<string, number> : {},
       pending: Array.isArray(raw?.pending) ? raw.pending.filter((p): p is Pending => typeof p?.cardId === 'string' && typeof p.text === 'string' && typeof p.rev === 'number') : [],
+      refused: record(raw?.refused) ? Object.fromEntries(Object.entries(raw.refused).filter(([, v]) => record(v) && typeof v.why === 'string')) as Record<string, Refused> : {},
     }
     return this.kept
   }
   private persist(): void { try { this.d.save(this.state()) } catch (error) { this.d.logger.warn('superagent: decision push state not saved: %s', String(error)) } }
+  private refuse(cardId: string, event: PushEvent, why: string): void {
+    this.state().refused[cardId] = { event, why, at: new Date(this.d.nowMs()).toISOString() }
+  }
 
-  /** A card was raised, decided or dropped: queue its event with the next revision (router and observer cards only). */
+  /**
+   * A card was raised, decided or dropped: queue its event (router and observer cards only, and only while the push is
+   * on). The revision is never below the clock in milliseconds, so a lost or broken state file never sends it backwards.
+   */
   noted(event: PushEvent, card: StoredCard): void {
-    if (!pushedSource(card.source)) return
+    if (!pushedSource(card.source) || !this.d.on()) return
     const team = this.d.team()
     if (team === undefined) return
     const kept = this.state()
-    const rev = (kept.revs[card.id] ?? 0) + 1
-    const built = decisionCardText(event, rev, team.address, card)
-    if (!built.ok) { this.d.logger.warn('superagent: decision card %s not pushed: %s', card.id, built.why); return }
+    const rev = Math.max((kept.revs[card.id] ?? 0) + 1, Math.floor(this.d.nowMs()))
     kept.revs[card.id] = rev
-    kept.pending.push({ cardId: card.id, event, rev, text: built.text })
-    if (kept.pending.length > PUSH_PENDING_MAX) kept.pending.splice(0, kept.pending.length - PUSH_PENDING_MAX)
+    const built = decisionCardText(event, rev, team.address, card)
+    if (!built.ok) {
+      this.d.logger.warn('superagent: decision card %s not pushed: %s', card.id, built.why)
+      this.refuse(card.id, event, built.why)
+    } else {
+      kept.pending.push({ cardId: card.id, event, rev, text: built.text })
+      if (kept.pending.length > PUSH_PENDING_MAX) kept.pending.splice(0, kept.pending.length - PUSH_PENDING_MAX)
+    }
     this.persist()
   }
 
-  /** Send what waits, oldest first. A market refusal that would repeat drops the event; a transport failure keeps it. */
+  /** Send what waits, oldest first. A market refusal that would repeat drops the event as a problem; a transport failure keeps it. */
   async tick(): Promise<void> {
-    if (this.sending) return
+    if (this.sending || !this.d.on()) return
     const kept = this.state()
     if (kept.pending.length === 0) return
     const team = this.d.team(), host = this.d.hostFingerprint()
@@ -121,19 +163,33 @@ export class DecisionPush {
       while (kept.pending.length > 0) {
         const next = kept.pending[0]!
         const taskId = `card-${host.slice(0, 8)}-${String(this.d.nowMs())}-${String(next.rev)}`
-        let delivered = 0, refused = 0
+        let delivered = 0, refusal: string | undefined
         for (const ref of targets) {
           try { await this.d.send(ref, next.text, taskId); delivered++ } catch (error) {
-            if (finalRefusal(error)) { refused++; this.d.logger.warn('superagent: market refused decision card %s (%s): %s', next.cardId, next.event, String(error)) }
+            if (finalRefusal(error)) { refusal = String(error); this.d.logger.warn('superagent: market refused decision card %s (%s): %s', next.cardId, next.event, String(error)) }
             else this.d.logger.warn('superagent: decision card %s to %s failed: %s', next.cardId, ref, String(error))
           }
         }
         // Nobody took it and nobody refused it for good: keep it, try again next tick.
-        if (delivered === 0 && refused === 0) return
+        if (delivered === 0 && refusal === undefined) return
         kept.pending.shift()
+        if (delivered > 0) delete kept.refused[next.cardId]
+        else this.refuse(next.cardId, next.event, `市场拒收（${next.event}）：${refusal!.slice(0, 200)}`)
         this.persist()
       }
     } finally { this.sending = false }
+  }
+
+  /**
+   * The cards whose push was refused (by this host's checks or by the market) and that the host still holds: one health
+   * problem each (R7a: the observer first). A later push of the same card that goes through clears it.
+   */
+  problems(): Array<{ cardId: string; event: PushEvent; why: string }> {
+    const kept = this.state()
+    let pruned = false
+    for (const id of Object.keys(kept.refused)) if (!this.d.holds(id)) { delete kept.refused[id]; pruned = true }
+    if (pruned) this.persist()
+    return Object.entries(kept.refused).map(([cardId, r]) => ({ cardId, event: r.event, why: r.why }))
   }
 
   /** For the state and tests. */
