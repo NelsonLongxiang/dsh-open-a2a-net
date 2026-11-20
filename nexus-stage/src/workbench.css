@@ -451,3 +451,14 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 /* The settings saves, under 设置. */
 .wb-sa-hist{padding:4px 0}
 .wb-sa-hist-line{font-size:12px;color:var(--muted,#888);word-break:break-all}
+/* T8: 等你拍板 — the decision cards in 待你处理 (wb-decisions.ts). */
+.wb-sa-decision-card{display:flex;flex-direction:column;gap:6px}
+.wb-sa-decision-head{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;font-size:11.5px;color:var(--n-ink-muted)}
+.wb-sa-level{font-weight:600;color:var(--n-ink)}
+.wb-sa-decision-question{white-space:pre-wrap;overflow-wrap:anywhere}
+.wb-sa-decision-options{display:flex;flex-direction:column;gap:4px}
+.wb-sa-option{display:flex;gap:6px;align-items:baseline;overflow-wrap:anywhere}
+.wb-sa-option.is-recommended{font-weight:600}
+.wb-sa-badge{font-size:10.5px;padding:0 5px;border-radius:8px;border:1px solid var(--n-accent);color:var(--n-ink)}
+.wb-sa-decision-note{min-height:44px}
+.wb-sa-file{align-self:flex-start;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

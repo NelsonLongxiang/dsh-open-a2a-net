@@ -191,6 +191,23 @@ describe('T8: on the host', () => {
     await m.h.stop()
   })
 
+  it('#767 review (R11): what turning the push off drops is dropped on disk too — a restart reads back nothing to send', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-push-off-'))
+    const m = await team({ home, send: () => { throw new Error('ECONNREFUSED') } })
+    m.h.proposeDecision('observer', 'session-o', '排着的', spec, 'r')
+    await m.h.decisionPush.tick()
+    expect(m.h.decisionPush.pending()).toHaveLength(1)
+    expect(m.h.saveSettings({ decisionPush: false }, () => true)).toMatchObject({ ok: true })
+    await m.h.decisionPush.tick()
+    await m.h.stop()
+    const n = await team({ home })
+    expect(n.h.decisionPush.pending()).toEqual([])
+    await n.h.decisionPush.tick()
+    expect(n.sent).toEqual([])
+    expect(n.refusedProblems()).toEqual([])
+    await n.h.stop()
+  })
+
   it('a transport failure keeps the event for the next tick; the outbox survives a restart', async () => {
     let mode: 'down' | 'up' = 'down'
     const home = mkdtempSync(join(tmpdir(), 'sa-push-retry-'))
