@@ -8,6 +8,12 @@ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import styles from './TeamRequestTab.module.css'
 import { AttachedFiles, stageFiles, useAttachedFiles } from './team-files.tsx'
 
+/**
+ * How long a staged file is reused for a retried decision: the file channel keeps a grant 24 hours, so an older copy is
+ * staged again rather than sent as a reference that may expire before the team fetches it.
+ */
+export const STAGE_REUSE_MS = 23 * 60 * 60_000
+
 export type TeamDecisionsTabProps = PropsLocale<'a2aNet'>
 
 export interface DecisionRow {
@@ -45,8 +51,8 @@ function Card({ row, t, done }: { readonly row: DecisionRow; readonly done: () =
   const [error, setError] = useState<string | undefined>(undefined)
   const { files, setFiles, addFiles, dragging, dropProps } = useAttachedFiles(t, (text) => { setError(text) })
   // A decision the host refuses and the owner sends again reuses the files already staged for it, so a refusal leaves at
-  // most one staged copy of each file (it expires with the file channel's 24 hours).
-  const staged = useRef(new Map<File, string>())
+  // most one live staged copy of each file (it expires with the file channel's 24 hours). A copy close to that is staged again.
+  const staged = useRef(new Map<File, { readonly ref: string; readonly at: number }>())
   const decide = async (body: Record<string, unknown>): Promise<void> => {
     setBusy(true)
     setError(undefined)
@@ -54,11 +60,13 @@ function Card({ row, t, done }: { readonly row: DecisionRow; readonly done: () =
     let refs: string[] = []
     if (files.length > 0) {
       if (row.address === undefined) { setBusy(false); setError(t('team.failed', { reason: t('team.noFileTarget') })); return }
-      const missing = files.filter(file => !staged.current.has(file))
+      const now = Date.now()
+      const missing = files.filter(file => { const kept = staged.current.get(file); return kept === undefined || now - kept.at >= STAGE_REUSE_MS })
       const out = await stageFiles(missing, row.address)
+      // The files staged before a failure are kept too, so the retry does not stage them again.
+      out.refs.forEach((ref, i) => { staged.current.set(missing[i]!, { ref, at: now }) })
       if ('refused' in out) { setBusy(false); setError(t('team.failed', { reason: out.refused })); return }
-      missing.forEach((file, i) => { staged.current.set(file, out.refs[i]!) })
-      refs = files.map(file => staged.current.get(file)!)
+      refs = files.map(file => staged.current.get(file)!.ref)
     }
     const refused = await postDecision(row, { ...body, ...(refs.length > 0 ? { files: refs } : {}) })
     setBusy(false)

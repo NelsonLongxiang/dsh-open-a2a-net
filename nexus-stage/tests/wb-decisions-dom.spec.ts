@@ -4,7 +4,7 @@
  * here through the same host route as the DSH right bar, and whether the person is the owner is the host's call alone.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { ATTACH_MAX, CARD_ID, cardOf, createDecisionsGroup, decisionLink, fileHref, oneClick, refusalText, type DecisionCard } from '../src/wb-decisions.ts'
+import { ATTACH_MAX, STAGE_REUSE_MS, CARD_ID, cardOf, createDecisionsGroup, decisionLink, fileHref, oneClick, refusalText, type DecisionCard } from '../src/wb-decisions.ts'
 import { createSuperagentPane } from '../src/wb-superagent.ts'
 
 const XSS = '<img src=x onerror="window.__pwned=1">'
@@ -303,6 +303,58 @@ describe('the owner\'s files on a decision (C8, as the right bar)', () => {
     await flush()
     expect(stage).toHaveBeenCalledTimes(2)
     expect(decide).toHaveBeenLastCalledWith({ id: 'd-1', teamId: 't2', how: 'approve', files: ['[A2A file] v1 a.md', '[A2A file] v1 b.md'] })
+  })
+
+  async function refusedOnce() {
+    const stage = vi.fn(async (f: File) => ({ ref: `[A2A file] v1 ${f.name}` }) as { ref: string } | { refused: string })
+    let answer: { status: number; body: Record<string, unknown> } = { status: 403, body: { ok: false, error: 'browser owner proof required' } }
+    const decide = vi.fn(async (_body: Record<string, unknown>) => answer)
+    const group = createDecisionsGroup({ list: async () => ({ decisions: [row({ address: ADDRESS, level: 'P2' })] }), decide, stage })
+    document.body.replaceChildren(group.root)
+    await group.refresh()
+    const card = (): HTMLElement => document.querySelector<HTMLElement>('[data-card="d-1"]')!
+    const input = card().querySelector<HTMLInputElement>('.wb-sa-attach input[type=file]')!
+    Object.defineProperty(input, 'files', { value: [file('a.md'), file('b.md')] })
+    input.dispatchEvent(new Event('change'))
+    button(card(), '同意推荐').click()
+    await flush()
+    expect(stage).toHaveBeenCalledTimes(2)
+    answer = { status: 200, body: { ok: true } }
+    return { stage, decide, card }
+  }
+
+  it('#773 review (A10): a file removed after staging is not sent with the retried decision', async () => {
+    const m = await refusedOnce()
+    const remove = Array.from(m.card().querySelectorAll<HTMLButtonElement>('.wb-sa-attach-remove')).find(b => b.getAttribute('aria-label') === '移除 b.md')!
+    remove.click()
+    button(m.card(), '同意推荐').click()
+    await flush()
+    expect(m.stage).toHaveBeenCalledTimes(2)
+    expect(m.decide).toHaveBeenLastCalledWith({ id: 'd-1', teamId: 't2', how: 'approve', files: ['[A2A file] v1 a.md'] })
+  })
+
+  it('#773 review: a staged copy close to the channel\'s 24 hours is staged again, never reused', async () => {
+    const real = Date.now
+    let now = real()
+    Date.now = () => now
+    try {
+      const m = await refusedOnce()
+      now += STAGE_REUSE_MS - 1
+      button(m.card(), '同意推荐').click()
+      await flush()
+      expect(m.stage).toHaveBeenCalledTimes(2)
+      expect(STAGE_REUSE_MS).toBeLessThan(24 * 60 * 60_000)
+    } finally { Date.now = real }
+    now = real()
+    Date.now = () => now
+    try {
+      const m = await refusedOnce()
+      now += STAGE_REUSE_MS
+      button(m.card(), '同意推荐').click()
+      await flush()
+      expect(m.stage).toHaveBeenCalledTimes(4)
+      expect(m.decide).toHaveBeenLastCalledWith({ id: 'd-1', teamId: 't2', how: 'approve', files: ['[A2A file] v1 a.md', '[A2A file] v1 b.md'] })
+    } finally { Date.now = real }
   })
 
   it('a card with no team address takes no files: the page says so and sends nothing', async () => {
