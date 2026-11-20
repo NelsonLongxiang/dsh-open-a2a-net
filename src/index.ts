@@ -57,6 +57,7 @@ import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type SettlementJudge, type TaskRecord } from './task-ledger.ts'
 import { formatReceipt, holdsRow, parseReceipt, receiptExtras, receiptTaskId, taskIdRefusal } from './receipt.ts'
+import { holdsOpenTicket, readSelfChecks } from './superagent/host/self-check-read.ts'
 import { SuperagentHost } from './superagent/host/index.ts'
 import { registerSuperagentTools } from './superagent/host/tools.ts'
 import { BUILDER_PRESET, RoleTools, scopeKeyOf, type RoleAgent } from './superagent/host/role-tools.ts'
@@ -979,8 +980,17 @@ export function apply(ctx: Context, config: Config): void {
     if (face === undefined) return undefined
     // The successor face reports failure as a result value; re-throw it so
     // every caller's rejection policy (reconciler backoff, route error)
-    // keeps working unchanged.
-    return face.resolveAgent(SessionId(id)).then(result => {
+    // keeps working unchanged. #756: a face can also throw before any promise
+    // exists (an in-place reset's lifecycle guard does); that becomes a
+    // rejection too, so it reaches the same policies instead of escaping a
+    // timer callback and taking the host down.
+    let resolving: ReturnType<typeof face.resolveAgent>
+    try {
+      resolving = face.resolveAgent(SessionId(id))
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)))
+    }
+    return resolving.then(result => {
       if (result.agent !== undefined) return result.agent
       throw new Error(`materialize refused: ${result.error?.message ?? 'unknown session resolution failure'}`)
     })
@@ -1604,7 +1614,16 @@ export function apply(ctx: Context, config: Config): void {
       reconcileCancelled = true
     })
     let reconcilePostponed = 0
+    // #756: one bad pass must never take the host down. Whatever a pass throws
+    // synchronously is logged and the loop keeps its cadence; the next pass
+    // re-derives the due set from the join intents.
     const reconcileTick = (): void => {
+      try { reconcilePass() } catch (error) {
+        logger.warn(`reconcile pass failed: ${String(error).slice(0, 200)}`)
+        if (!reconcileCancelled && ctx.fiber.uid !== null) schedule(reconcileTick, Math.max(50, config.wakeReconcileIntervalMs))
+      }
+    }
+    const reconcilePass = (): void => {
       if (reconcileCancelled || ctx.fiber.uid === null) return
       const interval = Math.max(50, config.wakeReconcileIntervalMs)
       if (!config.wakeReconcile || wakeFace() === undefined) {
@@ -2120,6 +2139,13 @@ export function apply(ctx: Context, config: Config): void {
     interval: (fn, ms) => ctx.timer.interval(fn, ms),
     // The team's A2A address (PR-B2b) is a CLI identity the a2a-net CLI runs against this very host.
     homeUrl: () => superagentHomeUrl,
+    // T5-B: the idle sweep reads the same host's prompt-template self-check log, and only while that check is on.
+    selfChecksOf: sessionId => readSelfChecks(ctx.get('promptTemplates' as never), sessionId),
+    // T5-A: dsh-prompt-templates' cast, reached through this plugin's own context so the plugin recognizes the caller.
+    castCard: input => {
+      const svc = ctx.get('promptTemplates' as never) as { cast?: (i: typeof input) => { ok: boolean; code?: string; error?: string; queued?: number } } | undefined
+      return typeof svc?.cast === 'function' ? svc.cast(input) : undefined
+    },
     claimAudience: () => (ownCardUrl !== '' ? originOf(ownCardUrl) : undefined),
     apiKey: () => config.apiKey,
     // PR-C2: remote members and served teams talk host to host, signed with this host's card key and bound to the body.
@@ -2212,6 +2238,11 @@ export function apply(ctx: Context, config: Config): void {
   }) : undefined
   teamsHandle = superagentTeams
   // Staffing changes (S1a): the host's executor, through the canvas and team routes' own checks.
+  // T5-B (dispatcher's PT-4 addition 1): whether a session holds an open a2a ticket, for dsh-prompt-templates' wrap-up
+  // self-check. Read-only; undefined (unknown) when this host runs no superagent team.
+  ctx.provide('a2aTickets' as never, {
+    hasOpenTicket: (sessionId: string): boolean | undefined => holdsOpenTicket(superagentTeams?.all(), sessionId),
+  } as never)
   if (superagentTeams !== undefined) staffing = createStaffing({ path: join(home, 'a2a', 'superagent', 'staffing.json'), teams: superagentTeams, canvasStore, canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
     sessionValid: id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, presetOf: sessionPresetOf, memberForWrite: id => canvasMemberForWrite(id),
     teamCanvasRefusal: (canvas, member) => superagentTeams.canvasMemberRefusal(canvas, member, sessionPresetOf), revokeCanvasMember: (id, reason, name) => revokeCanvasMember(id, reason, name), logger })

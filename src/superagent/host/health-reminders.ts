@@ -30,6 +30,11 @@ export const OBSERVER_SILENCE_MS = 3_600_000
 export interface HealthObserver {
   readonly pick: (problem: HealthProblem) => string | undefined
   readonly tell: (observer: string, text: string) => boolean
+  /**
+   * #754 review: where the observer's hour is kept across restarts. Without it a host that restarts more often than
+   * once an hour would tell the observer again each time and the owner would never get the card.
+   */
+  readonly persist?: { readonly load: () => ReadonlyArray<{ key: string; observer: string; since: number }>; readonly save: (rows: ReadonlyArray<{ key: string; observer: string; since: number }>) => void }
 }
 
 /** The token an observer's request or card carries so the host can see it acted on one problem. */
@@ -62,11 +67,15 @@ export function queuedText(problem: HealthProblem, name: (session: string) => st
 /** What a problem's card says, in the words the health banner already uses (no internal codes). */
 export const problemText = (problem: HealthProblem): string =>
   problem.code === 'router-not-loaded' ? `总工会话 ${problem.session ?? ''} 没有加载，需求送不到它，打开这个会话即可`
+  : problem.code === 'decision-push-refused' ? `决策卡 ${problem.title ?? ''} 没有推到市场：${problem.detail ?? ''}；市场上这张卡会停在原来的状态，请在本机工作台上处理`
   : problem.code === 'router-turn-failed' ? `总工会话 ${problem.session ?? ''} 上一回合失败（${problem.detail ?? '未知原因'}），需求在等它判断；常见原因是模型额度用完或服务中断`
   : problem.code === 'mcp-no-seat' ? `团队 MCP 服务器 ${problem.title ?? ''} 还用不了：团队里还没有带席位 id 的成员，市场只给名册里的席位发令牌`
   : problem.code === 'mcp-token-unavailable' ? `团队 MCP 服务器 ${problem.title ?? ''} 换不到席位令牌，成员对它的调用会失败：${problem.detail ?? ''}`
   : problem.code === 'member-not-loaded' ? `成员会话 ${problem.session ?? ''} 没有加载，工单派不给它，打开这个会话即可`
   : problem.code === 'tickets-queued' ? queuedText(problem)
+  : problem.code === 'session-wait-overdue' ? `成员会话 ${problem.session ?? ''} 登记的等待已过期限（${problem.detail ?? ''}，已过 ${String(problem.minutes ?? 0)} 分钟），还没有被叫醒；工单「${problem.title ?? problem.ticketId ?? ''}」`
+  : problem.code === 'session-orphan-stop' ? `成员会话 ${problem.session ?? ''} 上一次停下是孤儿停（没做完，也没登记任何会叫它回来的东西）；工单「${problem.title ?? problem.ticketId ?? ''}」`
+  : problem.code === 'session-no-selfcheck' ? `成员会话 ${problem.session ?? ''} 持单 ${String(problem.minutes ?? 0)} 分钟，一条收尾自查记录都没有（可能出错、中断或没加载）；工单「${problem.title ?? problem.ticketId ?? ''}」`
   : problem.ticketId !== undefined ? `工单 ${problem.ticketId} 很久没有动静`
   : `问题 ${problem.code}`
 
@@ -76,8 +85,9 @@ export const problemText = (problem: HealthProblem): string =>
 export class HealthReminders {
   private readonly open = new Map<string, string>()
   private readonly held = new Map<string, { readonly until: number }>()
-  /** Problems the observer was told about and has not acted on yet (memory only: a restart tells it again). */
+  /** Problems the observer was told about and has not acted on yet; kept through `observer.persist` across restarts. */
   private readonly pending = new Map<string, { readonly observer: string; readonly since: number }>()
+  private loaded = false
 
   constructor(
     private readonly raise: (question: string, key: string, at: string) => string | undefined,
@@ -88,7 +98,25 @@ export class HealthReminders {
   ) {}
 
   /** One look: rebuild the pairing from the open cards, take back what went away, raise cards for what is new. */
+  /** Read the kept observer hours once; a broken store starts empty rather than failing the look. */
+  private load(): void {
+    if (this.loaded) return
+    this.loaded = true
+    try {
+      for (const row of this.observer?.persist?.load() ?? []) {
+        if (typeof row.key === 'string' && typeof row.observer === 'string' && Number.isFinite(row.since)) this.pending.set(row.key, { observer: row.observer, since: row.since })
+      }
+    } catch { /* start empty */ }
+  }
+
+  /** Keep the observer hours; a failed write leaves them in memory for this run. */
+  private save(): void {
+    try { this.observer?.persist?.save(this.observerHolds()) } catch { /* memory still holds them */ }
+  }
+
   tick(problems: readonly HealthProblem[], now: number): void {
+    this.load()
+    const before = JSON.stringify(this.observerHolds())
     // A restart empties the map: the open cards say which problems still have a card (the key rides in reason).
     if (this.open.size === 0) for (const card of this.openCards()) if (card.reason !== undefined) this.open.set(card.reason, card.id)
     const keys = new Set(problems.map(problemKey))
@@ -129,6 +157,7 @@ export class HealthReminders {
       const cardId = this.raise(`健康自检：${problemText(problem)}。${why}`, key, this.at())
       if (cardId !== undefined) this.open.set(key, cardId)
     }
+    if (JSON.stringify(this.observerHolds()) !== before) this.save()
   }
 
   /**
@@ -136,11 +165,15 @@ export class HealthReminders {
    * handled, and held off for an hour like a decided card; if it lasts, the observer is told again.
    */
   observerActed(observer: string, text: string, at: number): void {
+    this.load()
+    let changed = false
     for (const [key, told] of [...this.pending]) {
       if (told.observer !== observer || !text.includes(healthToken(key))) continue
       this.pending.delete(key)
       this.held.set(key, { until: at + HOLD_OTHER_MS })
+      changed = true
     }
+    if (changed) this.save()
   }
 
   /** The problems the observer holds now, for the state and tests. */

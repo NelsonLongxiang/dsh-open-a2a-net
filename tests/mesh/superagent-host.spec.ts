@@ -383,6 +383,17 @@ describe('superagent engine in the a2a host', () => {
     } finally { await m.dispose() }
   }, 60_000)
 
+  it('T5-B: the plugin provides a2aTickets — whether a session holds an open ticket, for the prompt-template self-check', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-host-tickets-'))
+    const m = await mount(home)
+    try {
+      const svc = m.ctx.get('a2aTickets' as never) as unknown as { hasOpenTicket: (id: string) => boolean | undefined }
+      expect(typeof svc.hasOpenTicket).toBe('function')
+      expect(svc.hasOpenTicket(M_ID)).toBe(false)
+      expect(svc.hasOpenTicket('session-nobody')).toBe(false)
+    } finally { await m.dispose() }
+  })
+
   it('PR-B2a: the owner\'s terminal is the workbench Source — a2a-net superagent request / state ride the owner credential', async () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-host-cli-'))
     const m = await mount(home)

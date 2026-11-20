@@ -39,6 +39,52 @@ it('an unavailable owner-card writer does not leave a false delivered-to-observe
  ownerAvailable=true;r.tick([one],T0+HEALTH_TICK_MS)
  expect(attempts).toBe(2);expect(cards).toHaveLength(1);expect(r.observerHolds()).toEqual([])
 })
+it('confirmed holds still persist when another problem has an unconfirmed delivery',()=>{
+ let saved:Array<{key:string;observer:string;since:number}>=[]
+ const cards:Array<{id:string;reason:string}>=[],notices:string[]=[]
+ const make=()=>new HealthReminders((_text,key)=>{const id='card-'+key;cards.push({id,reason:key});return id},()=>{},()=>cards,()=>new Date(T0).toISOString(),{
+  pick:()=> 'observer',tell:(_id,text)=>{notices.push(text);if(text.includes(healthToken(problemKey(two))))throw Error('second notice unknown');return true},
+  persist:{load:()=>structuredClone(saved),save:rows=>{saved=structuredClone([...rows])}},
+ })
+ const first=make();first.tick([one,two],T0)
+ expect(saved).toEqual([{key:problemKey(one),observer:'observer',since:T0}])
+ expect(cards.map(c=>c.reason)).toEqual([problemKey(two)])
+ const restarted=make();restarted.tick([one,two],T0+HEALTH_TICK_MS)
+ expect(notices).toHaveLength(2)
+ expect(restarted.observerHolds()).toEqual(saved)
+ restarted.tick([one,two],T0+OBSERVER_SILENCE_MS)
+ expect(cards.map(c=>c.reason)).toEqual([problemKey(two),problemKey(one)])
+ expect(saved).toEqual([])
+})
+it('a selection exception clears a restored pending hold without discarding another problem or its deadline',()=>{
+ let saved=[{key:problemKey(one),observer:'observer',since:T0},{key:problemKey(two),observer:'observer',since:T0}]
+ const cards:string[]=[]
+ const r=new HealthReminders((_text,key)=>{cards.push(key);return'card-'+key},()=>{},()=>[],()=>new Date(T0).toISOString(),{
+  pick:p=>{if(p.ticketId==='one')throw Error('registry unavailable');return'observer'},tell:()=>{throw Error('neither restored problem should be redelivered')},
+  persist:{load:()=>structuredClone(saved),save:rows=>{saved=structuredClone([...rows])}},
+ })
+ r.tick([one,two],T0+HEALTH_TICK_MS)
+ expect(cards).toEqual([problemKey(one)])
+ expect(saved).toEqual([{key:problemKey(two),observer:'observer',since:T0}])
+ r.tick([one,two],T0+OBSERVER_SILENCE_MS)
+ expect(cards).toEqual([problemKey(one),problemKey(two)])
+ expect(saved).toEqual([])
+})
+it('an accepted observer action removes the persisted hold instead of reviving it after restart',()=>{
+ let saved:Array<{key:string;observer:string;since:number}>=[]
+ const cards:string[]=[],notices:string[]=[]
+ const make=()=>new HealthReminders(text=>{cards.push(text);return'card'},()=>{},()=>[],()=>new Date(T0).toISOString(),{
+  pick:()=> 'observer',tell:(_id,text)=>{notices.push(text);return true},persist:{load:()=>structuredClone(saved),save:rows=>{saved=structuredClone([...rows])}},
+ })
+ const first=make();first.tick([one],T0)
+ expect(saved).toHaveLength(1)
+ first.observerActed('observer',healthToken(problemKey(one)),T0+1)
+ expect(saved).toEqual([])
+ const restarted=make();restarted.tick([one],T0+HEALTH_TICK_MS)
+ expect(notices).toHaveLength(2)
+ expect(cards).toEqual([])
+ expect(saved).toEqual([{key:problemKey(one),observer:'observer',since:T0+HEALTH_TICK_MS}])
+})
 it('the host health timer turns an observer followup exception into one owner card',()=>{
  let now=T0,tells=0
  const ticks:Array<()=>void>=[]

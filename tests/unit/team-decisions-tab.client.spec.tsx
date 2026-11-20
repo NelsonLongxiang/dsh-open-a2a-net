@@ -2,7 +2,7 @@
 /** The right bar's decisions view (docs/design/superagent-decision-cards.md). */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { DecisionList, canApprove, type DecisionRow } from '../../src/client/TeamDecisionsTab.tsx'
+import { DecisionList, STAGE_REUSE_MS, canApprove, type DecisionRow } from '../../src/client/TeamDecisionsTab.tsx'
 import { en } from '../../src/client/locales.ts'
 
 const t = ((key: string, values?: Record<string, string>) => Object.entries(values ?? {}).reduce((text, [name, value]) => text.replace(`{${name}}`, value), (en as Record<string, string>)[key] ?? key)) as never
@@ -104,8 +104,108 @@ describe('files on a card (C8)', () => {
     await waitFor(() => { expect(screen.queryByText('要不要升级？')).toBeNull() })
     const urls = f.mock.calls.map(([url]) => url)
     expect(urls.find(url => url.startsWith('/__dsh_a2a/blob'))).toContain(encodeURIComponent('dsh/canvas/ops'))
+    // #772: no `by` parameter — the host never read one; the staging route's authority is the control credential.
+    expect(urls.find(url => url.startsWith('/__dsh_a2a/blob'))).not.toContain('by=')
     const decided = f.mock.calls.filter(([url, init]) => init?.method === 'POST' && !url.startsWith('/__dsh_a2a/blob')).map(([, init]) => JSON.parse(String(init!.body)) as Record<string, unknown>)
     expect(decided).toEqual([{ id: 'd-1', how: 'approve', files: [`[A2A file] v1 sha256=${'a'.repeat(64)} size=2 name=n.txt from=http://h`] }])
+  })
+  it('#771 review: a refused decision sent again reuses the files already staged (no second staged copy)', async () => {
+    let refuse = true
+    const f = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('/__dsh_a2a/blob')) return { ok: true, status: 200, json: async () => ({ ok: true, ref: `[A2A file] v1 sha256=${'a'.repeat(64)} size=2 name=n.txt from=http://h` }) } as Response
+      if (init?.method === 'POST') return refuse ? { ok: false, status: 403, json: async () => ({ ok: false, error: 'browser owner proof required' }) } as Response : { ok: true, status: 200, json: async () => ({ ok: true }) } as Response
+      return { ok: true, status: 200, json: async () => ({ decisions: [card({ address: 'dsh/canvas/ops' })] }) } as Response
+    })
+    vi.stubGlobal('fetch', f)
+    const { container } = render(<DecisionList t={t} />)
+    await screen.findByText('要不要升级？')
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [new File(['hi'], 'n.txt')] } })
+    fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
+    await screen.findByText(/browser owner proof required/)
+    refuse = false
+    fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
+    await waitFor(() => { expect(f.mock.calls.filter(([url, init]) => init?.method === 'POST' && !String(url).startsWith('/__dsh_a2a/blob'))).toHaveLength(2) })
+    expect(f.mock.calls.filter(([url]) => String(url).startsWith('/__dsh_a2a/blob'))).toHaveLength(1)
+  })
+  function stagingHost(o: { failBlob?: (name: string) => boolean; refuseDecision?: () => boolean } = {}) {
+    const f = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('/__dsh_a2a/blob')) {
+        const name = new URL(url, 'http://x').searchParams.get('name') ?? ''
+        if (o.failBlob?.(name) === true) return { ok: false, status: 507, json: async () => ({ ok: false, error: 'the file channel is full' }) } as Response
+        return { ok: true, status: 200, json: async () => ({ ok: true, ref: `[A2A file] v1 ${name}` }) } as Response
+      }
+      if (init?.method === 'POST') return o.refuseDecision?.() === true ? { ok: false, status: 403, json: async () => ({ ok: false, error: 'browser owner proof required' }) } as Response : { ok: true, status: 200, json: async () => ({ ok: true }) } as Response
+      return { ok: true, status: 200, json: async () => ({ decisions: [card({ address: 'dsh/canvas/ops' })] }) } as Response
+    })
+    vi.stubGlobal('fetch', f)
+    const blobs = (name: string): number => f.mock.calls.filter(([url]) => String(url).startsWith('/__dsh_a2a/blob') && new URL(String(url), 'http://x').searchParams.get('name') === name).length
+    const decisions = () => f.mock.calls.filter(([url, init]) => init?.method === 'POST' && !String(url).startsWith('/__dsh_a2a/blob')).map(([, init]) => JSON.parse(String(init!.body)) as Record<string, unknown>)
+    return { f, blobs, decisions }
+  }
+
+  it('#773 review: the files staged before a mid-way failure are kept, so the retry stages only what failed', async () => {
+    let failB = true
+    const h = stagingHost({ failBlob: name => name === 'b.txt' && failB })
+    const { container } = render(<DecisionList t={t} />)
+    await screen.findByText('要不要升级？')
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [new File(['a'], 'a.txt'), new File(['b'], 'b.txt')] } })
+    fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
+    await screen.findByText(/the file channel is full/)
+    failB = false
+    fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
+    await waitFor(() => { expect(h.decisions()).toHaveLength(1) })
+    expect([h.blobs('a.txt'), h.blobs('b.txt')]).toEqual([1, 2])
+    expect(h.decisions()[0]).toEqual({ id: 'd-1', how: 'approve', files: ['[A2A file] v1 a.txt', '[A2A file] v1 b.txt'] })
+  })
+
+  it('#773 review: a staged copy close to the channel\'s 24 hours is staged again, never reused', async () => {
+    const real = Date.now
+    let now = real()
+    Date.now = () => now
+    try {
+      let refuse = true
+      const h = stagingHost({ refuseDecision: () => refuse })
+      const { container } = render(<DecisionList t={t} />)
+      await screen.findByText('要不要升级？')
+      fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [new File(['a'], 'a.txt')] } })
+      fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
+      await screen.findByText(/browser owner proof required/)
+      // Just under the limit: reused.
+      now += STAGE_REUSE_MS - 1
+      fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
+      await waitFor(() => { expect(h.decisions()).toHaveLength(2) })
+      expect(h.blobs('a.txt')).toBe(1)
+      // At the limit: staged again before it is sent.
+      now += 1
+      refuse = false
+      fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
+      await waitFor(() => { expect(h.decisions()).toHaveLength(3) })
+      expect(h.blobs('a.txt')).toBe(2)
+      expect(STAGE_REUSE_MS).toBeLessThan(24 * 60 * 60_000)
+    } finally { Date.now = real }
+  })
+  it('#775 review (A10, right bar): a file removed after staging is not sent with the retried decision', async () => {
+    let refuse = true
+    const h = stagingHost({ refuseDecision: () => refuse })
+    const { container } = render(<DecisionList t={t} />)
+    await screen.findByText('要不要升级？')
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [new File(['a'], 'a.txt'), new File(['b'], 'b.txt')] } })
+    fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
+    await screen.findByText(/browser owner proof required/)
+    fireEvent.click(screen.getByRole('button', { name: (en as Record<string, string>)['team.removeFile']!.replace('{name}', 'b.txt') }))
+    refuse = false
+    fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
+    await waitFor(() => { expect(h.decisions()).toHaveLength(2) })
+    expect([h.blobs('a.txt'), h.blobs('b.txt')]).toEqual([1, 1])
+    expect(h.decisions()[1]).toEqual({ id: 'd-1', how: 'approve', files: ['[A2A file] v1 a.txt'] })
+  })
+  it('#771 review: two different files that share a name and size are both kept', async () => {
+    serve([card({ address: 'dsh/canvas/ops' })])
+    const { container } = render(<DecisionList t={t} />)
+    await screen.findByText('要不要升级？')
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(['aa'], 'r.md', { lastModified: 1 }), new File(['bb'], 'r.md', { lastModified: 2 })] } })
+    await waitFor(() => { expect(screen.getAllByText(/r\.md/)).toHaveLength(2) })
   })
   it('refuses to send files when the card names no team address, and keeps the card', async () => {
     serveWithBlob([card()])

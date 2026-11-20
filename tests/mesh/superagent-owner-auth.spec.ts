@@ -123,6 +123,13 @@ describe('original-request browser-owner guarded HTTP faces', () => {
     expect(f.calls.recover).toHaveBeenLastCalledWith('card', 'out-original', true)
   })
 
+  it('#764 review: turning on observerCast needs the owner\'s proof (a control-route shell cannot)', async () => {
+    const f = await fixture(false)
+    const result = await f.send('/__dsh_a2a/superagent', { action: 'settings', settings: { observerCast: true } }, { cookie: '' })
+    expect(result).toMatchObject({ status: 503, data: { ok: false, code: 'owner-auth-unavailable' } })
+    expect(f.calls.settings).not.toHaveBeenCalled()
+  })
+
   it('does not narrow unrelated control-only non-rule settings', async () => {
     const f = await fixture(false)
     expect((await f.send('/__dsh_a2a/superagent', { action: 'settings', settings: { paused: true } }, { cookie: '' })).data.ok).toBe(true)
