@@ -115,3 +115,60 @@ describe('R7a on the host', () => {
     await h.stop()
   })
 })
+
+describe('#754 review follow-ups', () => {
+  const host = async (home: string, loaded: Set<string>, sent: Array<[string, string]>, clock: { ms: number }) => {
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const presets: Record<string, string> = { 'session-r': 'superagent-router', 'session-a': 'superagent-member', 'session-o': 'superagent-observer' }
+    const h = new SuperagentHost({
+      canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', 'session-a', 'session-o'], remote: [] } : undefined, home, logger: { info: () => {}, warn: () => {} },
+      deliverToSession: (id: string, text: string) => { sent.push([id, text]); return true }, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id,
+      sessionLoaded: (id: string) => loaded.has(id), bootSettled: () => true, presetOf: (id: string) => presets[id], now: () => new Date(clock.ms).toISOString(),
+    } as never)
+    expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true, id => presets[id])).toMatchObject({ ok: true })
+    h.start()
+    const reminders = (h as unknown as { healthReminders: HealthReminders }).healthReminders
+    return { h, tick: () => reminders.tick(h.health() as HealthProblem[], clock.ms) }
+  }
+  const healthCards = (h: { decisionCards: () => Array<{ source: string; question: string }> }) => h.decisionCards().filter(card => card.source === 'health')
+
+  it('on the host: an observer whose session is not loaded is passed over, and the owner gets the card at once', async () => {
+    const sent: Array<[string, string]> = [], clock = { ms: T0 }
+    const m = await host(mkdtempSync(join(tmpdir(), 'sa-health-unloaded-')), new Set(['session-a']), sent, clock)
+    m.tick()
+    expect(sent.filter(([id]) => id === 'session-o')).toEqual([])
+    const cards = healthCards(m.h)
+    expect(cards.length).toBeGreaterThan(0)
+    expect(cards.every(card => !card.question.includes('观察者一小时内没有处理'))).toBe(true)
+    await m.h.stop()
+  })
+
+  it('the observer hour survives a restart: the owner still gets the card an hour after the first notice', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-health-restart-'))
+    const loaded = new Set(['session-a', 'session-o'])
+    const clock = { ms: T0 }
+    const first: Array<[string, string]> = []
+    const a = await host(home, loaded, first, clock)
+    a.tick()
+    expect(first.filter(([id, text]) => id === 'session-o' && text.startsWith('[superagent health]')).length).toBeGreaterThan(0)
+    expect(healthCards(a.h)).toEqual([])
+    await a.h.stop()
+    // Restart 40 minutes later: the observer is not told again, and no card yet.
+    clock.ms = T0 + 40 * 60_000
+    const second: Array<[string, string]> = []
+    const b = await host(home, loaded, second, clock)
+    b.tick()
+    expect(second.filter(([id, text]) => id === 'session-o' && text.startsWith('[superagent health]'))).toEqual([])
+    expect(healthCards(b.h)).toEqual([])
+    await b.h.stop()
+    // Restart again past the hour since the first notice: the owner gets the card, saying the observer did not act.
+    clock.ms = T0 + OBSERVER_SILENCE_MS + 60_000
+    const third: Array<[string, string]> = []
+    const c = await host(home, loaded, third, clock)
+    c.tick()
+    const cards = healthCards(c.h)
+    expect(cards.length).toBeGreaterThan(0)
+    expect(cards.some(card => card.question.includes('观察者一小时内没有处理'))).toBe(true)
+    await c.h.stop()
+  })
+})

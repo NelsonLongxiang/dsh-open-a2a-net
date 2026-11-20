@@ -263,7 +263,10 @@ export class SuperagentHost {
       () => this.now(),
       // R7a (workbench-market 18 §八): a loaded observer the problem is not about sees it first.
       { pick: problem => this.settings.observers.find(id => id !== problem.session && (d.sessionLoaded?.(id) ?? true)),
-        tell: (observer, text) => d.deliverToSession(observer, text) },
+        tell: (observer, text) => d.deliverToSession(observer, text),
+        // #754 review: the observer's hour survives a restart (written whole, then renamed into place).
+        persist: { load: () => { const path = join(dir, 'observer-health.json'); return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) as Array<{ key: string; observer: string; since: number }> : [] },
+          save: rows => { const path = join(dir, 'observer-health.json'), temporary = `${path}.tmp-${String(process.pid)}`; mkdirSync(dir, { recursive: true }); writeFileSync(temporary, JSON.stringify(rows), { mode: 0o600 }); renameSync(temporary, path) } } },
     )
     this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), ask: (address, text, task, sender) => this.a2a.askApproved(address, text, task!, sender!),
       sender: create => create ? this.a2a.ensureIdentity() : Promise.resolve(this.a2a.address ?? ''), approval: record => this.outboundApproval(record),
