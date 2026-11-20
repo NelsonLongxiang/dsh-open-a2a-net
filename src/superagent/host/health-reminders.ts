@@ -17,6 +17,28 @@ export const HEALTH_TICK_MS = 15 * 60_000
 /** How long a decided hold-off lasts: a day for 先忽略, an hour otherwise. */
 export const HOLD_IGNORE_MS = 24 * 3_600_000, HOLD_OTHER_MS = 3_600_000
 
+/**
+ * How long the observer has to act on a health problem before it reaches the owner (workbench-market 18 §八: the same
+ * one-hour quiet period as the health check).
+ */
+export const OBSERVER_SILENCE_MS = 3_600_000
+
+/**
+ * Who sees a health problem first (workbench-market 18 §八, reliability R7a): the team's observer, when it has one whose
+ * session is loaded and the problem is not about that observer. `pick` names it, `tell` delivers the notice.
+ */
+export interface HealthObserver {
+  readonly pick: (problem: HealthProblem) => string | undefined
+  readonly tell: (observer: string, text: string) => boolean
+}
+
+/** The token an observer's request or card carries so the host can see it acted on one problem. */
+export const healthToken = (key: string): string => `[健康 ${key}]`
+
+/** What the observer is told about a problem it sees first. */
+export const observerNotice = (problem: HealthProblem, key: string): string =>
+  `[superagent health] 健康自检：${problemText(problem)}。宿主先交给你（观察者），一小时内没有处理就直接交属主。处理指：针对它开一张单（a2a_ticket_request），或提一张决策卡（a2a_decision_propose），正文里写上 ${healthToken(key)}；只读或只在会话里说过都不算。`
+
 /** The problems a reminder card is about, one key each. */
 export const problemKey = (problem: HealthProblem): string => problem.code === 'tickets-queued'
   // One card per thing the tickets wait for: the oldest ticket in the group changes as tickets launch, the member does not.
@@ -54,12 +76,15 @@ export const problemText = (problem: HealthProblem): string =>
 export class HealthReminders {
   private readonly open = new Map<string, string>()
   private readonly held = new Map<string, { readonly until: number }>()
+  /** Problems the observer was told about and has not acted on yet (memory only: a restart tells it again). */
+  private readonly pending = new Map<string, { readonly observer: string; readonly since: number }>()
 
   constructor(
     private readonly raise: (question: string, key: string, at: string) => string | undefined,
     private readonly takeBack: (cardId: string) => void,
     private readonly openCards: () => ReadonlyArray<{ id: string; reason?: string }>,
     private readonly at: () => string,
+    private readonly observer?: HealthObserver,
   ) {}
 
   /** One look: rebuild the pairing from the open cards, take back what went away, raise cards for what is new. */
@@ -73,16 +98,44 @@ export class HealthReminders {
       this.open.delete(key)
       this.held.delete(key)
     }
+    for (const key of [...this.pending.keys()]) if (!keys.has(key)) this.pending.delete(key)
     for (const problem of problems) {
       const key = problemKey(problem)
       if (this.open.has(key)) continue
       const hold = this.held.get(key)
       if (hold !== undefined && now < hold.until) continue
       this.held.delete(key)
-      const cardId = this.raise(`健康自检：${problemText(problem)}。`, key, this.at())
+      // R7a: the observer sees it first; the owner gets it when there is none, it is not loaded, or it did not act in time.
+      const told = this.pending.get(key)
+      const observer = this.observer?.pick(problem)
+      let why = ''
+      if (told !== undefined) {
+        if (observer === told.observer && now - told.since < OBSERVER_SILENCE_MS) continue
+        this.pending.delete(key)
+        why = observer === told.observer ? '（观察者一小时内没有处理）' : '（观察者会话没有加载）'
+      } else if (observer !== undefined && this.observer!.tell(observer, observerNotice(problem, key))) {
+        this.pending.set(key, { observer, since: now })
+        continue
+      }
+      const cardId = this.raise(`健康自检：${problemText(problem)}。${why}`, key, this.at())
       if (cardId !== undefined) this.open.set(key, cardId)
     }
   }
+
+  /**
+   * The observer filed a request or raised a card (R7a): each problem it was told about whose token the text carries is
+   * handled, and held off for an hour like a decided card; if it lasts, the observer is told again.
+   */
+  observerActed(observer: string, text: string, at: number): void {
+    for (const [key, told] of [...this.pending]) {
+      if (told.observer !== observer || !text.includes(healthToken(key))) continue
+      this.pending.delete(key)
+      this.held.set(key, { until: at + HOLD_OTHER_MS })
+    }
+  }
+
+  /** The problems the observer holds now, for the state and tests. */
+  observerHolds(): ReadonlyArray<{ key: string; observer: string; since: number }> { return [...this.pending].map(([key, told]) => ({ key, ...told })) }
 
   /** The owner decided a reminder: hold its problem off, a day for 忽略, an hour otherwise. */
   decided(cardId: string, chosen: string, at: number): void {
