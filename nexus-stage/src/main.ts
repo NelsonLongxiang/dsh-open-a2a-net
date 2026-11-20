@@ -322,6 +322,14 @@ const bench = createWorkbench({
         const res = await controlFetch('/__dsh_a2a/superagent/decisions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
         try { return { status: res.status, body: await res.json() as Record<string, unknown> } } catch { return { status: res.status, body: { ok: false, error: `HTTP ${res.status}` } } }
       },
+      // C8: the owner's file for a decision, staged on this host and granted to the team's canvas (as the right bar does).
+      async stage(file, address) {
+        try {
+          const res = await controlFetch(`/__dsh_a2a/blob?to=${encodeURIComponent(address)}&name=${encodeURIComponent(file.name)}&by=owner`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
+          const out = await res.json() as { ok?: unknown; ref?: unknown; error?: unknown }
+          return res.ok && out.ok === true && typeof out.ref === 'string' ? { ref: out.ref } : { refused: typeof out.error === 'string' ? out.error : `HTTP ${res.status}` }
+        } catch (error) { return { refused: String(error) } }
+      },
       async file(href) {
         const res = await controlFetch(href, { cache: 'no-store' })
         if (res.ok) return await res.blob()

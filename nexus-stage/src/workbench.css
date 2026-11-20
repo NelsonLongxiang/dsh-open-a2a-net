@@ -462,3 +462,6 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-sa-badge{font-size:10.5px;padding:0 5px;border-radius:8px;border:1px solid var(--n-accent);color:var(--n-ink)}
 .wb-sa-decision-note{min-height:44px}
 .wb-sa-file{align-self:flex-start;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wb-sa-attach{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.wb-sa-attach-file{display:inline-flex;gap:4px;align-items:center;max-width:100%;font-size:11.5px;overflow-wrap:anywhere}
+.wb-sa-decision-card.is-dragging{outline:2px dashed var(--n-accent);outline-offset:2px}
