@@ -230,7 +230,7 @@
       config:
         id: superagent-observer
         name: superagent 团队观察者
-        description: superagent 团队的观察者专用：和成员一样接单干活，发现没人提的工作时可以自己开工单，交总工决定。不派活、不开子代理。
+        description: superagent 团队的观察者专用：持有属主意图、站在执行之外，不接执行单；给卡点打标签、计数，提议消掉整类等待的规矩，没人提的工作开工单交总工决定。一个领域一个。不派活、不开子代理。
         order: 93
         plugins:
           - id: persona
