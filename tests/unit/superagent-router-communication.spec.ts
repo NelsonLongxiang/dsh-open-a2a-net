@@ -45,8 +45,8 @@ it('ships generated inline router text without changing preset ids or compositio
 
 it('adds only the shared boundary to original worker personas and leaves the builder unchanged', () => {
   // Target next/0.8 78e077c; preserve its member-proposal text and original worker semantics. The observer's prefix is D19's
-  // rewrite (workbench-market 18: takes no tickets, tags and counts stuck points).
-  const originalPrefixes = { member: 'f34cf9d7580fa7d0a88c7e2da3e1bfa1542043b9dc4fca483bdda832c60de9d4', observer: '853262fd72e4abef3b8461fbd1be833fa3b61d30fc759f7e605cdef2702285ef' }
+  // rewrite (workbench-market 18: takes no tickets, tags and counts stuck points, sees health problems first — R7a).
+  const originalPrefixes = { member: 'f34cf9d7580fa7d0a88c7e2da3e1bfa1542043b9dc4fca483bdda832c60de9d4', observer: '85b12df801d44d8eda90f0c237516a0eae3b0f522718292e050286f7861cccc5' }
   for (const [role, sha] of Object.entries(originalPrefixes)) {
     const original = readFileSync(new URL('src/superagent/prompts/' + role + '.md', root), 'utf8')
     expect(digest(original)).toBe(sha)

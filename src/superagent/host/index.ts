@@ -261,6 +261,9 @@ export class SuperagentHost {
       cardId => this.decisions.withdraw(cardId),
       () => this.decisions.open().filter(card => card.source === 'health').map(card => ({ id: card.id, ...(card.reason !== undefined ? { reason: card.reason } : {}) })),
       () => this.now(),
+      // R7a (workbench-market 18 §八): a loaded observer the problem is not about sees it first.
+      { pick: problem => this.settings.observers.find(id => id !== problem.session && (d.sessionLoaded?.(id) ?? true)),
+        tell: (observer, text) => d.deliverToSession(observer, text) },
     )
     this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), ask: (address, text, task, sender) => this.a2a.askApproved(address, text, task!, sender!),
       sender: create => create ? this.a2a.ensureIdentity() : Promise.resolve(this.a2a.address ?? ''), approval: record => this.outboundApproval(record),
@@ -970,7 +973,9 @@ export class SuperagentHost {
   /** File an observer's own request (design D15). It reaches the router as any request does; the host only keeps a loop from flooding it. */
   requestForObserver(session: string, text: string): Record<string, unknown> {
     if (!this.isObserver(session)) return { ok: false, code: 'not-observer', error: 'a2a_ticket_request serves only the sessions on this team created under the observer preset' }
-    return this.fileProposal(observerActor(session), text, { observer: session })
+    const filed = this.fileProposal(observerActor(session), text, { observer: session })
+    if (filed.ok === true) this.healthReminders.observerActed(session, text, Date.parse(this.now()))
+    return filed
   }
 
   /**
@@ -1025,7 +1030,10 @@ export class SuperagentHost {
 
   /** Raise a card of the router's or an observer's own (decision cards C2, C8). */
   proposeDecision(source: 'router' | 'observer', by: string, question: string, spec: DecisionSpec, reason?: string, files?: readonly DecisionFile[]): Record<string, unknown> {
-    return this.decisions.propose({ source, by, question, spec, at: this.now(), ...(reason !== undefined && reason.trim() !== '' ? { reason: reason.trim() } : {}), ...(files !== undefined ? { files } : {}) })
+    const out = this.decisions.propose({ source, by, question, spec, at: this.now(), ...(reason !== undefined && reason.trim() !== '' ? { reason: reason.trim() } : {}), ...(files !== undefined ? { files } : {}) })
+    // R7a: an observer's card that names a health problem it was told about counts as acting on it.
+    if (out.ok && source === 'observer') this.healthReminders.observerActed(by, `${question}\n${reason ?? ''}`, Date.parse(this.now()))
+    return out
   }
 
   /**

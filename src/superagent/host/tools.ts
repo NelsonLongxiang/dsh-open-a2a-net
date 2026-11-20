@@ -575,9 +575,9 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
   // acts on tickets through this (owner 2026-11-10: a scheduled turn reads where things stand before it acts).
   ctx.tools.register(defineTool({
     name: 'a2a_ticket_read',
-    description: 'Team member or observer only, read-only: where your work stands before you act on it. kind mine: your open tickets; kind ticket: one of them (ticket_id). An observer can also read kind team (the team\'s open and recent tickets) and kind decisions (the router\'s recent decisions). An approver the owner named reads kind outbound: the outbound cards waiting for a decision, with their ids. It changes nothing.',
+    description: 'Team member or observer only, read-only: where your work stands before you act on it. kind mine: your open tickets; kind ticket: one of them (ticket_id). An observer can also read kind team (the team\'s open and recent tickets) and kind decisions (the router\'s recent decisions) and kind health (the host\'s health problems, which reach the observer first). An approver the owner named reads kind outbound: the outbound cards waiting for a decision, with their ids. It changes nothing.',
     parameters: {
-      kind: { type: 'string', required: true, description: 'mine | ticket | team | decisions | outbound' },
+      kind: { type: 'string', required: true, description: 'mine | ticket | team | decisions | health | outbound' },
       ticket_id: { type: 'string', description: 'For kind ticket.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_ticket_read', value) },
@@ -607,10 +607,12 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
         if (!(h.settings.approvers ?? []).includes(me)) return { ok: false, code: 'not-approver', error: 'kind outbound is for the approvers the owner named in the team settings' }
         return { ok: true, cards: json(h.decisionCards().filter(card => card.source === 'outbound').map(card => ({ id: card.id, question: card.question, ...(card.reason !== undefined ? { reason: card.reason } : {}), by: card.by, at: card.at, options: card.options }))) }
       }
-      if (!observer) return { ok: false, code: 'not-observer', error: 'kind team and kind decisions are for observers; a member reads kind mine or ticket' }
+      if (!observer) return { ok: false, code: 'not-observer', error: 'kind team, decisions and health are for observers; a member reads kind mine or ticket' }
       if (args.kind === 'team') return { ok: true, tickets: h.store.tickets.list().slice(0, 50).map(t => summary(t.id)) }
       if (args.kind === 'decisions') return { ok: true, decisions: json(h.recentDecisions()) }
-      return { ok: false, code: 'kind', error: 'kind must be mine, ticket, team or decisions' }
+      // R7a (workbench-market 18 §七 3): the host's health list, which the observer sees first.
+      if (args.kind === 'health') return { ok: true, health: json(h.health()) }
+      return { ok: false, code: 'kind', error: 'kind must be mine, ticket, team, decisions or health' }
     },
   }))
 
