@@ -7,6 +7,13 @@
  */
 import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+// These scenarios own routing/executor lifecycles, not an installed external CLI. Preserve the real startup gate with a
+// fixed capability read; dedicated ygl specs exercise creation/version failures without leaking a process into teardown.
+vi.mock('../../src/superagent/host/ygl-home.ts', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../src/superagent/host/ygl-home.ts')>()
+  return { ...actual, ensureTeamYglHome: async () => 'present', ensureTeamYglProject: async () => 'present',
+    startWhenYglKnown: (start: () => void, d: Parameters<typeof actual.startWhenYglKnown>[1]) => actual.startWhenYglKnown(start, { ...d, read: async () => '0.126.0' }) }
+})
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -31,7 +38,7 @@ class ManyAgents extends Service {
   roots(): Agent[] { return [...this.map.values()] }
   get(id: Agent['id']): Agent | undefined { return this.map.get(String(id)) }
 }
-interface TestAgent extends Agent { steered: string[]; host?: Context }
+interface TestAgent extends Agent { steered: string[]; host?: Context; holdAssignmentTurn?: boolean }
 function makeAgent(id: string, name: string): TestAgent {
   const agent = {
     id: SessionId(id), session: { id: SessionId(id), events: [] as unknown[], title: name }, steered: [] as string[],
@@ -43,6 +50,8 @@ function makeAgent(id: string, name: string): TestAgent {
       agent.steered.push(text)
       const events = (agent as unknown as { session: { events: unknown[] } }).session.events
       events.push({ type: 'user/message', data: { content: [{ type: 'text', text }] } })
+      // The fixed-slot scenario models a member still working after assignment. Other tests retain instant idle.
+      if ((agent as unknown as TestAgent).holdAssignmentTurn === true && text.startsWith('[superagent assignment]')) return
       events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: `noted by ${name}` }] } } })
       agent.host?.emit('agent/status', { agent: agent as unknown as Agent, status: 'idle' })
     },
@@ -575,6 +584,7 @@ describe('superagent engine in the a2a host', () => {
       expect(await m.sa({ action: 'settings', settings: { router: R_ID, members: [M_ID] } })).toMatchObject({ ok: false, error: expect.stringContaining('canvas') })
       expect(await m.team(R_ID, [M_ID, X_ID])).toMatchObject({ ok: true, settings: { members: [M_ID, X_ID] } })
       const sessionsBefore = m.agents.roots().length
+      m.M.holdAssignmentTurn = true; m.X.holdAssignmentTurn = true
 
       // Three requests, three tickets, two members: two run, one waits.
       const asks: Array<{ triggerId: string; thread: string }> = []

@@ -8,7 +8,7 @@ The executor keeps one member slot before it calls the assignment-card delivery 
 
 A claim takes a causal number after the send boundary. A turn end arriving while that exact send is pending is kept in memory, together with its claim number, rather than lost or settled prematurely. Only an accepted card, the unchanged binding and the latest claim may replay that idle. A later claim supersedes it. The assignment is marked running and its inputs are recorded delivered before the normal settle path decides whether the member should park or retain background work.
 
-A member can report against its tentative binding while the card answer is pending. A terminal result removes it normally and a late transport answer cannot revive it. The new guard prevents reassignment while the original card answer is pending. Refused delivery releases the tentative hold; the assignment stays pending and the original retry policy still applies. The prepare path keeps its prior behavior and is covered by the existing regression set.
+A member can report against its tentative binding while the card answer is pending. A terminal result removes it normally and a late transport answer cannot revive it. The new guard prevents reassignment while the original card answer is pending. Only an explicit `false` is a definite refusal and releases the tentative hold; the assignment stays pending and the original retry policy still applies. An exception (including unknown follow-up acceptance or a transport error) is not proof of non-delivery: it retains the binding as `unknown`, records the uncertainty without replacing a real report, and permits no automatic card retry. The prepare path keeps its prior behavior and is covered by the existing regression set.
 
 ## Persistence and restart
 
@@ -24,7 +24,7 @@ Stopping a host closes its executor. A late promise from that stopped instance d
 
 An older executor does not enforce the `card` marker and may resume or retry pending work. Do not downgrade an active home carrying `sending`/`unknown` card records. First stop all writers, preserve the failure state and reconcile the original requests. Restore a coherent version-matched home/queues only through the existing approved rollback procedure; a surviving JSON field is not a downgrade safety guarantee.
 
-This change does not introduce a cryptographic acceptance proof, change the delivery adapter's boolean contract, or make unkeyed local idle events identify arbitrary concurrent work. Claims and idle are still supplied by the existing authenticated host/seat path. A delivery adapter that reports `false` after committing an effect violates its existing refusal contract; this change does not silently convert that into permission for blind replay. It also does not retrofit unknown-send protection into other delivery kinds or grant publication/deployment authority.
+This change does not introduce a cryptographic acceptance proof, change what an explicit boolean acceptance/refusal means, or make unkeyed local idle events identify arbitrary concurrent work. Claims and idle are still supplied by the existing authenticated host/seat path. A delivery adapter that reports `false` after committing an effect violates its existing refusal contract; exceptions and ambiguous answers are now retained as unknown for this assignment path rather than converted to false. It does not retrofit unknown-send protection into other delivery kinds or grant publication/deployment authority.
 
 ## Checks
 

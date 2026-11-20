@@ -4,8 +4,17 @@
  * 4h auto-deregister, mailbox round-trip.
  */
 import { mkdtempSync } from '../temp-dirs.ts'
-import { describe, expect, it } from 'vitest'
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs'
+import { describe, expect, it, vi, afterEach } from 'vitest'
+import { readFileSync, writeFileSync } from 'node:fs'
+const writeFault = vi.hoisted(() => ({ path: '', hits: 0 }))
+vi.mock('../../src/task-ledger-persistence.ts', async original => {
+  const actual = await original<typeof import('../../src/task-ledger-persistence.ts')>()
+  return { ...actual, writeTaskLedger: (path: string, bytes: string) => {
+    if (path === writeFault.path) { writeFault.hits++; throw Object.assign(Error('synthetic mailbox commit refused'), { code: 'EACCES' }) }
+    return actual.writeTaskLedger(path, bytes)
+  } }
+})
+afterEach(() => { writeFault.path = ''; writeFault.hits = 0 })
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { generateKeyPairSync } from 'node:crypto'
@@ -154,21 +163,21 @@ describe('gh#113 CLI mailbox: seq, loss and truncation are visible', () => {
     const a = store(dir).s
     a.mail(H, 'x', 'on disk')
     const diskEpoch = a.readMailbox(H).epoch
-    // The store writes through a temp file + rename (#708), so a read-only file no longer fails the write; a read-only directory does.
-    chmodSync(dir, 0o555)
-    try {
-      a.mail(H, 'x', 'memory only')
-      const memory = a.readMailbox(H)
-      expect(memory.next_seq).toBe(3)
-      expect(memory.epoch).not.toBe(diskEpoch)
-      a.mail(H, 'x', 'still memory only')
-      expect(a.readMailbox(H).epoch).toBe(memory.epoch) // one rotation per failure streak
-      const restarted = store(dir).s.readMailbox(H)
-      expect(restarted).toMatchObject({ epoch: diskEpoch, next_seq: 2 })
-      expect(restarted.epoch).not.toBe(memory.epoch)
-    } finally {
-      chmodSync(dir, 0o755)
-    }
+    // Inject the actual commit seam: chmod on Windows (or an elevated POSIX user) does not reliably refuse directory writes.
+    // Keep the on-disk bytes and every original epoch/cursor assertion, rather than skipping this failure path by platform.
+    const file = join(dir, 'deposits.json'), before = readFileSync(file)
+    writeFault.path = file
+    a.mail(H, 'x', 'memory only')
+    const memory = a.readMailbox(H)
+    expect(memory.next_seq).toBe(3)
+    expect(memory.epoch).not.toBe(diskEpoch)
+    a.mail(H, 'x', 'still memory only')
+    expect(a.readMailbox(H).epoch).toBe(memory.epoch) // one rotation per failure streak
+    expect(writeFault.hits).toBe(2)
+    expect(readFileSync(file)).toEqual(before)
+    const restarted = store(dir).s.readMailbox(H)
+    expect(restarted).toMatchObject({ epoch: diskEpoch, next_seq: 2 })
+    expect(restarted.epoch).not.toBe(memory.epoch)
   })
 
   it('review P3: unsound seqs (fractional, duplicate, negative, mixed) are renumbered under a new epoch', () => {

@@ -387,6 +387,36 @@ export class MemberExecutor implements Executor {
     try { return await this.d.deliver(member, text, kind, ticketId, run) } catch (error) { this.d.logger.warn('superagent: delivery to %s failed: %s', member, String(error)); return false }
   }
 
+  /** An assignment adapter's exception is not proof of non-delivery; only an explicit false permits another send. */
+  private async sendAssignment(binding: Binding, text: string): Promise<'accepted' | 'refused' | 'unknown'> {
+    try {
+      const out = await this.d.deliver(binding.member, text, 'assign', binding.ticketId, runOf(binding))
+      return out === true ? 'accepted' : out === false ? 'refused' : 'unknown'
+    } catch (error) {
+      this.d.logger.warn('superagent: assignment card %s has unknown acceptance: %s', binding.assignmentId, String(error))
+      return 'unknown'
+    }
+  }
+
+  /** Persist uncertainty without replacing a real report or authorizing automatic redelivery. */
+  private holdUnknownCard(binding: Binding): void {
+    const ticket = this.d.ticket(binding.ticketId), assignment = ticket?.assignments.find(a => a.id === binding.assignmentId)
+    if (ticket === undefined || ticket.ended || assignment === undefined || assignment.state === 'ended') return
+    const firstUnknown = binding.card === 'sending'
+    if (firstUnknown) {
+      binding.card = 'unknown'
+      try { this.save() } catch (error) { binding.card = 'sending'; throw error }
+    }
+    const message = 'Assignment-card delivery is unknown. Reconcile the original member and task before explicitly retrying or stopping; the card was not automatically resent.'
+    if (assignment.report === undefined) {
+      try { this.d.reportFor(ticket.id, binding.member, 'failed', message) }
+      catch (error) { this.d.logger.warn('superagent: unknown assignment card %s not reported: %s', binding.assignmentId, String(error)) }
+    } else if (firstUnknown) {
+      try { this.d.engine().note(ticket.id, message) }
+      catch (error) { this.d.logger.warn('superagent: unknown assignment card %s not noted: %s', binding.assignmentId, String(error)) }
+    }
+  }
+
   private async launchLoop(): Promise<void> {
     // Oldest first, but a ticket waiting for its repository's member does not hold up the ones behind it.
     for (let progressed = true; progressed;) {
@@ -430,12 +460,17 @@ export class MemberExecutor implements Executor {
           this.bindings.push(binding)
           this.assigning.set(assignment.id, send)
           try { this.save() } catch (error) { this.assigning.delete(assignment.id); this.bindings = this.bindings.filter(b => b !== binding); throw error }
-          const accepted = await this.tryDeliver(candidate, cardText, 'assign', ticket.id, run)
+          const acceptance = await this.sendAssignment(binding, cardText)
           if (this.closed) return // A late promise from a stopped instance must never write over the new host's state.
           this.assigning.delete(assignment.id)
           const current = this.d.ticket(ticket.id)
           if (!this.bindings.includes(binding) || current === undefined || current.ended || current.assignments.find(a => a.id === assignment.id)?.state !== 'pending') break
-          if (!accepted) {
+          if (binding.card === 'unknown' || acceptance === 'unknown') {
+            this.waiting = this.waiting.filter(w => w !== next)
+            this.holdUnknownCard(binding)
+            break
+          }
+          if (acceptance === 'refused') {
             this.bindings = this.bindings.filter(b => b !== binding)
             this.background.delete(candidate)
             this.save()
@@ -677,8 +712,10 @@ export class MemberExecutor implements Executor {
 
   /** The member's turn failed: a passing failure goes on after a backoff (upstream, three times); any other fails the ticket for a person. */
   memberError(member: string, error: unknown): void {
+    if (this.closed) return
     const binding = this.bindingOf(member)
     if (binding === undefined) return
+    if (binding.card !== undefined) { this.holdUnknownCard(binding); return }
     const { ticketId, assignmentId } = binding
     const tries = this.retries.get(assignmentId) ?? 0
     if (transientError(error) && tries < TRANSIENT_TRIES) {
@@ -713,21 +750,8 @@ export class MemberExecutor implements Executor {
         continue
       }
       if (binding.card !== undefined) {
-        // A crash can occur after the recipient accepted but before its answer was durable. Keep this exact hold and do
-        // not replay the card. The person reconciles the original, then may use the existing explicit retry/stop action.
-        const firstUnknown = binding.card === 'sending'
-        if (firstUnknown) {
-          binding.card = 'unknown'
-          this.save()
-        }
-        const message = 'Assignment-card delivery is unknown after the host restarted. Reconcile the original member and task before explicitly retrying or stopping; the card was not automatically resent.'
-        if (assignment.report === undefined) {
-          try { this.d.reportFor(ticket.id, binding.member, 'failed', message) }
-          catch (error) { this.d.logger.warn('superagent: unknown assignment card %s not reported: %s', assignment.id, String(error)) }
-        } else if (firstUnknown) {
-          // A real result/question that beat the card answer is not replaced by the executor's transport uncertainty.
-          try { engine.note(ticket.id, message) } catch (error) { this.d.logger.warn('superagent: unknown assignment card %s not noted: %s', assignment.id, String(error)) }
-        }
+        // A crash can occur after acceptance but before its answer became durable: no automatic replay of this send.
+        this.holdUnknownCard(binding)
         continue
       }
       // A child team keeps working on its own host: nothing was interrupted, and a new Assignment would send it the ticket again.
