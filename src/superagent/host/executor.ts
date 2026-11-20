@@ -86,7 +86,15 @@ export interface MemberTurn { readonly quiet: boolean; readonly text: string; /*
 
 /** One binding: which member runs which ticket's Assignment. */
 /** `run`: this binding's own id (#688 R2) — a new one each time a ticket is bound, so a fact from an earlier run is told apart. */
-interface Binding { readonly member: string; readonly ticketId: string; readonly assignmentId: string; readonly at: string; readonly run?: string }
+interface Binding {
+  readonly member: string
+  readonly ticketId: string
+  readonly assignmentId: string
+  readonly at: string
+  readonly run?: string
+  /** A card send whose result is not durable yet. A restored one is held for reconciliation, never automatically resent. */
+  card?: 'sending' | 'unknown'
+}
 
 /** A binding's run id; bindings stored before runs had ids use their start time. */
 export function runOf(binding: { readonly at: string; readonly run?: string }): string { return binding.run ?? binding.at }
@@ -146,6 +154,9 @@ export class MemberExecutor implements Executor {
   private launchAgain = false
   /** One delivery at a time per Assignment: the retry never sends what a delivery in flight is sending. */
   private readonly delivering = new Set<string>()
+  /** #751: a member's card is in flight; claims/idle are kept under this exact binding until its answer arrives. */
+  private readonly assigning = new Map<string, { binding: Binding; sent: number; idle?: { turn: MemberTurn; claimed: number } }>()
+  private closed = false
   private readonly deliverAgain = new Set<string>()
   /**
    * #742: a quiet turn end that settle() set aside because an Input delivery to its Assignment was still in flight. Kept
@@ -230,8 +241,8 @@ export class MemberExecutor implements Executor {
   private available(member: string): boolean {
     const stopping = this.stopping.get(member)
     if (stopping !== undefined && Date.now() - stopping >= STOPPING_MS) this.stopping.delete(member)
-    const held = this.bindings.filter(b => b.member === member).length
-    return held < (this.d.capacity?.(member) ?? 1) && !this.stopping.has(member) && !this.background.has(member)
+    const held = this.bindings.filter(b => b.member === member)
+    return !this.closed && !held.some(b => b.card !== undefined) && held.length < (this.d.capacity?.(member) ?? 1) && !this.stopping.has(member) && !this.background.has(member)
   }
 
   /** The repository a ticket was accepted for. */
@@ -342,7 +353,7 @@ export class MemberExecutor implements Executor {
 
   /** Launch waiting Assignments on free members, oldest first, while both exist. */
   launch(): void {
-    if (this.d.paused?.() === true || this.d.ready?.() === false) return
+    if (this.closed || this.d.paused?.() === true || this.d.ready?.() === false) return
     if (this.launching) { this.launchAgain = true; return }
     this.launching = true
     void this.launchLoop().catch(error => { this.d.logger.warn('superagent: launch failed: %s', String(error)) }).finally(() => {
@@ -354,6 +365,7 @@ export class MemberExecutor implements Executor {
 
   /** The periodic retry (upstream retries launches and deliveries): an assignment or Input a failed delivery left behind goes out again. */
   tick(): void {
+    if (this.closed) return
     const now = Date.now()
     if (now - this.lastRetry < RETRY_MS) return
     this.lastRetry = now
@@ -403,13 +415,43 @@ export class MemberExecutor implements Executor {
         if (cap > 0 && this.bindings.length >= cap) break
         let member: string | undefined
         let tried: string | undefined
+        let bound: Binding | undefined
+        let ended: { turn: MemberTurn; claimed: number } | undefined
         const run = newRun()
         let preparing: { command: string; timeoutMs: number; cwd: string } | 'no-workspace' | undefined
         for (const candidate of this.free(ticket.id)) {
           preparing = this.preparationFor(ticket.id, candidate)
           if (preparing !== undefined) { member = candidate; break }
           tried = candidate
-          if (await this.tryDeliver(candidate, assignmentCard(ticket, this.d.trigger, this.ticketRepos[ticket.id], this.d.memberNotes?.(candidate, ticket) ?? []), 'assign', ticket.id, run)) { member = candidate; break }
+          const cardText = assignmentCard(ticket, this.d.trigger, this.ticketRepos[ticket.id], this.d.memberNotes?.(candidate, ticket) ?? [])
+          // Reserve the member before any external effect, but do not claim that the card arrived or the assignment started.
+          const binding: Binding = { member: candidate, ticketId: ticket.id, assignmentId: assignment.id, at: new Date().toISOString(), run, card: 'sending' }
+          const send = { binding, sent: ++this.causal } as { binding: Binding; sent: number; idle?: { turn: MemberTurn; claimed: number } }
+          this.bindings.push(binding)
+          this.assigning.set(assignment.id, send)
+          try { this.save() } catch (error) { this.assigning.delete(assignment.id); this.bindings = this.bindings.filter(b => b !== binding); throw error }
+          const accepted = await this.tryDeliver(candidate, cardText, 'assign', ticket.id, run)
+          if (this.closed) return // A late promise from a stopped instance must never write over the new host's state.
+          this.assigning.delete(assignment.id)
+          const current = this.d.ticket(ticket.id)
+          if (!this.bindings.includes(binding) || current === undefined || current.ended || current.assignments.find(a => a.id === assignment.id)?.state !== 'pending') break
+          if (!accepted) {
+            this.bindings = this.bindings.filter(b => b !== binding)
+            this.background.delete(candidate)
+            this.save()
+            continue
+          }
+          member = candidate
+          bound = binding
+          if (send.idle !== undefined && send.idle.claimed > send.sent && this.claimSeq.get(candidate) === send.idle.claimed) ended = send.idle
+          break
+        }
+        // A stop/retry while the card was in flight must not be resurrected by its late answer.
+        const current = this.d.ticket(ticket.id)
+        if (current === undefined || current.ended || current.assignments.find(a => a.id === assignment.id)?.state !== 'pending') {
+          this.waiting = this.waiting.filter(w => w !== next)
+          this.refused.delete(assignment.id)
+          continue
         }
         if (member === undefined) {
           if (tried !== undefined) this.refused.set(assignment.id, { member: tried, at: new Date().toISOString() })
@@ -417,13 +459,19 @@ export class MemberExecutor implements Executor {
         }
         this.waiting = this.waiting.filter(w => w !== next)
         this.refused.delete(assignment.id)
-        this.bindings.push({ member, ticketId: ticket.id, assignmentId: assignment.id, at: new Date().toISOString(), run })
+        if (bound === undefined) { bound = { member, ticketId: ticket.id, assignmentId: assignment.id, at: new Date().toISOString(), run }; this.bindings.push(bound) }
         if (this.ticketMembers[ticket.id] === undefined) this.ticketMembers[ticket.id] = { member, named: false }
         delete this.lastMembers[ticket.id]
         this.lastMembers[ticket.id] = member
         this.save()
         this.d.logger.info('superagent: ticket %s assigned to %s', ticket.id, member)
         try { engine.assignmentStarted(ticket.id, assignment.id) } catch (error) { this.d.logger.warn('superagent: assignment %s not recorded started: %s', assignment.id, String(error)) }
+        if (bound.card !== undefined) {
+          if (this.d.ticket(ticket.id)?.assignments.find(a => a.id === assignment.id)?.state !== 'running') continue
+          delete bound.card
+          try { this.save() } catch (error) { bound.card = 'sending'; throw error }
+        }
+        if (ended !== undefined && this.bindings.includes(bound)) this.memberIdle(member, ended.turn)
         if (preparing !== undefined) void this.prepareThenAssign(ticket.id, assignment.id, member, preparing)
         progressed = true
       }
@@ -471,6 +519,7 @@ export class MemberExecutor implements Executor {
       const binding = this.bindings.find(b => b.assignmentId === assignment.id)
       // A parked Assignment comes back through the launch loop once its member is free.
       if (binding === undefined) { if (this.parked.some(b => b.assignmentId === assignment.id)) this.launch(); return }
+      if (this.closed || binding.card !== undefined) return
       this.delivering.add(assignment.id)
       let sent: number | 'failed' | undefined = 'failed'
       try { sent = await this.deliverNow(ticket, assignment, binding) } finally {
@@ -531,7 +580,8 @@ export class MemberExecutor implements Executor {
   stop(ticket: Ticket, assignment: Assignment, reason: string): void {
     const binding = this.bindings.find(b => b.assignmentId === assignment.id)
     this.waiting = this.waiting.filter(w => w.assignmentId !== assignment.id)
-    this.retries.delete(assignment.id); this.resuming.delete(assignment.id); this.deferredIdle.delete(assignment.id); this.chainSent.delete(assignment.id)
+    this.retries.delete(assignment.id); this.resuming.delete(assignment.id); this.deferredIdle.delete(assignment.id); this.chainSent.delete(assignment.id); this.assigning.delete(assignment.id)
+    if (binding !== undefined) this.background.delete(binding.member)
     const parked = this.parked.find(b => b.assignmentId === assignment.id)
     if (parked !== undefined) {
       // It holds no turn and may be on another ticket by now: nothing to stop. A member removed from the team is told.
@@ -555,6 +605,7 @@ export class MemberExecutor implements Executor {
 
   /** The member's session took a message into its history: the Inputs delivered to its assignment so far count as read. */
   memberRead(member: string): void {
+    if (this.closed) return
     // A new claim means a new turn: an idle set aside before it no longer describes the member's state (#742).
     this.dropDeferredIdle(member)
     this.claimSeq.set(member, ++this.causal)
@@ -564,7 +615,7 @@ export class MemberExecutor implements Executor {
   private markRead(member: string): void {
     this.claimedAt.set(member, Date.now())
     const binding = this.bindingOf(member)
-    if (binding === undefined) return
+    if (binding === undefined || binding.card !== undefined) return
     const ticket = this.d.ticket(binding.ticketId)
     if (ticket === undefined || ticket.ended) return
     const unread = ticket.inputs.filter((input): input is Extract<TicketInput, { kind: 'trigger' }> => input.kind === 'trigger' && !input.readAt && input.deliveredTo === binding.assignmentId).map(input => input.id)
@@ -574,11 +625,17 @@ export class MemberExecutor implements Executor {
 
   /** The member's turn ended: Inputs delivered to it before now count as read, and the engine hears the turn end. */
   memberIdle(member: string, turn: MemberTurn = { quiet: true, text: '' }): void {
+    if (this.closed) return
     if (this.stopping.delete(member)) queueMicrotask(() => this.launch())
     const binding = this.bindingOf(member)
     this.dropDeferredIdle(member)
     if (binding === undefined) { this.background.delete(member); return }
     const claimed = this.claimSeq.get(member) ?? 0
+    if (binding.card !== undefined) {
+      const sending = this.assigning.get(binding.assignmentId)
+      if (sending?.binding === binding && claimed > sending.sent) sending.idle = { turn: { ...turn }, claimed }
+      return // A turn cannot settle an unconfirmed card, including a restored unknown send.
+    }
     this.markRead(member)
     // The owner talked to this session directly: that turn says nothing about the ticket, and the ticket goes on after it.
     if (turn.person === true && turn.quiet && !this.resuming.has(binding.assignmentId)) {
@@ -640,7 +697,10 @@ export class MemberExecutor implements Executor {
     this.memberIdle(member, { quiet: true, text: '' })
   }
 
-  /** After a restart: each Assignment that was running gets upstream's interruption handling (restart with a recovery note). */
+  /** Stop this instance's pending card completions from mutating state after the host has stopped. */
+  close(): void { this.closed = true; this.assigning.clear() }
+
+  /** Restore normal runs through upstream interruption handling; unknown card sends stay held for explicit reconciliation. */
   recover(): void {
     const engine = this.d.engine()
     // A parked Assignment holds no turn to interrupt; one that ended while this host was down is forgotten.
@@ -650,6 +710,24 @@ export class MemberExecutor implements Executor {
       const assignment = ticket?.assignments.find(a => a.id === binding.assignmentId)
       if (ticket === undefined || ticket.ended || assignment === undefined || assignment.state === 'ended') {
         this.bindings = this.bindings.filter(b => b !== binding)
+        continue
+      }
+      if (binding.card !== undefined) {
+        // A crash can occur after the recipient accepted but before its answer was durable. Keep this exact hold and do
+        // not replay the card. The person reconciles the original, then may use the existing explicit retry/stop action.
+        const firstUnknown = binding.card === 'sending'
+        if (firstUnknown) {
+          binding.card = 'unknown'
+          this.save()
+        }
+        const message = 'Assignment-card delivery is unknown after the host restarted. Reconcile the original member and task before explicitly retrying or stopping; the card was not automatically resent.'
+        if (assignment.report === undefined) {
+          try { this.d.reportFor(ticket.id, binding.member, 'failed', message) }
+          catch (error) { this.d.logger.warn('superagent: unknown assignment card %s not reported: %s', assignment.id, String(error)) }
+        } else if (firstUnknown) {
+          // A real result/question that beat the card answer is not replaced by the executor's transport uncertainty.
+          try { engine.note(ticket.id, message) } catch (error) { this.d.logger.warn('superagent: unknown assignment card %s not noted: %s', assignment.id, String(error)) }
+        }
         continue
       }
       // A child team keeps working on its own host: nothing was interrupted, and a new Assignment would send it the ticket again.

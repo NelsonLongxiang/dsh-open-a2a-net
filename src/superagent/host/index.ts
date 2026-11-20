@@ -366,7 +366,7 @@ export class SuperagentHost {
     this.pass()
   }
 
-  stop(): Promise<void> { this.roster.close(); this.disposeTimer?.(); this.disposeTimer = undefined; this.healthTimer?.(); this.healthTimer = undefined; this.started = false; return this.a2a.stop() }
+  stop(): Promise<void> { this.executor.close(); this.roster.close(); this.disposeTimer?.(); this.disposeTimer = undefined; this.healthTimer?.(); this.healthTimer = undefined; this.started = false; return this.a2a.stop() }
 
   /** Run the A2A Source's mailbox loop exactly while its Source is on. */
   private syncA2a(): void {
@@ -899,7 +899,10 @@ export class SuperagentHost {
     const member = this.resolveMember(value)
     if (member === undefined) return { ok: false, code: 'member', error: `no such member: ${value}. ${this.memberListLine()}` }
     const latest = ticket.assignments.at(-1)
-    if (latest?.state === 'pending') { this.named.assigned(ticketId); this.executor.setMember(ticketId, member); return { ok: true, ticket_id: ticketId, member: this.memberName(member) } }
+    const card = this.executor.list().find(b => b.assignmentId === latest?.id)?.card
+    if (card === 'sending') return { ok: false, code: 'assignment-in-flight', error: 'the original assignment card is still in flight; wait for its result or stop that ticket, do not send another card' }
+    if (latest?.state === 'pending' && card === undefined) { this.named.assigned(ticketId); this.executor.setMember(ticketId, member); return { ok: true, ticket_id: ticketId, member: this.memberName(member) } }
+    // A restored unknown card has a failed report: only this explicit retry action (after reconciliation) creates a new run.
     // A refused reassignment leaves nothing changed (#690 F1): the running member keeps the ticket, its name and its hold.
     const before = this.executor.memberOfTicket(ticketId)
     this.executor.setMember(ticketId, member)
