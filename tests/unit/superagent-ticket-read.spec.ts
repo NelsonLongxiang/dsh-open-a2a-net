@@ -40,6 +40,8 @@ describe('a2a_ticket_read', () => {
     expect(await m.read(m.other, { kind: 'mine' })).toMatchObject({ ok: true, tickets: [] })
     expect(await m.read(m.other, { kind: 'ticket', ticket_id: m.ticket })).toMatchObject({ ok: false, code: 'not-yours' })
     expect(await m.read(m.other, { kind: 'team' })).toMatchObject({ ok: false, code: 'not-observer' })
+    // #762 review: a plain member cannot read the prompt-template library, a session's templates or the log either.
+    for (const kind of ['library', 'templates', 'interventions']) expect(await m.read(m.other, { kind, session_id: 'session-m' })).toMatchObject({ ok: false, code: 'not-observer' })
     await m.h.stop()
   })
   it('an observer reads the team and its decisions', async () => {

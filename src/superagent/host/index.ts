@@ -124,6 +124,9 @@ export const SENDER_TAKE = '接这一单', SENDER_TAKE_LIST = '接这一单，�
 /** M12 limits: open `sender` cards at a time, and how old a message may be to wait on one. */
 export const SENDER_CARDS_MAX = 10, SENDER_HOLD_MAX_AGE_MS = 24 * 3_600_000
 
+/** Observer phase 1: how many intervention rows one read returns by default, and at most (the plugin's own cap). */
+const INTERVENTIONS_READ_DEFAULT = 100, INTERVENTIONS_READ_MAX = 500
+
 export class SuperagentHost {
   readonly store: JsonRepositories
   readonly engine: Engine
@@ -1093,31 +1096,54 @@ export class SuperagentHost {
    * answers `available: false` with why, never an error that stops the observer.
    */
   async promptTemplates(kind: 'library' | 'templates' | 'interventions', q: { session_id?: string; since?: string; source?: string; limit?: number } = {}): Promise<Record<string, unknown>> {
+    // The plugin's /plugins/ routes answer this host's own loopback without a token; the observer never sees a credential.
     const read = this.d.templatesRead ?? (async (path: string) => {
       const home = this.d.homeUrl?.()
-      if (home === undefined) throw new Error('this host\'s web server is not up yet')
+      if (home === undefined) throw new Error('web server not up')
       const res = await fetch(`${home}/plugins/dsh-prompt-templates/${path}`, { signal: AbortSignal.timeout(5_000) })
       return { status: res.status, body: await res.json().catch(() => undefined) }
     })
+    // #762 review: one domain, one observer — templates and interventions are read for this team's own sessions only.
+    // The library is the host's shared card set and is read whole.
+    const team = new Set([this.settings.router, ...this.settings.members].filter((id): id is string => typeof id === 'string'))
+    const session = q.session_id?.trim() ?? ''
+    if (kind !== 'library' && session !== '' && !team.has(session)) return { ok: false, code: 'not-in-team', error: 'that session is not a member of this team: an observer reads its own team\'s sessions only' }
     const params = new URLSearchParams()
+    let limit = INTERVENTIONS_READ_DEFAULT
     if (kind === 'templates') {
-      if (q.session_id === undefined || q.session_id.trim() === '') return { ok: false, code: 'session_id', error: 'kind templates needs session_id: the session whose own templates to read' }
-      params.set('session_id', q.session_id.trim())
+      if (session === '') return { ok: false, code: 'session_id', error: 'kind templates needs session_id: the session whose own templates to read' }
+      params.set('session_id', session)
     }
     if (kind === 'interventions') {
-      if (q.session_id !== undefined && q.session_id.trim() !== '') params.set('session_id', q.session_id.trim())
-      if (q.since !== undefined && q.since.trim() !== '') params.set('since', q.since.trim())
-      if (q.source !== undefined && q.source.trim() !== '') params.set('source', q.source.trim())
-      if (q.limit !== undefined && Number.isFinite(q.limit)) params.set('limit', String(Math.trunc(q.limit)))
+      if (q.since !== undefined && q.since.trim() !== '') {
+        const at = Date.parse(q.since.trim())
+        if (!/^\d{4}-\d{2}-\d{2}/.test(q.since.trim()) || Number.isNaN(at)) return { ok: false, code: 'since', error: 'since must be an ISO time, e.g. 2026-11-20T08:00:00Z' }
+        params.set('since', new Date(at).toISOString())
+      }
+      if (q.source !== undefined && q.source.trim() !== '') {
+        if (!['schedule', 'event', 'manual', 'plugin'].includes(q.source.trim())) return { ok: false, code: 'source', error: 'source must be schedule, event, manual or plugin' }
+        params.set('source', q.source.trim())
+      }
+      if (q.limit !== undefined && Number.isFinite(q.limit)) limit = Math.max(1, Math.min(INTERVENTIONS_READ_MAX, Math.trunc(q.limit)))
+      if (session !== '') params.set('session_id', session)
+      // Without a session the plugin is asked for its widest page and the rows are kept to this team's sessions.
+      params.set('limit', String(session !== '' ? limit : INTERVENTIONS_READ_MAX))
     }
-    const path = `${kind === 'interventions' ? 'interventions' : 'library'}${params.size > 0 ? `?${params.toString()}` : ''}`
+    const target = `${kind === 'interventions' ? 'interventions' : 'library'}${params.size > 0 ? `?${params.toString()}` : ''}`
+    // Fixed words to the observer; the plugin's own error text goes to the host log only.
+    const unavailable = (reason: string, detail?: string): Record<string, unknown> => {
+      if (detail !== undefined) this.d.logger.warn('superagent: prompt-templates %s read: %s', kind, detail)
+      return { ok: true, available: false, reason }
+    }
     let out: { status: number; body: unknown }
-    try { out = await read(path) } catch (error) { return { ok: true, available: false, reason: `dsh-prompt-templates could not be read: ${error instanceof Error ? error.message : String(error)}` } }
-    if (out.status === 404) return { ok: true, available: false, reason: 'dsh-prompt-templates is not installed on this host, or is older than 0.16 (no read-only faces)' }
-    const body = out.body as { schema?: unknown; items?: unknown; error?: unknown } | undefined
-    if (out.status !== 200 || body === undefined) return { ok: true, available: false, reason: `dsh-prompt-templates answered ${String(out.status)}${typeof body?.error === 'object' && body.error !== null ? `: ${JSON.stringify(body.error).slice(0, 200)}` : ''}` }
-    if (typeof body.schema !== 'number' || body.schema < 9 || !Array.isArray(body.items)) return { ok: true, available: false, reason: 'dsh-prompt-templates is older than 0.16 (schema 9): upgrade it to read the library and the log' }
-    return { ok: true, available: true, schema: body.schema, items: body.items }
+    try { out = await read(target) } catch (error) { return unavailable('dsh-prompt-templates could not be read on this host right now', error instanceof Error ? error.message : String(error)) }
+    if (out.status === 404) return unavailable('dsh-prompt-templates is not installed on this host, or is older than 0.16')
+    const body = out.body as { schema?: unknown; items?: unknown } | undefined
+    if (out.status !== 200 || body === undefined) return unavailable('dsh-prompt-templates did not answer the read', `HTTP ${String(out.status)}`)
+    if (typeof body.schema !== 'number' || body.schema < 9 || !Array.isArray(body.items)) return unavailable('dsh-prompt-templates is older than 0.16 (schema 9): upgrade it to read the library and the log')
+    let items = body.items as Array<Record<string, unknown>>
+    if (kind === 'interventions' && session === '') items = items.filter(row => typeof row['session_id'] === 'string' && team.has(row['session_id'] as string)).slice(-limit)
+    return { ok: true, available: true, schema: body.schema, items }
   }
 
   /** R7b: what the observer holds now (for the team state). */
