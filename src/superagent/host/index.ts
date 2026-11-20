@@ -370,7 +370,11 @@ export class SuperagentHost {
     this.disposeTimer = this.d.interval(() => this.pass(), PASS_MS)
     // Reliability R7: look at the team's health every 15 minutes; a new problem raises one card (the boot grace period
     // keeps health() quiet, so nothing is raised from it either).
-    this.healthTimer = this.d.interval(() => { this.healthReminders.tick(this.health() as readonly HealthProblem[], Date.parse(this.now())); this.questionTick() }, HEALTH_TICK_MS)
+    // #761 review: each look stands alone, so a fault in the health look never skips the question look (or the other way round).
+    this.healthTimer = this.d.interval(() => {
+      try { this.healthReminders.tick(this.health() as readonly HealthProblem[], Date.parse(this.now())) } catch (error) { this.d.logger.warn('superagent: health look skipped: %s', String(error)) }
+      this.questionTick()
+    }, HEALTH_TICK_MS)
     this.roster.start(this.d.interval)
     // Defer: start() may run while the plugin's apply() still executes, when the canvas lookups it touches are not
     // initialized yet (a TDZ crash took the plugin down on hosts with models set - review of #566). A microtask runs

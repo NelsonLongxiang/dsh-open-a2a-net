@@ -74,7 +74,20 @@ export class QuestionGate {
    */
   ask(ticketId: string, reporter: string, title: string, question: string, now: number): QuestionRoute {
     this.load()
-    this.handled.delete(ticketId)
+    // #761 review 1: a question the observer already holds keeps its first hour. A member asking again within it must
+    // not restart the hour (or the question would never reach the person); the observer just hears the new words.
+    const held = this.pending.get(ticketId)
+    if (held !== undefined) {
+      if (this.d.loaded(held.observer)) this.d.tell(held.observer, questionNotice(ticketId, title, question))
+      return 'observer'
+    }
+    // #761 review 2: the observer already settled this ticket's question and the member still asks: it goes to the person.
+    if (this.handled.has(ticketId)) {
+      this.handled.delete(ticketId)
+      this.reached.set(ticketId, now)
+      this.save()
+      return 'person'
+    }
     const notedAt = this.noted.get(ticketId)
     const observer = notedAt !== undefined && now - notedAt < QUESTION_SILENCE_MS ? undefined : this.d.pick(reporter)
     if (observer !== undefined && this.d.tell(observer, questionNotice(ticketId, title, question))) {
@@ -97,6 +110,9 @@ export class QuestionGate {
       if (told.observer !== observer || !text.includes(questionToken(ticketId))) continue
       this.pending.delete(ticketId)
       this.handled.set(ticketId, { observer, since: now })
+      // #761 review 2: any way the observer settles a question (note, request or card) opens the no-loop window, so a
+      // member asking again on that ticket within the hour goes to the person.
+      this.noted.set(ticketId, now)
       changed = true
     }
     if (changed) this.save()
@@ -140,7 +156,8 @@ export class QuestionGate {
       if (now - told.since < QUESTION_SILENCE_MS) continue
       this.handled.delete(ticketId); this.reached.set(ticketId, now); out.push({ ticketId, why: 'still-waiting' }); changed = true
     }
-    // Forget clocks and notes of tickets no longer waiting.
+    // Forget clocks and notes of tickets no longer waiting. A note stamped in the future (the clock went back) is kept
+    // until the clock catches up, as the hour itself is.
     for (const ticketId of [...this.reached.keys()]) if (!waiting(ticketId)) { this.reached.delete(ticketId); changed = true }
     for (const [ticketId, at] of [...this.noted]) if (now - at >= QUESTION_SILENCE_MS) { this.noted.delete(ticketId); changed = true }
     if (changed) this.save()
