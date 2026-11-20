@@ -130,18 +130,29 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
   const busy = new Set<string>()
   /** Per card: the owner's files picked for the decision, kept across redraws until it is sent or the card goes. */
   const attached = new Map<string, File[]>()
+  /**
+   * Per card: the reference of each file already staged for it. A decision the host refuses and the owner sends again
+   * reuses them, so a refusal leaves at most one staged copy of each file (it expires with the file channel's 24 hours).
+   */
+  const staged = new Map<string, Map<File, string>>()
 
-  /** Add picked or dropped files to a card's decision: at most 16, each at most 64 MB, a file already there once. */
+  /**
+   * Add picked or dropped files to a card's decision: at most 16, each at most 64 MB. The same file picked again (same
+   * name, size and modification time) is kept once and the page says so; two different files that share a name and size
+   * are both kept.
+   */
   function attach(card: DecisionCard, added: readonly File[]): void {
     const tooBig = added.find(file => file.size > ATTACH_BYTES_MAX)
     if (tooBig !== undefined) { said.set(card.id, `「${tooBig.name}」超过 64 MB，文件通道收不下`); draw(true); return }
     const now = attached.get(card.id) ?? []
-    const known = new Set(now.map(file => `${file.name}:${String(file.size)}`))
+    const keyOf = (file: File): string => `${file.name}:${String(file.size)}:${String(file.lastModified)}`
+    const known = new Set(now.map(keyOf))
     const next = [...now]
-    for (const file of added) { const key = `${file.name}:${String(file.size)}`; if (!known.has(key)) { known.add(key); next.push(file) } }
+    const again: string[] = []
+    for (const file of added) { const key = keyOf(file); if (known.has(key)) again.push(file.name); else { known.add(key); next.push(file) } }
     if (next.length > ATTACH_MAX) { said.set(card.id, `一个决定最多附 ${String(ATTACH_MAX)} 个文件`); draw(true); return }
     attached.set(card.id, next)
-    said.delete(card.id)
+    if (again.length > 0) said.set(card.id, `已经附上过，没有重复添加：${again.join('、')}`); else said.delete(card.id)
     draw(true)
   }
 
@@ -258,18 +269,23 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
     if (files.length > 0) {
       const refused = card.address === undefined ? '这张卡没有团队地址，不能附带文件' : deps.stage === undefined ? '这台主机不能附带文件' : undefined
       if (refused !== undefined) { busy.delete(card.id); said.set(card.id, `没有提交：${refused}`); draw(true); return }
+      const done = staged.get(card.id) ?? new Map<File, string>()
+      staged.set(card.id, done)
       for (const file of files) {
-        let staged: { ref: string } | { refused: string }
-        try { staged = await deps.stage!(file, card.address!) } catch (error) { staged = { refused: String(error) } }
-        if ('refused' in staged) { busy.delete(card.id); said.set(card.id, `没有提交：文件「${file.name}」没有附上（${staged.refused}）`); draw(true); return }
-        refs.push(staged.ref)
+        const already = done.get(file)
+        if (already !== undefined) { refs.push(already); continue }
+        let out: { ref: string } | { refused: string }
+        try { out = await deps.stage!(file, card.address!) } catch (error) { out = { refused: String(error) } }
+        if ('refused' in out) { busy.delete(card.id); said.set(card.id, `没有提交：文件「${file.name}」没有附上（${out.refused}）`); draw(true); return }
+        done.set(file, out.ref)
+        refs.push(out.ref)
       }
     }
     let out: { status: number; body: Json }
     try { out = await deps.decide({ id: card.id, ...(card.teamId !== '' ? { teamId: card.teamId } : {}), ...body, ...(refs.length > 0 ? { files: refs } : {}) }) } catch (error) { out = { status: 0, body: { error: String(error) } } }
     busy.delete(card.id)
     if (out.status >= 200 && out.status < 300 && out.body.ok === true) {
-      picks.delete(card.id); notes.delete(card.id); attached.delete(card.id)
+      picks.delete(card.id); notes.delete(card.id); attached.delete(card.id); staged.delete(card.id)
       notice.textContent = '已提交，团队会收到你的决定'
       notice.hidden = false
     } else if (out.body.code === 'stale') {
@@ -325,7 +341,7 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
         cards = rows.flatMap(row => { const card = cardOf(row); return card === undefined ? [] : [card] })
         loaded = true
         // A card decided elsewhere is gone: what was typed for it goes too.
-        for (const id of [...picks.keys(), ...notes.keys(), ...said.keys(), ...attached.keys()]) if (!cards.some(c => c.id === id)) { picks.delete(id); notes.delete(id); said.delete(id); attached.delete(id) }
+        for (const id of [...picks.keys(), ...notes.keys(), ...said.keys(), ...attached.keys()]) if (!cards.some(c => c.id === id)) { picks.delete(id); notes.delete(id); said.delete(id); attached.delete(id); staged.delete(id) }
         failure = ''
       } catch (error) { failure = error instanceof Error ? error.message : String(error) }
       draw()
