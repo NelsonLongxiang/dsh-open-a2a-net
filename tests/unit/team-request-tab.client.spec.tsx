@@ -228,7 +228,7 @@ describe('files', () => {
     await add(file('a.txt'), file('b.txt'))
     fireEvent.click(screen.getByRole('button', { name: en['team.send'] }))
     await waitFor(() => { expect(posts(f)).toHaveLength(1) })
-    expect(stagedUrls(f)).toEqual(['a.txt', 'b.txt'].map(name => `/__dsh_a2a/blob?to=${encodeURIComponent('dsh/canvas/ops')}&name=${name}&by=owner`))
+    expect(stagedUrls(f)).toEqual(['a.txt', 'b.txt'].map(name => `/__dsh_a2a/blob?to=${encodeURIComponent('dsh/canvas/ops')}&name=${name}`))
     expect(posts(f)[0]).toEqual({ action: 'request', text: ['看这个', REF('a.txt'), REF('b.txt')].join('\n') })
     await waitFor(() => { expect(screen.queryByText('a.txt')).toBeNull() })
   })

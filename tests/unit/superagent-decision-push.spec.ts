@@ -304,4 +304,16 @@ describe('T8: on the host', () => {
     await m.h.stop()
     expect(push.every(t => t.disposed)).toBe(true)
   })
+
+  it('#772: the decision\'s own text never reaches the envelope — no 决定：/说明： lines, no file reference, no from= address', async () => {
+    const m = await team()
+    const c = m.h.proposeDecision('observer', 'session-o', '问题', spec, '理由') as { id: string }
+    const ref = formatFileRef({ sha256: 'e'.repeat(64), size: 77, name: 'owner-only.pdf', from: 'http://host.invalid:1' })
+    expect(m.h.decide(c.id, 'choose', '乙', 'NOTE-TEXT 只给团队看', [ref])).toMatchObject({ ok: true })
+    await m.h.decisionPush.tick()
+    const decided = m.sent.map(([, t]) => t).find(t => bodyOf(t).event === 'decided')!
+    for (const leak of ['决定：', '说明：', 'NOTE-TEXT', '[A2A file]', 'from=', 'host.invalid', 'owner-only', 'e'.repeat(64)]) expect(decided, leak).not.toContain(leak)
+    expect(bodyOf(decided).card).toMatchObject({ decided_option: '乙', files: [] })
+    await m.h.stop()
+  })
 })
