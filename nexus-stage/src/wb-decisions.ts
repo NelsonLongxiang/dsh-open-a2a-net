@@ -20,6 +20,11 @@ export const CARD_ID = /^[A-Za-z0-9._:-]{1,64}$/
 const SHA256 = /^[0-9a-f]{64}$/
 /** The file channel's limits (src/blob-store.ts; the host's DECISION_FILES_MAX): files on one decision, bytes per file. */
 export const ATTACH_MAX = 16, ATTACH_BYTES_MAX = 64 * 1024 * 1024
+/**
+ * How long a staged file is reused for a retried decision. The file channel keeps a grant 24 hours; a copy older than this
+ * is staged again rather than sent as a reference that may expire before the team fetches it.
+ */
+export const STAGE_REUSE_MS = 23 * 60 * 60_000
 
 export interface DecisionCard {
   readonly id: string; readonly teamId: string; readonly team: string; readonly question: string; readonly level: string
@@ -132,9 +137,10 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
   const attached = new Map<string, File[]>()
   /**
    * Per card: the reference of each file already staged for it. A decision the host refuses and the owner sends again
-   * reuses them, so a refusal leaves at most one staged copy of each file (it expires with the file channel's 24 hours).
+   * reuses them while they are younger than STAGE_REUSE_MS, so a refusal leaves at most one live staged copy of each file
+   * (it expires with the file channel's 24 hours).
    */
-  const staged = new Map<string, Map<File, string>>()
+  const staged = new Map<string, Map<File, { readonly ref: string; readonly at: number }>>()
 
   /**
    * Add picked or dropped files to a card's decision: at most 16, each at most 64 MB. The same file picked again (same
@@ -269,15 +275,15 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
     if (files.length > 0) {
       const refused = card.address === undefined ? '这张卡没有团队地址，不能附带文件' : deps.stage === undefined ? '这台主机不能附带文件' : undefined
       if (refused !== undefined) { busy.delete(card.id); said.set(card.id, `没有提交：${refused}`); draw(true); return }
-      const done = staged.get(card.id) ?? new Map<File, string>()
+      const done = staged.get(card.id) ?? new Map<File, { readonly ref: string; readonly at: number }>()
       staged.set(card.id, done)
       for (const file of files) {
         const already = done.get(file)
-        if (already !== undefined) { refs.push(already); continue }
+        if (already !== undefined && Date.now() - already.at < STAGE_REUSE_MS) { refs.push(already.ref); continue }
         let out: { ref: string } | { refused: string }
         try { out = await deps.stage!(file, card.address!) } catch (error) { out = { refused: String(error) } }
         if ('refused' in out) { busy.delete(card.id); said.set(card.id, `没有提交：文件「${file.name}」没有附上（${out.refused}）`); draw(true); return }
-        done.set(file, out.ref)
+        done.set(file, { ref: out.ref, at: Date.now() })
         refs.push(out.ref)
       }
     }
