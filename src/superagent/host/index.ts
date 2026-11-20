@@ -127,6 +127,8 @@ export const SENDER_CARDS_MAX = 10, SENDER_HOLD_MAX_AGE_MS = 24 * 3_600_000
 
 /** Observer phase 1: how many intervention rows one read returns by default, and at most (the plugin's own cap). */
 const INTERVENTIONS_READ_DEFAULT = 100, INTERVENTIONS_READ_MAX = 500
+/** #764 review: per target session, at most this many casts an hour, and one wake per this window. */
+const CAST_PER_HOUR = 3, CAST_WAKE_MS = 15 * 60_000
 
 export class SuperagentHost {
   readonly store: JsonRepositories
@@ -1167,6 +1169,61 @@ export class SuperagentHost {
     return { ok: true, available: true, schema: body.schema, items }
   }
 
+  /**
+   * Observer phase 2 (T5-A): the observer casts one card into one of its own team's sessions, through the same host's
+   * prompt-template plugin. The plugin only recognizes the caller as this a2a plugin, so who may cast is checked here:
+   * the team's observer (by the session calling, never a parameter), into a session of this team other than itself, while
+   * the owner has turned observerCast on. The target is woken so the card goes in at its next step.
+   */
+  castCard(observer: string, input: { session_id?: unknown; template_id?: unknown; reason?: unknown }): Record<string, unknown> {
+    if (!this.isObserver(observer)) return { ok: false, code: 'not-observer', error: 'a2a_card_cast serves only the team\'s observer' }
+    if (this.settingsValue.observerCast !== true) return { ok: false, code: 'off', error: 'casting cards is off for this team (the owner turns on observerCast)' }
+    const target = String(input.session_id ?? '').trim()
+    const team = new Set([this.settings.router, ...this.settings.members].filter((id): id is string => typeof id === 'string'))
+    if (target === '' || !team.has(target) || target === observer) return { ok: false, code: 'not-in-team', error: 'cast only into another session of this team' }
+    const templateId = String(input.template_id ?? '').trim()
+    const reason = String(input.reason ?? '')
+    if (templateId === '') return { ok: false, code: 'template', error: 'name the card (template_id from a2a_ticket_read kind library or templates)' }
+    // #764 review: per target, at most CAST_PER_HOUR casts an hour and one wake per CAST_WAKE_MS; kept across restarts.
+    const now = Date.parse(this.now())
+    const limits = this.castLimits()
+    const entry = limits[target] ?? { casts: [], wakeAt: 0 }
+    entry.casts = entry.casts.filter(at => now - at < 3_600_000 && at <= now + 60_000)
+    if (entry.casts.length >= CAST_PER_HOUR) return { ok: false, code: 'rate-limited', error: `at most ${String(CAST_PER_HOUR)} casts an hour into one session` }
+    const out = this.d.castCard?.({ sessionId: target, templateId, reason })
+    if (out === undefined) return { ok: true, available: false, reason: 'dsh-prompt-templates with the cast service (0.17+) is not on this host' }
+    if (!out.ok) return { ok: false, code: out.code ?? 'refused', error: out.error ?? 'the card was not cast' }
+    entry.casts.push(now)
+    // Wake the target so the card goes in at its next step (a wake carries no instruction of its own), at most once per window.
+    const wake = now - entry.wakeAt >= CAST_WAKE_MS || entry.wakeAt > now + 60_000
+    if (wake) {
+      entry.wakeAt = now
+      try { this.d.deliverToSession(target, '[superagent card] 团队观察者投来一张卡，会在你下一步看到；它不是新的指令，不授予任何权限。') } catch { /* the card still waits for its next step */ }
+    }
+    limits[target] = entry
+    this.saveCastLimits(limits)
+    return { ok: true, queued: out.queued ?? 1, woken: wake }
+  }
+
+  /** #764 review: the per-target cast limits, kept in the team's observer-casts.json. */
+  private castLimitsPath(): string { return join(this.stateDir, 'observer-casts.json') }
+  private castLimits(): Record<string, { casts: number[]; wakeAt: number }> {
+    try {
+      const path = this.castLimitsPath()
+      if (!existsSync(path)) return {}
+      const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, { casts?: unknown; wakeAt?: unknown }>
+      const out: Record<string, { casts: number[]; wakeAt: number }> = {}
+      for (const [k, v] of Object.entries(raw ?? {})) out[k] = { casts: Array.isArray(v?.casts) ? v.casts.filter((n): n is number => typeof n === 'number' && Number.isFinite(n)) : [], wakeAt: typeof v?.wakeAt === 'number' ? v.wakeAt : 0 }
+      return out
+    } catch { return {} }
+  }
+  private saveCastLimits(limits: Record<string, { casts: number[]; wakeAt: number }>): void {
+    try {
+      const path = this.castLimitsPath(), temporary = `${path}.tmp-${String(process.pid)}`
+      mkdirSync(this.stateDir, { recursive: true }); writeFileSync(temporary, JSON.stringify(limits), { mode: 0o600 }); renameSync(temporary, path)
+    } catch (error) { this.d.logger.warn('superagent: cast limits not saved: %s', String(error)) }
+  }
+
   /** R7b: what the observer holds now (for the team state). */
   observerQuestions(): { pending: string[]; handled: string[] } { return this.questionGate.holds() }
 
@@ -1972,6 +2029,48 @@ export class SuperagentHost {
     out.push(...queuedProblems(this.executor.queued(), q => this.queuedSince(q), id => this.store.tickets.get(id)?.title ?? id, now))
     // T8: a decision card the market refused (or this host could not shape for it) stays visible: one problem per team and card.
     for (const refused of this.decisionPush.problems()) out.push({ code: 'decision-push-refused', title: `${this.settings.canvas ?? ''}/${refused.cardId}`, detail: refused.why })
+    if (this.settingsValue.idleSweep === true) out.push(...this.idleSweep(now))
+    return out
+  }
+
+  /**
+   * T5-B (workbench-market 18, the session idle sweep): what the wrap-up self-check log says about the members holding a
+   * ticket. Three problems, each going to the observer first (R7a): a registered wait past its deadline with nothing
+   * newer (session-wait-overdue), an orphan stop as the latest word (session-orphan-stop), and a member that has held a
+   * ticket for QUIET_MINUTES with no self-check record at all (session-no-selfcheck: the check never ran — an error, an
+   * interruption, a session not loaded). Only rows written since this Assignment began count: a member's earlier ticket
+   * says nothing about this one (#765 review X1–X3). The latest word is the latest orphan or concluded row; rows the
+   * check writes along the way (written, hint, no-template, injected) never hide it (X4). Silent when the self-check log
+   * is not readable or the check is off; a member whose log read throws is skipped, the others are still swept.
+   */
+  private idleSweep(now: number): Array<{ code: string; session: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> {
+    const out: Array<{ code: string; session: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> = []
+    if (this.d.selfChecksOf === undefined) return out
+    for (const binding of this.executor.list()) {
+      const member = binding.member
+      if (member.includes('@')) continue
+      const ticket = this.store.tickets.get(binding.ticketId)
+      if (ticket === undefined || ticket.ended !== undefined) continue
+      const since = Date.parse(ticket.assignments.find(a => a.id === binding.assignmentId)?.createdAt ?? '')
+      if (!Number.isFinite(since)) continue
+      let rows: ReadonlyArray<{ kind: string; conclusion: string | null; deadline: string | null; at: string }> | undefined
+      try { rows = this.d.selfChecksOf(member) } catch { continue }
+      if (rows === undefined) return out
+      const ref = { session: member, ticketId: ticket.id, title: ticket.title }
+      const current = rows.filter(row => Date.parse(row.at) >= since)
+      if (current.length === 0) {
+        const minutes = Math.floor((now - since) / 60_000)
+        if (minutes >= QUIET_MINUTES) out.push({ code: 'session-no-selfcheck', ...ref, minutes })
+        continue
+      }
+      const last = current.filter(row => row.kind === 'orphan' || row.kind === 'concluded').at(-1)
+      if (last === undefined) continue
+      if (last.kind === 'orphan' || last.conclusion === 'orphan') { out.push({ code: 'session-orphan-stop', ...ref }); continue }
+      if (last.conclusion === 'waiting' && last.deadline !== null) {
+        const due = Date.parse(last.deadline)
+        if (Number.isFinite(due) && now > due) out.push({ code: 'session-wait-overdue', ...ref, minutes: Math.floor((now - due) / 60_000), detail: last.deadline })
+      }
+    }
     return out
   }
 
