@@ -109,6 +109,32 @@ describe('files on a card (C8)', () => {
     const decided = f.mock.calls.filter(([url, init]) => init?.method === 'POST' && !url.startsWith('/__dsh_a2a/blob')).map(([, init]) => JSON.parse(String(init!.body)) as Record<string, unknown>)
     expect(decided).toEqual([{ id: 'd-1', how: 'approve', files: [`[A2A file] v1 sha256=${'a'.repeat(64)} size=2 name=n.txt from=http://h`] }])
   })
+  it('#771 review: a refused decision sent again reuses the files already staged (no second staged copy)', async () => {
+    let refuse = true
+    const f = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('/__dsh_a2a/blob')) return { ok: true, status: 200, json: async () => ({ ok: true, ref: `[A2A file] v1 sha256=${'a'.repeat(64)} size=2 name=n.txt from=http://h` }) } as Response
+      if (init?.method === 'POST') return refuse ? { ok: false, status: 403, json: async () => ({ ok: false, error: 'browser owner proof required' }) } as Response : { ok: true, status: 200, json: async () => ({ ok: true }) } as Response
+      return { ok: true, status: 200, json: async () => ({ decisions: [card({ address: 'dsh/canvas/ops' })] }) } as Response
+    })
+    vi.stubGlobal('fetch', f)
+    const { container } = render(<DecisionList t={t} />)
+    await screen.findByText('要不要升级？')
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [new File(['hi'], 'n.txt')] } })
+    fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
+    await screen.findByText(/browser owner proof required/)
+    refuse = false
+    fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
+    await waitFor(() => { expect(f.mock.calls.filter(([url, init]) => init?.method === 'POST' && !String(url).startsWith('/__dsh_a2a/blob'))).toHaveLength(2) })
+    expect(f.mock.calls.filter(([url]) => String(url).startsWith('/__dsh_a2a/blob'))).toHaveLength(1)
+  })
+  it('#771 review: two different files that share a name and size are both kept', async () => {
+    serve([card({ address: 'dsh/canvas/ops' })])
+    const { container } = render(<DecisionList t={t} />)
+    await screen.findByText('要不要升级？')
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File(['aa'], 'r.md', { lastModified: 1 }), new File(['bb'], 'r.md', { lastModified: 2 })] } })
+    await waitFor(() => { expect(screen.getAllByText(/r\.md/)).toHaveLength(2) })
+  })
   it('refuses to send files when the card names no team address, and keeps the card', async () => {
     serveWithBlob([card()])
     const { container } = render(<DecisionList t={t} />)

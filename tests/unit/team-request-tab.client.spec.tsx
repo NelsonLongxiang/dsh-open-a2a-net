@@ -218,7 +218,8 @@ describe('a team on another instance', () => {
 describe('files', () => {
   const stagedUrls = (f: ReturnType<typeof serve>) => f.mock.calls.map(([url]) => url).filter(url => url.startsWith('/__dsh_a2a/blob'))
   const add = async (...files: File[]) => { const input = await waitFor(() => screen.getByLabelText(en['team.addFiles'], { selector: 'input' })); fireEvent.change(input, { target: { files } }) }
-  const file = (name: string, size = 3) => new File(['x'.repeat(size)], name)
+  // A fixed modification time: picking the same file from disk again gives the same one (#771 review: the dedupe key).
+  const file = (name: string, size = 3) => new File(['x'.repeat(size)], name, { lastModified: 1 })
 
   it('stages each file for the team and sends one reference line each, after the text', async () => {
     const f = serve(bound)

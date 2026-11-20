@@ -45,8 +45,11 @@ export function useAttachedFiles(t: T, refuse: (text: string) => void) {
   const addFiles = (added: readonly File[]): void => {
     const tooBig = added.find(file => file.size > FILE_BYTES_MAX)
     if (tooBig !== undefined) { refuse(t('team.fileTooBig', { name: tooBig.name })); return }
-    const known = new Set(files.map(file => `${file.name}:${String(file.size)}`))
-    const next = [...files, ...added.filter(file => !known.has(`${file.name}:${String(file.size)}`))]
+    // The same file picked again is kept once; two different files that share a name and size are both kept.
+    const keyOf = (file: File): string => `${file.name}:${String(file.size)}:${String(file.lastModified)}`
+    const known = new Set(files.map(keyOf))
+    const next = [...files]
+    for (const file of added) { const key = keyOf(file); if (!known.has(key)) { known.add(key); next.push(file) } }
     if (next.length > FILES_MAX) { refuse(t('team.tooManyFiles', { max: String(FILES_MAX) })); return }
     setFiles(next)
   }

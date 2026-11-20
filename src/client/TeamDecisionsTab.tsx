@@ -3,7 +3,7 @@
  * each with the proposer's recommendation. P2 and P3 can be approved with one click; P0 and P1 need an option chosen. The host
  * enforces that too. Records are data: text nodes only.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import styles from './TeamRequestTab.module.css'
 import { AttachedFiles, stageFiles, useAttachedFiles } from './team-files.tsx'
@@ -44,6 +44,9 @@ function Card({ row, t, done }: { readonly row: DecisionRow; readonly done: () =
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>(undefined)
   const { files, setFiles, addFiles, dragging, dropProps } = useAttachedFiles(t, (text) => { setError(text) })
+  // A decision the host refuses and the owner sends again reuses the files already staged for it, so a refusal leaves at
+  // most one staged copy of each file (it expires with the file channel's 24 hours).
+  const staged = useRef(new Map<File, string>())
   const decide = async (body: Record<string, unknown>): Promise<void> => {
     setBusy(true)
     setError(undefined)
@@ -51,9 +54,11 @@ function Card({ row, t, done }: { readonly row: DecisionRow; readonly done: () =
     let refs: string[] = []
     if (files.length > 0) {
       if (row.address === undefined) { setBusy(false); setError(t('team.failed', { reason: t('team.noFileTarget') })); return }
-      const staged = await stageFiles(files, row.address)
-      if ('refused' in staged) { setBusy(false); setError(t('team.failed', { reason: staged.refused })); return }
-      refs = staged.refs
+      const missing = files.filter(file => !staged.current.has(file))
+      const out = await stageFiles(missing, row.address)
+      if ('refused' in out) { setBusy(false); setError(t('team.failed', { reason: out.refused })); return }
+      missing.forEach((file, i) => { staged.current.set(file, out.refs[i]!) })
+      refs = files.map(file => staged.current.get(file)!)
     }
     const refused = await postDecision(row, { ...body, ...(refs.length > 0 ? { files: refs } : {}) })
     setBusy(false)
