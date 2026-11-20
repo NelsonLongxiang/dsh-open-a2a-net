@@ -89,6 +89,11 @@ export interface SuperagentHostDeps {
   readonly now?: () => string
   /** This host's own base URL for the team identity's CLI, once the web server listens. */
   readonly homeUrl?: () => string | undefined
+  /**
+   * Observer phase 1: read the same host's dsh-prompt-templates read-only faces (`/plugins/dsh-prompt-templates/<path>`).
+   * Defaults to a loopback GET through homeUrl; tests stub it. Resolves to the HTTP status and parsed body.
+   */
+  readonly templatesRead?: (path: string) => Promise<{ status: number; body: unknown }>
   /** This host's API key (the CLI's control credential). */
   readonly apiKey?: () => string | undefined
   /** The origin this host publishes as its own (its card URL's): what the team identity's claims are bound to. */

@@ -1082,6 +1082,40 @@ export class SuperagentHost {
     if (moved.length > 0) this.pass()
   }
 
+  /**
+   * Observer phase 1 (workbench-market 18 #883): what the observer reads of the same host's prompt-template plugin —
+   * the card library, one session's own templates, and the intervention log (digests, never text). The plugin's
+   * read-only routes are the source in phase 1. A host without the plugin, or with one older than 0.16 (schema 9),
+   * answers `available: false` with why, never an error that stops the observer.
+   */
+  async promptTemplates(kind: 'library' | 'templates' | 'interventions', q: { session_id?: string; since?: string; source?: string; limit?: number } = {}): Promise<Record<string, unknown>> {
+    const read = this.d.templatesRead ?? (async (path: string) => {
+      const home = this.d.homeUrl?.()
+      if (home === undefined) throw new Error('this host\'s web server is not up yet')
+      const res = await fetch(`${home}/plugins/dsh-prompt-templates/${path}`, { signal: AbortSignal.timeout(5_000) })
+      return { status: res.status, body: await res.json().catch(() => undefined) }
+    })
+    const params = new URLSearchParams()
+    if (kind === 'templates') {
+      if (q.session_id === undefined || q.session_id.trim() === '') return { ok: false, code: 'session_id', error: 'kind templates needs session_id: the session whose own templates to read' }
+      params.set('session_id', q.session_id.trim())
+    }
+    if (kind === 'interventions') {
+      if (q.session_id !== undefined && q.session_id.trim() !== '') params.set('session_id', q.session_id.trim())
+      if (q.since !== undefined && q.since.trim() !== '') params.set('since', q.since.trim())
+      if (q.source !== undefined && q.source.trim() !== '') params.set('source', q.source.trim())
+      if (q.limit !== undefined && Number.isFinite(q.limit)) params.set('limit', String(Math.trunc(q.limit)))
+    }
+    const path = `${kind === 'interventions' ? 'interventions' : 'library'}${params.size > 0 ? `?${params.toString()}` : ''}`
+    let out: { status: number; body: unknown }
+    try { out = await read(path) } catch (error) { return { ok: true, available: false, reason: `dsh-prompt-templates could not be read: ${error instanceof Error ? error.message : String(error)}` } }
+    if (out.status === 404) return { ok: true, available: false, reason: 'dsh-prompt-templates is not installed on this host, or is older than 0.16 (no read-only faces)' }
+    const body = out.body as { schema?: unknown; items?: unknown; error?: unknown } | undefined
+    if (out.status !== 200 || body === undefined) return { ok: true, available: false, reason: `dsh-prompt-templates answered ${String(out.status)}${typeof body?.error === 'object' && body.error !== null ? `: ${JSON.stringify(body.error).slice(0, 200)}` : ''}` }
+    if (typeof body.schema !== 'number' || body.schema < 9 || !Array.isArray(body.items)) return { ok: true, available: false, reason: 'dsh-prompt-templates is older than 0.16 (schema 9): upgrade it to read the library and the log' }
+    return { ok: true, available: true, schema: body.schema, items: body.items }
+  }
+
   /** R7b: what the observer holds now (for the team state). */
   observerQuestions(): { pending: string[]; handled: string[] } { return this.questionGate.holds() }
 
