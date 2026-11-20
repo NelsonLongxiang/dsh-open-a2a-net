@@ -34,6 +34,7 @@ import {NarrowOutboundRecovery} from './narrow-outbound.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { SettingsHistory } from './settings-history.ts'
 import { HealthReminders, HEALTH_TICK_MS, type HealthProblem } from './health-reminders.ts'
+import { QuestionGate, questionToken } from './question-gate.ts'
 import { DECISION_FILES_MAX, DecisionBook, decisionFiles, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
@@ -151,6 +152,8 @@ export class SuperagentHost {
   private readonly settingsHistory: SettingsHistory
   /** The team's health reminders: one card per problem, taken back when it goes away (reliability R7). */
   private readonly healthReminders: HealthReminders
+  /** R7b: questions that go to the observer first. */
+  private readonly questionGate: QuestionGate
   /** The A2A Source (PR-B2b): the team's A2A address and its mailbox loop. */
   readonly a2a: A2aSource
   /** What the team owes A2A requesters (host/receipts.ts). */
@@ -268,6 +271,14 @@ export class SuperagentHost {
         persist: { load: () => { const path = join(dir, 'observer-health.json'); return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) as Array<{ key: string; observer: string; since: number }> : [] },
           save: rows => { const path = join(dir, 'observer-health.json'), temporary = `${path}.tmp-${String(process.pid)}`; mkdirSync(dir, { recursive: true }); writeFileSync(temporary, JSON.stringify(rows), { mode: 0o600 }); renameSync(temporary, path) } } },
     )
+    // R7b (workbench-market 18, #880): a member's question goes to the team's loaded observer first.
+    this.questionGate = new QuestionGate({
+      pick: reporter => this.settings.observers.find(id => id !== reporter && (d.sessionLoaded?.(id) ?? true)),
+      loaded: id => d.sessionLoaded?.(id) ?? true,
+      tell: (observer, text) => d.deliverToSession(observer, text),
+      persist: { load: () => { const path = join(dir, 'observer-questions.json'); return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) as unknown : undefined },
+        save: kept => { const path = join(dir, 'observer-questions.json'), temporary = `${path}.tmp-${String(process.pid)}`; mkdirSync(dir, { recursive: true }); writeFileSync(temporary, JSON.stringify(kept), { mode: 0o600 }); renameSync(temporary, path) } },
+    })
     this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), ask: (address, text, task, sender) => this.a2a.askApproved(address, text, task!, sender!),
       sender: create => create ? this.a2a.ensureIdentity() : Promise.resolve(this.a2a.address ?? ''), approval: record => this.outboundApproval(record),
       narrowReceipt:(binding,caller,message)=>this.d.narrowRecovery?.receipt(binding,caller,message)===true,
@@ -359,7 +370,11 @@ export class SuperagentHost {
     this.disposeTimer = this.d.interval(() => this.pass(), PASS_MS)
     // Reliability R7: look at the team's health every 15 minutes; a new problem raises one card (the boot grace period
     // keeps health() quiet, so nothing is raised from it either).
-    this.healthTimer = this.d.interval(() => { this.healthReminders.tick(this.health() as readonly HealthProblem[], Date.parse(this.now())) }, HEALTH_TICK_MS)
+    // #761 review: each look stands alone, so a fault in the health look never skips the question look (or the other way round).
+    this.healthTimer = this.d.interval(() => {
+      try { this.healthReminders.tick(this.health() as readonly HealthProblem[], Date.parse(this.now())) } catch (error) { this.d.logger.warn('superagent: health look skipped: %s', String(error)) }
+      this.questionTick()
+    }, HEALTH_TICK_MS)
     this.roster.start(this.d.interval)
     // Defer: start() may run while the plugin's apply() still executes, when the canvas lookups it touches are not
     // initialized yet (a TDZ crash took the plugin down on hosts with models set - review of #566). A microtask runs
@@ -977,7 +992,7 @@ export class SuperagentHost {
   requestForObserver(session: string, text: string): Record<string, unknown> {
     if (!this.isObserver(session)) return { ok: false, code: 'not-observer', error: 'a2a_ticket_request serves only the sessions on this team created under the observer preset' }
     const filed = this.fileProposal(observerActor(session), text, { observer: session })
-    if (filed.ok === true) this.healthReminders.observerActed(session, text, Date.parse(this.now()))
+    if (filed.ok === true) { const at = Date.parse(this.now()); this.healthReminders.observerActed(session, text, at); this.questionGate.acted(session, text, at) }
     return filed
   }
 
@@ -1035,9 +1050,44 @@ export class SuperagentHost {
   proposeDecision(source: 'router' | 'observer', by: string, question: string, spec: DecisionSpec, reason?: string, files?: readonly DecisionFile[]): Record<string, unknown> {
     const out = this.decisions.propose({ source, by, question, spec, at: this.now(), ...(reason !== undefined && reason.trim() !== '' ? { reason: reason.trim() } : {}), ...(files !== undefined ? { files } : {}) })
     // R7a: an observer's card that names a health problem it was told about counts as acting on it.
-    if (out.ok && source === 'observer') this.healthReminders.observerActed(by, `${question}\n${reason ?? ''}`, Date.parse(this.now()))
+    if (out.ok && source === 'observer') { const at = Date.parse(this.now()); this.healthReminders.observerActed(by, `${question}\n${reason ?? ''}`, at); this.questionGate.acted(by, `${question}\n${reason ?? ''}`, at) }
     return out
   }
+
+  /**
+   * R7b: the observer leaves a note on one of this team's open tickets. It reaches the member holding it as a fact that
+   * grants nothing, like the router's notes; it cannot change, stop or reassign the ticket. A note carrying a question's
+   * `[提问 <ticket>]` token handles that question, and starts the no-loop hour on the ticket.
+   */
+  observerNote(session: string, ticketId: string, text: string): Record<string, unknown> {
+    if (!this.isObserver(session)) return { ok: false, code: 'not-observer', error: 'a2a_ticket_note serves only the team\'s observer' }
+    const body = text.trim()
+    if (body === '' || body.length > 4_000) return { ok: false, code: 'text', error: 'text must be 1..4000 characters' }
+    const ticket = this.store.tickets.get(ticketId)
+    if (ticket === undefined || ticket.ended !== undefined) return { ok: false, code: 'ticket', error: 'name an open ticket of this team' }
+    try { this.engine.note(ticketId, `[观察者留言] ${body}`) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
+    const at = Date.parse(this.now())
+    this.questionGate.notedOn(ticketId, at)
+    this.questionGate.acted(session, body, at)
+    this.pass()
+    return { ok: true, ticketId }
+  }
+
+  /** R7b: questions the observer did not settle go on to the person by the existing route. */
+  private questionTick(): void {
+    let moved: Array<{ ticketId: string; why: string }>
+    try { moved = this.questionGate.tick(id => { const t = this.store.tickets.get(id); return t !== undefined && t.ended === undefined && t.attention !== undefined }, Date.parse(this.now())) } catch (error) { this.d.logger.warn('superagent: question look skipped: %s', String(error)); return }
+    const words: Record<string, string> = { unloaded: '观察者会话没有加载', silent: '观察者一小时内没有处理', 'still-waiting': '观察者处理后一小时单子仍在等' }
+    for (const { ticketId, why } of moved) {
+      const ticket = this.store.tickets.get(ticketId)
+      if (ticket === undefined) continue
+      this.relayReport(ticketId, 'waiting', `${words[why] ?? why}，问题按原路交给人。`)
+    }
+    if (moved.length > 0) this.pass()
+  }
+
+  /** R7b: what the observer holds now (for the team state). */
+  observerQuestions(): { pending: string[]; handled: string[] } { return this.questionGate.holds() }
 
   /**
    * A ready report from a member that has ygl-trees but names nothing it wrote there is sent back once (design Y2): the
@@ -1149,11 +1199,16 @@ export class SuperagentHost {
   decisionCards(): Array<StoredCard & { readonly title?: string }> {
     const onTickets = this.store.tickets.list().flatMap((ticket): Array<StoredCard & { title: string }> => {
       if (ticket.ended !== undefined || ticket.attention === undefined) return []
+      // R7b: while the observer holds the question it has not reached the person.
+      if (this.questionGate.held(ticket.id)) return []
       const id = ticketCardId(ticket.id, ticket.attention.question)
       const card = this.decisions.get(id)
       if (card?.decided !== undefined) return []
+      // The person's clock (workbench-market 15) starts when the question reached them, not when the member asked.
+      const reached = this.questionGate.reachedAt(ticket.id)
+      const since = reached !== undefined ? { at: new Date(reached).toISOString() } : {}
       // A question asked before cards, or by an older member: it has no recommendation, so it is the strictest kind.
-      return [{ ...(card ?? { id, question: ticket.attention.question, source: 'ticket' as const, by: '', ticketId: ticket.id, at: ticket.updatedAt, level: 'P1' as const, options: [], recommended: '' }), title: ticket.title }]
+      return [{ ...(card ?? { id, question: ticket.attention.question, source: 'ticket' as const, by: '', ticketId: ticket.id, at: ticket.updatedAt, level: 'P1' as const, options: [], recommended: '' }), ...since, title: ticket.title }]
     })
     return [...this.decisions.open().filter(card => card.source !== 'ticket'), ...onTickets]
   }
@@ -1408,7 +1463,10 @@ export class SuperagentHost {
     try { ticket = this.engine.report(binding.ticketId, report) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
     const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
     if (decision !== undefined && typeof report.question === 'string') this.decisions.forTicket({ ticketId: ticket.id, by: member, question: report.question, spec: { level: decision.level, options: decision.options, recommended: decision.recommended }, at: this.now(), ...(decision.files !== undefined ? { files: decision.files } : {}) })
-    this.relayReport(ticket.id, report.state, report.summary)
+    // R7b: a new question for a person goes to the observer first; the person path waits while it holds it.
+    const asks = typeof report.question === 'string' && report.question.trim() !== '' && ticket.attention !== undefined && ticket.ended === undefined
+    const route = asks ? this.questionGate.ask(ticket.id, member, ticket.title, ticket.attention!.question, Date.parse(this.now())) : 'person'
+    this.relayReport(ticket.id, report.state, report.summary, route === 'observer')
     this.pass()
     return { ok: true, ticketId: ticket.id, stage }
   }
@@ -1431,11 +1489,13 @@ export class SuperagentHost {
   }
 
   /** The router hears a report in its own session, so it can hand a result or a question to the person. */
-  private relayReport(ticketId: string, state: string, summary: string): void {
+  private relayReport(ticketId: string, state: string, summary: string, held = false): void {
     const router = this.settingsValue.router, ticket = this.store.tickets.get(ticketId)
     if (router === undefined || ticket === undefined) return
     const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
-    const question = ticket.attention !== undefined ? `\nquestion for the person (send it with superagent_reply purpose attention, copied exactly): ${ticket.attention.question}` : ''
+    const question = ticket.attention === undefined ? ''
+      : held || this.questionGate.held(ticket.id) ? `\nThe team's observer has this ticket's question first (${questionToken(ticket.id)}): do not send it to the person yet. The host passes it on by this same route if the observer does not settle it within the hour.`
+      : `\nquestion for the person (send it with superagent_reply purpose attention, copied exactly): ${ticket.attention.question}`
     // The owner asked for this in the router's own session, and reads the answer there: superagent_reply goes to the team page.
     const inChat = (state === 'ready' || state === 'failed' || state === 'dropped' || ticket.attention !== undefined) && ticket.origin.triggerIds.some(id => this.ruleChanges.filedFromChat(id))
       ? '\nThe owner asked for this in this session: besides superagent_reply, tell them here in plain words what came of it, or what you need from them.' : ''
