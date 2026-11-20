@@ -191,8 +191,8 @@ describe('the team\'s agent presets: shipped in the bundle layer, required of a 
     expect(observer).toContain('a2a_decision_propose')
     expect(member).not.toContain('a2a_decision_propose')
     expect(observer).not.toContain('dsh-tool-subagent')
-    expect(observer).toContain("name: '@deepseek-ai/dsh-tool-executor-ptc'")
-    expect(block('superagent-builder')).not.toContain('dsh-tool-executor-ptc')
+    expect(observer).toContain("name: '@nelsonlongxiang/dsh-open-a2a-net/superagent-ptc'")
+    expect(block('superagent-builder')).not.toContain('superagent-ptc')
   })
 
   it('the bundle layer declares the router and member presets the host names', async () => {
@@ -210,9 +210,10 @@ describe('the team\'s agent presets: shipped in the bundle layer, required of a 
     for (const plugin of ['dsh-command-goal', 'dsh-tool-goal', 'dsh-tool-present']) expect(member).toContain(`name: '@deepseek-ai/${plugin}'`)
     expect(router).toContain('superagent_route')
     // Owner 2026-11-19: members (and observers, whose plugins equal a member's) work in code mode by default; the router reads
-    // only and stays native. The row is off where the host has no PTC runtime (DSH before 0.2.2).
-    expect(member).toMatch(/- id: tool-executor-ptc\n\s+name: '@deepseek-ai\/dsh-tool-executor-ptc'\n\s+disabled: !!js '!ctx.get\(''ptcRuntime''\)'/)
-    expect(router).not.toContain('dsh-tool-executor-ptc')
+    // only and stays native. The owned entry remains mounted and owns compatibility/service readiness, not a YAML snapshot.
+    expect(member).toMatch(/- id: tool-executor-ptc\n\s+name: '@nelsonlongxiang\/dsh-open-a2a-net\/superagent-ptc'\n/)
+    expect(member).not.toContain("!ctx.get(''ptcRuntime'')")
+    expect(router).not.toContain('superagent-ptc')
     expect(member).toContain('a2a_ticket_report')
     expect(member).toContain('reasonable defaults for routine steps')
     expect(member).toContain("name: '@deepseek-ai/dsh-tool-fs'\n")

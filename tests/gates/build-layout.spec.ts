@@ -30,6 +30,15 @@ describe('built package layout', () => {
     expect(host.A2aClient).toBeTypeOf('function')
   })
 
+  it('exports the optional PTC preset entry as built code and declarations', async () => {
+    const manifest = JSON.parse(await readFile(artifact('package.json'), 'utf8'))
+    expect(manifest.exports['./superagent-ptc']).toEqual({ types: './lib/types/superagent/ptc.d.ts', default: './lib/superagent/ptc.js' })
+    const entry = await import(pathToFileURL(fileURLToPath(artifact(manifest.exports['./superagent-ptc'].default))).href)
+    expect(entry.apply).toBeTypeOf('function')
+    expect(entry.inject).toEqual(['tools', 'systemPrompt', 'loader'])
+    await expect(readFile(artifact(manifest.exports['./superagent-ptc'].types), 'utf8')).resolves.toContain('compatiblePtcRuntime')
+  })
+
   it('ships a compiled artifact for every host source module', async () => {
     // The pack file list is `lib` wholesale, so a module missing its build
     // output would ship as a broken import. The guard walks the host tree

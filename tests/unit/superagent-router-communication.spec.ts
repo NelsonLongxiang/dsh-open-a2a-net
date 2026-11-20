@@ -33,8 +33,8 @@ it('ships generated inline router text without changing preset ids or compositio
   const expectedComposition = {
     'superagent-router': '0b7ca64fa013e3e8295f5bb7c963d25b757e7a3abbff26828dd679f0cde1d814',
     // Owner 2026-11-19: members and observers gain the PTC executor (code mode by default); router and builder unchanged.
-    'superagent-member': '41af706b7436385560d6ce2d5897ae93f4c80c1ca3f9bfada735366f8d6ef4f4',
-    'superagent-observer': '41af706b7436385560d6ce2d5897ae93f4c80c1ca3f9bfada735366f8d6ef4f4',
+    'superagent-member': '37e7d7d7e52ce01c9c79c32f2c330515c29054f2b582a97ac67350a9f8f9577a',
+    'superagent-observer': '37e7d7d7e52ce01c9c79c32f2c330515c29054f2b582a97ac67350a9f8f9577a',
     'superagent-builder': '04658b48dfdf35e0c2dea710a6f58e4efca5f0ffaca3dfa5c566dfab76175390',
   }
   for (const row of presets) {
