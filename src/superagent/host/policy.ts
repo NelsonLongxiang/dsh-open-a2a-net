@@ -110,6 +110,8 @@ export interface TeamSettings {
   readonly observerCast?: true
   /** T5-B: the idle sweep (overdue waits, orphan stops, no self-check record) adds health problems; off unless the owner turns it on. */
   readonly idleSweep?: true
+  /** T8: true pushes the router's and observer's decision cards to the market (a rule change: the owner turns it on). Absent: off. */
+  readonly decisionPush?: true
   /** Who reviews the team's pull requests: one A2A address the owner set and linked (design D5). Absent: nobody is asked. */
   readonly reviewer?: string
   /** The team's MCP servers (design superagent-team-mcp M1). Their tokens are never settings: the host holds them in memory. */
@@ -284,6 +286,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const progressOff = 'progressOff' in r ? r.progressOff : current.progressOff
   const observerCast = 'observerCast' in r ? r.observerCast : current.observerCast
   const idleSweep = 'idleSweep' in r ? r.idleSweep : current.idleSweep
+  const decisionPush = 'decisionPush' in r ? r.decisionPush : current.decisionPush
   let prepare = current.prepare
   if ('prepare' in r) {
     if (r.prepare === null || r.prepare === '') prepare = undefined
@@ -352,6 +355,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   if (progressOff !== undefined && typeof progressOff !== 'boolean') return { ok: false, error: 'progressOff must be true or false' }
   if (observerCast !== undefined && typeof observerCast !== 'boolean') return { ok: false, error: 'observerCast must be true or false' }
   if (idleSweep !== undefined && typeof idleSweep !== 'boolean') return { ok: false, error: 'idleSweep must be true or false' }
+  if (decisionPush !== undefined && typeof decisionPush !== 'boolean') return { ok: false, error: 'decisionPush must be true or false' }
   const botsRaw = (r.bots ?? {}) as Record<string, unknown>
   if (Object.keys(botsRaw).some(name => name !== 'a2a')) return { ok: false, error: 'only the a2a Source has a bot list' }
   const bots = 'a2a' in botsRaw ? list(botsRaw.a2a, 'bots.a2a') : current.bots.a2a
@@ -400,7 +404,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const observers = current.observers ?? []
   const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
   if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), ...(approvers !== undefined ? { approvers } : {}), ...(blockedTools !== undefined ? { blockedTools } : {}), evalTimeoutMs, paused, ...(progressOff === true ? { progressOff: true as const } : {}), ...(observerCast === true ? { observerCast: true as const } : {}), ...(idleSweep === true ? { idleSweep: true as const } : {}), ...(mcp !== undefined ? { mcp } : {}) } }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), ...(approvers !== undefined ? { approvers } : {}), ...(blockedTools !== undefined ? { blockedTools } : {}), evalTimeoutMs, paused, ...(progressOff === true ? { progressOff: true as const } : {}), ...(observerCast === true ? { observerCast: true as const } : {}), ...(idleSweep === true ? { idleSweep: true as const } : {}), ...(decisionPush === true ? { decisionPush: true as const } : {}), ...(mcp !== undefined ? { mcp } : {}) } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/

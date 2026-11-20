@@ -34,6 +34,7 @@ import {NarrowOutboundRecovery} from './narrow-outbound.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { SettingsHistory } from './settings-history.ts'
 import { HealthReminders, HEALTH_TICK_MS, type HealthProblem } from './health-reminders.ts'
+import { DecisionPush, PUSH_TICK_MS } from './decision-push.ts'
 import { QuestionGate, questionToken } from './question-gate.ts'
 import { DECISION_FILES_MAX, DecisionBook, decisionFiles, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
@@ -171,6 +172,9 @@ export class SuperagentHost {
   /** docs/design/superagent-root-team.md R2-R4: this team's child teams, when it is a root. */
   readonly root: RootDispatch
   private readonly roster: RosterReports
+  /** T8: the router's and observer's decision cards to the market, on the roster's route. */
+  readonly decisionPush: DecisionPush
+  private pushTimer: (() => void) | undefined
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
   private readonly sending = new Set<string>()
   private started = false
@@ -238,6 +242,20 @@ export class SuperagentHost {
       handleOf: id => d.handleOf?.(id) ?? id, nameOf: id => plainName(d.sessionName?.(id)), online: id => d.sessionLoaded?.(id) ?? false, seatIdOf: id => this.named.seatIdOf(id),
       loadOf: id => this.executor.loadOf(id), hostFingerprint: () => d.hostFingerprint?.(), warm: () => d.warmPeerCards?.(), nowMs: () => Date.parse(this.now()), logger: d.logger,
     })
+    // T8 step 1: the roster's recipients, transport and canvas address; the outbox is kept across restarts.
+    const pushPath = join(dir, 'decision-push.json')
+    this.decisionPush = new DecisionPush({
+      on: () => this.settingsValue.decisionPush === true,
+      holds: cardId => this.decisions?.get(cardId) !== undefined,
+      team: () => { const s = this.settings; if (s.canvas === undefined) return undefined; const router = s.router ?? s.members[0]; const zone = router === undefined ? undefined : (d.handleOf?.(router) ?? router).split('/')[0]; return zone === undefined || zone === '' ? undefined : { canvas: s.canvas, address: `${zone}/canvas/${s.canvas}` } },
+      remotes: canvas => (d.canvasTeam?.(canvas)?.remote ?? []).map(r => r.ref),
+      declares: (ref, capability) => d.memberDeclares?.(ref, capability) === true,
+      send: async (ref, text, taskId) => { if (d.rosterSend === undefined) throw new Error('no roster send on this host'); await d.rosterSend(ref, text, taskId) },
+      hostFingerprint: () => d.hostFingerprint?.(),
+      load: () => { try { return existsSync(pushPath) ? JSON.parse(readFileSync(pushPath, 'utf8')) as unknown : undefined } catch { return undefined } },
+      save: kept => { mkdirSync(dir, { recursive: true }); const tmp = `${pushPath}.tmp-${randomUUID()}`; writeFileSync(tmp, JSON.stringify(kept), { mode: 0o600 }); renameSync(tmp, pushPath) },
+      nowMs: () => Date.parse(this.now()), logger: d.logger,
+    })
     const progressPath = join(dir, 'progress.json')
     this.progress = new ProgressReceipts({
       store: this.store, a2a: this.a2a, on: () => this.settingsValue.sources.a2a && this.settingsValue.progressOff !== true, nowMs: () => Date.parse(this.now()),
@@ -264,6 +282,8 @@ export class SuperagentHost {
     // The book prunes decided cards by age: on the host's clock, the one the cards are stamped with (a real clock here would
     // drop a card the host decided "just now" whenever the two disagree, e.g. a host or test with an injected clock).
     this.decisions = new DecisionBook(join(dir, 'decisions.json'), ticketId => { const ticket = this.store.tickets.get(ticketId); return ticket !== undefined && ticket.ended === undefined }, () => Date.parse(this.now()))
+    // T8: the book tells the push when a card is raised, decided or dropped (router and observer cards go to the market).
+    this.decisions.onChange = (event, card) => { this.decisionPush?.noted(event, card) }
     this.healthReminders = new HealthReminders(
       (question, key, at) => { const out = this.decisions.propose({ source: 'health', by: 'health', question, reason: key, at, spec: { level: 'P2', options: ['去处理', '先忽略 24 小时'], recommended: '去处理' } }); return out.ok ? out.id : undefined },
       cardId => this.decisions.withdraw(cardId),
@@ -381,6 +401,7 @@ export class SuperagentHost {
       this.questionTick()
     }, HEALTH_TICK_MS)
     this.roster.start(this.d.interval)
+    this.pushTimer ??= this.d.interval(() => { void this.decisionPush.tick().catch((error: unknown) => { this.d.logger.warn('superagent: decision push skipped: %s', String(error)) }) }, PUSH_TICK_MS)
     // Defer: start() may run while the plugin's apply() still executes, when the canvas lookups it touches are not
     // initialized yet (a TDZ crash took the plugin down on hosts with models set - review of #566). A microtask runs
     // after apply() finishes; the catch inside applyModels is the second fence.
@@ -392,7 +413,7 @@ export class SuperagentHost {
     this.pass()
   }
 
-  stop(): Promise<void> { this.roster.close(); this.disposeTimer?.(); this.disposeTimer = undefined; this.healthTimer?.(); this.healthTimer = undefined; this.started = false; return this.a2a.stop() }
+  stop(): Promise<void> { this.roster.close(); this.disposeTimer?.(); this.disposeTimer = undefined; this.healthTimer?.(); this.healthTimer = undefined; this.pushTimer?.(); this.pushTimer = undefined; this.started = false; return this.a2a.stop() }
 
   /** Run the A2A Source's mailbox loop exactly while its Source is on. */
   private syncA2a(): void {
@@ -2006,6 +2027,8 @@ export class SuperagentHost {
     }
     // A queued ticket has no binding, so the quiet check above never sees it: say what it has waited for, and for how long.
     out.push(...queuedProblems(this.executor.queued(), q => this.queuedSince(q), id => this.store.tickets.get(id)?.title ?? id, now))
+    // T8: a decision card the market refused (or this host could not shape for it) stays visible: one problem per team and card.
+    for (const refused of this.decisionPush.problems()) out.push({ code: 'decision-push-refused', title: `${this.settings.canvas ?? ''}/${refused.cardId}`, detail: refused.why })
     if (this.settingsValue.idleSweep === true) out.push(...this.idleSweep(now))
     return out
   }
