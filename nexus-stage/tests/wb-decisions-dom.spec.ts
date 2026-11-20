@@ -140,6 +140,46 @@ describe('the 等你拍板 group', () => {
   })
 })
 
+describe('#769 review follow-ups', () => {
+  it('only the router\'s and the observer\'s cards are listed — a member\'s ticket question and the host\'s own cards are not', async () => {
+    const m = mount(() => [row({ id: 'r-1', source: 'router' }), row({ id: 'o-1', source: 'observer' }), row({ id: 'ticket:t-ask', source: 'ticket' }), row({ id: 'h-1', source: 'health' }), row({ id: 'x-1', source: 'tool' }), row({ id: 'n-1', source: undefined })])
+    await m.group.refresh()
+    expect(Array.from(document.querySelectorAll<HTMLElement>('[data-card]')).map(n => n.dataset.card)).toEqual(['r-1', 'o-1'])
+    expect(m.group.waiting()).toBe(2)
+  })
+
+  it('a read that fails says why instead of reading forever; a later good read clears it; a failed refresh keeps the cards', async () => {
+    let fail: string | undefined = 'HTTP 503'
+    const list = vi.fn(async () => { if (fail !== undefined) throw new Error(fail); return { decisions: [row()] } })
+    const group = createDecisionsGroup({ list, decide: vi.fn(async () => ({ status: 200, body: { ok: true } })) })
+    document.body.replaceChildren(group.root)
+    await group.refresh()
+    expect(group.root.textContent).toContain('读不到等你拍板的卡：HTTP 503')
+    expect(group.root.textContent).not.toContain('正在读取')
+    fail = undefined
+    await group.refresh()
+    expect(group.root.querySelector('.wb-sa-decisions-failed')).toBeNull()
+    expect(group.root.querySelector('[data-card="d-1"]')).not.toBeNull()
+    fail = 'network down'
+    await group.refresh()
+    expect(group.root.querySelector('.wb-sa-decisions-failed')!.textContent).toContain('刷新失败，下面是上次读到的卡：network down')
+    expect(group.root.querySelector('[data-card="d-1"]')).not.toBeNull()
+  })
+
+  it('the 团队 badge counts a member\'s question once: on its ticket, not again as a card', async () => {
+    const list = vi.fn(async () => ({ decisions: [row({ id: 'ticket:t-ask', source: 'ticket' }), row({ id: 'o-1', source: 'observer' })] }))
+    const pane = createSuperagentPane({ act: vi.fn(async () => ({ ok: true })), refresh: vi.fn(), decisions: { list, decide: vi.fn(async () => ({ status: 200, body: { ok: true } })) } })
+    document.body.replaceChildren(pane.root)
+    const state = { canvases: ['ops'], settings: { canvas: 'ops', router: 'session-r', members: ['session-m'], acceptMode: 'observe', paused: false, sources: { workbench: true, a2a: false }, remoteMembers: [] }, policyVersion: 'p', a2a: { enabled: false, address: null, health: {} }, executor: { bindings: [] }, threads: [],
+      tickets: [{ id: 't-ask', title: '问一下', createdAt: '2026-11-20T00:00:00Z', updatedAt: '2026-11-20T00:00:00Z', mandate: { strength: 'explicit', scope: 's', basis: { via: 'addressed' }, actor: { source: 'workbench', id: 'owner' } }, channels: [], assignments: [], inputs: [], attention: { question: '用哪个？' }, stage: { stage: 'person', action: 'answer' } }] } as never
+    const sessions = [{ id: 'session-r', name: '总工', joined: true }, { id: 'session-m', name: '成员', joined: true }]
+    pane.update(state, sessions, Date.now())
+    await flush()
+    // One ticket waiting on the person, one observer card: two, not three.
+    expect(pane.update(state, sessions, Date.now()).badge).toBe('2')
+  })
+})
+
 describe('in the 团队 tab', () => {
   it('focusDecision opens 待你处理 with the group, and the poll reads the cards', async () => {
     const list = vi.fn(async () => ({ decisions: [row()] }))
