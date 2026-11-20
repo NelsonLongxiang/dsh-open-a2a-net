@@ -145,9 +145,12 @@ describe('queued tickets beside a free member (#744 review R1)', () => {
     const ticket = m.open()
     await vi.waitFor(() => { expect(attempts).toBeGreaterThan(0) })
     m.h.executor.launch()
-    await vi.waitFor(() => { expect(attempts).toBeGreaterThan(1) })
-    expect(m.h.executor.list()).toEqual([])
-    expect(m.h.executor.queued()).toEqual([expect.objectContaining({ ticketId: ticket, reason: 'delivery-refused', member: 'session-a', refusedAt: expect.any(String) })])
+    // A tentative hold exists while the answer is in flight; assert the unchanged refusal postcondition after it settles.
+    await vi.waitFor(() => {
+      expect(attempts).toBeGreaterThan(1)
+      expect(m.h.executor.list()).toEqual([])
+      expect(m.h.executor.queued()).toEqual([expect.objectContaining({ ticketId: ticket, reason: 'delivery-refused', member: 'session-a', refusedAt: expect.any(String) })])
+    })
     m.clock.ms += (QUIET_MINUTES + 5) * 60_000
     expect(m.h.health().filter(p => p.code === 'tickets-queued')).toEqual([expect.objectContaining({ reason: 'delivery-refused', session: 'session-a', count: 1, ticketId: ticket })])
     expect(m.h.queueOf(ticket)).toMatchObject({ reason: 'delivery-refused', member: 'session-a' })
