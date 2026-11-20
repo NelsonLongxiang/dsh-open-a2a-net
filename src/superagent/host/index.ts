@@ -638,9 +638,10 @@ export class SuperagentHost {
   /**
    * The team's workers: the canvas's local members and its remote members — except a remote member the team lists as an
    * A2A bot, which is a caller (the workbench market sits on the canvas to be linked, docs/ops/superagent-market-team.md),
-   * never one that takes tickets.
+   * never one that takes tickets. Nor is an observer (workbench-market 18 §八, design D19): it stands outside the execution
+   * and takes no ticket; it stays a member of the team for the gate, its requests and its cards.
    */
-  private pool(): string[] { const now = this.settings; return [...now.members, ...workerRemotes(now), ...this.childTeams().map(c => c.ref)] }
+  private pool(): string[] { const now = this.settings; return [...now.members.filter(id => !now.observers.includes(id)), ...workerRemotes(now), ...this.childTeams().map(c => c.ref)] }
   /** superagent-root-team: a root team's child teams, from its canvas (none for a plain team). */
   private childTeams(): ReadonlyArray<{ ref: string; slots: number }> {
     const canvas = this.settingsValue.canvas
@@ -1066,7 +1067,7 @@ export class SuperagentHost {
   /** Design outbound-requests O1, O2: a team session asks for a message to another team on a ticket; a P0 card decides it. */
   requestOutbound(session: string, ask: OutboundAsk): Record<string, unknown> {
     const ticket = typeof ask.ticket_id === 'string' ? this.store.tickets.get(ask.ticket_id.trim()) : undefined
-    const checked = this.outbound.check(session, ask, { role: this.toolRoleOf(session), a2aOn: this.settingsValue.sources.a2a, own: ownAddresses(this.d.handleOf, this.settingsValue.canvas, [this.settingsValue.router, ...this.pool()]),
+    const checked = this.outbound.check(session, ask, { role: this.toolRoleOf(session), a2aOn: this.settingsValue.sources.a2a, own: ownAddresses(this.d.handleOf, this.settingsValue.canvas, [this.settingsValue.router, ...this.pool(), ...this.settings.observers]),
       ticket: ticket === undefined ? undefined : { open: !ticket.ended, title: ticket.title, holder: this.executor.list().find(b => b.ticketId === ticket.id)?.member } })
     if (!checked.ok) return checked
     const out = this.decisions.propose({ source: 'outbound', by: session, at: this.now(), question: `${this.memberName(session)} ${checked.question}`, ...(checked.reason !== undefined ? { reason: checked.reason } : {}), spec: { level: 'P0', options: [OUTBOUND_APPROVE, OUTBOUND_DECLINE], recommended: OUTBOUND_APPROVE }, outbound: { ticketId: checked.ticketId, address: checked.address, text: checked.text, team: this.settingsValue.canvas ?? '', title: ticket!.title } })
