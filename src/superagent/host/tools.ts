@@ -526,6 +526,25 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     },
   }))
 
+  // Observer phase 2 (T5-A): the observer casts a card into one of its team's sessions; off unless the owner turns it on.
+  ctx.tools.register(defineTool({
+    name: 'a2a_card_cast',
+    description: 'Team observer only: cast one card from this host\'s prompt-template library into another session of your team. It goes in at that session\'s next step as a visible message naming you and your reason; it is not an instruction and grants nothing. Pick the card with a2a_ticket_read kind library or templates. Works only while the owner has turned observerCast on and the host has dsh-prompt-templates with the cast service; one copy of a card waits per session. Record each cast in ygl-trees.',
+    parameters: {
+      session_id: { type: 'string', required: true, description: 'The team session to cast into.' },
+      template_id: { type: 'string', required: true, description: 'The card id, from kind library or templates.' },
+      reason: { type: 'string', required: true, description: 'Why this card, why now: one line, at most 500 characters.' },
+    },
+    output: { ...anyProps, render: (_args, value) => said('a2a_card_cast', value) },
+    presentCall: args => ({ card: 'generic', title: `a2a_card_cast ${String(args.template_id)} → ${String(args.session_id)}`, kind: 'other', rawInput: { session_id: args.session_id, template_id: args.template_id } }),
+    execute: async (args: { session_id?: string; template_id?: string; reason?: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host(exec)
+      const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
+      if (h === undefined || me === undefined) return { ok: false, code: 'not-observer', error: 'a2a_card_cast serves only the team\'s observer' }
+      return json(h.castCard(me, args)) as Record<string, JsonValue>
+    },
+  }))
+
   // Design tool-requests T3: a tool the role's list hides can still be asked for by name; the owner decides on a P0 card.
   ctx.tools.register(defineTool({
     name: 'a2a_tool_request',

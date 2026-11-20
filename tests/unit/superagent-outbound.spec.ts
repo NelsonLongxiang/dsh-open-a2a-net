@@ -96,6 +96,7 @@ describe('approvers in the settings (O3)', () => {
     const set = parseSettings({ approvers: ['session-0123abcd-ef'] }, DEFAULT_SETTINGS) as { settings: typeof DEFAULT_SETTINGS }
     expect((parseSettings({ approvers: [] }, set.settings) as { settings: { approvers?: unknown } }).settings.approvers).toBeUndefined()
     expect(touchesRules({ approvers: [] })).toBe(true)
+    expect(touchesRules({ observerCast: true })).toBe(true)
   })
 })
 
