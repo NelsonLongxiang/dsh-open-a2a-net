@@ -331,6 +331,8 @@ export interface Workbench {
   /** A node was picked on the planning board (0.6.13): resolve it against
    *  the latest state and open the right-side chat drawer for it. */
   openNodeChat(id: string): void
+  /** T8 deep link: open the 团队 tab at this decision card. */
+  openDecision(cardId: string): void
 }
 
 /** Bare host:port of a peer url (workbench-local twin of federation's
@@ -1456,5 +1458,5 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     recoveryOwner?.invalidate()
   }
   update(null)
-  return { root, update, updateSuperagent, mode: () => mode, selectTab, openNodeChat, dispose }
+  return { root, update, updateSuperagent, mode: () => mode, selectTab, openNodeChat, dispose, openDecision: (cardId: string) => { if (superagentPane === undefined) return; selectTab('team'); superagentPane.focusDecision(cardId) } }
 }
