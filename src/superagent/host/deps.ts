@@ -94,6 +94,11 @@ export interface SuperagentHostDeps {
    * Defaults to a loopback GET through homeUrl; tests stub it. Resolves to the HTTP status and parsed body.
    */
   readonly templatesRead?: (path: string) => Promise<{ status: number; body: unknown }>
+  /**
+   * T5-B: one session's wrap-up self-check log from the same host's dsh-prompt-templates; undefined when the plugin, its
+   * self-check, or a version with the read is not there (the sweep then says nothing about self-checks).
+   */
+  readonly selfChecksOf?: (sessionId: string) => ReadonlyArray<{ kind: string; conclusion: string | null; deadline: string | null; at: string }> | undefined
   /** This host's API key (the CLI's control credential). */
   readonly apiKey?: () => string | undefined
   /** The origin this host publishes as its own (its card URL's): what the team identity's claims are bound to. */

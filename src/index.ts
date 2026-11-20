@@ -2120,6 +2120,12 @@ export function apply(ctx: Context, config: Config): void {
     interval: (fn, ms) => ctx.timer.interval(fn, ms),
     // The team's A2A address (PR-B2b) is a CLI identity the a2a-net CLI runs against this very host.
     homeUrl: () => superagentHomeUrl,
+    // T5-B: the idle sweep reads the same host's prompt-template self-check log, and only while that check is on.
+    selfChecksOf: sessionId => {
+      const svc = ctx.get('promptTemplates' as never) as { selfChecks?: (id: string) => unknown; selfCheckEnabled?: () => boolean } | undefined
+      if (typeof svc?.selfChecks !== 'function' || typeof svc.selfCheckEnabled !== 'function' || !svc.selfCheckEnabled()) return undefined
+      return svc.selfChecks(sessionId) as ReadonlyArray<{ kind: string; conclusion: string | null; deadline: string | null; at: string }>
+    },
     claimAudience: () => (ownCardUrl !== '' ? originOf(ownCardUrl) : undefined),
     apiKey: () => config.apiKey,
     // PR-C2: remote members and served teams talk host to host, signed with this host's card key and bound to the body.
@@ -2212,6 +2218,11 @@ export function apply(ctx: Context, config: Config): void {
   }) : undefined
   teamsHandle = superagentTeams
   // Staffing changes (S1a): the host's executor, through the canvas and team routes' own checks.
+  // T5-B (dispatcher's PT-4 addition 1): whether a session holds an open a2a ticket, for dsh-prompt-templates' wrap-up
+  // self-check. Read-only; undefined (unknown) when this host runs no superagent team.
+  ctx.provide('a2aTickets' as never, {
+    hasOpenTicket: (sessionId: string): boolean | undefined => superagentTeams === undefined ? undefined : superagentTeams.all().some(team => team.executor.bindingOf(String(sessionId)) !== undefined),
+  } as never)
   if (superagentTeams !== undefined) staffing = createStaffing({ path: join(home, 'a2a', 'superagent', 'staffing.json'), teams: superagentTeams, canvasStore, canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
     sessionValid: id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, presetOf: sessionPresetOf, memberForWrite: id => canvasMemberForWrite(id),
     teamCanvasRefusal: (canvas, member) => superagentTeams.canvasMemberRefusal(canvas, member, sessionPresetOf), revokeCanvasMember: (id, reason, name) => revokeCanvasMember(id, reason, name), logger })

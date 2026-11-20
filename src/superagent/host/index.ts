@@ -1949,6 +1949,42 @@ export class SuperagentHost {
     }
     // A queued ticket has no binding, so the quiet check above never sees it: say what it has waited for, and for how long.
     out.push(...queuedProblems(this.executor.queued(), q => this.queuedSince(q), id => this.store.tickets.get(id)?.title ?? id, now))
+    if (this.settingsValue.idleSweep === true) out.push(...this.idleSweep(now))
+    return out
+  }
+
+  /**
+   * T5-B (workbench-market 18, the session idle sweep): what the wrap-up self-check log says about the members holding a
+   * ticket. Three problems, each going to the observer first (R7a): a registered wait past its deadline with nothing
+   * newer (session-wait-overdue), an orphan stop as the latest word (session-orphan-stop), and a member that has held a
+   * ticket for QUIET_MINUTES with no self-check record at all (session-no-selfcheck: the check never ran — an error, an
+   * interruption, a session not loaded). Silent when the self-check log is not readable or the check is off.
+   */
+  private idleSweep(now: number): Array<{ code: string; session: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> {
+    const out: Array<{ code: string; session: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> = []
+    if (this.d.selfChecksOf === undefined) return out
+    for (const binding of this.executor.list()) {
+      const member = binding.member
+      if (member.includes('@')) continue
+      let rows: ReadonlyArray<{ kind: string; conclusion: string | null; deadline: string | null; at: string }> | undefined
+      try { rows = this.d.selfChecksOf(member) } catch { rows = undefined }
+      if (rows === undefined) return out
+      const ticket = this.store.tickets.get(binding.ticketId)
+      if (ticket === undefined || ticket.ended !== undefined) continue
+      const ref = { session: member, ticketId: ticket.id, title: ticket.title }
+      const last = rows.at(-1)
+      if (last === undefined) {
+        const since = ticket.assignments.find(a => a.id === binding.assignmentId)?.createdAt
+        const minutes = since === undefined ? 0 : Math.floor((now - Date.parse(since)) / 60_000)
+        if (minutes >= QUIET_MINUTES) out.push({ code: 'session-no-selfcheck', ...ref, minutes })
+        continue
+      }
+      if (last.kind === 'orphan' || (last.kind === 'concluded' && last.conclusion === 'orphan')) { out.push({ code: 'session-orphan-stop', ...ref }); continue }
+      if (last.kind === 'concluded' && last.conclusion === 'waiting' && last.deadline !== null) {
+        const due = Date.parse(last.deadline)
+        if (Number.isFinite(due) && now > due) out.push({ code: 'session-wait-overdue', ...ref, minutes: Math.floor((now - due) / 60_000), detail: last.deadline })
+      }
+    }
     return out
   }
 
