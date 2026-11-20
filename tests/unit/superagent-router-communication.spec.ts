@@ -47,7 +47,7 @@ it('adds only the shared boundary to original worker personas and leaves the bui
   // Target next/0.8 78e077c; preserve its member-proposal text and original worker semantics. The member's prefix adds the R7b question
   // contract (four parts); the observer's is D19's
   // rewrite (workbench-market 18: takes no tickets, tags and counts stuck points, sees health problems first — R7a).
-  const originalPrefixes = { member: 'dd48170602723c933cd0101026fc05c91b02fdd813535ff144c2de9efed4956e', observer: '2ccd7452f3a410edc1f9121d076f400fe3da707f3a2ef2ae269771091e1641f5' }
+  const originalPrefixes = { member: 'dd48170602723c933cd0101026fc05c91b02fdd813535ff144c2de9efed4956e', observer: '1cfe304325f5868e61c68cb5e2ea666a16b8d1a9f9e2b35c9ae2c5e1656f05be' }
   for (const [role, sha] of Object.entries(originalPrefixes)) {
     const original = readFileSync(new URL('src/superagent/prompts/' + role + '.md', root), 'utf8')
     expect(digest(original)).toBe(sha)

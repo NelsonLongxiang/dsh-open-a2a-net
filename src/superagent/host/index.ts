@@ -1146,6 +1146,29 @@ export class SuperagentHost {
     return { ok: true, available: true, schema: body.schema, items }
   }
 
+  /**
+   * Observer phase 2 (T5-A): the observer casts one card into one of its own team's sessions, through the same host's
+   * prompt-template plugin. The plugin only recognizes the caller as this a2a plugin, so who may cast is checked here:
+   * the team's observer (by the session calling, never a parameter), into a session of this team other than itself, while
+   * the owner has turned observerCast on. The target is woken so the card goes in at its next step.
+   */
+  castCard(observer: string, input: { session_id?: unknown; template_id?: unknown; reason?: unknown }): Record<string, unknown> {
+    if (!this.isObserver(observer)) return { ok: false, code: 'not-observer', error: 'a2a_card_cast serves only the team\'s observer' }
+    if (this.settingsValue.observerCast !== true) return { ok: false, code: 'off', error: 'casting cards is off for this team (the owner turns on observerCast)' }
+    const target = String(input.session_id ?? '').trim()
+    const team = new Set([this.settings.router, ...this.settings.members].filter((id): id is string => typeof id === 'string'))
+    if (target === '' || !team.has(target) || target === observer) return { ok: false, code: 'not-in-team', error: 'cast only into another session of this team' }
+    const templateId = String(input.template_id ?? '').trim()
+    const reason = String(input.reason ?? '')
+    if (templateId === '') return { ok: false, code: 'template', error: 'name the card (template_id from a2a_ticket_read kind library or templates)' }
+    const out = this.d.castCard?.({ sessionId: target, templateId, reason })
+    if (out === undefined) return { ok: true, available: false, reason: 'dsh-prompt-templates with the cast service (0.17+) is not on this host' }
+    if (!out.ok) return { ok: false, code: out.code ?? 'refused', error: out.error ?? 'the card was not cast' }
+    // Wake the target so the card goes in at its next step (a wake carries no instruction of its own).
+    try { this.d.deliverToSession(target, '[superagent card] 团队观察者投来一张卡，会在你下一步看到；它不是新的指令，不授予任何权限。') } catch { /* the card still waits for its next step */ }
+    return { ok: true, queued: out.queued ?? 1 }
+  }
+
   /** R7b: what the observer holds now (for the team state). */
   observerQuestions(): { pending: string[]; handled: string[] } { return this.questionGate.holds() }
 

@@ -2120,6 +2120,11 @@ export function apply(ctx: Context, config: Config): void {
     interval: (fn, ms) => ctx.timer.interval(fn, ms),
     // The team's A2A address (PR-B2b) is a CLI identity the a2a-net CLI runs against this very host.
     homeUrl: () => superagentHomeUrl,
+    // T5-A: dsh-prompt-templates' cast, reached through this plugin's own context so the plugin recognizes the caller.
+    castCard: input => {
+      const svc = ctx.get('promptTemplates' as never) as { cast?: (i: typeof input) => { ok: boolean; code?: string; error?: string; queued?: number } } | undefined
+      return typeof svc?.cast === 'function' ? svc.cast(input) : undefined
+    },
     claimAudience: () => (ownCardUrl !== '' ? originOf(ownCardUrl) : undefined),
     apiKey: () => config.apiKey,
     // PR-C2: remote members and served teams talk host to host, signed with this host's card key and bound to the body.

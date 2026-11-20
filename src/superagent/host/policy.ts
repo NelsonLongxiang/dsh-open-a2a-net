@@ -106,6 +106,8 @@ export interface TeamSettings {
   readonly paused: boolean
   /** superagent-market-progress-roster P1: true turns progress receipts off for the whole team; absent, they are on. */
   readonly progressOff?: true
+  /** Observer phase 2 (T5-A): the observer may cast a card into a team session; off unless the owner turns it on. */
+  readonly observerCast?: true
   /** Who reviews the team's pull requests: one A2A address the owner set and linked (design D5). Absent: nobody is asked. */
   readonly reviewer?: string
   /** The team's MCP servers (design superagent-team-mcp M1). Their tokens are never settings: the host holds them in memory. */
@@ -278,6 +280,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   }
   const paused = 'paused' in r ? r.paused : current.paused
   const progressOff = 'progressOff' in r ? r.progressOff : current.progressOff
+  const observerCast = 'observerCast' in r ? r.observerCast : current.observerCast
   let prepare = current.prepare
   if ('prepare' in r) {
     if (r.prepare === null || r.prepare === '') prepare = undefined
@@ -344,6 +347,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   }
   if (typeof paused !== 'boolean') return { ok: false, error: 'paused must be true or false' }
   if (progressOff !== undefined && typeof progressOff !== 'boolean') return { ok: false, error: 'progressOff must be true or false' }
+  if (observerCast !== undefined && typeof observerCast !== 'boolean') return { ok: false, error: 'observerCast must be true or false' }
   const botsRaw = (r.bots ?? {}) as Record<string, unknown>
   if (Object.keys(botsRaw).some(name => name !== 'a2a')) return { ok: false, error: 'only the a2a Source has a bot list' }
   const bots = 'a2a' in botsRaw ? list(botsRaw.a2a, 'bots.a2a') : current.bots.a2a
@@ -392,7 +396,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const observers = current.observers ?? []
   const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
   if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), ...(approvers !== undefined ? { approvers } : {}), ...(blockedTools !== undefined ? { blockedTools } : {}), evalTimeoutMs, paused, ...(progressOff === true ? { progressOff: true as const } : {}), ...(mcp !== undefined ? { mcp } : {}) } }
+  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), ...(approvers !== undefined ? { approvers } : {}), ...(blockedTools !== undefined ? { blockedTools } : {}), evalTimeoutMs, paused, ...(progressOff === true ? { progressOff: true as const } : {}), ...(observerCast === true ? { observerCast: true as const } : {}), ...(mcp !== undefined ? { mcp } : {}) } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
