@@ -593,14 +593,18 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
   // acts on tickets through this (owner 2026-11-10: a scheduled turn reads where things stand before it acts).
   ctx.tools.register(defineTool({
     name: 'a2a_ticket_read',
-    description: 'Team member or observer only, read-only: where your work stands before you act on it. kind mine: your open tickets; kind ticket: one of them (ticket_id). An observer can also read kind team (the team\'s open and recent tickets) and kind decisions (the router\'s recent decisions) and kind health (the host\'s health problems, which reach the observer first). An approver the owner named reads kind outbound: the outbound cards waiting for a decision, with their ids. It changes nothing.',
+    description: 'Team member or observer only, read-only: where your work stands before you act on it. kind mine: your open tickets; kind ticket: one of them (ticket_id). An observer can also read kind team (the team\'s open and recent tickets) and kind decisions (the router\'s recent decisions), kind health (the host\'s health problems, which reach the observer first), and from this host\'s prompt-template plugin kind library (the cards, their versions, switches and intervals), kind templates (one session\'s own templates, session_id) and kind interventions (each time a card went into a session: schedule, event, manual by the owner, or a plugin; digests only, never text). An approver the owner named reads kind outbound: the outbound cards waiting for a decision, with their ids. It changes nothing.',
     parameters: {
-      kind: { type: 'string', required: true, description: 'mine | ticket | team | decisions | health | outbound' },
+      kind: { type: 'string', required: true, description: 'mine | ticket | team | decisions | health | library | templates | interventions | outbound' },
+      session_id: { type: 'string', description: 'For kind templates (required): the session whose own templates to read; for kind interventions: one session.' },
+      since: { type: 'string', description: 'For kind interventions: only rows at or after this ISO time.' },
+      source: { type: 'string', description: 'For kind interventions: schedule | event | manual | plugin (manual = the owner sending a card by hand).' },
+      limit: { type: 'number', description: 'For kind interventions: at most this many rows (newest kept).' },
       ticket_id: { type: 'string', description: 'For kind ticket.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_ticket_read', value) },
     presentCall: args => ({ card: 'generic', title: `a2a_ticket_read ${String(args.kind)}`, kind: 'read', rawInput: args }),
-    execute: async (args: { kind?: string; ticket_id?: string }, exec): Promise<Record<string, JsonValue>> => {
+    execute: async (args: { kind?: string; ticket_id?: string; session_id?: string; since?: string; source?: string; limit?: number }, exec): Promise<Record<string, JsonValue>> => {
       const h = host(exec)
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
       if (h === undefined || me === undefined || h.roleOf(me) !== 'member' || !h.settings.members.includes(me)) return { ok: false, code: 'not-member', error: 'a2a_ticket_read serves only the members on this host of a superagent team' }
@@ -625,12 +629,17 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
         if (!(h.settings.approvers ?? []).includes(me)) return { ok: false, code: 'not-approver', error: 'kind outbound is for the approvers the owner named in the team settings' }
         return { ok: true, cards: json(h.decisionCards().filter(card => card.source === 'outbound').map(card => ({ id: card.id, question: card.question, ...(card.reason !== undefined ? { reason: card.reason } : {}), by: card.by, at: card.at, options: card.options }))) }
       }
-      if (!observer) return { ok: false, code: 'not-observer', error: 'kind team, decisions and health are for observers; a member reads kind mine or ticket' }
-      if (args.kind === 'team') return { ok: true, tickets: h.store.tickets.list().slice(0, 50).map(t => summary(t.id)) }
+      if (!observer) return { ok: false, code: 'not-observer', error: 'kind team, decisions, health, library, templates and interventions are for observers; a member reads kind mine or ticket' }
+      // The observer has no assignment card to name the team's ygl-trees project: kind team carries it (#762 review).
+      if (args.kind === 'team') return { ok: true, tickets: h.store.tickets.list().slice(0, 50).map(t => summary(t.id)), ...(h.yglProject() !== undefined ? { ygl: json({ project: h.yglProject()!, ...(h.yglScope() !== undefined ? { scope: h.yglScope()! } : {}) }) } : {}) }
       if (args.kind === 'decisions') return { ok: true, decisions: json(h.recentDecisions()) }
       // R7a (workbench-market 18 §七 3): the host's health list, which the observer sees first.
       if (args.kind === 'health') return { ok: true, health: json(h.health()) }
-      return { ok: false, code: 'kind', error: 'kind must be mine, ticket, team, decisions or health' }
+      // Observer phase 1 (#883): the same host's prompt-template library, a session's own templates, and the intervention log.
+      if (args.kind === 'library' || args.kind === 'templates' || args.kind === 'interventions') {
+        return json(await h.promptTemplates(args.kind, { ...(args.session_id !== undefined ? { session_id: String(args.session_id) } : {}), ...(args.since !== undefined ? { since: String(args.since) } : {}), ...(args.source !== undefined ? { source: String(args.source) } : {}), ...(args.limit !== undefined ? { limit: Number(args.limit) } : {}) })) as Record<string, JsonValue>
+      }
+      return { ok: false, code: 'kind', error: 'kind must be mine, ticket, team, decisions, health, library, templates or interventions' }
     },
   }))
 

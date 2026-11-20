@@ -40,11 +40,15 @@ describe('a2a_ticket_read', () => {
     expect(await m.read(m.other, { kind: 'mine' })).toMatchObject({ ok: true, tickets: [] })
     expect(await m.read(m.other, { kind: 'ticket', ticket_id: m.ticket })).toMatchObject({ ok: false, code: 'not-yours' })
     expect(await m.read(m.other, { kind: 'team' })).toMatchObject({ ok: false, code: 'not-observer' })
+    // #762 review: a plain member cannot read the prompt-template library, a session's templates or the log either.
+    for (const kind of ['library', 'templates', 'interventions']) expect(await m.read(m.other, { kind, session_id: 'session-m' })).toMatchObject({ ok: false, code: 'not-observer' })
     await m.h.stop()
   })
   it('an observer reads the team and its decisions', async () => {
     const m = await team()
     expect(await m.read('session-o', { kind: 'team' })).toMatchObject({ ok: true, tickets: [expect.objectContaining({ id: m.ticket, queue: null })] })
+    // #762 review: the observer has no assignment card, so kind team names the team's ygl-trees project.
+    expect((await m.read('session-o', { kind: 'team' })).ygl).toMatchObject({ project: expect.stringMatching(/^team-/) })
     expect(await m.read('session-o', { kind: 'decisions' })).toMatchObject({ ok: true })
     expect(await m.read('session-o', { kind: 'ticket', ticket_id: m.ticket })).toMatchObject({ ok: true })
     await m.h.stop()
