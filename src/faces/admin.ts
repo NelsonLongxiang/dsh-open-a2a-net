@@ -94,6 +94,8 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly cliHomeOptions: (handle: string) => Promise<{ homes: string[]; unreadable: number; held?: true }>
   readonly layoutStore: LayoutStore
   readonly taskLedger: TaskLedger
+  /** #731: how this host keeps its a2a journals private (per-file 0600, or the Windows directory ACL result). */
+  readonly a2aDirPrivacy?: import('../windows-private-dir.ts').DirPrivacy
   readonly reminderDiagnostics?: () => unknown
   readonly nudgeEscalations?:()=>import('../nudge-observability.ts').NudgeEscalations
   readonly enforceRefused?: { reason: string; blockers: readonly string[] }
@@ -381,6 +383,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // list and settled ones just a count, all additive so the panel
           // keeps rendering plain owed rows until it learns the tiers.
           ledgerPersistence: taskLedger.persistenceState(),
+          filePrivacy: d.a2aDirPrivacy,
           deliveryBookkeeping:taskLedger.deliveryBookkeepingState(),
           deliveryCapacity:taskLedger.deliveryCapacityState(),
           nudgeEscalations:d.nudgeEscalations?.()??{queued:0,unavailable:0,failed:0},
