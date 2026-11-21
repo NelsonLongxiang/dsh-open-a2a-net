@@ -8,6 +8,22 @@ import { tmpdir } from 'node:os'
 import { ensureTeamYglHome, ensureTeamYglProject, refreshYglCapabilities, teamYglHome, teamYglProject, teamYglScope, yglCapabilitiesOf, YGL_DB_FILE, type YglRun } from '../../src/superagent/host/ygl-home.ts'
 import { yglCardLines, yglRouterLine } from '../../src/superagent/host/cards.ts'
 
+/** Y1d: the card's first step; a card without one fails here instead of passing vacuously. */
+const firstStep = (card: string): string => {
+  const line = card.split('\n').find(l => l.startsWith('- first:'))
+  expect(line, 'the card has a "- first:" step').toBeDefined()
+  return line!
+}
+/** Y1d with the #306 exception: every line of a card that selects a project for the session. */
+const projectUseLines = (card: string): string[] => card.split('\n').filter(l => l.includes('project action use'))
+/** 0.123+: brief takes the project, so only the task step selects it (task advance takes no project, ygl-trees#306). */
+const expectOnlyTaskStepSelects = (card: string): void => {
+  expect(firstStep(card)).not.toContain('action use')
+  const uses = projectUseLines(card)
+  expect(uses, 'exactly one line selects the project').toHaveLength(1)
+  expect(uses[0]!.startsWith('- when you take it:'), uses[0]).toBe(true)
+}
+
 const quiet = { warn: () => {} }
 const fresh = () => join(mkdtempSync(join(tmpdir(), 'sa-ygl-')), 'team')
 
@@ -110,19 +126,48 @@ describe('Y1e: a team kb scope (owner 2026-11-18)', () => {
   })
   it('the member card keeps today\'s steps on an old or unknown ygl-trees', () => {
     const old = yglCardLines('team-ops', { scope: 'bench:team-ops', caps: yglCapabilitiesOf('0.122.0') })
-    expect(old.join('\n')).toContain('domain project action use name "team-ops"')
+    expect(firstStep(old.join('\n'))).toContain('domain project action use name "team-ops"')
     expect(old.join('\n')).not.toContain('scope')
     expect(yglCardLines('team-ops')).toEqual(old)
   })
   it('drops the project-use step from 0.123.0, and adds the team scope from 0.126.0', () => {
     const mid = yglCardLines('team-ops', { scope: 'bench:team-ops', caps: yglCapabilitiesOf('0.123.0') }).join('\n')
-    expect(mid).not.toContain('action use')
+    expectOnlyTaskStepSelects(mid)
     expect(mid).toContain('domain agent action brief with project "team-ops"')
     expect(mid).not.toContain('scope')
     const now = yglCardLines('team-ops', { scope: 'bench:team-ops', caps: yglCapabilitiesOf('0.126.0') }).join('\n')
     expect(now).toContain('with scope "bench:team-ops" (this team\'s notes), then again with scope ""')
     expect(now).toContain('kb add what the next session should reuse, with scope "bench:team-ops"')
     expect(now).toContain('make no other project')
+    expectOnlyTaskStepSelects(now)
+  })
+  it('Y2: every card asks for a skill match first and a task for the ticket, todo to doing to done, with its id on the report', () => {
+    const cards = {
+      old: yglCardLines('team-ops', { scope: 'bench:team-ops', caps: yglCapabilitiesOf('0.122.0') }).join('\n'),
+      mid: yglCardLines('team-ops', { scope: 'bench:team-ops', caps: yglCapabilitiesOf('0.123.0') }).join('\n'),
+      now: yglCardLines('team-ops', { scope: 'bench:team-ops', caps: yglCapabilitiesOf('0.126.0') }).join('\n'),
+      bare: yglCardLines().join('\n'),
+    }
+    for (const [name, card] of Object.entries(cards)) {
+      expect(card, name).toContain('mcp__ygl__read domain agent action match with query set to this ticket\'s subject')
+      expect(card, name).toContain('domain skill action show')
+      expect(card, name).toContain('domain task action add with text set to this ticket\'s title')
+      expect(card, name).toContain('domain task action advance id <its id> to doing')
+      expect(card, name).toContain('domain task action advance id <the task id> to done')
+      expect(card, name).toContain('pass the ids you wrote in ygl on a2a_ticket_report, the task id too')
+      // rel attach needs a tree node, and a team project has none until the owner decides its milestones.
+      expect(card, name).not.toContain('rel attach')
+      expect(card, name).not.toContain('domain rel')
+    }
+    for (const name of ['old', 'mid', 'now'] as const) {
+      expect(cards[name], name).toContain('title and project "team-ops", then')
+      // task advance takes no project in the ygl MCP: the task step selects it for the session before add and advance.
+      expect(cards[name], name).toContain('domain project action use name "team-ops" (for your session only; task advance takes no project), then domain task action add')
+    }
+    expect(cards.bare).not.toContain('and project')
+    // The match and task steps come before the work; done comes before kb add.
+    expect(cards.now.indexOf('action match')).toBeLessThan(cards.now.indexOf('as you go'))
+    expect(cards.now.indexOf('to done')).toBeLessThan(cards.now.indexOf('kb add what the next session'))
   })
   it('the router line names the scope only when there is one', () => {
     expect(yglRouterLine('team-ops')).toContain('pass it as project')

@@ -6,6 +6,22 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { yglCapabilities, yglCapabilitiesOf } from '../../src/superagent/host/ygl-home.ts'
 
+/** Y1d: the card's first step; a card without one fails here instead of passing vacuously. */
+const firstStep = (card: string): string => {
+  const line = card.split('\n').find(l => l.startsWith('- first:'))
+  expect(line, 'the card has a "- first:" step').toBeDefined()
+  return line!
+}
+/** Y1d with the #306 exception: every line of a card that selects a project for the session. */
+const projectUseLines = (card: string): string[] => card.split('\n').filter(l => l.includes('project action use'))
+/** 0.123+: brief takes the project, so only the task step selects it (task advance takes no project, ygl-trees#306). */
+const expectOnlyTaskStepSelects = (card: string): void => {
+  expect(firstStep(card)).not.toContain('action use')
+  const uses = projectUseLines(card)
+  expect(uses, 'exactly one line selects the project').toHaveLength(1)
+  expect(uses[0]!.startsWith('- when you take it:'), uses[0]).toBe(true)
+}
+
 async function team(ygl: boolean, made: string[] = [], version?: string) {
   const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
   const { routeItem, registerSuperagentTools } = await import('../../src/superagent/host/tools.ts')
@@ -39,9 +55,13 @@ describe('ygl-trees on the assignment card', () => {
     expect(m.card).toContain('mcp__ygl__read domain agent action brief')
     // Y1c: the card names the team's project; the member selects it for its own session first (ygl-trees#260), then briefs.
     expect(m.card).toContain('This team\'s project is "team-team"')
-    expect(m.card).toContain('mcp__ygl__write domain project action use name "team-team"')
+    // Y1d on an unknown ygl-trees: the first step selects the project (not only the task step does).
+    expect(firstStep(m.card)).toContain('mcp__ygl__write domain project action use name "team-team"')
     expect(m.card).toContain('make no other project')
     expect(m.card).toContain('pass the ids you wrote in ygl on a2a_ticket_report')
+    // Y2: the skill match and the ticket's task are on the card the member receives.
+    expect(m.card).toContain('domain agent action match')
+    expect(m.card).toContain('domain task action add with text set to this ticket\'s title and project "team-team"')
     await m.h.stop()
     const n = await team(false)
     expect(n.card).not.toContain('ygl')
@@ -96,7 +116,9 @@ describe('the reminder at ready', () => {
 describe('the cards follow the installed ygl-trees (Y1d/Y1e, owner 2026-11-18)', () => {
   it('0.126.0: no project-use step, the team scope on kb add and searches, on both cards and the state', async () => {
     const m = await team(true, [], '0.126.0')
-    expect(m.card).not.toContain('domain project action use')
+    // Y1d: brief takes the project, so the first step selects none; only the task step does (task advance takes no project).
+    expect(firstStep(m.card)).toContain('domain agent action brief with project "team-team"')
+    expectOnlyTaskStepSelects(m.card)
     expect(m.card).toContain('domain agent action brief with project "team-team"')
     expect(m.card).toContain('with scope "bench:team-team" (this team\'s notes), then again with scope ""')
     expect(m.card).toContain('kb add what the next session should reuse, with scope "bench:team-team"')
@@ -106,7 +128,7 @@ describe('the cards follow the installed ygl-trees (Y1d/Y1e, owner 2026-11-18)',
   })
   it('0.122.0: today\'s steps, and no scope', async () => {
     const m = await team(true, [], '0.122.0')
-    expect(m.card).toContain('mcp__ygl__write domain project action use name "team-team"')
+    expect(firstStep(m.card)).toContain('mcp__ygl__write domain project action use name "team-team"')
     expect(m.card).not.toContain('bench:team-')
     expect(m.h.state().ygl).toEqual({ version: '0.122.0', briefHonorsProject: false, kbScope: false, project: 'team-team' })
     await m.h.stop()
@@ -184,7 +206,8 @@ describe('#739 rereview R1: no card goes out before the version read settles, on
     expect(assignments.length).toBeGreaterThan(0)
     for (const card of assignments) {
       expect(card).toContain('with scope "bench:team-team"')
-      expect(card).not.toContain('domain project action use')
+      expect(firstStep(card)).toContain('domain agent action brief with project "team-team"')
+      expectOnlyTaskStepSelects(card)
     }
     await h.stop()
     setYglCapabilitiesForTest(YGL_UNKNOWN)
