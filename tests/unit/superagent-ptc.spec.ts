@@ -1,11 +1,14 @@
 /** Optional PTC activation uses Cordis lifetimes, not a one-shot preset disabled expression. */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
+import { mkdtempSync } from '../temp-dirs.ts'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { apply, compatiblePtcRuntime, inject, name } from '../../src/superagent/ptc.ts'
 
 const runtime = () => ({ language: 'typescript', programFormat: 'function-body', retainsState: false, release() {}, resolve() {}, run() {} })
@@ -55,6 +58,11 @@ describe('optional team PTC entry', () => {
 
   it('the actual legacy tools and runtime service never import the unavailable new executor', async () => {
     const ctx = new Context(), imports: string[] = []
+    // The real PTC runtime loads a native addon; its loader caches binaries under os.tmpdir() and never removes them,
+    // which the verify gate reports as temp residue. Cache in a directory this test owns (removed after the file).
+    const previousCache = process.env.NARB_NATIVE_CACHE_DIR
+    process.env.NARB_NATIVE_CACHE_DIR = mkdtempSync(join(tmpdir(), 'ptc-native-cache-'))
+    onTestFinished(() => { if (previousCache === undefined) delete process.env.NARB_NATIVE_CACHE_DIR; else process.env.NARB_NATIVE_CACHE_DIR = previousCache })
     const requireTools = createRequire(import.meta.resolve('@deepseek-ai/dsh-tools'))
     const { PtcRuntime } = await import(pathToFileURL(requireTools.resolve('@deepseek-ai/dsh-ptc-runtime')).href)
     class LegacyRuntime extends PtcRuntime {
