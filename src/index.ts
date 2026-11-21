@@ -76,6 +76,7 @@ import { createQueueGuard, queueFullRefusal, QUEUE_FULL_NEXT, WIRE_ERROR_QUEUE_F
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
 import { isRootOriginUrl, sameMountedUrl, originClaimTeamWarning, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
+import { allOwnClaimUrls, cardListsOwnClaim, claimUrlForTarget, isOwnClaimCaller, normalizeOriginClaimByPeer, originClaimByPeerWarning, ownClaimUrlsForPeer } from './origin-claim-by-peer.ts'
 import { AuthObserver, type AffectedEntry } from './auth-observer.ts'
 import { claimCovers, allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry, type RemoteCliProof, recheckRemoteCliAuthorization, recheckCallerAdmission } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
@@ -295,6 +296,8 @@ export function apply(ctx: Context, config: Config): void {
   // be discovered from a ledger full of unexplained steering.
   const teamWarning = originClaimTeamWarning(config.team)
   if (teamWarning !== undefined) logger.warn(teamWarning)
+  const originClaimByPeer = normalizeOriginClaimByPeer(config.originClaimByPeer)
+  for (const row of originClaimByPeer.ignored) logger.warn(originClaimByPeerWarning(row))
   const exposure = directDeliveryExposure(config.peers, config.apiKey)
   if (exposure.warning !== undefined) logger.warn(exposure.warning)
   // gh#9 control-face norm (docs/protocol/delivery-origin-auth.md §10): on a
@@ -610,7 +613,14 @@ export function apply(ctx: Context, config: Config): void {
   function originClaimHeaders(target: OriginClaimTarget): Record<string, string> {
     // No local web/card anchor yet: keep the preexisting absent-envelope migration posture, not a malformed Sig3.
     if(ownCardUrl==='')return {}
-    return signOriginClaim(target, { caller: config.team, callerUrl: ownCardUrl, privateKey: nodePrivateKey, unbound: config.originClaimUnboundWindow !== false, now: Date.now() })
+    // #787: a mapped peer gets the operator-selected local claim URL; everyone else keeps ownCardUrl.
+    const callerUrl = claimUrlForTarget(target.url, originClaimByPeer.rules, ownCardUrl)
+    if (callerUrl === '') return {}
+    return signOriginClaim(target, { caller: config.team, callerUrl, privateKey: nodePrivateKey, unbound: config.originClaimUnboundWindow !== false, now: Date.now() })
+  }
+  /** Local card URLs this host recognizes when judging a specific peer (default + that peer's mapping only). */
+  function ownClaimUrlsFor(peerUrl: string): string[] {
+    return ownClaimUrlsForPeer(peerUrl, originClaimByPeer.rules, ownCardUrl)
   }
   const client = new A2aClient({
     apiKey: config.apiKey,
@@ -3174,7 +3184,7 @@ export function apply(ctx: Context, config: Config): void {
     // shared zone string was "us". True self is the loopback self-fetch
     // face: the caller's card URL origin equals OUR card URL origin.
     try {
-      if (callerUrl !== '' && isRootOriginUrl(callerUrl) && new URL(callerUrl).origin === new URL(ownCardUrl).origin) return true
+      if (callerUrl !== '' && isOwnClaimCaller(callerUrl, allOwnClaimUrls(originClaimByPeer.rules, ownCardUrl))) return true
     } catch { /* malformed callerUrl — falls through to the record bases */ }
     for (const id of joinedSessions.list()) {
       if (`${config.team}/${id8(id)}` === caller) return true
@@ -3203,15 +3213,12 @@ export function apply(ctx: Context, config: Config): void {
     // shadow only corroborates.
     // #189: a ROOT claim URL speaks for its origin; a path-prefixed one only for the exact peer URL we seeded (a mounted card).
     if (callerCard !== undefined && ownCardUrl !== '') {
-      const ourOrigin = new URL(ownCardUrl).origin
       const callerOrigin = new URL(callerUrl).origin
       const weSeedThem = config.peers.some(peer => {
         try { return isRootOriginUrl(callerUrl) ? new URL(peer).origin === callerOrigin : sameMountedUrl(peer, callerUrl) } catch { return false }
       })
-      const theySeedUs = (callerCard.peers ?? []).some(peer => {
-        try { return new URL(peer).origin === ourOrigin } catch { return false }
-      })
-      if (weSeedThem && theySeedUs) return true
+      // #787: only the default ownCardUrl and the claim URL mapped for THIS caller count as us.
+      if (weSeedThem && cardListsOwnClaim(callerCard.peers, ownClaimUrlsFor(callerUrl))) return true
     }
     return false
   }
@@ -3331,8 +3338,9 @@ export function apply(ctx: Context, config: Config): void {
   function intakeHostLinked(origin: string, key: string): boolean {
     const ourOrigin = ownCardUrl === '' ? '' : (() => { try { return new URL(ownCardUrl).origin } catch { return '' } })()
     const sameOrigin = (u: string): boolean => { try { return new URL(u).origin === origin } catch { return false } }
+    const peerUrl = config.peers.find(sameOrigin) ?? origin
     const bilateral = ourOrigin !== '' && config.peers.some(sameOrigin) && [...cardCache.entries()].some(([url, entry]) =>
-      sameOrigin(url) && entry.card?.publicKey === key && (entry.card.peers ?? []).some(peer => { try { return new URL(peer).origin === ourOrigin } catch { return false } }))
+      sameOrigin(url) && entry.card?.publicKey === key && cardListsOwnClaim(entry.card.peers, ownClaimUrlsFor(peerUrl)))
     if (bilateral) return true
     const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))
     return canvasStore.list().some(name => canvasStore.remoteMembersOf(name).some(ref => splitQualifiedMember(ref) !== undefined && canvasStore.ownerKeyOf(ref) === key && memberProvenance(ref, key, ownKey) === 'confirmed-remote'))
@@ -3865,7 +3873,8 @@ export function apply(ctx: Context, config: Config): void {
    */
   function peerLinkState(peerUrl: string): { link: 'linked' | 'stranger'; verified: boolean } {
     return peerLinkDisplay(peerUrl, {
-      card: cardCache.get(peerUrl)?.card, ownUrl: ownCardUrl, ownAudiences: config.originClaimAudiences, seeds: config.peers,
+      card: cardCache.get(peerUrl)?.card, ownUrl: ownCardUrl, ownAudiences: config.originClaimAudiences,
+      ownPeerClaimUrls: ownClaimUrlsFor(peerUrl).filter(url => url !== ownCardUrl), seeds: config.peers,
       refs: canvasStore.list().flatMap(name => [...canvasStore.remoteMembersOf(name)]),
       ownHandles: new Set([...joinedSessions.list(), ...liveRoots.keys()].map(id => `${config.team}/${id8(id)}`)),
       cards: [...cardCache.values()].flatMap(entry => entry.card === undefined ? [] : [entry.card]),
@@ -3885,14 +3894,10 @@ export function apply(ctx: Context, config: Config): void {
     if (cached !== undefined && ownCardUrl !== '') {
       try {
         const peerOrigin = new URL(peerUrl).origin
-        const ourOrigin = new URL(ownCardUrl).origin
         const weSeedThem = config.peers.some(peer => {
           try { return new URL(peer).origin === peerOrigin } catch { return false }
         })
-        const theySeedUs = (cached.peers ?? []).some(peer => {
-          try { return new URL(peer).origin === ourOrigin } catch { return false }
-        })
-        if (weSeedThem && theySeedUs) linked = true
+        if (weSeedThem && cardListsOwnClaim(cached.peers, ownClaimUrlsFor(peerUrl))) linked = true
       } catch { /* malformed peer URL — falls through to the canvas basis */ }
     }
     // Basis 2: a canvas remote ref names the peer's zone or one of its

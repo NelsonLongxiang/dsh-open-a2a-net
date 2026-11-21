@@ -36,4 +36,12 @@ describe('host-specific display link facts only', () => {
     expect(peerLinkDisplay('http://c', { ...base, card: b, cards: [b], seeds: ['http://b'] }).link).toBe('stranger')
     expect(peerLinkDisplay('http://b', { ...base, card: undefined, cards: [] })).toEqual({ link: 'stranger', verified: false })
   })
+
+  it('#787 display follows the per-peer claim URL and does not reuse it for a different peer', () => {
+    const b = { ...card('b'), peers: ['http://100.64.0.10:13080'] }
+    const input = { ...base, card: b, cards: [b], refs: [], ownUrl: 'http://192.168.50.10:13080', seeds: ['https://hub.example.invalid'] }
+    expect(peerLinkDisplay('https://hub.example.invalid', input).link).toBe('stranger')
+    expect(peerLinkDisplay('https://hub.example.invalid', { ...input, ownPeerClaimUrls: ['http://100.64.0.10:13080'] }).link).toBe('linked')
+    expect(peerLinkDisplay('http://192.168.50.20:13080', { ...input, seeds: ['http://192.168.50.20:13080'] }).link).toBe('stranger')
+  })
 })
