@@ -232,7 +232,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 
 卡片经 Ed25519 签名且会过期；签名核心只含 `name`、`session`、`team`、`capabilities`、`expiresAt` 与区域委托记录 `records`。卡片上的 `peers` 引荐、`sessionTeams` 列表、`teamMemberships`、`canvasOrg`、`lanIp` 与 `version` 未签名、每次现读——后两项让运维无需逐台登录即可核对每个舰队节点实际运行的构建。若某引荐 URL 自身的取卡刚证明它提供的是本节点的卡片（或某个已跟踪 peer 的另一种地址写法），该 URL 会被记住 6 小时，窗口内再次被引荐时直接忽略，不会在 peer store 里反复闪现。
 
-每个 `/__dsh_a2a/*` 控制路由（读也算）在配置了 `apiKey` 时都要求之（`X-API-Key` 头，非浏览器客户端也可用 `api_key` 查询参数；常数时间比较）。密钥为空时只信任 loopback socket；`Sec-Fetch-Site` 头只能否决、不能授权（跨站页面即使在 loopback 上也会被拒），带 `X-Forwarded-For`、`Forwarded` 或 `X-Real-IP` 的请求同样不享受 loopback 信任（经本机反向代理或隧道进来的远端调用方不能借此免密钥）。把监听器暴露到 loopback 之外前请先设置 `apiKey`。
+每个 `/__dsh_a2a/*` 控制路由（读也算）在配置了 `apiKey` 时都要求之（`X-API-Key` 头，非浏览器客户端也可用 `api_key` 查询参数；常数时间比较）。密钥为空时只信任 loopback socket；`Sec-Fetch-Site` 头只能否决、不能授权（跨站页面即使在 loopback 上也会被拒），带 `X-Forwarded-For`、`Forwarded` 或 `X-Real-IP` 的请求同样不享受 loopback 信任（经本机反向代理或隧道进来的远端调用方不能借此免密钥）。密钥为空时，DSH 宿主自己已登录的浏览器主人无论从哪个地址访问也受信任（#783）：由宿主 Connection 的 `admit` 对原始请求校验浏览器登录与 Host/Origin 栅栏（`--trusted-host`），且只认宿主的浏览器主人 Peer，因此工作台可放在 Tailscale Serve、Caddy、nginx 等反向代理之后使用。本插件自身不信任任何代理头，跨站否决照旧，宿主不提供该 Connection 服务时拒绝（fail-closed）。已配置 `apiKey` 时行为不变，浏览器登录不能代替密钥。把监听器暴露到 loopback 之外前请先设置 `apiKey`。
 
 | 控制路由 | 用途 |
 | --- | --- |

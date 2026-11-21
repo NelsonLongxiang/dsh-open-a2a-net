@@ -294,6 +294,11 @@ and re-offers of it within that window are ignored instead of flickering in and 
 Every `/__dsh_a2a/*` control route — reads included — requires the configured `apiKey` (the `X-API-Key` header, or an `api_key` query parameter for non-browser clients;
 constant-time compare) when one is set. With an empty key only a loopback socket is trusted; a
 `Sec-Fetch-Site` header can only refuse (a cross-site page is rejected even on loopback), never grant, and a request carrying `X-Forwarded-For`, `Forwarded` or `X-Real-IP` gets no loopback trust either (a remote caller arriving through a local reverse proxy or tunnel cannot borrow it to skip the key).
+With an empty key the DSH host's own logged-in browser owner is also trusted, wherever it arrives from (#783): the host's
+Connection `admit` checks the browser login and its Host/Origin fence (`--trusted-host`) on the unchanged request, and only
+its browser-owner Peer counts — so the workbench works behind Tailscale Serve, Caddy or nginx. This plugin trusts no proxy
+header itself, the cross-site veto still applies, and a host without that Connection service refuses (fail-closed).
+A configured `apiKey` is unaffected: a browser login does not replace it.
 Set an `apiKey` before exposing the listener beyond loopback.
 
 | Control route | Purpose |
