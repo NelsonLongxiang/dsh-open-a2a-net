@@ -1,6 +1,6 @@
 {
   "name": "@nelsonlongxiang/dsh-open-a2a-net",
-  "version": "0.8.1-preview.25",
+  "version": "0.8.1-preview.28",
   "description": "Open A2A network plugin for DeepSeek Harness: signed agent cards, decentralized peer/zone discovery, direct routing model tools, and joinable session nodes with a sidebar control",
   "type": "module",
   "main": "lib/index.js",
@@ -80,7 +80,6 @@
     "client": {
       "platform": "web",
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-slots",
         "@deepseek-ai/dsh-client-ui-sidebar"

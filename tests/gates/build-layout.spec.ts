@@ -4,7 +4,8 @@
  * `lib/client.js`, so the host package root must import `lib/a2a-client.js`.
  */
 import { readdir, readFile } from 'node:fs/promises'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
+import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 
 const root = new URL('../../', import.meta.url)
@@ -26,8 +27,17 @@ describe('built package layout', () => {
 
     await expect(readFile(artifact('lib/a2a-client.js'), 'utf8')).resolves.toContain('export class A2aClient')
 
-    const host = await import(pathToFileURL(fileURLToPath(artifact('lib/index.js'))).href)
-    expect(host.A2aClient).toBeTypeOf('function')
+    // The delivery is compiled ESM. Import it with Node, not Vitest's source transformer and SSR cache.
+    const inspect = "const host = await import('./lib/index.js'); console.log('[host-layout] ' + JSON.stringify({ A2aClient: typeof host.A2aClient }))"
+    const imported = spawnSync(process.execPath, ['--input-type=module', '-e', inspect], {
+      cwd: fileURLToPath(root), env: process.env, encoding: 'utf8', timeout: 4000,
+    })
+    expect(imported.error).toBeUndefined()
+    expect(imported.signal).toBeNull()
+    expect(imported.status, imported.stderr).toBe(0)
+    const lines = imported.stdout.split(/\r?\n/).filter(line => line.startsWith('[host-layout] '))
+    expect(lines).toHaveLength(1)
+    expect(JSON.parse(lines[0]!.slice('[host-layout] '.length)).A2aClient).toBe('function')
   })
 
   it('ships a compiled artifact for every host source module', async () => {

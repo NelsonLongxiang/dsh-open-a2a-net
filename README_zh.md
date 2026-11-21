@@ -201,6 +201,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | `exposureExcerpt` | `'full'` | 卡片发布会话活动摘录的程度：`full`、`masked`（仅形状前缀）或 `off`。标题与句柄始终保留。 |
 | `originClaimWindow` | `false` | OriginClaim 过渡窗口，自 #64 第一步起默认关闭：不带信封的投递按验签失败拒绝。设为 `true` 重新打开，这类投递重新走调用方门，并计入 `legacyInbound`。 |
 | `originClaimUrl` | `''` | 信封 `callerUrl` 的覆盖值（pocket 隧道宿主用）；`''` 自动推导。 |
+| `originClaimByPeer` | `{}` | #787：把目标 peer（精确 origin 或精确挂载卡片 URL）映射为本机对该 peer 声明的 OriginClaim 卡片地址。空则所有对端仍用全局 `originClaimUrl` / 推导出的卡片地址。不改节点密钥、`linkKeys` 或接收侧 `originClaimAudiences`。非法、带用户信息、非 http(s)、带查询/片段以及冲突的条目会被忽略。文件通道的 `from` 仍写默认卡片 origin（本映射不覆盖）。 |
 | `originClaimUnboundWindow` | `true` | OriginClaim 受众绑定过渡窗口：同时签发并接受不带受众的旧信封（接受数计入 `unboundInbound`；其中绑定形式在本机未命中的另计 `boundMissInbound`）；`false` 只签发、只接受绑定受众的信封。 |
 | `canvasLegacyBareMembers` | `true` | #335 迁移窗口：未暂停历史裸成员保持旧推断；暂停槽位永不路由/授权，迁移与观察完成后仅属主裁定关窗。 |
 | `originClaimAudiences` | `[]` | 本宿主额外认作信封受众的 origin，用于端口映射或反向代理宿主（对端拨号的 URL 既不是卡片 URL 也不是到达地址）。 |
@@ -210,7 +211,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | `asyncNudgeDelayMs` | `120000` | 经 `/a2a/direct` 入站、已投递但目标未消费的异步任务，在此延迟后用一行催办重新唤醒目标（目标忙时先让一轮，再升级为排队提示）；`0` 关闭。 |
 | `targetQueueCap` | `3` | 本宿主上同一个目标最多排队这么多条目标尚未回应且等回执的任务；再来新投递就可见拒收（`-32009 target-queue-full`，不投递）。本宿主自己记过账的任务的回执、以及 CLI 信箱从不拦；一个画布队算一个目标。被拒的 task id 记为失败，重试要换新 id。目标消费本任务后的 final 或目标自己发回执会记 `answeredAt` 并释放名额，即使回执投递失败；行仍欠回执，死信、迟到回执和守恒不变，状态面/画布排队数采用同一口径。`0` 关闭（#224/#253）。 |
 | `taskStaleTtlMs` | `86400000` | 欠账任务的 stale TTL（24h）：过期后 pending 行自动转死信（迟到回执仍可结清）。 |
-| `dshHome` | `''` | 插件状态所用的 DSH home 目录覆盖（`<home>/a2a/…`）；`''` 解析默认 home。 |
+| `dshHome` | `''` | 插件状态所用的 DSH home 目录覆盖（`<home>/a2a/…`）；`''` 解析默认 home。其中的日志只允许本人读写：POSIX 上文件权限 0600；Windows 不认文件权限位，宿主每次启动给 `<home>/a2a` 设只授当前用户 SID 的 ACL（新文件继承），结果在 `/__dsh_a2a/state` 的 `filePrivacy` 字段（#731）。 |
 | `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | `172800000` / `300000` / `1800000` | 卡片生命周期（48h，每 1/4 周期重签一次）；会话在此窗口内没有最终回复时，回复等待者以占位应答释放（5 分钟）；`a2a_route` 工具的单次调用超时（30 分钟）。 |
 | `cardCacheTtlMs` / `cardCacheNegativeTtlMs` / `remoteRowsTtlMs` / `stateColdRowsTtlMs` | `60000` / `30000` / `15000` / `5000` | peer 卡片缓存（命中/未命中）、远端会话行刷新窗口、状态面冷行刷新窗口。 |
 
@@ -232,7 +233,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 
 卡片经 Ed25519 签名且会过期；签名核心只含 `name`、`session`、`team`、`capabilities`、`expiresAt` 与区域委托记录 `records`。卡片上的 `peers` 引荐、`sessionTeams` 列表、`teamMemberships`、`canvasOrg`、`lanIp` 与 `version` 未签名、每次现读——后两项让运维无需逐台登录即可核对每个舰队节点实际运行的构建。若某引荐 URL 自身的取卡刚证明它提供的是本节点的卡片（或某个已跟踪 peer 的另一种地址写法），该 URL 会被记住 6 小时，窗口内再次被引荐时直接忽略，不会在 peer store 里反复闪现。
 
-每个 `/__dsh_a2a/*` 控制路由（读也算）在配置了 `apiKey` 时都要求之（`X-API-Key` 头，非浏览器客户端也可用 `api_key` 查询参数；常数时间比较）。密钥为空时只信任 loopback socket；`Sec-Fetch-Site` 头只能否决、不能授权（跨站页面即使在 loopback 上也会被拒），带 `X-Forwarded-For`、`Forwarded` 或 `X-Real-IP` 的请求同样不享受 loopback 信任（经本机反向代理或隧道进来的远端调用方不能借此免密钥）。把监听器暴露到 loopback 之外前请先设置 `apiKey`。
+每个 `/__dsh_a2a/*` 控制路由（读也算）在配置了 `apiKey` 时都要求之（`X-API-Key` 头，非浏览器客户端也可用 `api_key` 查询参数；常数时间比较）。密钥为空时只信任 loopback socket；`Sec-Fetch-Site` 头只能否决、不能授权（跨站页面即使在 loopback 上也会被拒），带 `X-Forwarded-For`、`Forwarded` 或 `X-Real-IP` 的请求同样不享受 loopback 信任（经本机反向代理或隧道进来的远端调用方不能借此免密钥）。密钥为空时，DSH 宿主自己已登录的浏览器主人无论从哪个地址访问也受信任（#783）：由宿主 Connection 的 `admit` 对原始请求校验浏览器登录与 Host/Origin 栅栏（`--trusted-host`），且只认宿主的浏览器主人 Peer，因此工作台可放在 Tailscale Serve、Caddy、nginx 等反向代理之后使用。本插件自身不信任任何代理头，跨站否决照旧，宿主不提供该 Connection 服务时拒绝（fail-closed）。配置了 `apiKey` 时，同一宿主浏览器主人也无需密钥即可访问（#790）：面板自身的请求不带密钥，否则配了 key 的宿主上已登录的浏览器读不到面板。CLI、API 与对端仍必须带密钥，配了 key 时仅凭 loopback 不够。把监听器暴露到 loopback 之外前请先设置 `apiKey`。
 
 | 控制路由 | 用途 |
 | --- | --- |

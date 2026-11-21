@@ -16,17 +16,19 @@ type T = PropsLocale<'a2aNet'>['t']
  * Stage files on this host for a team, each granted to its canvas.
  * @param files - the files to stage.
  * @param address - the team's canvas address.
- * @returns one reference line per file, or why one could not be staged.
+ * @returns one reference line per file; or why one could not be staged, with the references of the files staged before it.
  */
-export async function stageFiles(files: readonly File[], address: string): Promise<{ refs: string[] } | { refused: string }> {
+export async function stageFiles(files: readonly File[], address: string): Promise<{ refs: string[] } | { refused: string; refs: string[] }> {
   const refs: string[] = []
   for (const file of files) {
     try {
-      const response = await fetch(`/__dsh_a2a/blob?to=${encodeURIComponent(address)}&name=${encodeURIComponent(file.name)}&by=owner`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
+      // The staging route takes the control credential only and records the grant under the operator `control`; it reads no
+      // `by` parameter. Whether the person is the owner is judged when the decision is made (browser owner proof), not here.
+      const response = await fetch(`/__dsh_a2a/blob?to=${encodeURIComponent(address)}&name=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
       const out = await response.json() as { ok?: boolean; ref?: string; error?: string }
-      if (!response.ok || out.ok !== true || out.ref === undefined) return { refused: `${file.name}: ${out.error ?? `HTTP ${String(response.status)}`}` }
+      if (!response.ok || out.ok !== true || out.ref === undefined) return { refused: `${file.name}: ${out.error ?? `HTTP ${String(response.status)}`}`, refs }
       refs.push(out.ref)
-    } catch (error) { return { refused: `${file.name}: ${String(error)}` } }
+    } catch (error) { return { refused: `${file.name}: ${String(error)}`, refs } }
   }
   return { refs }
 }
@@ -43,8 +45,11 @@ export function useAttachedFiles(t: T, refuse: (text: string) => void) {
   const addFiles = (added: readonly File[]): void => {
     const tooBig = added.find(file => file.size > FILE_BYTES_MAX)
     if (tooBig !== undefined) { refuse(t('team.fileTooBig', { name: tooBig.name })); return }
-    const known = new Set(files.map(file => `${file.name}:${String(file.size)}`))
-    const next = [...files, ...added.filter(file => !known.has(`${file.name}:${String(file.size)}`))]
+    // The same file picked again is kept once; two different files that share a name and size are both kept.
+    const keyOf = (file: File): string => `${file.name}:${String(file.size)}:${String(file.lastModified)}`
+    const known = new Set(files.map(keyOf))
+    const next = [...files]
+    for (const file of added) { const key = keyOf(file); if (!known.has(key)) { known.add(key); next.push(file) } }
     if (next.length > FILES_MAX) { refuse(t('team.tooManyFiles', { max: String(FILES_MAX) })); return }
     setFiles(next)
   }

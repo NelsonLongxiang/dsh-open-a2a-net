@@ -4,23 +4,23 @@
  * 4h auto-deregister, mailbox round-trip.
  */
 import { mkdtempSync } from '../temp-dirs.ts'
-import { describe, expect, it, vi, afterEach } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readFileSync, writeFileSync } from 'node:fs'
-const writeFault = vi.hoisted(() => ({ path: '', hits: 0 }))
-vi.mock('../../src/task-ledger-persistence.ts', async original => {
-  const actual = await original<typeof import('../../src/task-ledger-persistence.ts')>()
-  return { ...actual, writeTaskLedger: (path: string, bytes: string) => {
-    if (path === writeFault.path) { writeFault.hits++; throw Object.assign(Error('synthetic mailbox commit refused'), { code: 'EACCES' }) }
-    return actual.writeTaskLedger(path, bytes)
-  } }
-})
-afterEach(() => { writeFault.path = ''; writeFault.hits = 0 })
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { generateKeyPairSync } from 'node:crypto'
 import { CliDepositStore, CLI_HANDLE_RE, MAILBOX_CAP, MAILBOX_TEXT_CAP } from '../../src/cli-deposit.ts'
 import { signCard } from '../../src/card.ts'
 
+const writeFault = vi.hoisted(() => ({ path: '', hits: 0 }))
+vi.mock('../../src/task-ledger-persistence.ts', async original => {
+  const actual = await original<typeof import('../../src/task-ledger-persistence.ts')>()
+  return { ...actual, writeTaskLedger: (file: string, bytes: string) => {
+    if (file === writeFault.path) { writeFault.hits++; throw Object.assign(Error('fixture commit denied'), { code: 'EACCES' }) }
+    return actual.writeTaskLedger(file, bytes)
+  } }
+})
+afterEach(() => { writeFault.path = ''; writeFault.hits = 0 })
 const { privateKey } = generateKeyPairSync('ed25519')
 
 function cliCard(team: string, name = 'cli-node'): string {
@@ -163,8 +163,8 @@ describe('gh#113 CLI mailbox: seq, loss and truncation are visible', () => {
     const a = store(dir).s
     a.mail(H, 'x', 'on disk')
     const diskEpoch = a.readMailbox(H).epoch
-    // Inject the actual commit seam: chmod on Windows (or an elevated POSIX user) does not reliably refuse directory writes.
-    // Keep the on-disk bytes and every original epoch/cursor assertion, rather than skipping this failure path by platform.
+    // chmod does not reliably deny directory writes on Windows or to an elevated POSIX process.
+    // Fail only this store's real persistence seam; keep the original epoch/cursor and restart assertions.
     const file = join(dir, 'deposits.json'), before = readFileSync(file)
     writeFault.path = file
     a.mail(H, 'x', 'memory only')

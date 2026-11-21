@@ -74,7 +74,8 @@ async function mount(home: string, extra: Partial<Config> = {}, listenPort = 0) 
   for (const a of [R!, M!, O!, X!]) ctx.emit('agent/created', { agent: a as unknown as Agent })
   const port = (ctx as unknown as { webServer: { port: number } }).webServer.port
   const login = mockGuiLogin()
-  const post = async (path: string, body: unknown): Promise<Record<string, any>> => await (await globalThis.fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...login }, body: JSON.stringify(body) })).json() as Record<string, any>
+  // Restart fixtures reuse this listener; never let a prior generation's pooled control socket cross the remount.
+  const post = async (path: string, body: unknown): Promise<Record<string, any>> => await (await globalThis.fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Connection: 'close', ...login }, body: JSON.stringify(body) })).json() as Record<string, any>
   const sa = async (body: unknown): Promise<Record<string, any>> => await post('/__dsh_a2a/superagent', body)
   const state = async (): Promise<Record<string, any>> => await (await globalThis.fetch(`http://127.0.0.1:${port}/__dsh_a2a/superagent`)).json() as Record<string, any>
   const tool = async (name: string, from: Agent, args: Record<string, unknown>): Promise<Record<string, any>> => await ctx.tools.get(name)!.execute(args, execAs(from)) as Record<string, any>
@@ -391,6 +392,17 @@ describe('superagent engine in the a2a host', () => {
       expect(String(out.error ?? '')).not.toContain('superagent-router')
     } finally { await m.dispose() }
   }, 60_000)
+
+  it('T5-B: the plugin provides a2aTickets — whether a session holds an open ticket, for the prompt-template self-check', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-host-tickets-'))
+    const m = await mount(home)
+    try {
+      const svc = m.ctx.get('a2aTickets' as never) as unknown as { hasOpenTicket: (id: string) => boolean | undefined }
+      expect(typeof svc.hasOpenTicket).toBe('function')
+      expect(svc.hasOpenTicket(M_ID)).toBe(false)
+      expect(svc.hasOpenTicket('session-nobody')).toBe(false)
+    } finally { await m.dispose() }
+  })
 
   it('PR-B2a: the owner\'s terminal is the workbench Source — a2a-net superagent request / state ride the owner credential', async () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-host-cli-'))

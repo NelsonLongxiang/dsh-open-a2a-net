@@ -1,5 +1,5 @@
 // @vitest-environment node
-import {it,expect,vi,afterEach} from 'vitest'
+import {it,expect,vi,afterEach,onTestFailed} from 'vitest'
 import {createPrivateKey,generateKeyPairSync} from 'node:crypto'
 import {readFileSync} from 'node:fs'
 import {join} from 'node:path'
@@ -11,6 +11,12 @@ import {A2aClient} from '../../src/a2a-client.ts'
 import {bootNode,reservePort,MockGuiConnection,mockGuiLogin,type MeshNode} from './harness.ts'
 const nativeFetch=globalThis.fetch.bind(globalThis),caller='superagent-team/0123456789abcdef',target='beta/bbbbbbbb',receiverId='session-bbbbbbbb11112222'
 afterEach(()=>vi.restoreAllMocks())
+/** #782 diagnostics: what the receiver's recovery journal holds, without permit bodies or keys. */
+function journalView(home:string):unknown{
+ const path=join(home,'a2a','request-recovery.json')
+ try{const raw=JSON.parse(readFileSync(path,'utf8'));return {entries:(raw.entries??[]).map((e:any)=>({taskId:e?.permit?.proposal?.binding?.taskId,phase:e?.phase,revoked:e?.revokedAt!==undefined}))}}
+ catch(error){return {unreadable:String(error)}}
+}
 async function fixture(){
  const grantErrors:string[]=[],realGrant=RequestRecoveryRuntime.prototype.grant
  vi.spyOn(RequestRecoveryRuntime.prototype,'grant').mockImplementation(async function(this:RequestRecoveryRuntime,...args:Parameters<RequestRecoveryRuntime['grant']>){try{return await realGrant.apply(this,args)}catch(e){grantErrors.push(String(e));throw e}})
@@ -33,21 +39,41 @@ async function fixture(){
  return{a,get b(){return b},binding,proposal,raw,grant,post,state,restart,dispose:async()=>{await a.dispose();await b.dispose()}}
 }
 it('real scoped receiver accepts exactly one permitted request and never creates standing membership',async()=>{
- const f=await fixture();try{
+ // #782: the observed red runs were whole-test 5 s timeouts, which cut off before any assertion could print its data.
+ // On any failure (a timeout included) print which stage it was in, how long each finished stage took, and the
+ // receiver's journal view. Budget and assertions are unchanged.
+ const t0=Date.now(),stages:Array<[string,number]>=[];let stage='fixture';let home:string|undefined
+ const at=(next:string)=>{stages.push([stage,Date.now()-t0]);stage=next}
+ onTestFailed(()=>{console.error('[#782 diagnostics] '+JSON.stringify({stage,elapsedMs:Date.now()-t0,finished:stages,journal:home===undefined?'no receiver yet':journalView(home)}))})
+ const f=await fixture();home=f.b.home;try{
+  at('initial-refused')
   const initial=await f.raw();expect(initial.data.error).toContain('no operator-established canvas link');expect(f.b.steered).toHaveLength(0)
+  at('grant')
   const granted=await f.grant();expect(granted.status,JSON.stringify(granted)).toBe(200);expect(granted.data.ok).toBe(true)
   const permit=granted.data.permit
-  const unused=await f.post(f.b,'/a2a/query',{task_id:f.binding.taskId,fingerprint:recoveryFingerprint(f.binding)});expect(unused.data).toMatchObject({found:true,status:'pending',task_id:f.binding.taskId,recovery_delivery:'ready'});expect(f.b.steered).toHaveLength(0)
+  at('query-ready')
+  const unused=await f.post(f.b,'/a2a/query',{task_id:f.binding.taskId,fingerprint:recoveryFingerprint(f.binding)})
+  // #782: one full-suite run saw found:false here and its log is lost. Grant writes the journal synchronously before it
+  // answers, so a miss means outcome() found no row, or read() threw. On failure, print the whole answer and the
+  // receiver's journal (task ids and phases only) so the next red run shows which.
+  expect(unused.data,JSON.stringify({unused:unused.data,journal:journalView(f.b.home)})).toMatchObject({found:true,status:'pending',task_id:f.binding.taskId,recovery_delivery:'ready'});expect(f.b.steered).toHaveLength(0)
+  at('replacements-refused')
   for(const patch of [{message:'replacement body'},{team:'beta/aaaaaaaa'},{task_id:'new-task'},{context_id:'other-context'}]){const refused=await f.raw(patch,permit);expect(refused.data.delivered).not.toBe(true)}
   expect(f.b.steered).toHaveLength(0)
+  at('accept')
   const accepted=await f.raw({},permit);expect(accepted.data,JSON.stringify(accepted)).toMatchObject({routed:true,delivered:true,recovery_delivery:'accepted',task_id:f.binding.taskId})
+  at('steer')
   await vi.waitFor(()=>expect(f.b.steered).toHaveLength(1))
+  at('replay-refused')
   const again=await f.raw({},permit);expect(again.data.delivered).not.toBe(true)
   const changedId=await f.raw({task_id:'changed-id'});expect(changedId.status).toBe(409);expect(f.b.steered).toHaveLength(1)
+  at('query-accepted')
   const query=await f.post(f.b,'/a2a/query',{task_id:f.binding.taskId,fingerprint:recoveryFingerprint(f.binding)});expect(query.data).toMatchObject({found:true,status:'pending',recovery_delivery:'accepted',task_id:f.binding.taskId});expect(query.data.reply).toBeUndefined()
   const state=await f.state();expect(state.tasks.find((r:any)=>r.taskId===f.binding.taskId)).toMatchObject({direction:'inbound',auth:{admission_rule:'request-recovery'}})
   expect(state.canvas.memberSlots.some((r:any)=>r.member===caller)).toBe(false)
-  await f.restart()
+  at('restart')
+  await f.restart();home=f.b.home
+  at('restored')
   const restored=await f.post(f.b,'/a2a/query',{task_id:f.binding.taskId,fingerprint:recoveryFingerprint(f.binding)});expect(restored.data).toMatchObject({status:'pending',recovery_delivery:'accepted'});expect(restored.data.reply).toBeUndefined()
   expect((await f.raw({},permit)).data.delivered).not.toBe(true);expect(f.b.steered).toHaveLength(0)
  }finally{await f.dispose()}

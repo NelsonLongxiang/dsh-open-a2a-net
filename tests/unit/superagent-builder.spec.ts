@@ -5,7 +5,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { orgInventory, type InventoryTeam } from '../../src/superagent/host/builder-tools.ts'
+import { orgInventory, registerBuilderIssueTools, type InventoryTeam } from '../../src/superagent/host/builder-tools.ts'
 import { BUILDER_PRESET, BUILDER_TOOLS, memberBoundary, roleToolRefusal } from '../../src/superagent/host/role-tools.ts'
 import { RULE_TEMPLATES } from '../../src/superagent/host/rule-templates.ts'
 
@@ -21,6 +21,74 @@ describe('the builder\'s guard', () => {
   it('its tools are no other role\'s: a member and the router are refused them', () => {
     expect(memberBoundary('member', 'superagent_org_read')).toBe(true)
     expect(roleToolRefusal('router', 'superagent_rule_templates')).toMatch(/router acts only/)
+  })
+})
+
+describe('#791: the builder checks itself and files issues through the owner', () => {
+  it('reads the network without sending, and its issue tools are no other role\'s', () => {
+    for (const name of ['a2a_status', 'a2a_tasks', 'a2a_teams', 'superagent_issue_propose', 'superagent_issue_file']) expect(roleToolRefusal('builder', name), name).toBeUndefined()
+    for (const name of ['a2a_route', 'a2a_report', 'a2a_file_send', 'a2a_team_join', 'bash']) expect(roleToolRefusal('builder', name), name).toMatch(/team builder only reads/)
+    for (const name of ['superagent_issue_propose', 'superagent_issue_file']) {
+      expect(memberBoundary('member', name), name).toBe(true)
+      expect(memberBoundary('observer', name), name).toBe(true)
+      expect(roleToolRefusal('router', name), name).toMatch(/router acts only/)
+    }
+  })
+
+  const B = 'session-builder-0000'
+  function tools(person: { id: string; atMs: number; text: string } | undefined, options: { repos?: string[]; gh?: (args: string[]) => Promise<string> } = {}) {
+    const registered = new Map<string, { execute: (args: unknown, exec: unknown) => Promise<Record<string, unknown>> }>()
+    const ctx = { tools: { register: (def: { name: string }) => { registered.set(def.name, def as never); return () => {} } } }
+    const calls: string[][] = []
+    let clock = 1_000
+    registerBuilderIssueTools(ctx as never, id => id === B, {
+      gh: options.gh ?? (async args => { calls.push(args); return JSON.stringify({ number: 42, html_url: 'https://github.com/acme/docs/issues/42' }) }),
+      repos: () => options.repos ?? ['acme/docs'], personMessage: () => person, now: () => clock,
+    })
+    const call = (name: string, args: unknown, as = B) => registered.get(name)!.execute(args, { agent: { id: as } })
+    return { call, calls, tick: (ms: number) => { clock += ms } }
+  }
+  const draft = { repo: 'acme/docs', title: '组队后成员收不到派单', body: '复现：……；期望：……' }
+
+  it('propose sends nothing; file waits for the owner\'s own message newer than the draft, then files once', async () => {
+    const early = tools({ id: 'm-0', atMs: 500, text: '好' })
+    const p = await early.call('superagent_issue_propose', draft)
+    expect(p).toMatchObject({ ok: true, repo: 'acme/docs', title: draft.title })
+    expect(early.calls).toEqual([])
+    expect(await early.call('superagent_issue_file', { id: p.id })).toMatchObject({ ok: false, code: 'not-yet' })
+    expect(early.calls).toEqual([])
+    const none = tools(undefined)
+    const q = await none.call('superagent_issue_propose', draft)
+    expect(await none.call('superagent_issue_file', { id: q.id })).toMatchObject({ ok: false, code: 'not-the-owner' })
+
+    const agreed = tools({ id: 'm-1', atMs: 2_000, text: '提吧' })
+    const r = await agreed.call('superagent_issue_propose', draft)
+    const filed = await agreed.call('superagent_issue_file', { id: r.id })
+    expect(filed).toMatchObject({ ok: true, filed: { number: 42, url: 'https://github.com/acme/docs/issues/42' } })
+    expect(agreed.calls).toHaveLength(1)
+    expect(agreed.calls[0]!.slice(0, 4)).toEqual(['api', '-X', 'POST', 'repos/acme/docs/issues'])
+    expect(agreed.calls[0]).toContain(`title=${draft.title}`)
+    // -f is gh's raw field: a body starting with @ is text, never a file to read.
+    expect(agreed.calls[0]!.filter(a => a === '-F')).toEqual([])
+    expect(await agreed.call('superagent_issue_file', { id: r.id })).toMatchObject({ ok: true, already: true })
+    expect(agreed.calls).toHaveLength(1)
+  })
+
+  it('only configured repositories; other sessions cannot propose or file a builder\'s draft; gh failure keeps the draft', async () => {
+    const t = tools({ id: 'm-1', atMs: 2_000, text: '好' })
+    expect(await t.call('superagent_issue_propose', { ...draft, repo: 'evil/repo' })).toMatchObject({ ok: false, code: 'repo' })
+    expect(await t.call('superagent_issue_propose', { ...draft, repo: '../x' })).toMatchObject({ ok: false, code: 'repo' })
+    expect(await tools(undefined, { repos: [] }).call('superagent_issue_propose', draft)).toMatchObject({ ok: false, code: 'repo', error: expect.stringContaining('no team') })
+    expect(await t.call('superagent_issue_propose', draft, 'session-other-0000')).toMatchObject({ ok: false, code: 'not-builder' })
+    const p = await t.call('superagent_issue_propose', draft)
+    expect(await t.call('superagent_issue_file', { id: p.id }, 'session-other-0000')).toMatchObject({ ok: false, code: 'not-builder' })
+
+    let fail = true
+    const flaky = tools({ id: 'm-1', atMs: 2_000, text: '好' }, { gh: async () => { if (fail) throw Error('HTTP 502\ndetail'); return JSON.stringify({ number: 7, html_url: 'u' }) } })
+    const d = await flaky.call('superagent_issue_propose', draft)
+    expect(await flaky.call('superagent_issue_file', { id: d.id })).toMatchObject({ ok: false, code: 'gh', error: expect.stringContaining('draft is kept') })
+    fail = false
+    expect(await flaky.call('superagent_issue_file', { id: d.id })).toMatchObject({ ok: true, filed: { number: 7 } })
   })
 })
 

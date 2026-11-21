@@ -57,6 +57,7 @@ import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type SettlementJudge, type TaskRecord } from './task-ledger.ts'
 import { formatReceipt, holdsRow, parseReceipt, receiptExtras, receiptTaskId, taskIdRefusal } from './receipt.ts'
+import { holdsOpenTicket, readSelfChecks } from './superagent/host/self-check-read.ts'
 import { SuperagentHost } from './superagent/host/index.ts'
 import { registerSuperagentTools } from './superagent/host/tools.ts'
 import { BUILDER_PRESET, RoleTools, scopeKeyOf, type RoleAgent } from './superagent/host/role-tools.ts'
@@ -75,6 +76,7 @@ import { createQueueGuard, queueFullRefusal, QUEUE_FULL_NEXT, WIRE_ERROR_QUEUE_F
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
 import { isRootOriginUrl, sameMountedUrl, originClaimTeamWarning, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
+import { allOwnClaimUrls, cardListsOwnClaim, claimUrlForTarget, isOwnClaimCaller, normalizeOriginClaimByPeer, originClaimByPeerWarning, ownClaimUrlsForPeer } from './origin-claim-by-peer.ts'
 import { AuthObserver, type AffectedEntry } from './auth-observer.ts'
 import { claimCovers, allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry, type RemoteCliProof, recheckRemoteCliAuthorization, recheckCallerAdmission } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
@@ -147,11 +149,12 @@ import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
 import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
-import { registerBuilderTools } from './superagent/host/builder-tools.ts'
+import { registerBuilderIssueTools, registerBuilderTools } from './superagent/host/builder-tools.ts'
+import { defaultGh } from './superagent/host/pr-follow.ts'
 import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
-import { touchesRules } from './superagent/host/owner-proof.ts'
+import { browserOwnerProof, touchesRules } from './superagent/host/owner-proof.ts'
 import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, startWhenYglKnown, yglCapabilities, yglSettled } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { IntakeOrigins } from './intake-origins.ts'
@@ -162,6 +165,7 @@ import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerFileFaces } from './faces/files.ts'
 import { registerSuperagentFaces } from './faces/superagent.ts'
 import {RequestRecoveryStore} from './request-recovery.ts'
+import { restrictDirToCurrentUser } from './windows-private-dir.ts'
 import {RequestRecoveryRuntime} from './request-recovery-runtime.ts'
 import {registerRequestRecoveryFace} from './faces/request-recovery.ts'
 import { SidebarSends } from './sidebar-sends.ts'
@@ -294,6 +298,8 @@ export function apply(ctx: Context, config: Config): void {
   // be discovered from a ledger full of unexplained steering.
   const teamWarning = originClaimTeamWarning(config.team)
   if (teamWarning !== undefined) logger.warn(teamWarning)
+  const originClaimByPeer = normalizeOriginClaimByPeer(config.originClaimByPeer)
+  for (const row of originClaimByPeer.ignored) logger.warn(originClaimByPeerWarning(row))
   const exposure = directDeliveryExposure(config.peers, config.apiKey)
   if (exposure.warning !== undefined) logger.warn(exposure.warning)
   // gh#9 control-face norm (docs/protocol/delivery-origin-auth.md §10): on a
@@ -387,20 +393,43 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
+   * No-key trust for the DSH host's own logged-in browser owner (#783). A DSH Web behind a reverse proxy on this host
+   * (Tailscale Serve, Caddy, nginx) reaches us with a forwarding header, so the loopback rule above refuses it — rightly,
+   * since the header says nothing about who is calling. The host's Connection, however, has already authenticated this
+   * very request: its `admit` checks the browser login and the Host/Origin fence (`--trusted-host`). Only the browser-owner
+   * Peer counts — never an API Peer — and this plugin trusts no proxy header itself. The cross-site veto still applies,
+   * and a missing, older or failing Connection service refuses (fail-closed, `owner-auth-unavailable`).
+   * @param req - the inbound control request.
+   * @returns whether the request is the host's authenticated browser owner.
+   */
+  function controlTrustedBrowserOwner(req: IncomingMessage): boolean {
+    const site = req.headers['sec-fetch-site']
+    if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') return false
+    let connection: unknown
+    try { connection = ctx.get('connection') } catch { return false }
+    return browserOwnerProof(connection, req).ok
+  }
+
+  /**
    * Control-route authorization. With `apiKey` set, the `X-API-Key` header
    * (or `api_key` query, for non-browser clients) must match in constant
-   * time. With no key, the same-origin/loopback trust applies — the explicit
-   * exposure assumption: an empty-key deployment accepts control from its
-   * own page and from loopback, and from nothing else.
+   * time, or the request is the host's authenticated browser owner (#790,
+   * owner decision 2026-11-21): the browser panel never carries the key, so
+   * without this a keyed host's own logged-in browser could not read its
+   * panel. CLI, API and peer callers still need the key; loopback alone is
+   * not enough. With no key, the loopback trust applies, and so does the
+   * host's authenticated browser owner (#783) — the explicit exposure
+   * assumption: an empty-key deployment accepts control from loopback and
+   * from its own logged-in browser, and from nothing else.
    * @param req - the inbound control request.
    * @returns whether the request may drive the control routes.
    */
   function controlAuthorized(req: IncomingMessage): boolean {
     if (config.apiKey !== '') {
       const presented = String(req.headers['x-api-key'] ?? new URL(req.url ?? '/', 'http://x').searchParams.get('api_key') ?? '')
-      return secretEqual(presented, config.apiKey)
+      return secretEqual(presented, config.apiKey) || controlTrustedBrowserOwner(req)
     }
-    return controlTrustedWithoutKey(req)
+    return controlTrustedWithoutKey(req) || controlTrustedBrowserOwner(req)
   }
 
   /**
@@ -553,6 +582,9 @@ export function apply(ctx: Context, config: Config): void {
   // from fetched cards join a bounded, quality-scored store persisted under
   // the same home as the node key.
   const home = config.dshHome === '' ? resolveDshHome() : resolveDshHome(config.dshHome)
+  // #731: Windows ignores the 0600 every journal here is created with; give the a2a directory an owner-only ACL.
+  const a2aDirPrivacy = restrictDirToCurrentUser(join(home, 'a2a'))
+  if (a2aDirPrivacy.mode === 'windows-acl' && !a2aDirPrivacy.ok) logger.warn('a2a: could not restrict the a2a directory to the current user (%s); its journals keep the inherited ACL', a2aDirPrivacy.error)
   const peerStore = new PeerStore(config.peers, join(home, 'a2a', 'peers.json'))
   // Node identity (docs/design/node-identity.md, N1): human-named nodes and their prompt versions.
   const nodeStore = new NodeStore(join(home, 'a2a'))
@@ -609,7 +641,14 @@ export function apply(ctx: Context, config: Config): void {
   function originClaimHeaders(target: OriginClaimTarget): Record<string, string> {
     // No local web/card anchor yet: keep the preexisting absent-envelope migration posture, not a malformed Sig3.
     if(ownCardUrl==='')return {}
-    return signOriginClaim(target, { caller: config.team, callerUrl: ownCardUrl, privateKey: nodePrivateKey, unbound: config.originClaimUnboundWindow !== false, now: Date.now() })
+    // #787: a mapped peer gets the operator-selected local claim URL; everyone else keeps ownCardUrl.
+    const callerUrl = claimUrlForTarget(target.url, originClaimByPeer.rules, ownCardUrl)
+    if (callerUrl === '') return {}
+    return signOriginClaim(target, { caller: config.team, callerUrl, privateKey: nodePrivateKey, unbound: config.originClaimUnboundWindow !== false, now: Date.now() })
+  }
+  /** Local card URLs this host recognizes when judging a specific peer (default + that peer's mapping only). */
+  function ownClaimUrlsFor(peerUrl: string): string[] {
+    return ownClaimUrlsForPeer(peerUrl, originClaimByPeer.rules, ownCardUrl)
   }
   const client = new A2aClient({
     apiKey: config.apiKey,
@@ -979,8 +1018,17 @@ export function apply(ctx: Context, config: Config): void {
     if (face === undefined) return undefined
     // The successor face reports failure as a result value; re-throw it so
     // every caller's rejection policy (reconciler backoff, route error)
-    // keeps working unchanged.
-    return face.resolveAgent(SessionId(id)).then(result => {
+    // keeps working unchanged. #756: a face can also throw before any promise
+    // exists (an in-place reset's lifecycle guard does); that becomes a
+    // rejection too, so it reaches the same policies instead of escaping a
+    // timer callback and taking the host down.
+    let resolving: ReturnType<typeof face.resolveAgent>
+    try {
+      resolving = face.resolveAgent(SessionId(id))
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)))
+    }
+    return resolving.then(result => {
       if (result.agent !== undefined) return result.agent
       throw new Error(`materialize refused: ${result.error?.message ?? 'unknown session resolution failure'}`)
     })
@@ -1604,7 +1652,16 @@ export function apply(ctx: Context, config: Config): void {
       reconcileCancelled = true
     })
     let reconcilePostponed = 0
+    // #756: one bad pass must never take the host down. Whatever a pass throws
+    // synchronously is logged and the loop keeps its cadence; the next pass
+    // re-derives the due set from the join intents.
     const reconcileTick = (): void => {
+      try { reconcilePass() } catch (error) {
+        logger.warn(`reconcile pass failed: ${String(error).slice(0, 200)}`)
+        if (!reconcileCancelled && ctx.fiber.uid !== null) schedule(reconcileTick, Math.max(50, config.wakeReconcileIntervalMs))
+      }
+    }
+    const reconcilePass = (): void => {
       if (reconcileCancelled || ctx.fiber.uid === null) return
       const interval = Math.max(50, config.wakeReconcileIntervalMs)
       if (!config.wakeReconcile || wakeFace() === undefined) {
@@ -1854,7 +1911,7 @@ export function apply(ctx: Context, config: Config): void {
       registerAdminFaces(webServer, {
         reminderDiagnostics:()=>({...idleReminders.diagnostics}),
         nudgeEscalations:()=>nudgeObservations.snapshot(),
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
+        a2aDirPrivacy, ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
         sessionPresetOf,
@@ -2120,6 +2177,13 @@ export function apply(ctx: Context, config: Config): void {
     interval: (fn, ms) => ctx.timer.interval(fn, ms),
     // The team's A2A address (PR-B2b) is a CLI identity the a2a-net CLI runs against this very host.
     homeUrl: () => superagentHomeUrl,
+    // T5-B: the idle sweep reads the same host's prompt-template self-check log, and only while that check is on.
+    selfChecksOf: sessionId => readSelfChecks(ctx.get('promptTemplates' as never), sessionId),
+    // T5-A: dsh-prompt-templates' cast, reached through this plugin's own context so the plugin recognizes the caller.
+    castCard: input => {
+      const svc = ctx.get('promptTemplates' as never) as { cast?: (i: typeof input) => { ok: boolean; code?: string; error?: string; queued?: number } } | undefined
+      return typeof svc?.cast === 'function' ? svc.cast(input) : undefined
+    },
     claimAudience: () => (ownCardUrl !== '' ? originOf(ownCardUrl) : undefined),
     apiKey: () => config.apiKey,
     // PR-C2: remote members and served teams talk host to host, signed with this host's card key and bound to the body.
@@ -2212,6 +2276,11 @@ export function apply(ctx: Context, config: Config): void {
   }) : undefined
   teamsHandle = superagentTeams
   // Staffing changes (S1a): the host's executor, through the canvas and team routes' own checks.
+  // T5-B (dispatcher's PT-4 addition 1): whether a session holds an open a2a ticket, for dsh-prompt-templates' wrap-up
+  // self-check. Read-only; undefined (unknown) when this host runs no superagent team.
+  ctx.provide('a2aTickets' as never, {
+    hasOpenTicket: (sessionId: string): boolean | undefined => holdsOpenTicket(superagentTeams?.all(), sessionId),
+  } as never)
   if (superagentTeams !== undefined) staffing = createStaffing({ path: join(home, 'a2a', 'superagent', 'staffing.json'), teams: superagentTeams, canvasStore, canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
     sessionValid: id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, presetOf: sessionPresetOf, memberForWrite: id => canvasMemberForWrite(id),
     teamCanvasRefusal: (canvas, member) => superagentTeams.canvasMemberRefusal(canvas, member, sessionPresetOf), revokeCanvasMember: (id, reason, name) => revokeCanvasMember(id, reason, name), logger })
@@ -2243,6 +2312,12 @@ export function apply(ctx: Context, config: Config): void {
       sessions: joinedSessions.list().filter(id => sessionNodes.has(id)), nameOf: id => { const agent = sessionNodes.get(id); return agent === undefined ? id : nodeMetadataOf(agent).name }, presetOf: sessionPresetOf, staffing: staffing?.list() ?? [],
     }), { staffing: () => staffing, personMessage: id => { const agent = ctx.get('agents')?.get(SessionId(id)) as Agent | undefined; return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
       teamRules: ref => { const team = superagentTeams!.get(ref === 'primary' ? '' : ref); return team === undefined || (ref === '' ) ? undefined : { ...(team.settings.canvas !== undefined ? { canvas: team.settings.canvas } : {}), rules: team.settings.rules, dispatch: team.settings.dispatch } } })
+    // #791: the builder drafts an issue; the host files it with the operator's gh after the owner's own typed message.
+    registerBuilderIssueTools(ctx, id => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET, {
+      gh: defaultGh,
+      repos: () => [...new Set(superagentTeams!.all().flatMap(team => Object.values(team.settings.repos ?? {})).filter((repo): repo is string => typeof repo === 'string' && repo !== ''))],
+      personMessage: id => { const agent = ctx.get('agents')?.get(SessionId(id)) as Agent | undefined; return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
+    })
     // superagent-team-mcp M2: each allowed tool of a team's MCP server is a tool of its own; the host holds the token.
     teamMcpTools = new TeamMcpTools(ctx, id => superagentTeams!.ofSession(id), () => superagentTeams!.all(), logger)
     // A member's turn ending is the executor's turn-end fact (PR-C1).
@@ -3143,7 +3218,7 @@ export function apply(ctx: Context, config: Config): void {
     // shared zone string was "us". True self is the loopback self-fetch
     // face: the caller's card URL origin equals OUR card URL origin.
     try {
-      if (callerUrl !== '' && isRootOriginUrl(callerUrl) && new URL(callerUrl).origin === new URL(ownCardUrl).origin) return true
+      if (callerUrl !== '' && isOwnClaimCaller(callerUrl, allOwnClaimUrls(originClaimByPeer.rules, ownCardUrl))) return true
     } catch { /* malformed callerUrl — falls through to the record bases */ }
     for (const id of joinedSessions.list()) {
       if (`${config.team}/${id8(id)}` === caller) return true
@@ -3172,15 +3247,12 @@ export function apply(ctx: Context, config: Config): void {
     // shadow only corroborates.
     // #189: a ROOT claim URL speaks for its origin; a path-prefixed one only for the exact peer URL we seeded (a mounted card).
     if (callerCard !== undefined && ownCardUrl !== '') {
-      const ourOrigin = new URL(ownCardUrl).origin
       const callerOrigin = new URL(callerUrl).origin
       const weSeedThem = config.peers.some(peer => {
         try { return isRootOriginUrl(callerUrl) ? new URL(peer).origin === callerOrigin : sameMountedUrl(peer, callerUrl) } catch { return false }
       })
-      const theySeedUs = (callerCard.peers ?? []).some(peer => {
-        try { return new URL(peer).origin === ourOrigin } catch { return false }
-      })
-      if (weSeedThem && theySeedUs) return true
+      // #787: only the default ownCardUrl and the claim URL mapped for THIS caller count as us.
+      if (weSeedThem && cardListsOwnClaim(callerCard.peers, ownClaimUrlsFor(callerUrl))) return true
     }
     return false
   }
@@ -3300,8 +3372,9 @@ export function apply(ctx: Context, config: Config): void {
   function intakeHostLinked(origin: string, key: string): boolean {
     const ourOrigin = ownCardUrl === '' ? '' : (() => { try { return new URL(ownCardUrl).origin } catch { return '' } })()
     const sameOrigin = (u: string): boolean => { try { return new URL(u).origin === origin } catch { return false } }
+    const peerUrl = config.peers.find(sameOrigin) ?? origin
     const bilateral = ourOrigin !== '' && config.peers.some(sameOrigin) && [...cardCache.entries()].some(([url, entry]) =>
-      sameOrigin(url) && entry.card?.publicKey === key && (entry.card.peers ?? []).some(peer => { try { return new URL(peer).origin === ourOrigin } catch { return false } }))
+      sameOrigin(url) && entry.card?.publicKey === key && cardListsOwnClaim(entry.card.peers, ownClaimUrlsFor(peerUrl)))
     if (bilateral) return true
     const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))
     return canvasStore.list().some(name => canvasStore.remoteMembersOf(name).some(ref => splitQualifiedMember(ref) !== undefined && canvasStore.ownerKeyOf(ref) === key && memberProvenance(ref, key, ownKey) === 'confirmed-remote'))
@@ -3834,7 +3907,8 @@ export function apply(ctx: Context, config: Config): void {
    */
   function peerLinkState(peerUrl: string): { link: 'linked' | 'stranger'; verified: boolean } {
     return peerLinkDisplay(peerUrl, {
-      card: cardCache.get(peerUrl)?.card, ownUrl: ownCardUrl, ownAudiences: config.originClaimAudiences, seeds: config.peers,
+      card: cardCache.get(peerUrl)?.card, ownUrl: ownCardUrl, ownAudiences: config.originClaimAudiences,
+      ownPeerClaimUrls: ownClaimUrlsFor(peerUrl).filter(url => url !== ownCardUrl), seeds: config.peers,
       refs: canvasStore.list().flatMap(name => [...canvasStore.remoteMembersOf(name)]),
       ownHandles: new Set([...joinedSessions.list(), ...liveRoots.keys()].map(id => `${config.team}/${id8(id)}`)),
       cards: [...cardCache.values()].flatMap(entry => entry.card === undefined ? [] : [entry.card]),
@@ -3854,14 +3928,10 @@ export function apply(ctx: Context, config: Config): void {
     if (cached !== undefined && ownCardUrl !== '') {
       try {
         const peerOrigin = new URL(peerUrl).origin
-        const ourOrigin = new URL(ownCardUrl).origin
         const weSeedThem = config.peers.some(peer => {
           try { return new URL(peer).origin === peerOrigin } catch { return false }
         })
-        const theySeedUs = (cached.peers ?? []).some(peer => {
-          try { return new URL(peer).origin === ourOrigin } catch { return false }
-        })
-        if (weSeedThem && theySeedUs) linked = true
+        if (weSeedThem && cardListsOwnClaim(cached.peers, ownClaimUrlsFor(peerUrl))) linked = true
       } catch { /* malformed peer URL — falls through to the canvas basis */ }
     }
     // Basis 2: a canvas remote ref names the peer's zone or one of its

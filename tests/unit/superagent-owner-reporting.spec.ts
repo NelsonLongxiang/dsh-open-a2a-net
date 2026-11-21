@@ -64,6 +64,9 @@ describe('the norms are in every team persona (R1, R2, R4, R6, R7)', () => {
       expect(text, id).toContain('Report progress only when it changes an action or a decision')
     }
     expect(preset('superagent-router')).toContain('relay it with superagent_reply')
-    for (const id of ['superagent-member', 'superagent-observer']) expect(preset(id)).toContain('prose in a report does not become a question')
+    expect(preset('superagent-member')).toContain('prose in a report does not become a question')
+    // D19: the observer holds no ticket, so its questions go only as decision cards.
+    expect(preset('superagent-observer')).toContain('A question for the owner goes only as a decision card with a2a_decision_propose')
+    expect(preset('superagent-observer')).toContain('prose does not become a question')
   })
 })

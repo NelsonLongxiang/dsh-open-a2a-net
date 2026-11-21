@@ -148,6 +148,64 @@ describe('F8 desired-state reconciliation', () => {
     expect(materialize.mock.calls.length).toBe(calls)
   })
 
+  it('#756: a wake face that throws synchronously (an in-place reset holds the session) is a failed wake, not a dead host', async () => {
+    const home = tmpHome()
+    writeIntents(home, ['agent-1'])
+    const { ctx, port } = await mountStack()
+    const agents = ctx.get('agents') as unknown as FakeAgentsService
+    const woken = { id: SessionId('agent-1'), session: { events: [] }, steer: vi.fn() } as unknown as Agent
+    let resetting = true
+    // The reset's lifecycle guard throws before any promise exists (the production stack in #756).
+    const resolveAgent = vi.fn((_id: string) => {
+      if (resetting) throw new Error('该会话正在重置，请稍后重试')
+      agents.agent = woken
+      ctx.emit('agent/created', { agent: woken })
+      return Promise.resolve({ agent: woken })
+    })
+    ctx.provide('sessionController', { resolveAgent } as never)
+    apply(ctx, makeConfig({ dshHome: home, wakeReconcileBackoffBaseMs: 200 }))
+    let row: ReconcileRow | undefined
+    await vi.waitFor(async () => {
+      const state = await getState(port())
+      row = state.reconcile.rows.find(item => item.id === 'agent-1')
+      expect(row?.attempts ?? 0).toBeGreaterThanOrEqual(1)
+    }, { timeout: 5_000 })
+    expect(row!.error).toContain('该会话正在重置')
+    // The host still answers, and once the reset releases the session the next attempt wakes it.
+    resetting = false
+    await vi.waitFor(async () => {
+      const state = await getState(port())
+      expect(state.reconcile.woken).toBeGreaterThanOrEqual(1)
+      expect(state.reconcile.rows.find(item => item.id === 'agent-1')).toBeUndefined()
+    }, { timeout: 5_000 })
+    await ctx.fiber.dispose()
+  })
+
+  it('#756: whatever a reconcile pass throws on its own costs that pass, not the host — the loop keeps its cadence', async () => {
+    const home = tmpHome()
+    writeIntents(home, ['agent-1'])
+    const { ctx, port } = await mountStack()
+    const agents = ctx.get('agents') as unknown as FakeAgentsService
+    const woken = { id: SessionId('agent-1'), session: { events: [] }, steer: vi.fn() } as unknown as Agent
+    // A controller that is mid-swap for a while: even reading its face throws, inside the pass itself.
+    let broken = 3
+    const controller = {}
+    Object.defineProperty(controller, 'resolveAgent', {
+      get() {
+        if (broken > 0) { broken -= 1; throw new Error('controller is being replaced') }
+        return async () => { agents.agent = woken; ctx.emit('agent/created', { agent: woken }); return { agent: woken } }
+      },
+    })
+    ctx.provide('sessionController', controller as never)
+    apply(ctx, makeConfig({ dshHome: home }))
+    await vi.waitFor(async () => {
+      const state = await getState(port())
+      expect(state.reconcile.woken).toBeGreaterThanOrEqual(1)
+    }, { timeout: 5_000 })
+    expect(broken).toBe(0)
+    await ctx.fiber.dispose()
+  })
+
   it('backs off after a failed wake and retries when the backoff elapses', async () => {
     const home = tmpHome()
     writeIntents(home, ['agent-1'])

@@ -44,15 +44,21 @@ it('ships generated inline router text without changing preset ids or compositio
 })
 
 it('adds only the shared boundary to original worker personas and leaves the builder unchanged', () => {
-  // Target next/0.8 78e077c; preserve its member-proposal text and original worker semantics.
-  const originalPrefixes = { member: 'f34cf9d7580fa7d0a88c7e2da3e1bfa1542043b9dc4fca483bdda832c60de9d4', observer: '9d89c6b736d0e37634d776bbd79db41845dae516411d8ad36f53bb8234c54df1' }
+  // Target next/0.8 78e077c; preserve its member-proposal text and original worker semantics. The member's prefix adds the R7b question
+  // contract (four parts); the observer's is D19's
+  // rewrite (workbench-market 18: takes no tickets, tags and counts stuck points, sees health problems first — R7a).
+  const originalPrefixes = { member: 'dd48170602723c933cd0101026fc05c91b02fdd813535ff144c2de9efed4956e', observer: '1cfe304325f5868e61c68cb5e2ea666a16b8d1a9f9e2b35c9ae2c5e1656f05be' }
   for (const [role, sha] of Object.entries(originalPrefixes)) {
     const original = readFileSync(new URL('src/superagent/prompts/' + role + '.md', root), 'utf8')
     expect(digest(original)).toBe(sha)
     expect(persona(presets.find(row => row.config?.id === 'superagent-' + role)!).prefix).toBe(presetPrompt(role))
     expect(presetPrompt(role).startsWith(original.trimEnd() + '\n\n')).toBe(true)
   }
-  expect(digest(persona(presets.find(row => row.config?.id === 'superagent-builder')!).prefix)).toBe('9d646ebaf36c2d0aafcf2a05c481a4241f54977a177be44f69fd64a6f5c84053')
+  // #791 (owner 2026-11-21) changed the builder's persona on purpose: read-only self-checks and owner-gated issues; pin the new text.
+  const builder = persona(presets.find(row => row.config?.id === 'superagent-builder')!).prefix as string
+  expect(builder).toContain('only after their own reply in this session call superagent_issue_file')
+  expect(builder).toContain('you never touch GitHub yourself')
+  expect(digest(builder)).toBe('972bb277f63a594b57f73bd3c261f593e27f0f2454f9fe65110a282ac3b14ddb')
 })
 
 it('retains upstream member initiative as a proposal, never a self-assignment or an external send', () => {

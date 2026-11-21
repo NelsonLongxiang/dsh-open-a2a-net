@@ -10,6 +10,7 @@ import { createScopeHintsChip, parseScopeHints, type ScopeHintsChip } from './sc
 import { createFaultReporter } from './fault'
 import { createWorkbench, type StateBody } from './workbench'
 import { personTickets, type SaState } from './wb-superagent'
+import { decisionLink } from './wb-decisions'
 import { recoveryOwnerResponse } from './request-recovery-panel'
 import { createTeamRoleDecorator } from './planning-team-roles'
 import { createPlanningView } from './planning-view'
@@ -310,6 +311,33 @@ const bench = createWorkbench({
       try { return await res.json() as Record<string, unknown> } catch { return { ok: false } }
     },
     selectTeam(id) { rememberTeam(id); void pollSuperagent() },
+    // T8: the decision cards, decided through the owner control face; whether the person is the owner is the host's call.
+    decisions: {
+      async list() {
+        const res = await controlFetch('/__dsh_a2a/superagent/decisions', { cache: 'no-store' })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return await res.json() as Record<string, unknown>
+      },
+      async decide(body) {
+        const res = await controlFetch('/__dsh_a2a/superagent/decisions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        try { return { status: res.status, body: await res.json() as Record<string, unknown> } } catch { return { status: res.status, body: { ok: false, error: `HTTP ${res.status}` } } }
+      },
+      // C8: the owner's file for a decision, staged on this host and granted to the team's canvas (as the right bar does).
+      async stage(file, address) {
+        try {
+          // The staging route takes the control credential only and records the grant under the operator `control`; it reads
+          // no `by` parameter. Whether the person is the owner is judged when the decision is made (browser owner proof).
+          const res = await controlFetch(`/__dsh_a2a/blob?to=${encodeURIComponent(address)}&name=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
+          const out = await res.json() as { ok?: unknown; ref?: unknown; error?: unknown }
+          return res.ok && out.ok === true && typeof out.ref === 'string' ? { ref: out.ref } : { refused: typeof out.error === 'string' ? out.error : `HTTP ${res.status}` }
+        } catch (error) { return { refused: String(error) } }
+      },
+      async file(href) {
+        const res = await controlFetch(href, { cache: 'no-store' })
+        if (res.ok) return await res.blob()
+        try { const out = await res.json() as { error?: unknown }; return typeof out.error === 'string' ? out.error : `HTTP ${res.status}` } catch { return `HTTP ${res.status}` }
+      },
+    },
     async addTeam(canvas, router) {
       const res = await controlFetch('/__dsh_a2a/superagent/teams', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ canvas, router }) })
       try { return await res.json() as Record<string, unknown> } catch { return { ok: false, error: `HTTP ${res.status}` } }
@@ -496,6 +524,17 @@ if (new URLSearchParams(window.location.search).get('mode') === 'plan') {
   window.setTimeout(() => window.clearInterval(tryBoard), 30_000)
 }
 
+// T8 deep link (the market's decide_at): ?tab=team&view=decisions&card=<id>. Read once, only these three, the id checked
+// against the card id rule; the parameters leave the address bar so a reload does not jump again. Opened once the 团队
+// tab exists (the first superagent poll that answers).
+let linkedCard = decisionLink(window.location.search)
+if (linkedCard !== undefined) {
+  const kept = new URLSearchParams(window.location.search)
+  for (const name of ['tab', 'view', 'card']) kept.delete(name)
+  const rest = kept.toString()
+  try { window.history.replaceState(window.history.state, '', `${window.location.pathname}${rest !== '' ? `?${rest}` : ''}${window.location.hash}`) } catch { /* the jump still happens */ }
+}
+
 /** GET /__dsh_a2a/superagent: 404 (no superagent on this host) or a failure hides the 团队 tab; single flight. */
 let superagentBusy = false
 async function pollSuperagent(): Promise<void> {
@@ -526,6 +565,7 @@ async function pollSuperagent(): Promise<void> {
     const state = own === null ? null : { ...own, teams: rows, selectedTeam: asked }
     bench.updateSuperagent(state)
     teamRoles.update(state === null ? null : [state, ...others])
+    if (state !== null && linkedCard !== undefined) { bench.openDecision(linkedCard); linkedCard = undefined }
   } catch { if (generation === teamGeneration && asked === selectedTeam) { bench.updateSuperagent(null); teamRoles.update(null) } } finally {
     superagentBusy = false
     if (asked !== selectedTeam || generation !== teamGeneration) void pollSuperagent()
