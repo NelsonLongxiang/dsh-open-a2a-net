@@ -99,7 +99,8 @@ describe('the reminder at ready', () => {
 describe('the cards follow the installed ygl-trees (Y1d/Y1e, owner 2026-11-18)', () => {
   it('0.126.0: no project-use step, the team scope on kb add and searches, on both cards and the state', async () => {
     const m = await team(true, [], '0.126.0')
-    expect(m.card).not.toContain('domain project action use')
+    // Y1d: brief takes the project, so the first step selects none; only the task step does (task advance takes no project).
+    expect((m.card.split('\n').find(line => line.startsWith('- first:')) ?? '')).not.toContain('domain project action use')
     expect(m.card).toContain('domain agent action brief with project "team-team"')
     expect(m.card).toContain('with scope "bench:team-team" (this team\'s notes), then again with scope ""')
     expect(m.card).toContain('kb add what the next session should reuse, with scope "bench:team-team"')
@@ -187,7 +188,7 @@ describe('#739 rereview R1: no card goes out before the version read settles, on
     expect(assignments.length).toBeGreaterThan(0)
     for (const card of assignments) {
       expect(card).toContain('with scope "bench:team-team"')
-      expect(card).not.toContain('domain project action use')
+      expect(card.split('\n').find(line => line.startsWith('- first:')) ?? '').not.toContain('domain project action use')
     }
     await h.stop()
     setYglCapabilitiesForTest(YGL_UNKNOWN)

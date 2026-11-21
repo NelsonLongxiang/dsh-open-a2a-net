@@ -152,7 +152,8 @@ export const YGL_WRITE = 'mcp__ygl__write'
  * 0.123.0 the explicit project is enough and the `project use` step goes; from 0.126.0, with a team scope, kb notes are
  * written to the team's scope and searched there first, then among the notes from before scopes. Unknown keeps today's steps.
  * Every card also asks for a skill match before work and a task for the ticket, advanced to doing and then done, whose id
- * goes with the others on the ready report (design Y2). It does not ask for `rel attach`: that tool's source is always a
+ * goes with the others on the ready report (design Y2); since `task advance` takes no project, the task line selects the
+ * team project for the session first. It does not ask for `rel attach`: that tool's source is always a
  * tree node, and a team project has no tree until the owner decides its milestones.
  */
 export function yglCardLines(project?: string, opts: { readonly scope?: string; readonly caps?: YglCapabilities } = {}): string[] {
@@ -186,8 +187,14 @@ export function yglCardLines(project?: string, opts: { readonly scope?: string; 
 }
 /** Design Y2: match the ticket against the team's skills before work; a hit is read first. */
 const YGL_MATCH_LINE = '- also first: mcp__ygl__read domain agent action match with query set to this ticket\'s subject; if it names a skill, read it (domain skill action show with its name) before you start'
-/** Design Y2: the ticket as a task in the team's project, so the library keeps what was worked on and when. */
-const yglTaskLine = (named?: string): string => `- when you take it: mcp__ygl__write domain task action add with text set to this ticket's title${named === undefined ? '' : ` and project ${named}`}, then domain task action advance id <its id> to doing`
+/**
+ * Design Y2: the ticket as a task in the team's project, so the library keeps what was worked on and when. The ygl MCP
+ * passes no project on `task advance` (ygl-trees mcp.ts), so in a library with several projects advance answers
+ * "ambiguous project" unless the project is selected for the session first; `project use` does that and nothing else.
+ */
+const yglTaskLine = (named?: string): string => named === undefined
+  ? '- when you take it: mcp__ygl__write domain task action add with text set to this ticket\'s title, then domain task action advance id <its id> to doing'
+  : `- when you take it: mcp__ygl__write domain project action use name ${named} (for your session only; task advance takes no project), then domain task action add with text set to this ticket's title and project ${named}, then domain task action advance id <its id> to doing`
 /** The steps without a project, for callers from before Y1c. */
 export const YGL_CARD_LINES: readonly string[] = yglCardLines()
 /** The line on a router's candidate card that names the team's project (Y1c). */

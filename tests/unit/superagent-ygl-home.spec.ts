@@ -116,7 +116,7 @@ describe('Y1e: a team kb scope (owner 2026-11-18)', () => {
   })
   it('drops the project-use step from 0.123.0, and adds the team scope from 0.126.0', () => {
     const mid = yglCardLines('team-ops', { scope: 'bench:team-ops', caps: yglCapabilitiesOf('0.123.0') }).join('\n')
-    expect(mid).not.toContain('action use')
+    expect(mid.split('\n').find(line => line.startsWith('- first:')) ?? '').not.toContain('action use')
     expect(mid).toContain('domain agent action brief with project "team-ops"')
     expect(mid).not.toContain('scope')
     const now = yglCardLines('team-ops', { scope: 'bench:team-ops', caps: yglCapabilitiesOf('0.126.0') }).join('\n')
@@ -134,7 +134,7 @@ describe('Y1e: a team kb scope (owner 2026-11-18)', () => {
     for (const [name, card] of Object.entries(cards)) {
       expect(card, name).toContain('mcp__ygl__read domain agent action match with query set to this ticket\'s subject')
       expect(card, name).toContain('domain skill action show')
-      expect(card, name).toContain('mcp__ygl__write domain task action add with text set to this ticket\'s title')
+      expect(card, name).toContain('domain task action add with text set to this ticket\'s title')
       expect(card, name).toContain('domain task action advance id <its id> to doing')
       expect(card, name).toContain('domain task action advance id <the task id> to done')
       expect(card, name).toContain('pass the ids you wrote in ygl on a2a_ticket_report, the task id too')
@@ -142,7 +142,11 @@ describe('Y1e: a team kb scope (owner 2026-11-18)', () => {
       expect(card, name).not.toContain('rel attach')
       expect(card, name).not.toContain('domain rel')
     }
-    for (const name of ['old', 'mid', 'now'] as const) expect(cards[name], name).toContain('title and project "team-ops", then')
+    for (const name of ['old', 'mid', 'now'] as const) {
+      expect(cards[name], name).toContain('title and project "team-ops", then')
+      // task advance takes no project in the ygl MCP: the task step selects it for the session before add and advance.
+      expect(cards[name], name).toContain('domain project action use name "team-ops" (for your session only; task advance takes no project), then domain task action add')
+    }
     expect(cards.bare).not.toContain('and project')
     // The match and task steps come before the work; done comes before kb add.
     expect(cards.now.indexOf('action match')).toBeLessThan(cards.now.indexOf('as you go'))
