@@ -616,7 +616,6 @@ export class MemberExecutor implements Executor {
     const binding = this.bindings.find(b => b.assignmentId === assignment.id)
     this.waiting = this.waiting.filter(w => w.assignmentId !== assignment.id)
     this.retries.delete(assignment.id); this.resuming.delete(assignment.id); this.deferredIdle.delete(assignment.id); this.chainSent.delete(assignment.id); this.assigning.delete(assignment.id)
-    if (binding !== undefined) this.background.delete(binding.member)
     const parked = this.parked.find(b => b.assignmentId === assignment.id)
     if (parked !== undefined) {
       // It holds no turn and may be on another ticket by now: nothing to stop. A member removed from the team is told.

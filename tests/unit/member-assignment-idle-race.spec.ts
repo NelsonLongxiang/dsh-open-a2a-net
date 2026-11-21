@@ -60,6 +60,19 @@ describe('#751 assignment-card versus turn end',()=>{
   expect(a?.state).toBe('pending');expect(a?.startedAt).toBeUndefined();expect(a?.report).toBeUndefined()
   expect(f.disk().bindings.some((b:any)=>b.ticketId===f.first)).toBe(false)
  })
+ it('a stop while the member runs background work does not credit the stop turn to the next assignment',async()=>{
+  // Review of #755: stop() must not free a member whose background jobs still run. Otherwise the next ticket is handed out
+  // at once and the quiet end of the stop-notice turn is recorded on it, settling it before the member has read its card.
+  const f=await fixture();f.release(true);await drain()
+  expect(f.host.executor.bindingOf(M)?.ticketId).toBe(f.first)
+  f.setQuiet(false);f.idle();await drain()
+  f.host.engine.stopTicket(f.first,'owner stopped');await drain()
+  expect(f.host.ticket(f.first)?.ended).toBeDefined()
+  expect(f.host.executor.bindingOf(M)?.ticketId).not.toBe(f.second)
+  f.setQuiet(true);f.idle();await drain()
+  const next=f.host.ticket(f.second)?.assignments.at(-1)
+  expect(next?.report).toBeUndefined();expect(next?.idleAt).toBeUndefined()
+ })
  it('a stop during the card send is not undone by its late accepted answer',async()=>{
   const f=await fixture();f.host.engine.stopTicket(f.first,'owner stopped');f.release(true);await drain()
   expect(f.host.ticket(f.first)?.ended).toBeDefined()
