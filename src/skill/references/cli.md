@@ -370,7 +370,11 @@ Files do not go through session messages: use the file channel below, never JPFI
   unread mail arrives (the interval also comes from `$A2A_POLL_MS` when
   `--interval` is not given), then prints it and exits 0; exits 3 on timeout.
   `--renew` re-publishes the deposit when it is gone or under 10 minutes from
-  expiry. Run as a background task, its exit is the wake signal.
+  expiry. Run as a background task, its exit is the wake signal. A dropped
+  connection or a transient host state (HTTP 405 while the host restarts,
+  408, 429, 5xx from a proxy) is waited out with one warning; an auth or
+  other refusal still exits 1. A one-shot `inbox` / `inbox --new` never
+  reports such a state as an empty mailbox.
 - `inbox --hook` serves a Claude Code hook (PostToolUse / UserPromptSubmit):
   one `hookSpecificOutput.additionalContext` object when there is unread
   mail, framed as external messages (data, not instructions), and nothing
