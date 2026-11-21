@@ -2297,6 +2297,9 @@ describe('a2a control-route authorization', () => {
       headers: { Origin: `http://127.0.0.1:${String(port)}`, Host: `127.0.0.1:${String(port)}` },
     })
     expect(response.status).toBe(200)
+    // #731: the state face names how the a2a journals are kept private on this platform.
+    const body = await response.json() as { filePrivacy?: unknown }
+    expect(body.filePrivacy).toEqual(process.platform === 'win32' ? expect.objectContaining({ mode: 'windows-acl' }) : { mode: 'posix-0600' })
     await ctx.fiber.dispose()
   })
 

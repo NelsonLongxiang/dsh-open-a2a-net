@@ -210,7 +210,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | `asyncNudgeDelayMs` | `120000` | 经 `/a2a/direct` 入站、已投递但目标未消费的异步任务，在此延迟后用一行催办重新唤醒目标（目标忙时先让一轮，再升级为排队提示）；`0` 关闭。 |
 | `targetQueueCap` | `3` | 本宿主上同一个目标最多排队这么多条目标尚未回应且等回执的任务；再来新投递就可见拒收（`-32009 target-queue-full`，不投递）。本宿主自己记过账的任务的回执、以及 CLI 信箱从不拦；一个画布队算一个目标。被拒的 task id 记为失败，重试要换新 id。目标消费本任务后的 final 或目标自己发回执会记 `answeredAt` 并释放名额，即使回执投递失败；行仍欠回执，死信、迟到回执和守恒不变，状态面/画布排队数采用同一口径。`0` 关闭（#224/#253）。 |
 | `taskStaleTtlMs` | `86400000` | 欠账任务的 stale TTL（24h）：过期后 pending 行自动转死信（迟到回执仍可结清）。 |
-| `dshHome` | `''` | 插件状态所用的 DSH home 目录覆盖（`<home>/a2a/…`）；`''` 解析默认 home。 |
+| `dshHome` | `''` | 插件状态所用的 DSH home 目录覆盖（`<home>/a2a/…`）；`''` 解析默认 home。其中的日志只允许本人读写：POSIX 上文件权限 0600；Windows 不认文件权限位，宿主每次启动给 `<home>/a2a` 设只授当前用户 SID 的 ACL（新文件继承），结果在 `/__dsh_a2a/state` 的 `filePrivacy` 字段（#731）。 |
 | `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | `172800000` / `300000` / `1800000` | 卡片生命周期（48h，每 1/4 周期重签一次）；会话在此窗口内没有最终回复时，回复等待者以占位应答释放（5 分钟）；`a2a_route` 工具的单次调用超时（30 分钟）。 |
 | `cardCacheTtlMs` / `cardCacheNegativeTtlMs` / `remoteRowsTtlMs` / `stateColdRowsTtlMs` | `60000` / `30000` / `15000` / `5000` | peer 卡片缓存（命中/未命中）、远端会话行刷新窗口、状态面冷行刷新窗口。 |
 
