@@ -2515,6 +2515,8 @@ describe('a2a plugin module surface', () => {
       originClaimAudiences: [],
       linkKeys: {},
       originClaimUrl: '',
+      // #787: per-peer OriginClaim addresses; empty keeps the global originClaimUrl for every peer.
+      originClaimByPeer: {},
       // #19 D2: card-face excerpt exposure (owner-level; default full).
       exposureExcerpt: 'full',
       stateColdRowsTtlMs: 5_000,

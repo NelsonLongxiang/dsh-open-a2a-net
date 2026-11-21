@@ -121,7 +121,9 @@ only form verified:
    declares it is reached elsewhere — a tunnel or proxy, whose requests
    all arrive on loopback; there a loopback arrival names no host and
    counts only when a configured origin is loopback at that port. The `Host` header is never read, because the
-   sender sets it.
+   sender sets it. `originClaimByPeer` (#787) is not an audience list: it only selects the outbound
+   `callerUrl` for a named peer. A mapped local address becomes an inbound audience when the request
+   actually arrives on that address (the socket's local end), not by being copied into `originClaimAudiences`.
 2. The signature covers the receiver's own `req.method` and path, so an
    envelope made for one route does not verify on another.
 3. Card fetch, key check, `card.team === caller` and ts skew are as in §3.
