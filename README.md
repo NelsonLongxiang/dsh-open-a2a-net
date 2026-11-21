@@ -299,7 +299,7 @@ With an empty key the DSH host's own logged-in browser owner is also trusted, wh
 Connection `admit` checks the browser login and its Host/Origin fence (`--trusted-host`) on the unchanged request, and only
 its browser-owner Peer counts — so the workbench works behind Tailscale Serve, Caddy or nginx. This plugin trusts no proxy
 header itself, the cross-site veto still applies, and a host without that Connection service refuses (fail-closed).
-A configured `apiKey` is unaffected: a browser login does not replace it.
+With `apiKey` set, the same browser owner is also accepted without the key (#790): the panel's own requests carry no key, so otherwise a keyed host's logged-in browser could not read its panel. CLI, API and peer callers still need the key, and loopback alone is not enough on a keyed host.
 Set an `apiKey` before exposing the listener beyond loopback.
 
 | Control route | Purpose |
