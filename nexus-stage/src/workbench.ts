@@ -25,9 +25,11 @@ import { createCliHomePicker, type CliHomeOptions } from './cli-home-picker'
 import { createMemberProvenancePicker, type ProvenanceChoice } from './member-provenance-picker'
 import { createRailTabs } from './wb-rail'
 import { createSuperagentPane, type SaState, type SuperagentPaneDeps } from './wb-superagent'
+import { createReceiverRecovery, type RecoveryJson } from './request-recovery-panel'
 import { DIRECTORY_FILTERS, learnLogTitle, loadLogTitles, renderDirectory, type DirFilter } from './wb-directory'
 import { ledgerFacts, renderLedger as paintLedger } from './wb-ledger'
 import { nameInto, teamLabel } from './wb-names'
+import { remoteMember, remotePeer, remoteSourceKey } from './remote-source'
 
 /** One pending ledger row from /state `tasks`. */
 export interface PendingRow {
@@ -223,6 +225,8 @@ export interface WorkbenchDeps {
   ownerSettingsRead?(): Promise<{ ok: boolean; seatNames?: Record<string, string>; teamJoinAllowlist?: string[]; teamScope?: boolean; teamScopeInfo?: boolean; announce?: boolean; announceRestartPending?: boolean; error?: string }>
   /** gh#34: write owner panel changes; true on success (POST the same face). */
   ownerSettingsWrite?(changes: { seatNames?: Record<string, string>; teamJoinAllowlist?: string[]; teamScope?: boolean; announce?: boolean }): Promise<{ ok: boolean; restartNeeded?: boolean; error?: string }>
+  /** Same-origin browser-owner request-recovery grant/revoke, never a peer proxy. */
+  requestRecovery?(body: RecoveryJson): Promise<RecoveryJson>
   /** gh#41 fleet planning: regulate a REMOTE peer's canvas team (this host
    *  signs the envelope and forwards; the peer's link gate authorizes). */
   fleetCanvasOp?(peer: string, op: 'create' | 'add-member' | 'remove-member' | 'remove', name: string, id?: string): Promise<{ ok: boolean; members?: string[]; error?: string }>
@@ -230,7 +234,7 @@ export interface WorkbenchDeps {
   abandon(taskId: string, reason: string): Promise<boolean>
   /** Canvas team member change via the control route (0.6.6): `id` is a
    *  local session id or a zone-qualified remote handle. True on success. */
-  canvasOp(action: 'add-member' | 'remove-member', name: string, id: string, home?: string, peer?: string): Promise<boolean>
+  canvasOp(action: 'add-member' | 'remove-member', name: string, id: string, home?: string, peer?: string): Promise<boolean | { ok: boolean; error?: string }>
   cliHomeOptions?(name: string, id: string): Promise<CliHomeOptions>
   confirmMember?(name: string, id: string, replacement: string, revision: number, expectedOwner: string | null, peer?: string): Promise<{ ok: boolean; error?: string }>
   regulateSuspended?(action: 'restore-suspended' | 'delete-suspended', name: string, id: string, revision: number, expected: readonly unknown[]): Promise<{ ok: boolean; error?: string }>
@@ -313,6 +317,8 @@ export type WorkbenchMode = 'canvas' | 'data'
 
 export interface Workbench {
   readonly root: HTMLElement
+  /** Remove the workbench-owned responsive listener and invalidate recovery drafts; never cancels server work. */
+  dispose(): void
   /** Feed one /state poll (or null while the first fetch is out). */
   update(state: StateBody | null): void
   /** Feed one GET /__dsh_a2a/superagent poll: null when the host runs no superagent team (the 团队 tab hides). */
@@ -325,6 +331,8 @@ export interface Workbench {
   /** A node was picked on the planning board (0.6.13): resolve it against
    *  the latest state and open the right-side chat drawer for it. */
   openNodeChat(id: string): void
+  /** T8 deep link: open the 团队 tab at this decision card. */
+  openDecision(cardId: string): void
 }
 
 /** Bare host:port of a peer url (workbench-local twin of federation's
@@ -358,9 +366,11 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   let dirFilter: DirFilter = 'all'
   // Canvas add-member form cache (static DOM re-mounted across polls; keyed
   // by team name — same trick as draftForm so inputs survive the 3s poll).
-  let canvasForm: { name: string; form: HTMLFormElement; pick: HTMLSelectElement; manual: HTMLInputElement } | null = null
+  let canvasForm: { name: string; form: HTMLFormElement; pick: HTMLSelectElement; manual: HTMLInputElement; busy: boolean } | null = null
   const cliHomeForms = new Map<string, HTMLFormElement>()
   const provenanceForms = new Map<string, HTMLElement>()
+  // Request lifetime belongs to this workbench, never to a mounted inspector form.
+  const memberAddRequests = new Map<string, { busy: boolean; message: string; failed: boolean }>()
   // Quick-dispatch form (0.6.9), cached per target routing team the same
   // draftForm way: a textarea's draft must survive the 3s poll remount.
   let dispatchForm: { team: string; form: HTMLFormElement; text: HTMLTextAreaElement; note: HTMLElement } | null = null
@@ -373,6 +383,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
    *  when the chat drawer loads it (the list face carries no titles). */
   const logTitles = loadLogTitles()
   let logRowsBusy = false
+  let directoryDragging = false
 
   const root = el('div', 'wb')
   root.setAttribute('data-testid', 'wb-root')
@@ -384,7 +395,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   menuBtn.dataset.testid = 'wb-menu'
   menuBtn.setAttribute('aria-label', '打开目录抽屉')
   menuBtn.textContent = '☰'
-  menuBtn.addEventListener('click', () => root.classList.toggle('is-rail-open'))
+  menuBtn.addEventListener('click', () => { root.classList.toggle('is-rail-open'); syncRecoveryView() })
   header.appendChild(menuBtn)
   const title = el('div', 'wb-title')
   title.appendChild(el('span', 'wb-title-main')).textContent = 'A2A 工作台'
@@ -399,7 +410,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   ownerBtn.setAttribute('aria-label', '主人设置')
   ownerBtn.title = '主人设置：席位名 / 入网白名单 / 可见性 / 发布'
   ownerBtn.textContent = '⚙'
-  ownerBtn.addEventListener('click', () => { ownerPanelOpen = !ownerPanelOpen; renderOwnerPanel() })
+  ownerBtn.addEventListener('click', () => { ownerPanelOpen = !ownerPanelOpen; if (!ownerPanelOpen) recoveryOwner?.invalidate(); renderOwnerPanel() })
   header.appendChild(ownerBtn)
   const headerStats = el('div', 'wb-header-stats')
   header.appendChild(headerStats)
@@ -410,6 +421,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   railToggle.textContent = '◧'
   railToggle.addEventListener('click', () => {
     root.classList.toggle('is-rail-collapsed')
+    syncRecoveryView()
     // The stage width changed while the board fills it → re-sync its view
     // size (idempotent; focus side effect is harmless in a shell toggle).
     if (mode === 'canvas' && board !== undefined) board.activate()
@@ -420,10 +432,18 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // Rail tabs (2026-10-23, wb-rail): one panel per pane, each with its own
   // scroll. Panes are created once and re-parented between tab panels
   // (canvas mode) and the stage stack (data mode).
-  const railTabs = createRailTabs(SECTION_DEFS)
+  const railTabs = createRailTabs(SECTION_DEFS, { onChange: () => syncRecoveryView() })
   const rail = railTabs.root
 
   const directoryBody = el('div', 'wb-directory')
+  directoryBody.addEventListener('dragstart', event => {
+    const target = event.target as HTMLElement | null
+    if (target?.closest('[draggable=true]')) directoryDragging = true
+  })
+  directoryBody.addEventListener('dragend', () => {
+    directoryDragging = false
+    queueMicrotask(() => renderSidebar())
+  })
   // Directory toolbar: unified search + category filter chips (0.6.6). Built
   // once above the re-rendered list so the input keeps focus and its text
   // across polls; filtering is pure frontend over /state.
@@ -488,7 +508,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   inspectorClose.type = 'button'
   inspectorClose.setAttribute('aria-label', '关闭详情')
   inspectorClose.textContent = '✕'
-  inspectorClose.addEventListener('click', () => select(undefined))
+  inspectorClose.addEventListener('click', () => { ownerPanelOpen = false; recoveryOwner?.invalidate(); select(undefined) })
   inspectorHead.appendChild(inspectorClose)
   inspector.appendChild(inspectorHead)
   const inspectorBody = el('div', 'wb-inspector-body')
@@ -527,11 +547,23 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       pane.classList.toggle('is-hidden', off)
       if (pane.parentElement !== home) home.appendChild(pane)
     }
+    syncRecoveryView(m)
+  }
+
+  let recoveryDisposed = false
+  const onRecoveryResize = (): void => { if (!recoveryDisposed && root.isConnected) syncRecoveryView() }
+  window.addEventListener('resize', onRecoveryResize)
+
+  function syncRecoveryView(m: WorkbenchMode = mode): void {
+    if (recoveryDisposed) return
+    const railVisible = !root.classList.contains('is-rail-collapsed') && (window.innerWidth > 1023 || root.classList.contains('is-rail-open'))
+    superagentPane?.setRecoveryVisible(teamOn && (m === 'data' || railTabs.selected() === 'team' && railVisible))
   }
 
   function syncMode(): void {
     const canvasUp = board !== undefined && board.available()
     const next: WorkbenchMode = canvasUp ? 'canvas' : 'data'
+    if (next !== mode) superagentPane?.setRecoveryVisible(false)
     root.dataset.mode = next
     boardPane.classList.toggle('is-hidden', next !== 'canvas')
     dataStack.classList.toggle('is-hidden', next === 'canvas')
@@ -551,6 +583,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   }
 
   function select(next: Selection): void {
+    if (ownerPanelOpen) { ownerPanelOpen = false; recoveryOwner?.invalidate() }
     selection = next
     // Canvas add-member form is cached per team name (draftForm trick):
     // drop it whenever the selection moves off its team.
@@ -561,10 +594,13 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     renderInspector()
     // Narrow screens: picking from the drawer closes it so the stage shows.
     root.classList.remove('is-rail-open')
+    syncRecoveryView()
   }
 
   // ── Directory section ──
   function renderSidebar(): void {
+    // Keep the native source connected until drop/dragend, including async log-list refreshes.
+    if (directoryDragging) return
     // Filter chips reflect the live view state (built once, toggled here).
     for (let i = 0; i < filterRow.children.length; i++) {
       const node = filterRow.children[i] as HTMLElement
@@ -858,6 +894,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   // gh#34 owner panel state + render (the gear toggles; the inspector hosts).
   let seatEditor: HTMLElement | undefined
   let ownerPanelOpen = false
+  const recoveryOwner = deps.requestRecovery ? createReceiverRecovery(deps.requestRecovery, () => ownerPanelOpen) : undefined
   let ownerState: { seatNames: Record<string, string>; teamJoinAllowlist: string[]; teamScope: boolean; announce: boolean; announceRestartPending: boolean } | null = null
   function renderOwnerPanel(): void {
     renderInspector()
@@ -884,9 +921,10 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     closeBtn.type = 'button'
     closeBtn.setAttribute('aria-label', '关闭主人设置')
     closeBtn.textContent = '✕'
-    closeBtn.addEventListener('click', () => { ownerPanelOpen = false; renderInspector() })
+    closeBtn.addEventListener('click', () => { ownerPanelOpen = false; recoveryOwner?.invalidate(); renderInspector() })
     head.appendChild(closeBtn)
     card.appendChild(head)
+    if (recoveryOwner) { recoveryOwner.refresh(); card.appendChild(recoveryOwner.root) }
     if (deps.ownerSettingsRead === undefined) {
       const note = el('div', 'wb-hint')
       note.textContent = '此宿主未提供主人设置面（旧版本）——升级后可用。'
@@ -978,7 +1016,32 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     box.appendChild(card)
   }
 
+  async function memberChange(action: 'add-member' | 'remove-member', name: string, id: string, home?: string, peer?: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const result = action === 'remove-member' ? await deps.canvasOp(action, name, id)
+        : home !== undefined && peer === undefined ? await deps.canvasOp(action, name, id, home)
+        : await deps.canvasOp(action, name, id, home, peer)
+      return typeof result === 'boolean' ? { ok: result } : { ok: result.ok === true, error: result.error }
+    } catch (error) { return { ok: false, error: String(error) } }
+  }
+
+  function syncMemberRequest(name: string): void {
+    if (canvasForm?.name !== name) return
+    const state = memberAddRequests.get(name)
+    const busy = state?.busy === true
+    canvasForm.busy = busy
+    for (const input of Array.from(canvasForm.form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input,select,button'))) input.disabled = busy
+    const note = canvasForm.form.querySelector<HTMLElement>('.wb-member-result')!
+    if (state) { note.setAttribute('role', state.failed ? 'alert' : 'status'); note.textContent = state.message }
+  }
+
   function renderInspector(): void {
+    // A select popover, keyboard focus or pending submit must not be detached by a poll.
+    const focused = document.activeElement
+    const sameTeam = selection?.kind === 'canvas' && canvasForm?.name === selection.row.name
+    if (!ownerPanelOpen && sameTeam && canvasForm?.form.isConnected
+      && (canvasForm.busy || (focused !== null && canvasForm.form.contains(focused)))) return
+    const scroll = inspector.scrollTop
     const box = clear(inspectorBody)
     // gh#34: the owner panel owns the inspector when open (selection cards
     // yield; the gear closes it back).
@@ -994,9 +1057,17 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       // Re-resolve the team from the freshest state: membership changes here
       // must be visible on the next render even though the click-time row is
       // a stale snapshot.
-      const fresh = (last?.canvas?.teams ?? []).find(t => t.name === sel.row.name) ?? sel.row
+      const fresh = (last?.canvas?.teams ?? []).find(t => t.name === sel.row.name)
+      if (!fresh) {
+        const note = el('div', 'wb-hint'); note.setAttribute('role', 'status')
+        note.textContent = '该队已不在当前目录，请重新选择团队。'
+        box.appendChild(note); return
+      }
       textRow(card, 'Canvas 队', fresh.name)
       textRow(card, '路由队', fresh.team)
+      // Keep the action before arbitrarily long member/retained-slot lists.
+      const controls = el('div', 'wb-member-controls')
+      card.appendChild(controls)
       const head = el('div', 'wb-side-head')
       head.textContent = `成员 · ${fresh.members.length}`
       card.appendChild(head)
@@ -1019,7 +1090,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         remove.textContent = '移除'
         remove.addEventListener('click', async () => {
           remove.disabled = true
-          if (!(await deps.canvasOp('remove-member', fresh.name, member.id))) remove.disabled = false
+          if (!(await memberChange('remove-member', fresh.name, member.id)).ok) remove.disabled = false
         })
         row.appendChild(remove)
         card.appendChild(row)
@@ -1032,7 +1103,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
           const key = JSON.stringify([fresh.name, member.id])
           let form = cliHomeForms.get(key)
           if (form === undefined) {
-            form = createCliHomePicker(() => deps.cliHomeOptions!(fresh.name, member.id), home => deps.canvasOp('add-member', fresh.name, member.id, home))
+            form = createCliHomePicker(() => deps.cliHomeOptions!(fresh.name, member.id), async home => (await memberChange('add-member', fresh.name, member.id, home)).ok)
             cliHomeForms.set(key, form)
           }
           card.appendChild(form)
@@ -1069,8 +1140,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         if(!form){form=createMemberProvenancePicker(choices,choice=>deps.confirmMember!(fresh.name,slot.member,choice.replacement,revision,slot.ownerKey,choice.peer));provenanceForms.set(formKey,form)}
         card.appendChild(form)
       }
-      // Add-member form: static DOM re-mounted per poll (draftForm trick) —
-      // rebuilt only when the inspected team changes.
+      // Cache draft and outcome by team; while focused or pending it stays mounted.
       if (canvasForm?.name !== fresh.name) {
         const form = el('form', 'wb-member-add')
         const pick = document.createElement('select')
@@ -1087,18 +1157,50 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
         form.appendChild(pick)
         form.appendChild(manual)
         form.appendChild(submit)
+        const note = el('div', 'wb-member-result'); note.setAttribute('role', 'status'); note.setAttribute('aria-live', 'polite')
+        form.appendChild(note)
+        const current = { name: fresh.name, form, pick, manual, busy: false }
         form.addEventListener('submit', async ev => {
           ev.preventDefault()
+          if (current.busy || memberAddRequests.get(current.name)?.busy === true) {
+            note.setAttribute('role', 'status'); note.textContent = '该队仍有添加请求在途，请等待原请求结果。'; return
+          }
           const handle = manual.value.trim()
-          const selected=handle!==''?undefined:pick.selectedOptions[0]
+          const selected = handle !== '' ? undefined : pick.selectedOptions[0]
           const id = handle !== '' ? handle : selected?.dataset.member ?? pick.value
+          let requestPeer = selected?.dataset.peer
           if (id === '') return
-          submit.disabled = true
-          const ok = await deps.canvasOp('add-member', fresh.name, id, undefined, selected?.dataset.peer)
-          submit.disabled = false
-          if (ok) manual.value = ''
+          const latest = last?.canvas?.teams?.find(t => t.name === current.name)
+          if (!latest) { note.setAttribute('role', 'alert'); note.textContent = '添加失败：该队已不在当前目录。'; return }
+          if (handle === '' && selected?.dataset.remoteSource !== undefined) {
+            const matches = (last?.remote ?? []).filter(remote => remoteSourceKey(remote) === selected.dataset.remoteSource)
+            if (matches.length !== 1 || remoteMember(matches[0]!) !== id || remotePeer(matches[0]!.via) !== remotePeer(selected.dataset.peer)) {
+              note.setAttribute('role', 'alert'); note.textContent = '添加失败：所选远端来源已变化或不可核实，请重新选择。'; return
+            }
+            requestPeer = matches[0]!.via // The current linked endpoint's exact spelling belongs on the wire.
+          } else if (handle === '' && !last?.sessions?.some(s => s.id === id && s.joined === true)) {
+            note.setAttribute('role', 'alert'); note.textContent = '添加失败：所选会话已离开目录或不再入网，请重新选择。'; return
+          }
+          const request = { busy: true, message: '正在添加…', failed: false }
+          memberAddRequests.set(current.name, request)
+          current.busy = true; submit.disabled = true; pick.disabled = true; manual.disabled = true
+          note.setAttribute('role', 'status'); note.textContent = '正在添加…'
+          try {
+            const result = await memberChange('add-member', current.name, id, undefined, requestPeer)
+            request.failed = !result.ok
+            request.message = result.ok ? '添加请求已确认，成员列表以主机最新状态为准。' : '添加失败：' + (result.error ?? '主机未确认，请核对权限、成员资格或连接后再重试。')
+            note.setAttribute('role', result.ok ? 'status' : 'alert')
+            note.textContent = request.message
+            if (result.ok) manual.value = ''
+          } finally {
+            request.busy = false
+            current.busy = false; submit.disabled = false; pick.disabled = false; manual.disabled = false
+            syncMemberRequest(current.name)
+          }
         })
-        canvasForm = { name: fresh.name, form, pick, manual }
+        // Leave focus transfer alone: a microtask remount here can swallow the native submit click.
+        // The next idle poll refreshes the options and member facts.
+        canvasForm = current
       }
       // Refresh the picker's options from the freshest state, preserving the
       // current choice (sessions/remote rows churn across polls).
@@ -1108,10 +1210,12 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       pick.appendChild(new Option('本机会话（现场/冷启动）…', '', true, true))
       const memberIds = new Set(fresh.members.map(member => member.id))
       for (const session of last?.sessions ?? []) {
-        if (memberIds.has(session.id)) continue
+        if (session.joined !== true || memberIds.has(session.id)) continue
         pick.appendChild(new Option(`${displayName(session)} — 本机`, session.id))
       }
       let remoteLabeled = false
+      const remoteCounts = new Map<string, number>()
+      for (const remote of last?.remote ?? []) { const key = remoteSourceKey(remote); remoteCounts.set(key, (remoteCounts.get(key) ?? 0) + 1) }
       for (const remote of last?.remote ?? []) {
         // gh#37: only zone/id8 HANDLES are addable members — a bare zone row
         // (the peer's own team card, e.g. 'dsh') fails the backend shape
@@ -1126,16 +1230,21 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
           pick.appendChild(new Option('远端会话队（目录卡片）…', '', true, false))
           remoteLabeled = true
         }
-        const option=new Option(`${displayName(remote)} — ${remote.via ?? '来源未确认'}`, JSON.stringify([remote.team,remote.via]))
-        option.dataset.member=remote.team
-        if(remote.via)option.dataset.peer=remote.via
+        const member = remoteMember(remote), peer = remotePeer(remote.via), key = remoteSourceKey(remote)
+        const option = new Option(`${displayName(remote)} — ${remote.memberRef ?? remote.team} — ${remote.via ?? '来源未确认'}`, key)
+        option.dataset.member = member ?? remote.memberRef ?? remote.team
+        option.dataset.remoteSource = key
+        if (peer) option.dataset.peer = remote.via
+        option.disabled = member === undefined || (remoteCounts.get(key) ?? 0) !== 1
+        if (option.disabled) option.textContent += '（来源待核实）'
         pick.appendChild(option)
       }
       if (!remoteLabeled) {
         pick.appendChild(new Option('（暂无可拉入的远端会话队——见下方说明）', '', true, false))
       }
       if (keep !== '' && Array.from(pick.options).some(option => option.value === keep)) pick.value = keep
-      card.appendChild(canvasForm.form)
+      syncMemberRequest(fresh.name)
+      controls.appendChild(canvasForm.form)
       const hint = el('div', 'wb-hint')
       hint.textContent =
         '成员由人类明确分配。本机写完整会话；远端必须通过已链接主机的有效名片核实并记录完整公钥来源。最小卡、离线或第三方无法验证时保留待确认，不能手输裸句柄绕过来源校验。来源确认不恢复暂停；默认兼容窗口不自动关闭。'
@@ -1145,6 +1254,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
       if (deps.dispatchQuick !== undefined) card.appendChild(dispatchCard(fresh.team))
     }
     box.appendChild(card)
+    inspector.scrollTop = scroll
   }
 
   // ── Quick dispatch (0.6.9) ──
@@ -1211,6 +1321,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   function openChat(target: ChatTarget): void {
     chat.open(target)
     root.classList.remove('is-rail-open')
+    syncRecoveryView()
   }
 
   /** Board picks (0.6.13): resolve a node id against the latest state. */
@@ -1339,6 +1450,13 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     placePanes(mode)
   }
 
+  function dispose(): void {
+    if (recoveryDisposed) return
+    recoveryDisposed = true
+    window.removeEventListener('resize', onRecoveryResize)
+    superagentPane?.setRecoveryVisible(false)
+    recoveryOwner?.invalidate()
+  }
   update(null)
-  return { root, update, updateSuperagent, mode: () => mode, selectTab, openNodeChat }
+  return { root, update, updateSuperagent, mode: () => mode, selectTab, openNodeChat, dispose, openDecision: (cardId: string) => { if (superagentPane === undefined) return; selectTab('team'); superagentPane.focusDecision(cardId) } }
 }

@@ -7,14 +7,21 @@ import { signCard } from '../../src/card.ts'
 import { peerPayloadFingerprint } from '../../src/idempotency-store.ts'
 import { signOriginClaim } from '../../src/origin-claim.ts'
 import { bootNode,reservePort,runContext } from './harness.ts'
+import TimerService from '@deepseek-ai/cordis-plugin-timer'
 const denied=vi.hoisted(()=>({prefix:'',remaining:0,skip:0}))
 vi.mock('node:fs',async original=>{const fs=await original<typeof import('node:fs')>();return {...fs,openSync:(path:any,...args:any[])=>{if(denied.remaining>0&&String(path).startsWith(denied.prefix)){if(denied.skip>0){denied.skip--;return (fs.openSync as any)(path,...args)}denied.remaining--;throw Object.assign(Error('injected unwritable ledger directory'),{code:'EACCES'})}return (fs.openSync as any)(path,...args)}}})
-afterEach(()=>{denied.prefix='';denied.remaining=0;denied.skip=0})
+afterEach(()=>{denied.prefix='';denied.remaining=0;denied.skip=0;vi.restoreAllMocks()})
 const state=async(base:string)=>{const response=await fetch(base+'/__dsh_a2a/state');expect(response.status).toBe(200);return response.json()}
 const finish=(agent:any,ids:string[])=>{for(const id of ids)agent.session.events.push({type:'turn/start'}, {type:'user/message',data:{content:[{type:'text',text:'[A2A direct] (task '+id+') sender sent:'}]}},{type:'assistant/message',data:{message:{content:[{type:'text',text:'completed '+id}]}}},{type:'turn/end',data:{reason:{kind:'completed'}}})}
 describe('ledger errors stay inside the real host event boundary',()=>{
  it('enforce forwarded receipt publishes query completion from precommit authority only after the ledger commits',async()=>{
   const pa=await reservePort(),pb=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb
+  // Capture (and still register) real recovery callbacks; don't race their 1s period against vi.waitFor's 1s window.
+  const scans:Array<()=>void>=[],interval=TimerService.prototype.interval
+  const timerSpy=vi.spyOn(TimerService.prototype,'interval').mockImplementation(function(this:TimerService,...args:any[]){
+   if(typeof args[0]==='function'&&args[1]===1000)scans.push(args[0])
+   return (interval as any).apply(this,args)
+  }as any)
   const a=await bootNode({name:'queryA',session:'queryA',team:'alpha',sessionNodes:true,port:pa,peers:[bu],teamScopeRouting:false,settlementAuth:'enforce',silent:true,forwardDirect:true})
   const b=await bootNode({name:'queryB',session:'queryB',team:'beta',sessionNodes:true,port:pb,peers:[au],teamScopeRouting:false,settlementAuth:'enforce',silent:true})
   const cli=generateKeyPairSync('ed25519').privateKey,handle='query-cli/a1b2c3d4e5f60718',task='enforce-query-commit',message='forward and preserve query result'
@@ -32,14 +39,17 @@ describe('ledger errors stay inside the real host event boundary',()=>{
    expect(await query()).toMatchObject({found:true,status:'pending'})
    const key=createPrivateKey(readFileSync(join(b.home,'a2a/node-key.pem'),'utf8'))
    const receipt=async(id:string)=>{const body=JSON.stringify({team:handle,caller_session:'beta/01234567',task_id:id,message:'[A2A receipt] task '+task+' exact completed result',wait:false});return fetch(target,{method:'POST',signal:AbortSignal.timeout(3000),headers:{'Content-Type':'application/json',...signOriginClaim({url:target,method:'POST',body},{caller:'beta',callerUrl:bu,privateKey:key,unbound:false,now:Date.now()})},body})}
-   denied.prefix=join(a.home,'a2a/tasks.json')+'.';denied.remaining=1
+   denied.prefix=join(a.home,'a2a/tasks.json')+'.';denied.remaining=100 // Keep the commit unavailable until after pending is checked.
    expect((await receipt('enforce-query-failure')).status).toBe(503)
    expect(await query()).toMatchObject({found:true,status:'pending'})
    expect((await state(au)).tasks.some((r:any)=>r.taskId===task)).toBe(true)
-   denied.remaining=0;const accepted=await receipt('enforce-query-success');expect(accepted.status).toBe(200);expect((await accepted.json()).settlement).toBeUndefined()
+   denied.remaining=0
+   expect(scans.length).toBeGreaterThan(0);for(const scan of scans)scan() // Execute the same registered recovery scan once; no second transport.
+   expect((await state(au)).archived.some((r:any)=>r.taskId===task)).toBe(true)
+    const accepted=await receipt('enforce-query-failure');expect(accepted.status).toBe(200);expect((await accepted.json()).settlement).toBeUndefined()
    expect((await state(au)).archived.some((r:any)=>r.taskId===task)).toBe(true)
    expect(await query()).toMatchObject({found:true,status:'completed',reply:'exact completed result'})
-  }finally{denied.remaining=0;await a.dispose();await b.dispose()}
+  }finally{denied.remaining=0;timerSpy.mockRestore();await a.dispose();await b.dispose()}
  })
 
  it('reports an own-inbound commit failure after the peer accepted the formal receipt without escaping or clearing local debt',async()=>{
@@ -50,12 +60,12 @@ describe('ledger errors stay inside the real host event boundary',()=>{
    for(const n of [a,b])await fetch(n.baseUrl+'/__dsh_a2a/join',{method:'POST',body:JSON.stringify({id:String(n.agents.agent!.id)})})
    const sent=await a.ctx.tools.get('a2a_route')!.execute({team:'beta/01234567',message:'own inbound commit test',async:true},runContext(a.agents.agent)) as any
    expect(sent.ok).toBe(true);const task=sent.task_id,file=join(b.home,'a2a/tasks.json')
-   denied.prefix=file+'.';denied.remaining=1;denied.skip=1 // answered commit succeeds; post-peer own-inbound commit fails.
+   denied.prefix=file+'.';denied.remaining=1;denied.skip=2 // reservation and sending checkpoint succeed; post-peer own-inbound commit fails.
    const result=await b.ctx.tools.get('a2a_route')!.execute({team:'alpha/01234567',message:'[A2A receipt] task '+task+' completed',async:true},runContext(b.agents.agent)) as any
-   expect(result).toMatchObject({ok:false,error:expect.stringContaining('local settlement commit failed')})
+   expect(result).toMatchObject({ok:false,error:expect.stringContaining('RECEIPT_SETTLEMENT_COMMIT_FAILED')})
    expect((await state(au)).archived.some((r:any)=>r.taskId===task)).toBe(true)
    expect(JSON.parse(readFileSync(file,'utf8')).tasks.some((r:any)=>r.taskId===task)).toBe(true)
-   expect((await state(bu)).ledgerPersistence.lastError.code).toBe('EACCES')
+   expect((await state(bu)).tasks.find((r:any)=>r.taskId===task)).toMatchObject({receiptDelivery:'receipt-undelivered',receiptRecovery:{state:'retained',code:'RECEIPT_SETTLEMENT_COMMIT_FAILED'}})
   }finally{denied.remaining=0;denied.skip=0;await a.dispose();await b.dispose()}
  })
 
@@ -72,7 +82,8 @@ describe('ledger errors stay inside the real host event boundary',()=>{
    const key=createPrivateKey(readFileSync(join(b.home,'a2a/node-key.pem'),'utf8')),target=au+'/a2a/direct'
    const receipt=async(transportId:string)=>{const body=JSON.stringify({team:'alpha/01234567',caller_session:'beta/01234567',task_id:transportId,message:'[A2A receipt] task '+task+' completed',wait:false});return fetch(target,{method:'POST',signal:AbortSignal.timeout(3000),headers:{'Content-Type':'application/json',...signOriginClaim({url:target,method:'POST',body},{caller:'beta',callerUrl:bu,privateKey:key,unbound:false,now:Date.now()})},body})}
    denied.prefix=file+'.';denied.remaining=1
-   const failed=await receipt('disk-sender-receipt-1');expect(failed.status).toBe(503);expect(await failed.json()).toMatchObject({delivered:false,error:expect.stringContaining('settlement was not committed')})
+   const failed=await receipt('disk-sender-receipt-1');expect(failed.status).toBe(503);// #708 R2: the receipt is inserted before it settles, so the failed ledger write now refuses the insertion itself: not-inserted, retryable on the same id.
+   expect(await failed.json()).toMatchObject({delivered:false,receipt_delivery:'not-inserted',task_status:'TASK_STATE_FAILED'})
    expect(readFileSync(file)).toEqual(before);expect((await state(au)).tasks.some((r:any)=>r.taskId===task)).toBe(true);expect(a.steered).toHaveLength(0)
    expect((await state(au)).ledgerPersistence).toMatchObject({ok:false,lastError:{code:'EACCES'}});expect(escaped).toEqual([])
    denied.remaining=0;const good=await receipt('disk-sender-receipt-2');expect(good.status).toBe(200);expect((await good.json()).delivered).toBe(true)

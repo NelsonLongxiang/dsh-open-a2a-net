@@ -96,7 +96,12 @@ describe('mesh faults — partition, restart, and recovery', () => {
       // delivery failed; the walk found candidates but none published the
       // team (cache-expired kill — the richer directory guidance); or no
       // route existed at all. All are closed failures with ok:false.
-      expect(String(down.error)).toMatch(/no route to "cargo"|failed on every candidate|not published by any configured peer/)
+      // #708: a connection dropped by the dying node without a pre-connect
+      // refusal code may already have carried the request, so the route stops
+      // there as acceptance-unknown under the caller's task id instead of
+      // failing over (a failover could run the task twice).
+      const unknown = (down as { acceptance?: string }).acceptance === 'unknown'
+      expect(String(down.error)).toMatch(unknown ? /direct route to peer failed/ : /no route to "cargo"|failed on every candidate|not published by any configured peer/)
       const probed = await probe(alpha)
       expect(probed.find(row => row.url === `http://127.0.0.1:${String(portC)}`)?.reachable).toBe(false)
 

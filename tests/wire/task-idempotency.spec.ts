@@ -28,6 +28,20 @@ import {
 } from '../../src/idempotency-store.ts'
 
 describe('idempotency store', () => {
+  it('recovery payload veto finds retained claims under any id without changing their outcomes or counters',()=>{
+    let now=1000
+    const {store,file}=tmpStore({now:()=>now,ttlMs:1000})
+    store.claim('old-transport','original-body');store.recordOutcome('old-transport',{status:'completed',reply:'done'})
+    store.claim('still-pending','pending-body');store.claim('failed-transport','failed-body');store.recordOutcome('failed-transport',{status:'failed',error:'unknown'})
+    const before=store.stats(),restored=new IdempotencyStore(file,{now:()=>now,ttlMs:1000})
+    for(const body of ['original-body','pending-body','failed-body'])expect(restored.hasFingerprint(body)).toBe(true)
+    expect(restored.hasFingerprint('other-body')).toBe(false);expect(restored.stats()).toEqual(before)
+    expect(restored.query('old-transport','original-body')).toMatchObject({status:'completed',reply:'done'})
+    now+=1001;expect(restored.hasFingerprint('original-body')).toBe(false)
+    // A false veto result only says no retained claim; it never grants or claims any effect.
+    expect(restored.stats().claimsFresh).toBe(before.claimsFresh)
+  })
+
   it('releases only an uncompleted matching receipt claim and preserves conflict and completed keys',()=>{
     const store=new IdempotencyStore('');expect(store.claim('receipt-attempt','body')).toBe('fresh')
     store.releaseUncompleted('receipt-attempt','different');expect(store.claim('receipt-attempt','body')).toBe('replay')
@@ -38,6 +52,24 @@ describe('idempotency store', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'dsh-a2a-idem-')), 'idempotency.json')
     return { store: new IdempotencyStore(file, options), file }
   }
+
+  it('persists only explicit not-sent evidence, binding the original payload and refusing expired/foreign queries', () => {
+    let clock = 1000
+    const { store, file } = tmpStore({ now: () => clock, ttlMs: 1000 })
+    expect(store.claim('not-dispatched', 'original-body')).toBe('fresh')
+    store.recordOutcome('not-dispatched', { status: 'failed', error: 'local scope refusal', delivery: 'not-sent' })
+    const restored = new IdempotencyStore(file, { now: () => clock, ttlMs: 1000 })
+    expect(restored.query('not-dispatched', 'original-body')).toMatchObject({ found: true, status: 'failed', delivery: 'not-sent' })
+    expect(restored.query('not-dispatched', 'another-body')).toEqual({ found: false, reason: 'payload-mismatch' })
+    restored.claim('ordinary-failed', 'body')
+    restored.recordOutcome('ordinary-failed', { status: 'failed', error: 'business exception' })
+    expect(restored.query('ordinary-failed', 'body')).not.toHaveProperty('delivery')
+    restored.claim('completed', 'body')
+    restored.recordOutcome('completed', { status: 'completed', reply: 'done' })
+    expect(restored.query('completed', 'body')).not.toHaveProperty('delivery')
+    clock += 1001
+    expect(restored.query('not-dispatched', 'original-body')).toEqual({ found: false, reason: 'unknown-task' })
+  })
 
   it('fresh claim records the fingerprint; identical re-claim answers replay; different payload answers conflict', () => {
     const { store } = tmpStore()
@@ -213,6 +245,19 @@ describe('idempotency outcome ledger (W7 slice 2)', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'dsh-a2a-idem-')), 'idempotency.json')
     return { store: new IdempotencyStore(file, options), file }
   }
+
+  it('persists explicit receipt delivery evidence without inventing it for generic completion', () => {
+    const {store,file}=tmpStore({now:()=>1000})
+    for(const id of ['delivered','refused','ordinary'])store.claim(id,'body')
+    store.recordOutcome('delivered',{status:'completed',reply:'receipt delivered',receiptDelivery:'delivered'})
+    store.recordOutcome('refused',{status:'completed',reply:'receipt refused',receiptDelivery:'refused'})
+    store.recordOutcome('ordinary',{status:'completed',reply:'delivered'})
+    const restored=new IdempotencyStore(file,{now:()=>1000})
+    expect(restored.query('delivered','body')).toMatchObject({status:'completed',receiptDelivery:'delivered'})
+    expect(restored.query('refused','body')).toMatchObject({status:'completed',receiptDelivery:'refused'})
+    expect(restored.query('ordinary','body')).not.toHaveProperty('receiptDelivery')
+    expect(restored.query('delivered','other')).toMatchObject({found:false,reason:'payload-mismatch'})
+  })
 
   it('a recorded outcome answers the completed query; the claim stays replay-gated', () => {
     const { store } = tmpStore()

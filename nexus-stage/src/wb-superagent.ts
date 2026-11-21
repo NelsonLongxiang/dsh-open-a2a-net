@@ -17,6 +17,8 @@
  */
 import type { RailTone } from './wb-rail'
 import { buildTeamFields, type TeamRule } from './wb-superagent-settings'
+import { createSenderRecovery, type RecoveryOutbound } from './request-recovery-panel'
+import { createDecisionsGroup, type DecisionsDeps } from './wb-decisions'
 
 type Json = Record<string, unknown>
 
@@ -104,6 +106,8 @@ export interface SaState {
   readonly canvasProblem?: string
   readonly pullRequestProblem?: string
   readonly reviews?: ReadonlyArray<{ ticketId: string; head: string; verdict?: { pass: boolean } }>
+  /** Transport attempts are separate from the ticket's member assignment. */
+  readonly outbound?: ReadonlyArray<Omit<RecoveryOutbound, 'task'> & { task?: string; error?: string; approval?: unknown; attempts?: ReadonlyArray<{ task: string; delivery: string; error?: string }> }>
   /** v5 acceptance F4: why a session this host serves another team with cannot take work (wrong preset). */
   readonly servesProblem?: string
   readonly canvases?: readonly string[]
@@ -130,6 +134,8 @@ export interface SuperagentPaneDeps {
   selectTeam?(id: string): void
   /** Bind another canvas team as a new team on this instance. */
   addTeam?(canvas: string, router: string): Promise<Json>
+  /** T8: the decision cards (GET / POST /__dsh_a2a/superagent/decisions); absent, the 等你拍板 group is not shown. */
+  decisions?: DecisionsDeps
 }
 
 export type SaView = 'person' | 'request' | 'tickets' | 'team' | 'settings'
@@ -257,9 +263,13 @@ function ago(iso: string, now: number): string {
 
 export interface SuperagentPane {
   readonly root: HTMLElement
+  /** Outer workbench navigation invalidates recovery readiness without cancelling server work. */
+  setRecoveryVisible(visible: boolean): void
   /** Feed one poll: the team's state (null when the host runs no superagent) and the local sessions. */
   update(state: SaState | null, sessions: readonly SaSession[], now: number): { badge: string; tone?: RailTone }
   select(view: SaView): void
+  /** T8 deep link: open 待你处理 at this decision card. */
+  focusDecision(cardId: string): void
 }
 
 export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
@@ -321,6 +331,8 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   const searchWrap = el('div', 'wb-sa-searchwrap')
   searchWrap.append(searchBox, searchDrop)
   root.append(el('div', 'wb-pane-head', 'superagent 团队'), teamBar, addTeamBox, searchWrap, nav, note, body)
+  // T8: built once, re-parented into 待你处理 on each render, so a pick or words being written survive the poll.
+  const decisionsGroup = deps.decisions === undefined ? undefined : createDecisionsGroup(deps.decisions)
 
   // The sub-tab is a per-viewer convenience kept across reloads (every access guarded).
   let view: SaView = (() => {
@@ -339,6 +351,8 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   /** The team just asked for: until its state arrives the old one's view is gone, so nothing can be written from it. */
   let pendingTeam: string | undefined
   function switchTeam(id: string): void {
+    for (const form of recoveryForms.values()) form.invalidate()
+    recoveryForms.clear()
     pendingTeam = id
     settingsDirty = false
     settingsForm = undefined
@@ -443,6 +457,16 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     return row?.name !== undefined && row.name !== '' ? `${row.name}（${id.replace(/^session-/, '').slice(0, 8)}）` : id
   }
 
+  const recoveryForms = new Map<string, ReturnType<typeof createSenderRecovery>>()
+  let recoveryVisible = true
+  function setRecoveryVisible(visible: boolean): void {
+    if (visible === recoveryVisible) return
+    recoveryVisible = visible
+    for (const form of recoveryForms.values()) form.invalidate()
+    recoveryForms.clear(); builtFrom = ''
+    if (visible) render()
+  }
+
   function ticketCard(ticket: SaTicket, opts: { answer?: boolean } = {}): HTMLElement {
     const person = ticket.stage?.stage === 'person'
     const card = el('div', `wb-led-card wb-sa-ticket${person ? ' is-warn' : ''}${ticket.ended !== undefined ? ' is-muted' : ''}`)
@@ -465,6 +489,42 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const report = latestReport(ticket)
     if (report !== undefined) kv(card, '报告', `${REPORT[report.state] ?? report.state} · ${report.summary}`)
     if (ticket.ended?.reason !== undefined) kv(card, '结束', ticket.ended.reason)
+    for (const outbound of last?.outbound?.filter(row => row.ticketId === ticket.id) ?? []) {
+      const detail = el('div', 'wb-sa-hint')
+      detail.dataset.outbound = outbound.card
+      const states: Record<string, string> = { waiting: '等待批准', sending: '发送中／待对账', unknown: '接纳未知', failed: '确认未发出或旧失败', sent: '已发送，等回执', answered: '已回执', declined: '未批准' }
+      detail.append(el('strong', undefined, '对外请求：' + outbound.address), el('div', undefined, states[outbound.state] ?? outbound.state))
+      if (outbound.task !== undefined) detail.append(el('div', undefined, 'task ' + outbound.task))
+      if (outbound.error !== undefined) detail.append(el('div', undefined, outbound.error))
+      detail.append(el('pre', 'wb-sa-hint', outbound.text))
+      if (ticket.ended === undefined && !outbound.narrowRecovery && outbound.task !== undefined && ['failed', 'unknown', 'sending'].includes(outbound.state)) {
+        const task = outbound.task
+        const act = (action: string, label: string): HTMLButtonElement => {
+          const button = el('button', 'wb-btn', label)
+          button.type = 'button'
+          button.addEventListener('click', () => {
+            if (action === 'outbound-retry' && typeof window.confirm === 'function' && !window.confirm('只恢复原批准的目标与原文。服务端必须确认原尝试未投递；未知或已送达不会重发。继续？')) return
+            button.disabled = true
+            void send({ action, card_id: outbound.card, task_id: task }, undefined, action === 'outbound-retry' ? '外发已处理，请查看原尝试和回执' : '已对账，未请求再次发送').finally(() => { button.disabled = false })
+          })
+          return button
+        }
+        detail.append(act('outbound-reconcile', '核对原外发'))
+        const lastAttempt = outbound.attempts?.at(-1)
+        if (outbound.approval !== undefined && lastAttempt?.task === task && lastAttempt.delivery === 'not-sent') detail.append(act('outbound-retry', '恢复原批准外发'))
+        else detail.append(el('div', undefined, '尚无明确未投递证据：先核对，不新卡、不重批、不重派。'))
+      }
+      if (!ticket.ended && outbound.state === 'failed' && outbound.task) {
+        const teamId = last?.selectedTeam ?? '', row = { ...outbound, task: outbound.task }, formKey = JSON.stringify([teamId, row.card, row.task])
+        let form = recoveryForms.get(formKey)
+        if (!form) {
+          form = createSenderRecovery({ row, teamId, act: deps.act, refresh: deps.refresh, closed: () => { recoveryForms.delete(formKey); builtFrom = ''; deps.refresh() }, current: () => recoveryVisible && pendingTeam === undefined && (last?.selectedTeam ?? '') === teamId && last?.settings.sources.a2a === true && last.settings.paused === false && last?.tickets.some(t => t.id === row.ticketId && !t.ended) === true && last?.outbound?.some(r => r.card === row.card && r.task === row.task && r.state === 'failed' && r.ticketId === row.ticketId && r.address === row.address && r.text === row.text) === true })
+          recoveryForms.set(formKey, form)
+        }
+        form.sync(row); detail.append(form.root)
+      }
+      card.append(detail)
+    }
     kv(card, '更新', `${ago(ticket.updatedAt, now)} · ${ticket.id}`)
     if (ticket.ended === undefined) {
       const actions = el('div', 'wb-sa-actions')
@@ -489,7 +549,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       }
       const retryable = ticket.delivery !== undefined || (person && (ticket.stage?.action === 'blocked' || ticket.stage?.action === 'failed'))
       if (retryable) {
-        const retry = el('button', 'wb-btn', '重试')
+        const retry = el('button', 'wb-btn', '重试工单（不重发外发）')
         retry.type = 'button'
         retry.addEventListener('click', () => { void send({ action: 'retry', ticket_id: ticket.id }, undefined, '已重试') })
         actions.appendChild(retry)
@@ -519,6 +579,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   function renderPerson(state: SaState): void {
     const problems = problemsOf(state, now).map(p => { const c = el('div', `wb-led-card is-${p.tone}`, p.text); return c })
     if (problems.length > 0) body.appendChild(group('问题', 'is-danger', problems))
+    if (decisionsGroup !== undefined) body.appendChild(decisionsGroup.root)
     body.appendChild(group('待你处理的工单', 'is-warn', personTickets(state).map(t => ticketCard(t, { answer: true })), '没有需要你处理的工单'))
   }
 
@@ -804,6 +865,8 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   }
 
   function select(next: SaView): void {
+    for (const form of recoveryForms.values()) form.invalidate()
+    recoveryForms.clear()
     view = next
     try { window.localStorage.setItem(VIEW_KEY, next) } catch { /* per-viewer convenience only */ }
     render()
@@ -816,7 +879,8 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     if (id === '') return
     pendingFocus = { kind, id }
     const wanted: SaView = kind === 'ticket' ? 'tickets' : 'request'
-    if (view !== wanted) { view = wanted; render() } else { render() }
+    if (view !== wanted) { for (const form of recoveryForms.values()) form.invalidate(); recoveryForms.clear(); view = wanted }
+    render()
   }
 
   function applyFocus(): void {
@@ -848,6 +912,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       if (state !== null && state.selectedTeam !== pendingTeam) return { badge: '' }
       pendingTeam = undefined
     }
+    if (last && (!state || (last.selectedTeam ?? '') !== (state.selectedTeam ?? ''))) { for (const form of recoveryForms.values()) form.invalidate(); recoveryForms.clear() }
     last = state
     sessions = rows
     now = at
@@ -863,9 +928,10 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const changed = viewKey() !== builtFrom || at - builtAt >= 60_000
     if (changed && !busy) render()
     if (state === null) return { badge: '' }
+    void decisionsGroup?.refresh()
     // The rail badge counts every team's waiting tickets: the picker names the other teams' counts, and a badge that
     // showed only this team's would hide them (an owner on one team never learned another needed them).
-    const waiting = personTickets(state).length + (state.teams ?? []).reduce((n, team) => n + (team.id !== state.selectedTeam ? team.waiting ?? 0 : 0), 0)
+    const waiting = personTickets(state).length + (decisionsGroup?.waiting() ?? 0) + (state.teams ?? []).reduce((n, team) => n + (team.id !== state.selectedTeam ? team.waiting ?? 0 : 0), 0)
     const problems = problemsOf(state, at)
     if (problems.some(p => p.tone === 'danger')) return { badge: String(waiting + problems.length), tone: 'danger' }
     return waiting + problems.length > 0 ? { badge: String(waiting + problems.length), tone: 'warn' } : { badge: '' }
@@ -874,7 +940,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   root.addEventListener('pointerdown', () => { pressing = true })
   for (const type of ['pointerup', 'pointercancel']) document.addEventListener(type, () => { pressing = false })
   render()
-  return { root, update, select }
+  return { root, update, select, setRecoveryVisible, focusDecision: (cardId: string) => { select('person'); decisionsGroup?.focus(cardId) } }
 }
 
 const REPORT: Readonly<Record<string, string>> = { progress: '进展', waiting: '等待', ready: '已就绪', blocked: '受阻', failed: '失败', dropped: '无需做' }

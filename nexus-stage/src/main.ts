@@ -10,6 +10,8 @@ import { createScopeHintsChip, parseScopeHints, type ScopeHintsChip } from './sc
 import { createFaultReporter } from './fault'
 import { createWorkbench, type StateBody } from './workbench'
 import { personTickets, type SaState } from './wb-superagent'
+import { decisionLink } from './wb-decisions'
+import { recoveryOwnerResponse } from './request-recovery-panel'
 import { createTeamRoleDecorator } from './planning-team-roles'
 import { createPlanningView } from './planning-view'
 import { rosterFrames, rosterNameOf } from './planning-roster'
@@ -282,7 +284,9 @@ async function fetchLayout(): Promise<unknown> {
 /** The team the 团队 tab shows; '' is the instance's primary team. Kept across reloads per viewer (guarded). */
 const TEAM_KEY = 'dsh-a2a.superagent.team'
 let selectedTeam = (() => { try { return window.localStorage.getItem(TEAM_KEY) ?? '' } catch { return '' } })()
+let teamGeneration = 0
 function rememberTeam(id: string): void {
+  teamGeneration++
   selectedTeam = id
   try { if (id === '') window.localStorage.removeItem(TEAM_KEY); else window.localStorage.setItem(TEAM_KEY, id) } catch { /* convenience only */ }
 }
@@ -293,7 +297,8 @@ const bench = createWorkbench({
   // superagent v4 PR-E: the 团队 tab writes through the owner control face.
   superagent: {
     async act(body) {
-      const res = await controlFetch('/__dsh_a2a/superagent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, ...(selectedTeam !== '' ? { teamId: selectedTeam } : {}) }) })
+      const res = await controlFetch('/__dsh_a2a/superagent', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, teamId: typeof body.teamId === 'string' ? body.teamId : selectedTeam }) })
+      if (String(body.action).startsWith('outbound-narrow-')) return recoveryOwnerResponse(res)
       try { return await res.json() as Record<string, unknown> } catch { return { ok: false, error: `HTTP ${res.status}` } }
     },
     refresh() { void pollSuperagent() },
@@ -306,10 +311,41 @@ const bench = createWorkbench({
       try { return await res.json() as Record<string, unknown> } catch { return { ok: false } }
     },
     selectTeam(id) { rememberTeam(id); void pollSuperagent() },
+    // T8: the decision cards, decided through the owner control face; whether the person is the owner is the host's call.
+    decisions: {
+      async list() {
+        const res = await controlFetch('/__dsh_a2a/superagent/decisions', { cache: 'no-store' })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return await res.json() as Record<string, unknown>
+      },
+      async decide(body) {
+        const res = await controlFetch('/__dsh_a2a/superagent/decisions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        try { return { status: res.status, body: await res.json() as Record<string, unknown> } } catch { return { status: res.status, body: { ok: false, error: `HTTP ${res.status}` } } }
+      },
+      // C8: the owner's file for a decision, staged on this host and granted to the team's canvas (as the right bar does).
+      async stage(file, address) {
+        try {
+          // The staging route takes the control credential only and records the grant under the operator `control`; it reads
+          // no `by` parameter. Whether the person is the owner is judged when the decision is made (browser owner proof).
+          const res = await controlFetch(`/__dsh_a2a/blob?to=${encodeURIComponent(address)}&name=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file })
+          const out = await res.json() as { ok?: unknown; ref?: unknown; error?: unknown }
+          return res.ok && out.ok === true && typeof out.ref === 'string' ? { ref: out.ref } : { refused: typeof out.error === 'string' ? out.error : `HTTP ${res.status}` }
+        } catch (error) { return { refused: String(error) } }
+      },
+      async file(href) {
+        const res = await controlFetch(href, { cache: 'no-store' })
+        if (res.ok) return await res.blob()
+        try { const out = await res.json() as { error?: unknown }; return typeof out.error === 'string' ? out.error : `HTTP ${res.status}` } catch { return `HTTP ${res.status}` }
+      },
+    },
     async addTeam(canvas, router) {
       const res = await controlFetch('/__dsh_a2a/superagent/teams', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ canvas, router }) })
       try { return await res.json() as Record<string, unknown> } catch { return { ok: false, error: `HTTP ${res.status}` } }
     },
+  },
+  async requestRecovery(body) {
+    const res = await controlFetch('/__dsh_a2a/request-recovery', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    return recoveryOwnerResponse(res)
   },
   // gh#34: the owner three-key panel rides the control face.
   async ownerSettingsRead() {
@@ -382,12 +418,15 @@ const bench = createWorkbench({
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action, name, id, ...(home === undefined ? {} : { home }), ...(peer === undefined ? {} : { peer }) }),
       })
-      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string }
-      if (res.ok && body.ok !== false) return true
-      console.warn(`canvas ${action} ${name}: ${body.error ?? `HTTP ${res.status}`}`)
-      return false
-    } catch {
-      return false
+      const body = await res.json().catch(() => undefined) as { ok?: boolean; error?: string } | undefined
+      if (res.ok && body?.ok === true) { void poll(); return { ok: true } }
+      const error = typeof body?.error === 'string' ? body.error : res.ok ? '主机未确认操作结果，请刷新核对成员列表。' : `HTTP ${res.status}`
+      planning.notice('error', `成员操作失败：${error}`)
+      return { ok: false, error }
+    } catch (failure) {
+      const error = String(failure)
+      planning.notice('error', `成员操作失败：${error}`)
+      return { ok: false, error }
     }
   },
   async dispatchQuick(team, message) {
@@ -485,20 +524,31 @@ if (new URLSearchParams(window.location.search).get('mode') === 'plan') {
   window.setTimeout(() => window.clearInterval(tryBoard), 30_000)
 }
 
+// T8 deep link (the market's decide_at): ?tab=team&view=decisions&card=<id>. Read once, only these three, the id checked
+// against the card id rule; the parameters leave the address bar so a reload does not jump again. Opened once the 团队
+// tab exists (the first superagent poll that answers).
+let linkedCard = decisionLink(window.location.search)
+if (linkedCard !== undefined) {
+  const kept = new URLSearchParams(window.location.search)
+  for (const name of ['tab', 'view', 'card']) kept.delete(name)
+  const rest = kept.toString()
+  try { window.history.replaceState(window.history.state, '', `${window.location.pathname}${rest !== '' ? `?${rest}` : ''}${window.location.hash}`) } catch { /* the jump still happens */ }
+}
+
 /** GET /__dsh_a2a/superagent: 404 (no superagent on this host) or a failure hides the 团队 tab; single flight. */
 let superagentBusy = false
 async function pollSuperagent(): Promise<void> {
   if (superagentBusy) return
   superagentBusy = true
   // A switch while this read is out: its answer is the old team's, and must not be shown as the new one's.
-  const asked = selectedTeam
+  const asked = selectedTeam, generation = teamGeneration
   try {
     const [res, list] = await Promise.all([
       controlFetch(`/__dsh_a2a/superagent${asked !== '' ? `?teamId=${encodeURIComponent(asked)}` : ''}`, { cache: 'no-store' }),
       controlFetch('/__dsh_a2a/superagent/teams', { cache: 'no-store' }),
     ])
     const { teams = [] } = list.ok ? await list.json() as { teams?: SaState['teams'] } : {}
-    if (asked !== selectedTeam) return
+    if (asked !== selectedTeam || generation !== teamGeneration) return
     // A remembered team that is gone (unbound, another host's list): back to the primary team, not a hidden tab.
     if (asked !== '' && list.ok && !(teams ?? []).some(row => row.id === asked)) { rememberTeam(''); return }
     const own = res.ok ? await res.json() as SaState : null
@@ -508,16 +558,17 @@ async function pollSuperagent(): Promise<void> {
       const r = await controlFetch(`/__dsh_a2a/superagent?teamId=${encodeURIComponent(row.id)}`, { cache: 'no-store' }).catch(() => undefined)
       return [row.id, r?.ok === true ? await r.json() as SaState : undefined] as const
     }))
-    if (asked !== selectedTeam) return
+    if (asked !== selectedTeam || generation !== teamGeneration) return
     const others = read.flatMap(([, other]) => other !== undefined ? [other] : [])
     const waiting = new Map(read.flatMap(([id, other]) => other !== undefined ? [[id, personTickets(other).length] as const] : []))
     const rows = (teams ?? []).map(row => waiting.has(row.id) ? { ...row, waiting: waiting.get(row.id) } : row)
     const state = own === null ? null : { ...own, teams: rows, selectedTeam: asked }
     bench.updateSuperagent(state)
     teamRoles.update(state === null ? null : [state, ...others])
-  } catch { bench.updateSuperagent(null); teamRoles.update(null) } finally {
+    if (state !== null && linkedCard !== undefined) { bench.openDecision(linkedCard); linkedCard = undefined }
+  } catch { if (generation === teamGeneration && asked === selectedTeam) { bench.updateSuperagent(null); teamRoles.update(null) } } finally {
     superagentBusy = false
-    if (asked !== selectedTeam) void pollSuperagent()
+    if (asked !== selectedTeam || generation !== teamGeneration) void pollSuperagent()
   }
 }
 
@@ -619,6 +670,7 @@ async function poll(): Promise<void> {
   }
 }
 
+window.addEventListener('beforeunload', () => bench.dispose(), { once: true })
 void poll()
 window.setInterval(() => {
   if (!document.hidden) void poll()

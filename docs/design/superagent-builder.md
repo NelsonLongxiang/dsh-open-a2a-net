@@ -37,9 +37,12 @@ The role-tools guard gets a fourth role, `builder`. Its list is:
 | `superagent_blueprint_apply` | Lets the host carry out the builder's own pending blueprint, only after the owner's own typed message in this session agreed to it (TB4). |
 | `superagent_blueprint_withdraw` | Withdraws its own pending blueprint. |
 | `a2a_whoami`, the schedule tools for itself | As every role. |
+| `a2a_status`, `a2a_tasks`, `a2a_teams` | #791 (owner 2026-11-21): read the network to check itself — peers, routes in flight, the task ledger, reachable teams. They send nothing. |
+| `superagent_issue_propose` | #791: drafts an issue (repository, title, body) about a problem it found. Only a repository configured for a team (`repos` in a team's settings). Nothing is sent. |
+| `superagent_issue_file` | #791: lets the host file the builder's own draft with the `gh` the operator logged in, only after the owner's own typed message in this session, newer than the draft (the D10 gate, as for a blueprint). A draft is filed once; drafts live in memory and a restart drops unfiled ones. |
 | `read`, `glob`, `grep` | Read-only files, to look at a repository before recommending who works on it. |
 
-- Everything else is refused at the call: `bash`, `write`, `edit`, subagents and other sessions, A2A sending, the canvas and team routes, ygl-trees writes. The guard enforces this whatever the preset says.
+- Everything else is refused at the call: `bash`, `write`, `edit`, subagents and other sessions, A2A sending, the canvas and team routes, ygl-trees writes. The guard enforces this whatever the preset says. #791 keeps this boundary: the builder files an issue only through the host and the owner's gate, never with a shell or a credential of its own.
 - The credential-access audit covers the builder like any role session. Since the owner withdrew separate system users (2026-11-12), the builder can read what the host's user can read, so `read` is in the audit's scope.
 - The builder's recommendations go to the owner in its own conversation. They are not prose questions spread across turns: each choice the owner must make is put with options and the one it recommends, as the team norms ask of the router.
 

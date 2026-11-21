@@ -16,6 +16,9 @@ export interface ReminderState {
   noticeAttemptedAt?: number
   notifiedAt?: number
   escalationAt?: number
+  deliveryNoticeAt?: number
+  /** #709 R2: the delivery-blocked summary's stable message id, so the host's inbox and history say if it was taken. */
+  deliveryNoticeId?: string
   diagnostic?: 'metadata-reset'
 }
 const integer = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
@@ -24,8 +27,8 @@ export function parseReminder(raw: unknown): ReminderState | undefined {
   const r=raw as Record<string,unknown>
   if(r.version!==1 || typeof r.targetId!=='string' || r.targetId.length<1 || r.targetId.length>256 || !integer(r.attempts) || !integer(r.deliveredCount) || r.deliveredCount>r.attempts || !integer(r.lastAttemptAt) || !integer(r.nextAt) || typeof r.requestId!=='string' || r.requestId.length>256 || !['reserved','delivered','failed','unknown'].includes(String(r.lastResult))) return undefined
   if(r.diagnostic!==undefined&&r.diagnostic!=='metadata-reset')return undefined
-  for(const key of ['lastDeliveredAt','noticeAttemptedAt','notifiedAt','escalationAt']) if(r[key]!==undefined&&!integer(r[key]))return undefined
-  return {version:1,targetId:r.targetId,attempts:r.attempts,deliveredCount:r.deliveredCount,lastAttemptAt:r.lastAttemptAt,nextAt:r.nextAt,requestId:r.requestId,lastResult:r.lastResult as ReminderState['lastResult'],...(r.lastDeliveredAt!==undefined?{lastDeliveredAt:r.lastDeliveredAt as number}:{}),...(r.noticeAttemptedAt!==undefined?{noticeAttemptedAt:r.noticeAttemptedAt as number}:{}),...(r.notifiedAt!==undefined?{notifiedAt:r.notifiedAt as number}:{}),...(r.escalationAt!==undefined?{escalationAt:r.escalationAt as number}:{}),...(r.diagnostic==='metadata-reset'?{diagnostic:'metadata-reset' as const}:{})}
+  for(const key of ['lastDeliveredAt','noticeAttemptedAt','notifiedAt','escalationAt','deliveryNoticeAt']) if(r[key]!==undefined&&!integer(r[key]))return undefined
+  return {version:1,targetId:r.targetId,attempts:r.attempts,deliveredCount:r.deliveredCount,lastAttemptAt:r.lastAttemptAt,nextAt:r.nextAt,requestId:r.requestId,lastResult:r.lastResult as ReminderState['lastResult'],...(r.lastDeliveredAt!==undefined?{lastDeliveredAt:r.lastDeliveredAt as number}:{}),...(r.noticeAttemptedAt!==undefined?{noticeAttemptedAt:r.noticeAttemptedAt as number}:{}),...(r.notifiedAt!==undefined?{notifiedAt:r.notifiedAt as number}:{}),...(r.escalationAt!==undefined?{escalationAt:r.escalationAt as number}:{}),...(r.deliveryNoticeAt!==undefined?{deliveryNoticeAt:r.deliveryNoticeAt as number}:{}),...(typeof r.deliveryNoticeId==='string'&&r.deliveryNoticeId.length>0&&r.deliveryNoticeId.length<=256?{deliveryNoticeId:r.deliveryNoticeId}:{}),...(r.diagnostic==='metadata-reset'?{diagnostic:'metadata-reset' as const}:{})}
 }
 export function nextReminderDelay(attempts: number): number {
   return attempts===1 ? REMINDER_MIN_MS : attempts===2 ? 10*60_000 : REMINDER_LONG_MS

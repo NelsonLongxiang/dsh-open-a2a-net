@@ -7,6 +7,7 @@
  * a getter so the deps object can be built before the const is declared.
  * @module src/tools/info
  */
+import { formatPossibleExpiry, parseDeliveryCapacitySnapshot, type DeliveryCapacitySnapshot } from '../task-delivery-capacity.ts'
 import { reminderView, type ReminderView } from '../reconciliation-state.ts'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
@@ -530,6 +531,8 @@ export function createInfoTools(deps: InfoToolsDeps) {
               },
             },
             deliveryBookkeeping:{type:'object',additionalProperties:false,required:true,properties:{orphaned:{type:'number',required:true},failures:{type:'number',required:true},lastError:{type:'object',additionalProperties:false,properties:{at:{type:'number',required:true},code:{type:'string',required:true}}}}},
+            // #713: the retained task-delivery correspondence window (observed numbers, or unavailable with a reason). Counts only.
+            deliveryCapacity:{type:'object',additionalProperties:false,required:true,properties:{status:{type:'string',required:true},reason:{type:'string'},observedAt:{type:'number'},capacity:{type:'number'},retentionMs:{type:'number'},stored:{type:'number'},retained:{type:'number'},expiredUntracked:{type:'number'},taskBound:{type:'number'},saturated:{type:'boolean'},retainedByState:{type:'object',additionalProperties:false,properties:{reserved:{type:'number',required:true},enqueued:{type:'number',required:true},claimed:{type:'number',required:true},cancelled:{type:'number',required:true},failed:{type:'number',required:true}}},earliestPossibleExpiryAt:{oneOf:[{type:'number'},{type:'null'}],description:'possible expiry under the retention rule (ms), or null; not a promise of a free slot'}}},
             ledgerPersistence:{type:'object',additionalProperties:false,required:true,properties:{ok:{type:'boolean',required:true},lastError:{type:'object',additionalProperties:false,properties:{at:{type:'number',required:true},code:{type:'string',required:true}}}}},
             nudgeEscalations:{type:'object',additionalProperties:false,required:true,properties:{queued:{type:'number',required:true},unavailable:{type:'number',required:true},failed:{type:'number',required:true},lastAt:{type:'number'},lastError:{type:'string'}}},
             reconciliationReminders: {type:'object',additionalProperties:false,required:true,properties:{observed:{type:'number',required:true},repeatedlyUnreconciled:{type:'number',required:true}}},
@@ -553,6 +556,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           type: 'text',
           text: [
             `Delivery bookkeeping: orphaned=${value.deliveryBookkeeping.orphaned} failures=${value.deliveryBookkeeping.failures}${value.deliveryBookkeeping.lastError?" code="+value.deliveryBookkeeping.lastError.code:""}`,
+            deliveryCapacityLine(parseDeliveryCapacitySnapshot(value.deliveryCapacity)),
             `Ledger persistence: ${value.ledgerPersistence.ok?'ok':'!!! FAILED !!!'}${value.ledgerPersistence.lastError?' at='+value.ledgerPersistence.lastError.at+' code='+value.ledgerPersistence.lastError.code:''}`,
             `Nudge escalations: queued=${value.nudgeEscalations.queued} unavailable=${value.nudgeEscalations.unavailable} failed=${value.nudgeEscalations.failed}${value.nudgeEscalations.lastAt===undefined?'':' lastAt='+value.nudgeEscalations.lastAt}${value.nudgeEscalations.lastError?' code='+value.nudgeEscalations.lastError:''}`,
             ...(value.inFlight.length === 0 ? [] : ['In flight:']),
@@ -573,6 +577,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         activity: RouteActivityEntry[]
         idempotency: IdempotencyStats
         deliveryBookkeeping:ReturnType<TaskLedger['deliveryBookkeepingState']>
+        deliveryCapacity:ReturnType<TaskLedger['deliveryCapacityState']>
         ledgerPersistence: ReturnType<TaskLedger['persistenceState']>
         nudgeEscalations:import('../nudge-observability.ts').NudgeEscalations
         reconciliationReminders: {observed:number;repeatedlyUnreconciled:number}
@@ -588,6 +593,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
             activity: recentActivity.slice(),
             idempotency: idempotencyStore.stats(),
             deliveryBookkeeping:taskLedger.deliveryBookkeepingState(),
+            deliveryCapacity:taskLedger.deliveryCapacityState(),
             ledgerPersistence:taskLedger.persistenceState(),
             nudgeEscalations:deps.nudgeEscalations?.()??{queued:0,unavailable:0,failed:0},
             reconciliationReminders: reminderSummary(),
@@ -637,6 +643,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
           inFlight: [...inFlightRoutes.values()].map(route => ({ team: route.team, peer: route.peer, startedAt: route.startedAt })).filter(inScope),
           activity: recentActivity.filter(inScope),
           deliveryBookkeeping:taskLedger.deliveryBookkeepingState(),
+          deliveryCapacity:taskLedger.deliveryCapacityState(),
           ledgerPersistence:taskLedger.persistenceState(),
           nudgeEscalations:deps.nudgeEscalations?.()??{queued:0,unavailable:0,failed:0},
           idempotency: idempotencyStore.stats(),
@@ -686,6 +693,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
                   answeredAt: { type: 'number' },
                   acknowledgedAt: { type: 'number' },
                   receiptDelivery:{type:'string',enum:['receipt-undelivered']},
+                  receiptRecovery:{type:'object',additionalProperties:false,properties:{state:{type:'string',enum:['retained','blocked','legacy-unknown','corrupt'],required:true},attempts:{type:'number'},nextAt:{type:'number'},code:{type:'string'}}},
                   consumed:{type:'boolean'}, deliveryObservation:{type:'string',enum:['consumed','delivered-unconsumed']},
                   reminderAttempts: {type:'number'}, reminderDelivered:{type:'number'}, reminderLastAt:{type:'number'}, reminderNextAt:{type:'number'}, reminderResult:{type:'string'}, reminderDiagnostic:{type:'string',enum:['metadata-reset']}, repeatedlyUnreconciled:{type:'boolean'},
                   direction: { type: 'string', enum: ['inbound', 'outbound'] },
@@ -793,6 +801,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
             ...(answeredAt !== undefined ? { answeredAt } : {}),
             ...(acknowledgedAt !== undefined ? { acknowledgedAt } : {}),
             ...(receiptDelivery?{receiptDelivery}:{}),
+            ...taskLedger.receiptObservation(taskId),
             ...(consumed!==undefined?{consumed,deliveryObservation:consumed?'consumed':'delivered-unconsumed'}:{}),
             ...(direction !== undefined ? { direction } : {}),
             ...(receiptExpected !== undefined ? { receiptExpected } : {}),
@@ -923,4 +932,15 @@ export function createInfoTools(deps: InfoToolsDeps) {
   }
 
   return { registerWhoami, registerTeams, registerStatus, registerTasks, registerProbe }
+}
+
+/**
+ * #713: one status line for the retained correspondence window. "Possible expiry" is the retention rule's earliest time,
+ * never a promise that a slot will be free or that re-sending is safe.
+ */
+export function deliveryCapacityLine(c: DeliveryCapacitySnapshot | undefined): string {
+  if (c === undefined) return 'Delivery correspondence: unknown'
+  if (c.status === 'unavailable') return `Delivery correspondence: unavailable (${c.reason})`
+  const expiry = c.earliestPossibleExpiryAt === null ? 'none' : formatPossibleExpiry(c.earliestPossibleExpiryAt)
+  return `Delivery correspondence: retained=${String(c.retained)}/${String(c.capacity)}${c.saturated ? ' !!! FULL: new deliveries refused !!!' : ''} task-bound=${String(c.taskBound)} expired-untracked=${String(c.expiredUntracked)} earliest possible expiry=${expiry}`
 }

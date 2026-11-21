@@ -27,6 +27,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Config } from '../index.ts'
+import { normalizeOriginClaimByPeer, originClaimByPeerMap } from '../origin-claim-by-peer.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from '../runtime.ts'
 import { reminderView } from '../reconciliation-state.ts'
 import { CanvasStore, canvasNameReserved as reservedCanvasName, isRemoteMemberRef, validRemoteMemberRef, legacyBareMember } from '../canvas-store.ts'
@@ -94,6 +95,8 @@ export interface AdminFaceDeps extends Pick<CanvasNotifyDeps, 'verifyOriginClaim
   readonly cliHomeOptions: (handle: string) => Promise<{ homes: string[]; unreadable: number; held?: true }>
   readonly layoutStore: LayoutStore
   readonly taskLedger: TaskLedger
+  /** #731: how this host keeps its a2a journals private (per-file 0600, or the Windows directory ACL result). */
+  readonly a2aDirPrivacy?: import('../windows-private-dir.ts').DirPrivacy
   readonly reminderDiagnostics?: () => unknown
   readonly nudgeEscalations?:()=>import('../nudge-observability.ts').NudgeEscalations
   readonly enforceRefused?: { reason: string; blockers: readonly string[] }
@@ -347,7 +350,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             })),
           },
           // #332: home-controlled aliases, never inferred from peer cards or a file reference.
-          host: { ...(lanIp !== '' ? { lanIp } : {}), originClaimAudiences: [...config.originClaimAudiences ?? []] },
+          host: { ...(lanIp !== '' ? { lanIp } : {}), originClaimAudiences: [...config.originClaimAudiences ?? []], originClaimByPeer: originClaimByPeerMap(normalizeOriginClaimByPeer(config.originClaimByPeer).rules) },
           // gh#20 W-C (host rail): each peer row also carries its display
           // name and version from the warm card (absent until a fetch),
           // and the last-contact timestamp for the health lamp. W-A's
@@ -381,7 +384,9 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           // list and settled ones just a count, all additive so the panel
           // keeps rendering plain owed rows until it learns the tiers.
           ledgerPersistence: taskLedger.persistenceState(),
+          filePrivacy: d.a2aDirPrivacy,
           deliveryBookkeeping:taskLedger.deliveryBookkeepingState(),
+          deliveryCapacity:taskLedger.deliveryCapacityState(),
           nudgeEscalations:d.nudgeEscalations?.()??{queued:0,unavailable:0,failed:0},
           reconciliationReminders: d.reminderDiagnostics?.(),
           tasks: taskLedger.list()
@@ -393,6 +398,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               ...(task.answeredAt !== undefined ? { answeredAt: task.answeredAt } : {}),
               ...(task.acknowledgedAt !== undefined ? { acknowledgedAt: task.acknowledgedAt } : {}),
               ...(task.receiptDelivery?{receiptDelivery:task.receiptDelivery}:{}),
+              ...taskLedger.receiptObservation(task.taskId),
               ...(task.consumed !== undefined ? { consumed:task.consumed,deliveryObservation:task.consumed?'consumed':'delivered-unconsumed' } : {}),
               ...(task.forwarded === true ? { forwarded: true } : {}),
               ...(task.deliveredTo !== undefined ? { deliveredTo: task.deliveredTo } : {}),
@@ -416,7 +422,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           tasksDead: taskLedger.list()
             .filter(task => task.status === 'dead')
             .map(task => ({ taskId: task.taskId, team: task.team, peer: task.peer, startedAt: task.startedAt, deadAt: task.deadAt ?? task.startedAt, reason: task.reason ?? 'unspecified', ...(task.answeredAt !== undefined ? { answeredAt: task.answeredAt } : {}),
-              ...(task.receiptDelivery?{receiptDelivery:task.receiptDelivery}:{}), ...(task.brief !== undefined ? { brief: task.brief } : {}), ...(task.direction !== undefined ? { direction: task.direction } : {}), ...(task.sender !== undefined ? { sender: task.sender } : {}), ...(task.auth !== undefined ? { auth: task.auth } : task.direction === 'inbound' ? { authLegacy: true } : {}) })),
+              ...(task.receiptDelivery?{receiptDelivery:task.receiptDelivery}:{}),
+              ...taskLedger.receiptObservation(task.taskId), ...(task.brief !== undefined ? { brief: task.brief } : {}), ...(task.direction !== undefined ? { direction: task.direction } : {}), ...(task.sender !== undefined ? { sender: task.sender } : {}), ...(task.auth !== undefined ? { auth: task.auth } : task.direction === 'inbound' ? { authLegacy: true } : {}) })),
           // gh#31: per-task outcomes for rows that LEFT the ledger — the
           // chat drawer used to guess (settled, abandoned or cancelled).
           // Bounded to the archive (≤64), newest first, with the

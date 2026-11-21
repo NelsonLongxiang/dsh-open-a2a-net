@@ -190,3 +190,84 @@ export function registerBuilderTools(ctx: Context, isBuilder: (sessionId: string
     },
   } as never))
 }
+
+/**
+ * #791: what the builder's issue tools need from the host. The host files with the `gh` its operator logged in; the builder
+ * never sees a credential. Only repositories the owner already configured for a team may be filed to.
+ */
+export interface IssueDeps {
+  readonly gh: (args: string[]) => Promise<string>
+  /** Repositories named in the teams' settings (`repos`), owner/name. */
+  readonly repos: () => readonly string[]
+  readonly personMessage: (sessionId: string) => { id: string; atMs: number; text: string } | undefined
+  readonly now?: () => number
+}
+
+/** A builder's issue draft, kept in memory until filed (a restart drops pending drafts; nothing was sent). */
+interface IssueDraft { readonly id: string; readonly session: string; readonly repo: string; readonly title: string; readonly body: string; readonly atMs: number; filed?: { url: string; number: number } }
+
+const ISSUE_DRAFT_CAP = 20, ISSUE_TITLE_MAX = 200, ISSUE_BODY_MAX = 8000
+const REPO = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
+
+/**
+ * #791: the team builder files a problem it found as an issue — through the owner's gate, as with a blueprint (D10). Propose
+ * records a draft and sends nothing; file lets the host submit it only after the owner's own typed message in this session,
+ * newer than the draft. A filed draft is never filed again.
+ */
+export function registerBuilderIssueTools(ctx: Context, isBuilder: (sessionId: string) => boolean, deps: IssueDeps): void {
+  const refused = { ok: false, code: 'not-builder', error: 'the team builder\'s tools serve only a session under the superagent-builder preset that holds no team role' }
+  const said = (title: string, value: Record<string, unknown>) => [{ type: 'text' as const, text: `${title}: ${JSON.stringify(value)}` }]
+  const me = (exec: { agent?: { id: unknown } }): string | undefined => exec.agent !== undefined && isBuilder(String(exec.agent.id)) ? String(exec.agent.id) : undefined
+  const now = deps.now ?? (() => Date.now())
+  const drafts = new Map<string, IssueDraft>()
+  const view = (d: IssueDraft): Record<string, JsonValue> => ({ id: d.id, repo: d.repo, title: d.title, body: d.body, ...(d.filed !== undefined ? { filed: d.filed } : {}) })
+  ctx.tools.register(defineTool({
+    name: 'superagent_issue_propose',
+    description: 'Team builder only: draft an issue about a problem you found (for example while the owner tests a team). Nothing is sent. repo must be one the owner configured for a team. Show the owner the returned draft and wait for their own reply; then call superagent_issue_file.',
+    parameters: {
+      repo: { type: 'string', required: true, description: 'owner/name; one of the repositories configured for a team.' },
+      title: { type: 'string', required: true, description: `The issue title, at most ${String(ISSUE_TITLE_MAX)} characters.` },
+      body: { type: 'string', required: true, description: `What happened, how to reproduce, what was expected; at most ${String(ISSUE_BODY_MAX)} characters. No credentials, addresses or local paths.` },
+    },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args: unknown, value: Record<string, unknown>) => said('issue draft', value) },
+    presentCall: () => ({ card: 'generic', title: 'issue (propose)', kind: 'other', rawInput: {} }),
+    execute: async (args: { repo?: string; title?: string; body?: string }, exec: { agent?: { id: unknown } }): Promise<Record<string, JsonValue>> => {
+      const session = me(exec); if (session === undefined) return refused
+      const repo = String(args.repo ?? '').trim(), title = String(args.title ?? '').trim(), body = String(args.body ?? '').trim()
+      const allowed = deps.repos()
+      if (!REPO.test(repo) || !allowed.includes(repo)) return { ok: false, code: 'repo', error: allowed.length === 0 ? 'no team on this host has a repository configured; the owner sets one in the team settings' : `repo must be one of: ${allowed.join(', ')}` }
+      if (title === '' || title.length > ISSUE_TITLE_MAX) return { ok: false, code: 'title', error: `title is 1..${String(ISSUE_TITLE_MAX)} characters` }
+      if (body === '' || body.length > ISSUE_BODY_MAX) return { ok: false, code: 'body', error: `body is 1..${String(ISSUE_BODY_MAX)} characters` }
+      const pending = [...drafts.values()].filter(d => d.session === session && d.filed === undefined)
+      if (pending.length >= ISSUE_DRAFT_CAP) return { ok: false, code: 'full', error: `you have ${String(ISSUE_DRAFT_CAP)} unfiled drafts; file or drop some first` }
+      const draft: IssueDraft = { id: `is-${randomBytes(4).toString('hex')}`, session, repo, title, body, atMs: now() }
+      drafts.set(draft.id, draft)
+      return { ok: true, ...view(draft), next: '把草稿给主人看；主人在本会话里亲口同意后，调用 superagent_issue_file。' }
+    },
+  } as never))
+  ctx.tools.register(defineTool({
+    name: 'superagent_issue_file',
+    description: 'Team builder only: let the host file your own issue draft, only after the owner\'s own typed message in this session agreed to it (a relayed or agent message never counts). A draft is filed once.',
+    parameters: { id: { type: 'string', required: true, description: 'The draft id from superagent_issue_propose.' } },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args: unknown, value: Record<string, unknown>) => said('issue', value) },
+    presentCall: () => ({ card: 'generic', title: 'issue (file)', kind: 'other', rawInput: {} }),
+    execute: async (args: { id?: string }, exec: { agent?: { id: unknown } }): Promise<Record<string, JsonValue>> => {
+      const session = me(exec); if (session === undefined) return refused
+      const draft = drafts.get(String(args.id ?? ''))
+      if (draft === undefined || draft.session !== session) return { ok: false, code: 'no-draft', error: 'there is no issue draft of yours with that id' }
+      if (draft.filed !== undefined) return { ok: true, already: true, ...view(draft) }
+      // D10: the owner's own typed message, newer than the draft; a relayed or agent message never counts.
+      const person = deps.personMessage(session)
+      if (person === undefined) return { ok: false, code: 'not-the-owner', error: 'this files only in a turn answering the owner\'s own message' }
+      if (person.atMs <= draft.atMs) return { ok: false, code: 'not-yet', error: 'the owner has not replied since this draft: show it to them and wait' }
+      if (!deps.repos().includes(draft.repo)) return { ok: false, code: 'repo', error: `${draft.repo} is no longer configured for a team` }
+      const body = `${draft.body}\n\n---\n由 superagent 组队顾问起草，主人在会话中同意后由宿主提交。`
+      let out: { html_url?: unknown; number?: unknown }
+      try { out = JSON.parse(await deps.gh(['api', '-X', 'POST', `repos/${draft.repo}/issues`, '-f', `title=${draft.title}`, '-f', `body=${body}`])) as typeof out }
+      catch (error) { return { ok: false, code: 'gh', error: `the host could not file it (gh: ${String((error as Error)?.message ?? error).split('\n')[0]!.slice(0, 200)}); the draft is kept` } }
+      if (typeof out.html_url !== 'string' || typeof out.number !== 'number') return { ok: false, code: 'gh', error: 'gh answered without an issue; the draft is kept' }
+      draft.filed = { url: out.html_url, number: out.number }
+      return { ok: true, ...view(draft) }
+    },
+  } as never))
+}

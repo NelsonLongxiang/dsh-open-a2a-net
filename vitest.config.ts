@@ -2,6 +2,8 @@ import { configDefaults, defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
+    // Vitest 4 uses this top-level option; keep I/O-heavy suites bounded at the original deadlines.
+    maxWorkers: 1,
     // A plugin instance in a test makes the superagent team's ygl-trees workspace and projects (ygl-home.ts); without this it
     // would write them into the developer's real ~/.ygl-trees-superagent. The global setup owns that home for the run and
     // removes it at the end (a config-time mkdtemp outlived every run).
@@ -16,6 +18,8 @@ export default defineConfig({
       },
     },
     exclude: [
+      // Node's built-in test runner owns the filesystem/CLI layout checks.
+      'tests/repository-layout.test.mjs',
       // Node's built-in runner owns the storefront metadata gate.
       'tests/market-metadata.test.mjs',
       // nexus-stage carries its own suite, consumed by the root gate via

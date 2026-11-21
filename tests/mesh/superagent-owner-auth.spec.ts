@@ -21,8 +21,8 @@ async function fixture(withConnection = true) {
   await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   if (withConnection) await ctx.plugin(MockGuiConnection, { origin: ORIGIN })
   const calls = { decide: vi.fn(() => ({ ok: true })), settings: vi.fn(() => ({ ok: true })), sync: vi.fn(async () => ({ ok: true, logins: [] })),
-    file: vi.fn(() => ({ name: 'fixture.txt', sha256, size: bytes.length })), staffing: vi.fn(async () => ({ ok: true })) }
-  const team = { decide: calls.decide, saveSettings: calls.settings, githubCollaborators: calls.sync, settings: { allowed: { github: [] } }, decisionFile: calls.file }
+    file: vi.fn(() => ({ name: 'fixture.txt', sha256, size: bytes.length })), staffing: vi.fn(async () => ({ ok: true })), recover: vi.fn(async () => ({ ok: true, state: 'failed' })) }
+  const team = { decide: calls.decide, saveSettings: calls.settings, githubCollaborators: calls.sync, settings: { allowed: { github: [] } }, decisionFile: calls.file, recoverOutbound: calls.recover }
   const outer = vi.fn((req: IncomingMessage) => req.headers['x-fixture-control-denied'] !== '1')
   const deps = { ctx, config: { team: 'dsh' }, superagentHost: team, superagentTeams: { get: () => team, decisionCards: () => [], health: () => [] },
     controlRoute: (handler: (req: IncomingMessage, res: ServerResponse) => void) => (req: IncomingMessage, res: ServerResponse) => {
@@ -51,6 +51,8 @@ const operations = [
   { label: 'decision file', path: `/__dsh_a2a/superagent/decisions/file?card=fixture-card&sha256=${sha256}`, body: undefined, effect: 'file' },
   { label: 'rule settings', path: '/__dsh_a2a/superagent', body: { action: 'settings', settings: { rules: [] } }, effect: 'settings' },
   { label: 'GitHub allowlist sync', path: '/__dsh_a2a/superagent', body: { action: 'sync-github-allowed' }, effect: 'sync' },
+  { label: 'outbound reconcile', path: '/__dsh_a2a/superagent', body: { action: 'outbound-reconcile', card_id: 'card', task_id: 'original' }, effect: 'recover' },
+  { label: 'outbound retry', path: '/__dsh_a2a/superagent', body: { action: 'outbound-retry', card_id: 'card', task_id: 'original' }, effect: 'recover' },
   { label: 'staffing agreement', path: '/__dsh_a2a/superagent/staffing', body: { action: 'agree', id: 'fixture-change' }, effect: 'staffing' },
 ] as const
 
@@ -106,6 +108,26 @@ describe('original-request browser-owner guarded HTTP faces', () => {
       expect(result.text).not.toContain('fixture-private-provider-error')
       expect(f.calls.decide).not.toHaveBeenCalled()
     } finally { lookup.mockRestore() }
+  })
+
+  it('owner recovery rejects payload replacement before effects and keeps the outer control fence', async () => {
+    const f = await fixture()
+    const original = { action: 'outbound-retry', card_id: 'card', task_id: 'out-original' }
+    for (const extra of [{ text: 'changed' }, { address: 'evil/aaaaaaaa' }, { sender: 'another' }, { approved: true }, { retry: true }]) {
+      expect(await f.send('/__dsh_a2a/superagent', { ...original, ...extra })).toMatchObject({ status: 400, data: { code: 'outbound-input' } })
+    }
+    expect(f.calls.recover).not.toHaveBeenCalled()
+    expect(await f.send('/__dsh_a2a/superagent', original, { 'x-fixture-control-denied': '1' })).toMatchObject({ status: 403, data: { code: 'control-refused' } })
+    expect(f.calls.recover).not.toHaveBeenCalled()
+    expect(await f.send('/__dsh_a2a/superagent', original)).toMatchObject({ status: 200, data: { ok: true } })
+    expect(f.calls.recover).toHaveBeenLastCalledWith('card', 'out-original', true)
+  })
+
+  it('#764 review: turning on observerCast needs the owner\'s proof (a control-route shell cannot)', async () => {
+    const f = await fixture(false)
+    const result = await f.send('/__dsh_a2a/superagent', { action: 'settings', settings: { observerCast: true } }, { cookie: '' })
+    expect(result).toMatchObject({ status: 503, data: { ok: false, code: 'owner-auth-unavailable' } })
+    expect(f.calls.settings).not.toHaveBeenCalled()
   })
 
   it('does not narrow unrelated control-only non-rule settings', async () => {

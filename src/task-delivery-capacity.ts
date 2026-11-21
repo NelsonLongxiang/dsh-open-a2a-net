@@ -1,0 +1,175 @@
+/** #713: pure, detached observations, not delivery admission or retry authority.
+ * The caller must provide its actual ledger health; this module never reads or mutates a ledger.
+ * TaskLedger.reserveDelivery and deliveryCapacityState use it (#713 A1); a full window throws DeliveryCapacityError.
+ */
+import { parseTaskDelivery, TASK_DELIVERY_CAP, TASK_DELIVERY_RETENTION_MS, type TaskDelivery } from './task-delivery.ts'
+
+const STATES = ['reserved', 'enqueued', 'claimed', 'cancelled', 'failed'] as const
+const UNAVAILABLE_REASONS = ['health-unavailable', 'ledger-damaged', 'not-conserved', 'correspondence-damaged', 'persistence-failed', 'invalid-clock', 'invalid-entries'] as const
+export type DeliveryCapacityUnavailableReason = typeof UNAVAILABLE_REASONS[number]
+export type DeliveryCapacitySnapshot =
+  | { status: 'unavailable'; reason: DeliveryCapacityUnavailableReason }
+  | {
+      status: 'observed'
+      observedAt: number
+      capacity: number
+      retentionMs: number
+      stored: number
+      retained: number
+      expiredUntracked: number
+      taskBound: number
+      saturated: boolean
+      /** Denominator: retained, not stored or receipt-owing tasks. */
+      retainedByState: Record<TaskDelivery['state'], number>
+      /** Possible expiry under the current rule, never a promise of a free slot or safe retry. */
+      earliestPossibleExpiryAt: number | null
+    }
+
+export interface DeliveryCapacityInput {
+  deliveries: readonly TaskDelivery[]
+  /** All still-stored tasks, including dead rows, not just unanswered receipt debt. */
+  taskIds: ReadonlySet<string>
+  now: number
+  /** `conserved`: the ledger's read-only conservation verdict (#746 review R2): a failed one is not a healthy window. */
+  health: { ledgerDamaged: boolean; deliveryRestoreError: boolean; persistenceOK: boolean; conserved: boolean }
+}
+
+/** Exact existing retention predicate, shared with TaskLedger.reserveDelivery; no state-based early eviction. */
+export function deliveryRetainedByRule(row: Pick<TaskDelivery, 'taskId' | 'createdAt'>, taskIds: ReadonlySet<string>, now: number): boolean {
+  return taskIds.has(row.taskId) || now - row.createdAt <= TASK_DELIVERY_RETENTION_MS
+}
+
+const integer = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
+const unavailable = (reason: DeliveryCapacityUnavailableReason): DeliveryCapacitySnapshot => ({ status: 'unavailable', reason })
+
+export function deliveryCapacitySnapshot(input: DeliveryCapacityInput): DeliveryCapacitySnapshot {
+  const { health, now, deliveries, taskIds } = input
+  if (!health || typeof health.ledgerDamaged !== 'boolean' || typeof health.deliveryRestoreError !== 'boolean' || typeof health.persistenceOK !== 'boolean' || typeof health.conserved !== 'boolean') return unavailable('health-unavailable')
+  if (health.ledgerDamaged) return unavailable('ledger-damaged')
+  if (!health.conserved) return unavailable('not-conserved')
+  if (health.deliveryRestoreError) return unavailable('correspondence-damaged')
+  if (!health.persistenceOK) return unavailable('persistence-failed')
+  if (!integer(now)) return unavailable('invalid-clock')
+  if (!Array.isArray(deliveries) || deliveries.length > TASK_DELIVERY_CAP) return unavailable('invalid-entries')
+
+  const retainedByState = { reserved: 0, enqueued: 0, claimed: 0, cancelled: 0, failed: 0 }
+  const taskKeys = new Set<string>(), messageKeys = new Set<string>()
+  let retained = 0, taskBound = 0, earliestPossibleExpiryAt: number | null = null
+  for (const raw of deliveries) {
+    const row = parseTaskDelivery(raw)
+    if (!row) return unavailable('invalid-entries')
+    const messageKey = JSON.stringify([row.sessionId, row.messageId])
+    if (taskKeys.has(row.taskId) || messageKeys.has(messageKey)) return unavailable('invalid-entries')
+    taskKeys.add(row.taskId); messageKeys.add(messageKey)
+    const bound = taskIds.has(row.taskId)
+    if (bound) taskBound++
+    if (!deliveryRetainedByRule(row, taskIds, now)) continue
+    retained++
+    retainedByState[row.state]++
+    // The inclusive horizon expires one integer millisecond later. Do not round unsafe additions.
+    if (!bound && row.createdAt <= Number.MAX_SAFE_INTEGER - TASK_DELIVERY_RETENTION_MS - 1) {
+      const expires = row.createdAt + TASK_DELIVERY_RETENTION_MS + 1
+      if (earliestPossibleExpiryAt === null || expires < earliestPossibleExpiryAt) earliestPossibleExpiryAt = expires
+    }
+  }
+  return {
+    status: 'observed', observedAt: now, capacity: TASK_DELIVERY_CAP, retentionMs: TASK_DELIVERY_RETENTION_MS,
+    stored: deliveries.length, retained, expiredUntracked: deliveries.length - retained, taskBound,
+    saturated: retained >= TASK_DELIVERY_CAP, retainedByState, earliestPossibleExpiryAt,
+  }
+}
+
+/**
+ * #746 review R1: a possible-expiry time as text, total over every accepted value. A safe-integer millisecond count past
+ * what a Date can hold is shown as that number, never thrown on and never clamped (a far-future record stays retained).
+ */
+export function formatPossibleExpiry(ms: number): string {
+  const date = new Date(ms)
+  return Number.isFinite(date.getTime()) ? date.toISOString() : `${String(ms)} ms since the epoch (beyond a calendar date)`
+}
+
+const object = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v) && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null)
+const exactKeys = (v: Record<string, unknown>, keys: readonly string[]): boolean => Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k))
+
+/** A bounded wire DTO, not an Error spread. Missing legacy fields remain unknown, never healthy zero. */
+export function parseDeliveryCapacitySnapshot(raw: unknown): DeliveryCapacitySnapshot | undefined {
+  if (!object(raw)) return undefined
+  if (raw.status === 'unavailable') {
+    if (!exactKeys(raw, ['status', 'reason']) || !UNAVAILABLE_REASONS.some(reason => reason === raw.reason)) return undefined
+    return { status: 'unavailable', reason: raw.reason as DeliveryCapacityUnavailableReason }
+  }
+  if (raw.status !== 'observed' || !exactKeys(raw, ['status', 'observedAt', 'capacity', 'retentionMs', 'stored', 'retained', 'expiredUntracked', 'taskBound', 'saturated', 'retainedByState', 'earliestPossibleExpiryAt'])) return undefined
+  const { observedAt, stored, retained, expiredUntracked, taskBound, retainedByState: counts, earliestPossibleExpiryAt: expiry } = raw
+  if (!integer(observedAt) || raw.capacity !== TASK_DELIVERY_CAP || raw.retentionMs !== TASK_DELIVERY_RETENTION_MS) return undefined
+  if (!integer(stored) || stored > TASK_DELIVERY_CAP || !integer(retained) || retained > stored || !integer(expiredUntracked) || expiredUntracked !== stored - retained || !integer(taskBound) || taskBound > retained) return undefined
+  if (raw.saturated !== (retained >= TASK_DELIVERY_CAP) || !object(counts) || !exactKeys(counts, STATES)) return undefined
+  let sum = 0
+  for (const state of STATES) { const n = counts[state]; if (!integer(n) || n > retained) return undefined; sum += n }
+  if (sum !== retained || (expiry !== null && (!integer(expiry) || expiry < TASK_DELIVERY_RETENTION_MS + 1 || expiry <= observedAt || retained === taskBound))) return undefined
+  return {
+    status: 'observed', observedAt, capacity: TASK_DELIVERY_CAP, retentionMs: TASK_DELIVERY_RETENTION_MS,
+    stored, retained, expiredUntracked, taskBound, saturated: raw.saturated as boolean,
+    retainedByState: { reserved: counts.reserved as number, enqueued: counts.enqueued as number, claimed: counts.claimed as number, cancelled: counts.cancelled as number, failed: counts.failed as number },
+    earliestPossibleExpiryAt: expiry as number | null,
+  }
+}
+
+/**
+ * #713: the host-wide retained correspondence window is full. Thrown by reserve before anything is enqueued for this
+ * occurrence; the message is unchanged for existing readers, `code` and the bounded `capacity` view are the typed part.
+ */
+export class DeliveryCapacityError extends Error {
+  readonly code = 'correspondence-capacity' as const
+  constructor(readonly capacity: DeliveryCapacitySnapshot) {
+    super('task delivery correspondence capacity reached; refusing untracked delivery')
+    this.name = 'DeliveryCapacityError'
+  }
+}
+
+/**
+ * #713 A2: the typed part of a capacity refusal as it travels (local result, wire JSON, client decode, forward). `notSent`
+ * holds only for this occurrence: reserve refused before anything was enqueued. The view is the receiving host's, never
+ * the caller's or the network's; an undecodable view stays `unknown`.
+ */
+export interface CapacityRefusal { readonly code: 'correspondence-capacity'; readonly notSent: true; readonly capacity: DeliveryCapacitySnapshot | 'unknown' }
+
+export function capacityRefusalOf(error: unknown): CapacityRefusal | undefined {
+  return error instanceof DeliveryCapacityError ? { code: 'correspondence-capacity', notSent: true, capacity: error.capacity } : undefined
+}
+
+/** Strict wire decode: exactly the three keys; anything else is not a capacity refusal (a peer cannot smuggle fields in). */
+export function parseCapacityRefusal(raw: unknown): CapacityRefusal | undefined {
+  if (!object(raw) || !exactKeys(raw, ['code', 'notSent', 'capacity']) || raw.code !== 'correspondence-capacity' || raw.notSent !== true) return undefined
+  return { code: 'correspondence-capacity', notSent: true, capacity: raw.capacity === 'unknown' ? 'unknown' : parseDeliveryCapacitySnapshot(raw.capacity) ?? 'unknown' }
+}
+
+/** The caller-facing text. It names the host-wide window, says nothing was sent, and never advises a workaround. */
+export function capacityRefusalNote(refusal: CapacityRefusal): string {
+  const c = refusal.capacity
+  const expiry = c !== 'unknown' && c.status === 'observed' && c.earliestPossibleExpiryAt !== null ? ` The earliest record may expire at ${formatPossibleExpiry(c.earliestPossibleExpiryAt)}; that is not a promise of a free slot.` : ''
+  return `The receiving host's task-delivery correspondence window is full (host-wide, not the target's queue); nothing was sent for this request.${expiry} Do not cancel tasks, join or route to other seats, or reuse task ids to make room; wait, or ask that host's owner to look at a2a_status.`
+}
+
+/**
+ * #713 A2: what an exhausted multi-candidate route says about capacity refusals. The typed refusal rides along only when
+ * it was the one and only failure; otherwise just the count, so one host's full window never reads as everyone's.
+ * `counted` is candidates whose own answer was already a count (a forwarded multi-candidate route, #747 review R1).
+ */
+export function capacityRefusalFields(refusals: readonly CapacityRefusal[], failures: number, counted = 0): { refusal?: CapacityRefusal; capacityRefusals?: number } {
+  const total = refusals.length + counted
+  if (total === 0) return {}
+  return refusals.length === 1 && counted === 0 && failures === 1 ? { refusal: refusals[0]!, capacityRefusals: 1 } : { capacityRefusals: total }
+}
+
+/** #747 review R1: a peer's count-only capacity fact, bounded: a positive safe integer no larger than any route could see. */
+export function parseCapacityCount(raw: unknown): number | undefined {
+  return typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 1 && raw <= 1024 ? raw : undefined
+}
+
+/**
+ * #747 review R2: does a failure body carry any evidence that the message was accepted (or may have been)? Such a body is
+ * never a not-sent capacity refusal: the stronger fact wins, and contradictory input reads as unknown.
+ */
+export function deliveryEvidence(raw: { acceptance?: unknown; delivered?: unknown; routed?: unknown }): boolean {
+  return raw.acceptance === 'unknown' || raw.acceptance === 'inserted' || raw.delivered === true || raw.routed === true
+}

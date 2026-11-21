@@ -43,6 +43,7 @@ import { dropDispatch, localXY } from './planning-drop'
 import { buildChildChip, childChipTitle } from './planning-root'
 import { createFrameSelection } from './planning-frame-selection'
 import { createRootCompose } from './planning-root-compose'
+import { createRootFrameDrag } from './planning-root-frame-drag'
 import { boardBounds, fitBelowHud, hudBottomOf } from './planning-fit'
 import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters, NODE_W, NODE_H } from './world'
 import { applyAction, settleAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
@@ -59,20 +60,11 @@ import { cardText } from './planning-card-text'
 import { createCardElement, paintPrio, workLabel } from './planning-card'
 import { createLegend } from './planning-legend'
 import { UNREACHABLE_HINT, showFrameReachability, unreachableRefs } from './planning-reachability'
-import { viewportBucket, type PlanningDeps, type PlanningInput, type PlanningSession, type PlanningTeam, type PlanningView, type SeamKey, type SeamPointer, type ViewportBucket } from './planning-types'
+import { viewportBucket, type Gesture, type PlanningDeps, type PlanningInput, type PlanningSession, type PlanningTeam, type PlanningView, type SeamKey, type SeamPointer, type ViewportBucket } from './planning-types'
 import './planning.css'
 
 export { viewportBucket } from './planning-types'
 export type { PlanningDeps, PlanningInput, PlanningSession, PlanningTeam, PlanningView, SeamKey, SeamPointer, ViewportBucket } from './planning-types'
-
-
-type Gesture =
-  | { readonly kind: 'none' }
-  | { readonly kind: 'node'; ids: readonly string[]; clicked: string; rosterOrigin?: string; last: { x: number; y: number }; moved: boolean; el: Element | null }
-  | { readonly kind: 'frame'; name: string; snap: NonNullable<ReturnType<WorldModel['beginFrameDrag']>>; origin: { x: number; y: number }; moved: boolean }
-  | { readonly kind: 'frame-resize'; name: string; dir: string; startRect: { x: number; y: number; w: number; h: number }; origin: { x: number; y: number }; moved: boolean }
-  | { readonly kind: 'pan'; last: { x: number; y: number }; moved: boolean }
-  | { readonly kind: 'marquee'; origin: { x: number; y: number }; last: { x: number; y: number }; additive: boolean }
 
 // The card skeleton, its 工作中/空闲 chip and the right-hand chip live in planning-card (module-size cap).
 export { workLabel } from './planning-card'
@@ -241,7 +233,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   noticeStack.setAttribute('role', 'log')
   noticeStack.setAttribute('aria-live', 'polite')
 
-  root.append(grid, world, marquee, toolbar, status, legend, noticeStack)
+  // Share a wrapping HUD row so a long toolbar never sits under the status control.
+  const hud = document.createElement('div')
+  hud.className = 'p-hud'
+  hud.append(toolbar, status)
+  root.append(grid, world, marquee, hud, legend, noticeStack)
 
   // ── viewport application ──
   let viewW = 0
@@ -433,7 +429,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     for (const [name, el] of [...frameEls]) {
       if (!seen.has(name)) { el.remove(); frameEls.delete(name) }
     }
-    frameSelection.sync(); compose.paint()
+    frameSelection.sync(); compose.paint(); rootDrag.sync()
   }
 
   // ── keyed diff: nodes ──
@@ -555,6 +551,9 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     if (roster && (a.type === 'create-team' || a.type === 'add-member') && a.ids.some(id => model.getNode(id)?.remote === true || !lastSessions.some(s => s.id === id && s.joined === true))) {
       notice('error', 'roster 只接受本机已入网会话，远端或未入网成员未写入'); return
     }
+    if (a.type === 'create-team' && a.ids.some(id => model.getNode(id)?.remote !== true && !lastSessions.some(s => s.id === id && s.joined === true))) {
+      notice('error', '本机会话已离开网络或目录，请重新选择后组建团队'); return
+    }
     // gh#20 W-B: the SERVER sees zone/id8 remote handles where the model
     // keeps its peer-<host> node id — the canvas member contract is
     // session-id-or-remote-ref. Translation happens here, one boundary;
@@ -658,6 +657,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   })
   // #650: ≥2 selected team frames make 建队 (G) compose a root team; otherwise it is the session team as before.
   const compose = createRootCompose({ root, signal, io: deps.compose, notice, frames: () => frameEls, composed: () => frameSelection.clear() })
+  const rootDrag = createRootFrameDrag({ model, compose, signal, frames: () => frameEls })
   const buildTeam = (): void => { if (!compose.open(frameSelection.names())) menus.startCreateFromSelection() }
 
   // ── 节点列表 drawer (planning-nodelist) ──
@@ -675,7 +675,11 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   attachSessionDrop(root, {
     signal, frames: () => frameEls,
     frameAt: (clientX, clientY) => { const p = localXY(root, { clientX, clientY }); return innermostFrameAt(new Map(model.allFrames()), screenToWorld(vp, p.x, p.y)) },
-    drop: (team, id) => model.getNode(id)?.memberships.some(m => m.team === team) === true ? notice('info', '该会话已在这个队里') : emitAction({ type: 'add-member', team, ids: [id] }),
+    drop: (team, id) => {
+      if (!lastSessions.some(session => session.id === id && session.joined === true)) { notice('error', '该会话已离开网络，请刷新后重新选择'); return }
+      if (model.getNode(id)?.memberships.some(m => m.team === team) === true) notice('info', '该会话已在这个队里')
+      else emitAction({ type: 'add-member', team, ids: [id] })
+    },
   })
 
   /** Center the viewport on one canvas node (the 已组队 row's 定位). */
@@ -704,7 +708,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       ev.preventDefault()
       return
     }
-    if (target !== null && target.closest('button, input, textarea, select, .p-toolbar, .p-search, .p-lamp, .p-status, .p-legend') !== null) return // HUD chrome owns its presses (no marquee / preventDefault: that stole the search box's focus — and, first, its native right-click menu)
+    if (target !== null && target.closest('button, input, textarea, select, .p-toolbar, .p-search, .p-lamp, .p-status, .p-legend, .p-nodelist, .p-menu') !== null) return // HUD chrome owns its presses (no marquee / preventDefault: that stole the search box's focus — and, first, its native right-click menu)
     undoBefore = layoutUndo.capture() // committed at pointerUp only if this press moved something
     const p = localXY(root, ev)
     // 右键按下：按住拖动 = 平移（Figma 惯例），原地抬起 = 上下文菜单。
@@ -824,7 +828,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       if (!gesture.moved && dx === 0 && dy === 0) return
       gesture.moved = true
       model.applyFrameDrag(gesture.snap, dx, dy)
-      render()
+      render(); rootDrag.move(gesture.name, w)
     } else if (gesture.kind === 'frame-resize') {
       // Re-solve the rect from the start rect plus the world delta, per
       // direction. Minimum 220x120 keeps the titlebar and成员 badges
@@ -906,8 +910,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       gesture.el?.classList.remove('dragging')
       render()
     } else if (gesture.kind === 'frame' || gesture.kind === 'frame-resize') {
-      // The frame stays where it was put; neighbours and stray cards yield (planning-overlap).
-      if (gesture.moved) { settleBoard(model, new Set(remoteFramesRef.keys()), gesture.name); markDirty(); render() }
+      if (gesture.moved) {
+        const p = localXY(root, ev)
+        const joined = gesture.kind === 'frame' && rootDrag.drop(gesture.snap, screenToWorld(vp, p.x, p.y))
+        // Ordinary layout drags keep their place; a root join (including a refusal) restores the drag snapshot.
+        if (!joined) { settleBoard(model, new Set(remoteFramesRef.keys()), gesture.name); markDirty() }
+        render()
+      }
     } else if (gesture.kind === 'pan') {
       if (gesture.moved) markDirty() // the viewport persists with the layout
     } else if (gesture.kind === 'marquee') {
@@ -918,7 +927,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       marquee.style.display = 'none'
       render()
     }
-    gesture = { kind: 'none' }
+    gesture = { kind: 'none' }; rootDrag.clear()
     if (undoBefore !== undefined) { layoutUndo.commit(undoBefore); undoBefore = undefined }
     try { root.releasePointerCapture(ev.pointerId ?? 0) } catch { /* not captured */ }
   }
@@ -930,7 +939,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     const panned = (gesture.kind === 'pan' && gesture.moved) || rightPress?.moved === true // right-drag pans live in rightPress
     marquee.style.display = 'none'
     rightPress = null
-    gesture = { kind: 'none' }
+    gesture = { kind: 'none' }; rootDrag.clear()
     if (undoBefore !== undefined && layoutUndo.revert(undoBefore)) render()
     if (panned) markDirty() // the pan stays (it is the view, not the layout) and persists like a finished one
     undoBefore = undefined
@@ -1463,7 +1472,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   function deactivate(): void { root.style.display = 'none' }
 
   function destroy(): void {
-    ac.abort()
+    ac.abort(); rootDrag.clear()
     for (const t of noticeTimers) clearTimeout(t)
   }
 

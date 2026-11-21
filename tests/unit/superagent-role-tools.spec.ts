@@ -2,13 +2,13 @@
  * superagent design v4, PR-D: the role tool lists (pinned) and how the host applies them.
  */
 import { describe, expect, it } from 'vitest'
-import { mkdtempSync } from '../temp-dirs.ts'
+import { mkdtempSync, cleanupBeforeTempDirs } from '../temp-dirs.ts'
 import { Config } from '../../src/config.ts'
 import { MEMBER_DENY, MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, TEAM_TOOLS, memberBoundary, roleToolRefusal, type Role, type RoleAgent } from '../../src/superagent/host/role-tools.ts'
 
 describe('role tool lists', () => {
   it('the team\'s own tools are the router\'s, the member\'s ticket tools and the builder\'s inventory', () => {
-    expect(TEAM_TOOLS).toEqual([...ROUTER_TOOLS.filter(name => !name.startsWith('schedule_') && name !== 'a2a_whoami' && !name.startsWith('mcp__ygl__') && !['read', 'glob', 'grep', 'skill'].includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw'])
+    expect(TEAM_TOOLS).toEqual([...ROUTER_TOOLS.filter(name => !name.startsWith('schedule_') && name !== 'a2a_whoami' && !name.startsWith('mcp__ygl__') && !['read', 'glob', 'grep', 'skill'].includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_ticket_note', 'a2a_card_cast', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', 'superagent_issue_propose', 'superagent_issue_file'])
     for (const name of ['a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback']) expect(MEMBER_TOOLS).toContain(name)
   })
 
@@ -244,6 +244,7 @@ describe('the team\'s agent presets: shipped in the bundle layer, required of a 
     // Design v5: the team is a canvas team; the host reads its sessions from the canvas (router first here).
     let local: string[] = []
     const h = new SuperagentHost({ home: mkdtempSync(join(tmpdir(), 'sa-presets-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, canvasTeam: name => name === 'team' ? { local, remote: [] } : undefined })
+    cleanupBeforeTempDirs(() => h.stop())
     local = ['session-s', 'session-m']
     expect(h.saveSettings({ canvas: 'team', router: 'session-s' }, () => true, of)).toMatchObject({ ok: false, error: expect.stringContaining('superagent-router') })
     local = ['session-r', 'session-s']
@@ -251,5 +252,6 @@ describe('the team\'s agent presets: shipped in the bundle layer, required of a 
     local = ['session-r', 'session-m']
     expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true, of)).toMatchObject({ ok: true })
     expect(h.serveTeam({ url: 'http://127.0.0.1:1', key: 'MCowBQYDK2VwAyEAabcdefghijklmnopqrstuvwxyz0123456789' }, ['session-s'], () => true, of)).toMatchObject({ ok: false })
+    await h.stop()
   })
 })

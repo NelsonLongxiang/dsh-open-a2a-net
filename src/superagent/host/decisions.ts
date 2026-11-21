@@ -31,6 +31,8 @@ export interface StoredCard extends DecisionSpec {
   readonly source: 'router' | 'observer' | 'ticket' | 'health' | 'tool' | 'outbound' | 'staffing' | 'sender'
   readonly by: string
   readonly ticketId?: string
+  /** Server-owned immutable payload of an outbound approval, never supplied by the recovery caller. */
+  readonly outbound?: { readonly ticketId: string; readonly address: string; readonly text: string; readonly team: string; readonly title: string }
   readonly at: string
   /** Files the proposer put on the card (C8). */
   readonly files?: readonly DecisionFile[]
@@ -89,6 +91,13 @@ export class DecisionBook {
    * and a member's undecided card whose ticket has ended. A card still waiting for the owner is never dropped.
    * @returns how many cards were dropped.
    */
+  /** T8: told after a card is raised, decided or withdrawn (the host pushes the router's and observer's to the market). */
+  onChange?: (event: 'created' | 'decided' | 'dropped', card: StoredCard) => void
+  private changed(event: 'created' | 'decided' | 'dropped', card: StoredCard | undefined): void {
+    if (card === undefined || this.onChange === undefined) return
+    try { this.onChange(event, card) } catch { /* the book never fails on a listener */ }
+  }
+
   prune(): number {
     const cutoff = this.now() - DECIDED_KEEP_MS
     const decided = this.cards.filter(card => card.decided !== undefined).sort((a, b) => b.decided!.at.localeCompare(a.decided!.at))
@@ -106,6 +115,10 @@ export class DecisionBook {
   }
 
   get(id: string): StoredCard | undefined { return this.cards.find(card => card.id === id) }
+  /** Recovery reads the actual retained decision, never a stale process copy or a host note. */
+  retainedForRecovery(id:string):StoredCard|undefined {
+    try{const raw=readFileSync(this.path,'utf8');if(Buffer.byteLength(raw)>4*1024*1024)return undefined;const cards:unknown=JSON.parse(raw);if(!Array.isArray(cards))return undefined;const matches=cards.filter(c=>c&&typeof c==='object'&&c.id===id);return matches.length===1?structuredClone(matches[0] as StoredCard):undefined}catch{return undefined}
+  }
 
   /** A file on a card, put there by its proposer or with the owner's decision: what the owner may download (C8). */
   fileOf(id: string, sha256: string): DecisionFile | undefined {
@@ -120,7 +133,7 @@ export class DecisionBook {
   }
 
   /** A card of the router's or an observer's own. An identical open question returns the existing card. */
-  propose(input: { source: 'router' | 'observer' | 'health' | 'tool' | 'outbound' | 'staffing' | 'sender'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
+  propose(input: { source: 'router' | 'observer' | 'health' | 'tool' | 'outbound' | 'staffing' | 'sender'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[]; outbound?: StoredCard['outbound'] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
     const question = input.question.trim()
     if (question === '' || question.length > QUESTION_MAX) return { ok: false, code: 'question', error: `question is required, at most ${String(QUESTION_MAX)} characters` }
     // Design owner-reporting R5: a choice the owner decided is final; the same question gets that decision back.
@@ -133,8 +146,9 @@ export class DecisionBook {
     if (repeated !== undefined) return { ok: true, id: repeated.id, reused: true }
     if (mine.length >= OPEN_CARDS_MAX) return { ok: false, code: 'too-many-open', error: `you already have ${String(mine.length)} decisions waiting for the owner` }
     const id = `d-${randomUUID()}`
-    this.cards.push({ id, question, ...(input.reason !== undefined ? { reason: input.reason } : {}), source: input.source, by: input.by, at: input.at, ...input.spec, ...(input.files !== undefined && input.files.length > 0 ? { files: input.files } : {}) })
+    this.cards.push({ id, question, ...(input.reason !== undefined ? { reason: input.reason } : {}), source: input.source, by: input.by, at: input.at, ...input.spec, ...(input.outbound !== undefined ? { outbound: { ...input.outbound } } : {}), ...(input.files !== undefined && input.files.length > 0 ? { files: input.files } : {}) })
     this.save()
+    this.changed('created', this.get(id))
     return { ok: true, id }
   }
 
@@ -148,9 +162,11 @@ export class DecisionBook {
 
   /** Take an undecided card back (reliability R7: a problem that went away recalls its reminder). */
   withdraw(id: string): void {
-    if (this.cards.some(card => card.id === id && card.decided === undefined)) {
-      this.cards = this.cards.filter(card => card.id !== id)
+    const card = this.cards.find(c => c.id === id && c.decided === undefined)
+    if (card !== undefined) {
+      this.cards = this.cards.filter(c => c.id !== id)
       this.save()
+      this.changed('dropped', card)
     }
   }
 
@@ -159,5 +175,6 @@ export class DecisionBook {
     const known = this.cards.some(card => card.id === id)
     this.cards = known ? this.cards.map(card => card.id === id ? { ...card, decided } : card) : [...this.cards, ...(fallback !== undefined ? [{ ...fallback, decided }] : [])]
     this.save()
+    this.changed('decided', this.get(id))
   }
 }

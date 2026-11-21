@@ -57,15 +57,18 @@ import { SelfReferralFilter } from './self-suppress.ts'
 import { resolveStageMount } from './stage-mount.ts'
 import { TaskLedger, TASK_STALE_TTL_MS, SUMMARY_CAP, ARCHIVE_CAP, archivedEndedBy, briefOf, type OutboundBirth, type ReceiptResolvedInfo, type Sender, type SettlementJudge, type TaskRecord } from './task-ledger.ts'
 import { formatReceipt, holdsRow, parseReceipt, receiptExtras, receiptTaskId, taskIdRefusal } from './receipt.ts'
+import { holdsOpenTicket, readSelfChecks } from './superagent/host/self-check-read.ts'
 import { SuperagentHost } from './superagent/host/index.ts'
 import { registerSuperagentTools } from './superagent/host/tools.ts'
 import { BUILDER_PRESET, RoleTools, scopeKeyOf, type RoleAgent } from './superagent/host/role-tools.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
+import { ReconciliationInbox } from './reconciliation-inbox.ts'
 import { REMINDER_SCAN_MS, reminderView } from './reconciliation-state.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from './admitted-bookkeeping.ts'
 import {FollowupAcceptanceUnknown,ACCEPTANCE_UNKNOWN_NOTE,ACCEPTANCE_INSERTED_NOTE} from './followup-admission.ts'
-import { runReceiptLadder } from './receipt-ladder.ts'
-import { receiptFailure, retryReceiptDelivery, transientReceiptFailure, receiptRetryWait, readReceiptReplay, RECEIPT_RETRYABLE } from './receipt-retry.ts'
+import { capacityRefusalOf, capacityRefusalNote, capacityRefusalFields, type CapacityRefusal } from './task-delivery-capacity.ts'
+import { ReceiptOutbox, receiptBirth, receiptTransportId, receiptPayloadHash, type ReceiptOutboxRecord, type ReceiptLane, type ReceiptAttemptResult } from './receipt-outbox.ts'
+import { receiptFailure, readReceiptReplay, RECEIPT_RETRYABLE, RECEIPT_NOT_INSERTED, RECEIPT_CONFIRMED, RECEIPT_PRECONNECT_REFUSED } from './receipt-retry.ts'
 import { IdempotencyStore, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED, peerPayloadFingerprint, type IdempotencyStats } from './idempotency-store.ts'
 import { refuseIfBudgetExhausted } from './recursion-guard.ts'
 import { createFloodGuard, fileChannelAdvice } from './flood-guard.ts'
@@ -73,6 +76,7 @@ import { createQueueGuard, queueFullRefusal, QUEUE_FULL_NEXT, WIRE_ERROR_QUEUE_F
 import { resolveZone, type ZoneCardFetch } from './zone.ts'
 import { registerA2aNetworkSkill } from './skill-registration.ts'
 import { isRootOriginUrl, sameMountedUrl, originClaimTeamWarning, signOriginClaim, verifyOriginClaim as verifyOriginClaimOf, type CliDepositCard, type OriginClaimTarget, type OriginClaimVerdict } from './origin-claim.ts'
+import { allOwnClaimUrls, cardListsOwnClaim, claimUrlForTarget, isOwnClaimCaller, normalizeOriginClaimByPeer, originClaimByPeerWarning, ownClaimUrlsForPeer } from './origin-claim-by-peer.ts'
 import { AuthObserver, type AffectedEntry } from './auth-observer.ts'
 import { claimCovers, allowlistVersion, authorizationRef, buildAuthorization, type SettlementRefusal, callerAdmission, localCandidateAdmission, canonicalAllowlist, judgeSettlement, type Settler, joinedFaceAdmission, refusalOf, sameZoneAdmission, type Admission, type AdmissionRecords, type AllowlistInputs, type PeerOrgEntry, type RemoteCliProof, recheckRemoteCliAuthorization, recheckCallerAdmission } from './task-auth.ts'
 import type { Context } from '@deepseek-ai/cordis'
@@ -145,11 +149,12 @@ import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
 import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
-import { registerBuilderTools } from './superagent/host/builder-tools.ts'
+import { registerBuilderIssueTools, registerBuilderTools } from './superagent/host/builder-tools.ts'
+import { defaultGh } from './superagent/host/pr-follow.ts'
 import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
-import { touchesRules } from './superagent/host/owner-proof.ts'
+import { browserOwnerProof, touchesRules } from './superagent/host/owner-proof.ts'
 import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, startWhenYglKnown, yglCapabilities, yglSettled } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { IntakeOrigins } from './intake-origins.ts'
@@ -159,6 +164,10 @@ import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerFileFaces } from './faces/files.ts'
 import { registerSuperagentFaces } from './faces/superagent.ts'
+import {RequestRecoveryStore} from './request-recovery.ts'
+import { restrictDirToCurrentUser } from './windows-private-dir.ts'
+import {RequestRecoveryRuntime} from './request-recovery-runtime.ts'
+import {registerRequestRecoveryFace} from './faces/request-recovery.ts'
 import { SidebarSends } from './sidebar-sends.ts'
 import { PI_PLATFORM, piDeliverable, piSeatAdmission } from './superagent/platforms/pi.ts'
 import { cancelAgentTurn, memberTurnFrom, personMessageFrom, selectSessionModel, stageCardFiles } from './superagent/session-reads.ts'
@@ -190,7 +199,7 @@ export const name = 'a2a'
 export const inject = ['tools', 'timer', 'systemPrompt']
 
 import { Config } from './config.ts'
-import { canvasOwnerFingerprint, splitCanvasOwner } from './canvas-id.ts'
+import { canvasOwnerFingerprint, splitCanvasOwner, homeCanvasTeam } from './canvas-id.ts'
 import { forwardReceiptBasis, teamReceiptBasis } from './direct-forward.ts'
 import { NudgeObservability } from './nudge-observability.ts'
 export { Config }
@@ -289,6 +298,8 @@ export function apply(ctx: Context, config: Config): void {
   // be discovered from a ledger full of unexplained steering.
   const teamWarning = originClaimTeamWarning(config.team)
   if (teamWarning !== undefined) logger.warn(teamWarning)
+  const originClaimByPeer = normalizeOriginClaimByPeer(config.originClaimByPeer)
+  for (const row of originClaimByPeer.ignored) logger.warn(originClaimByPeerWarning(row))
   const exposure = directDeliveryExposure(config.peers, config.apiKey)
   if (exposure.warning !== undefined) logger.warn(exposure.warning)
   // gh#9 control-face norm (docs/protocol/delivery-origin-auth.md §10): on a
@@ -382,20 +393,43 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
+   * No-key trust for the DSH host's own logged-in browser owner (#783). A DSH Web behind a reverse proxy on this host
+   * (Tailscale Serve, Caddy, nginx) reaches us with a forwarding header, so the loopback rule above refuses it — rightly,
+   * since the header says nothing about who is calling. The host's Connection, however, has already authenticated this
+   * very request: its `admit` checks the browser login and the Host/Origin fence (`--trusted-host`). Only the browser-owner
+   * Peer counts — never an API Peer — and this plugin trusts no proxy header itself. The cross-site veto still applies,
+   * and a missing, older or failing Connection service refuses (fail-closed, `owner-auth-unavailable`).
+   * @param req - the inbound control request.
+   * @returns whether the request is the host's authenticated browser owner.
+   */
+  function controlTrustedBrowserOwner(req: IncomingMessage): boolean {
+    const site = req.headers['sec-fetch-site']
+    if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') return false
+    let connection: unknown
+    try { connection = ctx.get('connection') } catch { return false }
+    return browserOwnerProof(connection, req).ok
+  }
+
+  /**
    * Control-route authorization. With `apiKey` set, the `X-API-Key` header
    * (or `api_key` query, for non-browser clients) must match in constant
-   * time. With no key, the same-origin/loopback trust applies — the explicit
-   * exposure assumption: an empty-key deployment accepts control from its
-   * own page and from loopback, and from nothing else.
+   * time, or the request is the host's authenticated browser owner (#790,
+   * owner decision 2026-11-21): the browser panel never carries the key, so
+   * without this a keyed host's own logged-in browser could not read its
+   * panel. CLI, API and peer callers still need the key; loopback alone is
+   * not enough. With no key, the loopback trust applies, and so does the
+   * host's authenticated browser owner (#783) — the explicit exposure
+   * assumption: an empty-key deployment accepts control from loopback and
+   * from its own logged-in browser, and from nothing else.
    * @param req - the inbound control request.
    * @returns whether the request may drive the control routes.
    */
   function controlAuthorized(req: IncomingMessage): boolean {
     if (config.apiKey !== '') {
       const presented = String(req.headers['x-api-key'] ?? new URL(req.url ?? '/', 'http://x').searchParams.get('api_key') ?? '')
-      return secretEqual(presented, config.apiKey)
+      return secretEqual(presented, config.apiKey) || controlTrustedBrowserOwner(req)
     }
-    return controlTrustedWithoutKey(req)
+    return controlTrustedWithoutKey(req) || controlTrustedBrowserOwner(req)
   }
 
   /**
@@ -548,6 +582,9 @@ export function apply(ctx: Context, config: Config): void {
   // from fetched cards join a bounded, quality-scored store persisted under
   // the same home as the node key.
   const home = config.dshHome === '' ? resolveDshHome() : resolveDshHome(config.dshHome)
+  // #731: Windows ignores the 0600 every journal here is created with; give the a2a directory an owner-only ACL.
+  const a2aDirPrivacy = restrictDirToCurrentUser(join(home, 'a2a'))
+  if (a2aDirPrivacy.mode === 'windows-acl' && !a2aDirPrivacy.ok) logger.warn('a2a: could not restrict the a2a directory to the current user (%s); its journals keep the inherited ACL', a2aDirPrivacy.error)
   const peerStore = new PeerStore(config.peers, join(home, 'a2a', 'peers.json'))
   // Node identity (docs/design/node-identity.md, N1): human-named nodes and their prompt versions.
   const nodeStore = new NodeStore(join(home, 'a2a'))
@@ -604,7 +641,14 @@ export function apply(ctx: Context, config: Config): void {
   function originClaimHeaders(target: OriginClaimTarget): Record<string, string> {
     // No local web/card anchor yet: keep the preexisting absent-envelope migration posture, not a malformed Sig3.
     if(ownCardUrl==='')return {}
-    return signOriginClaim(target, { caller: config.team, callerUrl: ownCardUrl, privateKey: nodePrivateKey, unbound: config.originClaimUnboundWindow !== false, now: Date.now() })
+    // #787: a mapped peer gets the operator-selected local claim URL; everyone else keeps ownCardUrl.
+    const callerUrl = claimUrlForTarget(target.url, originClaimByPeer.rules, ownCardUrl)
+    if (callerUrl === '') return {}
+    return signOriginClaim(target, { caller: config.team, callerUrl, privateKey: nodePrivateKey, unbound: config.originClaimUnboundWindow !== false, now: Date.now() })
+  }
+  /** Local card URLs this host recognizes when judging a specific peer (default + that peer's mapping only). */
+  function ownClaimUrlsFor(peerUrl: string): string[] {
+    return ownClaimUrlsForPeer(peerUrl, originClaimByPeer.rules, ownCardUrl)
   }
   const client = new A2aClient({
     apiKey: config.apiKey,
@@ -881,11 +925,21 @@ export function apply(ctx: Context, config: Config): void {
   // executes at most once inside the 24h window — same-key replays answer
   // refused-but-idempotent, same-key different-payload answers conflict.
   const idempotencyStore = new IdempotencyStore(join(home, 'a2a', 'idempotency.json'))
+  const requestRecovery=new RequestRecoveryRuntime({key:nodePrivateKey,home:()=>originOf(ownCardUrl),ledger:taskLedger,idempotency:idempotencyStore,
+    store:new RequestRecoveryStore(join(home,'a2a','request-recovery.json')),
+    peer:async url=>{const card=await fetchPeerCard(url);if(card)cardCache.set(url,{at:Date.now(),card});return card},linked:(url,key)=>intakeHostLinked(url,key),
+    cli:(url,caller)=>client.fetchCard(url+'/a2a/cli/'+encodeURIComponent(caller)),
+    localCli:caller=>{const row=cliDeposits.get(caller);if(!row)return undefined;try{const v=verifyCard(JSON.parse(row.cardJson),Date.now());return v.ok?v.card:undefined}catch{return undefined}},
+    target:team=>resolveAgentForTeam(team),
+    targetValid:(agent,team)=>sessionTeamOf(agent)===team&&joinedSessions.has(String(agent.id))&&archivedSessionFilter()?.(String(agent.id))!==true&&superagentRouterRefusal(undefined,String(agent.id))===undefined,
+    post:async(url,path,body)=>{const target=url+path,text=JSON.stringify(body),key=outboundKeyFor(url,linkKeyMap,config.apiKey);const res=await peerFetch(target,{method:'POST',headers:{'Content-Type':'application/json',...(key?{'X-API-Key':key}:{}),...originClaimHeaders({url:target,method:'POST',body:text})},body:text,signal:AbortSignal.timeout(15000)});if(!res.ok){void res.body?.cancel().catch(()=>{});throw Error('recovery peer refused HTTP '+res.status)}return await res.json() as Record<string,unknown>},
+  })
+
   // Requests a person sent from a session's team tab to another instance, and their receipts (kept for the tab).
   const sidebarSends = new SidebarSends(join(home, 'a2a', 'sidebar-sends.json'))
   const refuseIfFlooded = createFloodGuard(idempotencyStore, recordActivity)
   const ownTask = (taskId: string): boolean => taskLedger.list().some(r => r.taskId === taskId) || taskLedger.archive().some(r => r.taskId === taskId)
-  const refuseIfQueueFull = createQueueGuard(() => taskLedger.list(), () => config.targetQueueCap, ownTask, idempotencyStore, recordActivity, id=>reminderView(taskLedger.reminderState(id)))
+  const refuseIfQueueFull = createQueueGuard(() => taskLedger.list(), () => config.targetQueueCap, ownTask, idempotencyStore, recordActivity, id=>reminderView(taskLedger.reminderState(id)),()=>taskLedger.receiptCapacityAvailable())
 
   // Unmasked-identity suppression: gossip mirrors peer lists back and forth,
   // so a URL whose fetch just proved it serves this node — or an already
@@ -964,8 +1018,17 @@ export function apply(ctx: Context, config: Config): void {
     if (face === undefined) return undefined
     // The successor face reports failure as a result value; re-throw it so
     // every caller's rejection policy (reconciler backoff, route error)
-    // keeps working unchanged.
-    return face.resolveAgent(SessionId(id)).then(result => {
+    // keeps working unchanged. #756: a face can also throw before any promise
+    // exists (an in-place reset's lifecycle guard does); that becomes a
+    // rejection too, so it reaches the same policies instead of escaping a
+    // timer callback and taking the host down.
+    let resolving: ReturnType<typeof face.resolveAgent>
+    try {
+      resolving = face.resolveAgent(SessionId(id))
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)))
+    }
+    return resolving.then(result => {
       if (result.agent !== undefined) return result.agent
       throw new Error(`materialize refused: ${result.error?.message ?? 'unknown session resolution failure'}`)
     })
@@ -1589,7 +1652,16 @@ export function apply(ctx: Context, config: Config): void {
       reconcileCancelled = true
     })
     let reconcilePostponed = 0
+    // #756: one bad pass must never take the host down. Whatever a pass throws
+    // synchronously is logged and the loop keeps its cadence; the next pass
+    // re-derives the due set from the join intents.
     const reconcileTick = (): void => {
+      try { reconcilePass() } catch (error) {
+        logger.warn(`reconcile pass failed: ${String(error).slice(0, 200)}`)
+        if (!reconcileCancelled && ctx.fiber.uid !== null) schedule(reconcileTick, Math.max(50, config.wakeReconcileIntervalMs))
+      }
+    }
+    const reconcilePass = (): void => {
       if (reconcileCancelled || ctx.fiber.uid === null) return
       const interval = Math.max(50, config.wakeReconcileIntervalMs)
       if (!config.wakeReconcile || wakeFace() === undefined) {
@@ -1839,7 +1911,7 @@ export function apply(ctx: Context, config: Config): void {
       registerAdminFaces(webServer, {
         reminderDiagnostics:()=>({...idleReminders.diagnostics}),
         nudgeEscalations:()=>nudgeObservations.snapshot(),
-        ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
+        a2aDirPrivacy, ctx, config, logger, home, session, lanIp, PLUGIN_VERSION, controlRoute, controlTrustedWithoutKey, readJsonBody, peerFetch, peerStore, peerLinkState, originClaimHeaders, refreshRemoteRows, joinedSessions, exposureStore, teamMemberships, cliDeposits, canvasStore, revokeCanvasMember, canvasMigrationState, canvasMemberForWrite, cliHomeForAdd, cliHomeOptions, layoutStore, taskLedger, idempotencyStore, inFlightRoutes, recentActivity, teamAuditRing, reportRing, sessionNodes, liveRoots, mountSessionNode, coldJoinedIds, prewarmStatus, reconcileStatus, id8, sessionLabelOf, sessionTeamOf, ownCanvasHandleOf, localSessionOfHandle, canvasTeamsOfSession, nodeMetadataOf, canvasTeamOf, archivedSessionFilter, pruneArchivedJoins, pruneCanvasMemberships, verifyOriginClaim, callerLinkedToThisHost, cachedCardFetch, authorizationView,
         indexUrl: import.meta.url, enforceRefused,
         teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
         sessionPresetOf,
@@ -2105,6 +2177,13 @@ export function apply(ctx: Context, config: Config): void {
     interval: (fn, ms) => ctx.timer.interval(fn, ms),
     // The team's A2A address (PR-B2b) is a CLI identity the a2a-net CLI runs against this very host.
     homeUrl: () => superagentHomeUrl,
+    // T5-B: the idle sweep reads the same host's prompt-template self-check log, and only while that check is on.
+    selfChecksOf: sessionId => readSelfChecks(ctx.get('promptTemplates' as never), sessionId),
+    // T5-A: dsh-prompt-templates' cast, reached through this plugin's own context so the plugin recognizes the caller.
+    castCard: input => {
+      const svc = ctx.get('promptTemplates' as never) as { cast?: (i: typeof input) => { ok: boolean; code?: string; error?: string; queued?: number } } | undefined
+      return typeof svc?.cast === 'function' ? svc.cast(input) : undefined
+    },
     claimAudience: () => (ownCardUrl !== '' ? originOf(ownCardUrl) : undefined),
     apiKey: () => config.apiKey,
     // PR-C2: remote members and served teams talk host to host, signed with this host's card key and bound to the body.
@@ -2176,8 +2255,19 @@ export function apply(ctx: Context, config: Config): void {
     },
     // Decision cards C8: a proposer's files go on the file channel, granted to its team's canvas, as a2a_file_send stages them.
     stageFiles: (id, paths, canvas) => stageCardFiles({ blobStore, from: originOf(ownCardUrl), cwd: (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd, team: `${config.team}/canvas/${canvas}`, by: id }, paths),
-    memberTurn: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : memberTurnFrom(id, sessionEventsOf(agent), ctx.get('jobs' as never)) },
+    memberTurn: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : memberTurnFrom(id, sessionEventsOf(agent), ctx.get('jobs' as never), message => logger.warn(message)) },
     teamSend: args => teamCanvasSend(args),
+    narrowRecovery:{identity:caller=>requestRecovery.identity(caller),proposal:binding=>requestRecovery.proposal(binding),transport:(permit,mode,current)=>requestRecovery.transport(permit,mode,current),receipt:(binding,caller,message)=>requestRecovery.receipt(binding,caller,message)},
+    outboundOutcome: ({ sender, task, address, message }) => {
+      const verdict = idempotencyStore.query(task, peerPayloadFingerprint({ caller: sender, team: homeCanvasTeam(address, ownCanvasFingerprint), message, noWait: true }))
+      if (!verdict.found) return { delivery: 'unknown' }
+      const row = taskLedger.find(task)
+      if (verdict.status === 'completed') return { delivery: 'accepted' }
+      // Forwarded/in-flight ledger rows may have unknown acceptance; they veto a retry, not certify delivery.
+      if (row !== undefined) return { delivery: 'unknown' }
+      if (verdict.status === 'failed' && verdict.delivery === 'not-sent') return { delivery: 'not-sent' }
+      return { delivery: 'unknown' }
+    },
     memberDeclares: (ref, capability) => { const member = splitQualifiedMember(ref); return member !== undefined && callerCapability(member.handle, capability) },
     callerDeclares: (caller, capability) => callerCapability(caller, capability),
     rosterSend: async (ref, text, taskId) => { await dispatchAnywhere(ref, text, session, undefined, AbortSignal.timeout(15_000), true, taskId) },
@@ -2186,6 +2276,11 @@ export function apply(ctx: Context, config: Config): void {
   }) : undefined
   teamsHandle = superagentTeams
   // Staffing changes (S1a): the host's executor, through the canvas and team routes' own checks.
+  // T5-B (dispatcher's PT-4 addition 1): whether a session holds an open a2a ticket, for dsh-prompt-templates' wrap-up
+  // self-check. Read-only; undefined (unknown) when this host runs no superagent team.
+  ctx.provide('a2aTickets' as never, {
+    hasOpenTicket: (sessionId: string): boolean | undefined => holdsOpenTicket(superagentTeams?.all(), sessionId),
+  } as never)
   if (superagentTeams !== undefined) staffing = createStaffing({ path: join(home, 'a2a', 'superagent', 'staffing.json'), teams: superagentTeams, canvasStore, canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
     sessionValid: id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, presetOf: sessionPresetOf, memberForWrite: id => canvasMemberForWrite(id),
     teamCanvasRefusal: (canvas, member) => superagentTeams.canvasMemberRefusal(canvas, member, sessionPresetOf), revokeCanvasMember: (id, reason, name) => revokeCanvasMember(id, reason, name), logger })
@@ -2217,6 +2312,12 @@ export function apply(ctx: Context, config: Config): void {
       sessions: joinedSessions.list().filter(id => sessionNodes.has(id)), nameOf: id => { const agent = sessionNodes.get(id); return agent === undefined ? id : nodeMetadataOf(agent).name }, presetOf: sessionPresetOf, staffing: staffing?.list() ?? [],
     }), { staffing: () => staffing, personMessage: id => { const agent = ctx.get('agents')?.get(SessionId(id)) as Agent | undefined; return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
       teamRules: ref => { const team = superagentTeams!.get(ref === 'primary' ? '' : ref); return team === undefined || (ref === '' ) ? undefined : { ...(team.settings.canvas !== undefined ? { canvas: team.settings.canvas } : {}), rules: team.settings.rules, dispatch: team.settings.dispatch } } })
+    // #791: the builder drafts an issue; the host files it with the operator's gh after the owner's own typed message.
+    registerBuilderIssueTools(ctx, id => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET, {
+      gh: defaultGh,
+      repos: () => [...new Set(superagentTeams!.all().flatMap(team => Object.values(team.settings.repos ?? {})).filter((repo): repo is string => typeof repo === 'string' && repo !== ''))],
+      personMessage: id => { const agent = ctx.get('agents')?.get(SessionId(id)) as Agent | undefined; return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
+    })
     // superagent-team-mcp M2: each allowed tool of a team's MCP server is a tool of its own; the host holds the token.
     teamMcpTools = new TeamMcpTools(ctx, id => superagentTeams!.ofSession(id), () => superagentTeams!.all(), logger)
     // A member's turn ending is the executor's turn-end fact (PR-C1).
@@ -2491,7 +2592,8 @@ export function apply(ctx: Context, config: Config): void {
     if (spent !== undefined && spent > 1) return
     nudgeBudget.set(key, spent ?? 0)
     const timer = setTimeout(() => {
-      if (!taskLedger.isPending(taskId)) {
+      const currentDebt=taskLedger.find(taskId)
+      if (!taskLedger.isPending(taskId)||currentDebt?.answeredAt!==undefined||currentDebt?.receiptDelivery==='receipt-undelivered') {
         nudgeBudget.delete(key)
         return
       }
@@ -2550,13 +2652,17 @@ export function apply(ctx: Context, config: Config): void {
     const matches=live.filter(a=>sessionTeamOf(a)===face)
     return matches.length===1?matches[0]:undefined
   }
+  const reconciliationInbox = new ReconciliationInbox({sender:config.team,rows:()=>taskLedger.list(),taint:agent=>markLineage(agent,'relay')})
   const idleReminders = new ReconciliationReminders({
     ledger:taskLedger,agents:reminderAgents,resolve:exactReminderTarget,
     sender:row=>{
       if(row.peer!=='local'||row.sender?.kind!=='session')return undefined
       const matches=reminderAgents().filter(a=>sessionTeamOf(a)===row.sender!.id);return matches.length===1?matches[0]:undefined
     },
-    followup:(agent:ReminderAgent,text:string)=>followupRelay(agent as Agent,text,config.team),
+    available:agent=>reconciliationInbox.available(agent as Agent),
+    followup:(agent,text,scope)=>reconciliationInbox.send(agent as Agent,text,scope),
+    noticeId:(agent,scope)=>reconciliationInbox.messageIdFor(agent as Agent,scope),
+    noticeState:(agent,id)=>reconciliationInbox.noticeState(agent as Agent,id),
     // A delivery whose steer was never consumed: its original text, once, as the original sender's content (it taints).
     // #693 review F1/F2: only a delivery the ledger never tracked (a lost steer), as a queued delivery OF THE ORIGINAL TASK,
     // so its reservation, claim, withdrawal and an unknown outcome follow the ordinary correspondence.
@@ -2569,6 +2675,185 @@ export function apply(ctx: Context, config: Config): void {
   })
   const requestReminderScan = ():void => {queueMicrotask(()=>idleReminders.scan())}
   ctx.effect(()=>{const timer=ctx.timer.interval(()=>idleReminders.scan(),REMINDER_SCAN_MS);requestReminderScan();return ()=>{idleReminders.stop();timer()}},'a2a: persistent idle reconciliation reminders')
+
+  const receiptLocalKey = encodePublicKey(createPublicKey(nodePrivateKey))
+  const depositKey = (handle:string):string|undefined => {
+    try {const row=cliDeposits.get(handle);return row?String((JSON.parse(row.cardJson) as {publicKey?:unknown}).publicKey??'')||undefined:undefined}catch{return undefined}
+  }
+  function receiptReturnLane(row:TaskRecord,target:string):ReceiptLane {
+    const incomingKey=taskLedger.deliveryFor(row.taskId)?.callerKey
+    const household=CLI_HANDLE_RE.test(target)?cliDeposits.heldKey(target):undefined
+    if(household&&(depositKey(target)!==undefined||canvasStore.cliHomeOf(target)===undefined))return {kind:'local-cli',key:household}
+    const pinnedCliCarrier=CLI_HANDLE_RE.test(target)&&row.auth?.caller_key!==undefined&&row.auth.claim!==undefined&&canvasStore.cliHomeOf(target)===row.auth.claim.origin
+    if(row.direction==='inbound'&&row.auth?.claim!==undefined&&(row.auth.proof==='origin-claim'||pinnedCliCarrier)) {
+      const url=row.auth.carrier_url??row.auth.claim.origin
+      const key=incomingKey
+      if(key&&key!==receiptLocalKey)return {kind:'peer',url,key,...(row.auth.caller_key?{cliKey:row.auth.caller_key}:{})}
+    }
+    if(CLI_HANDLE_RE.test(target)) {
+      const key=cliDeposits.heldKey(target)
+      return key?{kind:'local-cli',key}:{kind:'unresolved'}
+    }
+    const local=localHandleResolver()(target)
+    return local!==undefined?{kind:'local-session',sessionId:local}:{kind:'unresolved'}
+  }
+  function reserveAuthoredReceipt(target:Agent,row:TaskRecord,to:string,text:string,automatic:boolean):ReceiptOutboxRecord {
+    const old=taskLedger.receiptFor(row.taskId)
+    if(old) {
+      if(old.authorId!==String(target.id)||old.target!==to||(!automatic&&old.text!==text))throw Error('another terminal receipt is already retained')
+      return old // Explicit receipt wins over the later automatic summary of the same turn.
+    }
+    const authorTeam=sessionTeamOf(target),caller=automatic?(row.auth?.target.includes('/')?authorTeam:session):authorTeam
+    const receipt={version:1 as const,taskId:row.taskId,authorId:String(target.id),authorTeam,target:to,text,transportId:receiptTransportId(row.taskId,to,text),caller,payer:automatic?session:authorTeam,localKey:receiptLocalKey,birth:receiptBirth(row,taskLedger.deliveryFor(row.taskId)?.callerKey),...(taskLedger.deliveryFor(row.taskId)?.callerKey?{sourceKey:taskLedger.deliveryFor(row.taskId)!.callerKey}:{}),lane:receiptReturnLane(row,to),...(row.contextId!==undefined?{contextId:row.contextId}:{}),createdAt:Date.now(),deadline:Date.now()+23*60*60_000,attempts:0,nextAt:Date.now(),phase:'ready' as const}
+    return taskLedger.prepareReceipt({...receipt,payloadHash:receiptPayloadHash(receipt)})
+  }
+  const receiptValidationStamps=new Map<string,string>()
+  function receiptAuthorityStamp(record:ReceiptOutboxRecord):string {
+    const author=sessionNodes.get(record.authorId)??reminderAgents().find(a=>String(a.id)===record.authorId)
+    return JSON.stringify([allowlistVersionNow(),config.isolated,session,receiptLocalKey,author?sessionTeamOf(author):'',archivedSessionFilter()?.(record.authorId)===true,superagentTeams?.ofSession(record.authorId)!==undefined,record.lane.kind==='local-session'?localHandleResolver()(record.target):'',record.lane.kind==='local-cli'?depositKey(record.target):'',CLI_HANDLE_RE.test(record.target)?canvasStore.cliHomeOf(record.target):'',resolutionPeers()])
+  }
+  const receiptTimers=new Set<()=>void>()
+  const receiptOutbox=new ReceiptOutbox({
+    ledger:taskLedger,
+    validate:async(record,row)=>{
+      const stamp=receiptAuthorityStamp(record)
+      const allow=()=>{if(stamp!==receiptAuthorityStamp(record))return {ok:false as const,code:'RECEIPT_AUTHORITY_CHANGED',retry:false};receiptValidationStamps.set(record.transportId,stamp);return {ok:true as const}}
+      const refuse=(code:string,retry=false)=>({ok:false as const,code,retry})
+      if(record.localKey!==receiptLocalKey||receiptBirth(row,taskLedger.deliveryFor(row.taskId)?.callerKey)!==record.birth||record.sourceKey!==taskLedger.deliveryFor(row.taskId)?.callerKey)return refuse('RECEIPT_IDENTITY_CHANGED')
+      if(config.isolated)return refuse('RECEIPT_ROUTE_UNAVAILABLE',true)
+      const author=sessionNodes.get(record.authorId)??reminderAgents().find(a=>String(a.id)===record.authorId)
+      if(!author||sessionTeamOf(author)!==record.authorTeam||archivedSessionFilter()?.(record.authorId)===true)return refuse('RECEIPT_AUTHOR_UNAVAILABLE',true)
+      if(superagentTeams?.ofSession(record.authorId)!==undefined)return refuse('RECEIPT_AUTHORITY_CHANGED')
+      const frozenReturn=row.direction==='inbound'&&row.auth?.proof==='origin-claim'&&row.auth.receipt_target===record.target
+      if(row.auth!==undefined&&(!frozenReturn||row.auth.admission_rule==='remote-ref-cli')) {
+        const admission=row.auth.admission_rule==='remote-ref-cli'?recheckRemoteCliAuthorization(admissionRecords,row.auth):recheckCallerAdmission(admissionRecords,row.auth.caller,row.auth.target,row.auth.ingress==='local')
+        if(!admission.ok)return refuse('RECEIPT_AUTHORITY_CHANGED')
+      }
+      if(record.payer!==session) {
+        let initiator=false;try{initiator=ctx.get('agents')?.requireInitiator()===author}catch{/* no initiator */}
+        const frozenReturn=row.direction==='inbound'&&row.auth?.proof==='origin-claim'&&row.auth.receipt_target===record.target
+        if(config.teamScopeRouting&&!initiator&&!frozenReturn) {
+          const scope=await outboundScope(senderScopeRecords,record.authorId,record.authorTeam,record.target)
+          if(!scope.ok)return refuse('RECEIPT_AUTHORITY_CHANGED')
+        }
+      }
+      let lane=record.lane
+      if(lane.kind==='unresolved'&&record.attempts===0) {
+        const urls=await directoryPeerCandidates(memoizedCardFetch(),record.target,[])
+        const cards=await Promise.all(urls.map(async url=>({url,card:await cachedCardFetch(url)})))
+        const available=cards.filter((x):x is {url:string;card:A2aPeerCard}=>x.card!==undefined)
+        const keys=new Set(available.map(x=>x.card.publicKey))
+        if(keys.size!==1||!available.length)return refuse('RECEIPT_ROUTE_UNAVAILABLE',true)
+        lane={kind:'peer',url:available[0]!.url,key:available[0]!.card.publicKey}
+        taskLedger.bindReceiptLane(record.taskId,record.transportId,lane)
+      }
+      if(lane.kind==='unresolved')return refuse('RECEIPT_RETURN_PROOF_MISSING')
+      if(lane.kind==='local-cli') {
+        const key=depositKey(record.target)
+        return !key?refuse('RECEIPT_ROUTE_UNAVAILABLE',true):key===lane.key?allow():refuse('RECEIPT_IDENTITY_CHANGED')
+      }
+      if(lane.kind==='local-session') {
+        const receiver=sessionNodes.get(lane.sessionId)
+        if(!receiver||localHandleResolver()(record.target)!==lane.sessionId)return refuse('RECEIPT_ROUTE_UNAVAILABLE',true)
+        return joinedFaceAdmissionRefusal(record.caller,record.target)===undefined&&superagentRouterRefusal(undefined,record.target)===undefined&&teamAddressRefusal(record.target,record.text)===undefined?allow():refuse('RECEIPT_AUTHORITY_CHANGED')
+      }
+      const pinned=CLI_HANDLE_RE.test(record.target)?canvasStore.cliHomeOf(record.target):undefined
+      if(pinned!==undefined&&originOf(pinned)!==originOf(lane.url))return refuse('RECEIPT_IDENTITY_CHANGED')
+      if(!resolutionPeers().some(url=>originOf(url)===originOf(lane.url)))return refuse('RECEIPT_AUTHORITY_CHANGED')
+      const card=await fetchPeerCard(lane.url)
+      if(!card)return refuse('RECEIPT_ROUTE_UNAVAILABLE',true)
+      if(card.publicKey!==lane.key)return refuse('RECEIPT_IDENTITY_CHANGED')
+      cardCache.set(lane.url,{at:Date.now(),card})
+      if(CLI_HANDLE_RE.test(record.target)) {
+        const online=await client.fetchCard(lane.url+'/a2a/cli/'+encodeURIComponent(record.target))
+        if(!lane.cliKey)return refuse('RECEIPT_RETURN_PROOF_MISSING')
+        if(!online||online.team!==record.target)return refuse('RECEIPT_ROUTE_UNAVAILABLE',true)
+        if(online.publicKey!==lane.cliKey)return refuse('RECEIPT_IDENTITY_CHANGED')
+      }
+      // The original authenticated return home is a receipt-only lane, not a discovery membership grant.
+      return frozenReturn||peerAdmissionLinkState(lane.url).link==='linked'||!config.teamScopeRouting?allow():refuse('RECEIPT_AUTHORITY_CHANGED')
+    },
+    deliver:async(record,reconcile):Promise<ReceiptAttemptResult>=>{
+      const fail=(code:string,retry:boolean,unknown=false):ReceiptAttemptResult=>({confirmed:false,code,retry,...(unknown?{unknown:true as const}:{})})
+      const stamp=receiptValidationStamps.get(record.transportId);receiptValidationStamps.delete(record.transportId)
+      if(stamp===undefined||stamp!==receiptAuthorityStamp(record))return fail('RECEIPT_AUTHORITY_CHANGED',false)
+      const lane=record.lane
+      if(lane.kind==='unresolved')return fail('RECEIPT_RETURN_PROOF_MISSING',false)
+      if(lane.kind==='local-cli') {
+        const prior=cliDeposits.readMail(record.target).find(row=>row.task_id===record.transportId)
+        if(reconcile&&!prior)return fail('RECEIPT_ACCEPTANCE_UNKNOWN',true,true)
+        try {
+          const evicted=cliDeposits.mailReceipt(record.target,record.caller,record.text,{taskId:record.transportId,contextId:record.contextId,proof:'in-process',receiptFor:record.taskId,admission:'local-exempt'})
+          for(const gone of evicted)if(gone.task_id)taskLedger.evictInbound(gone.task_id,taskLedger.find(gone.task_id)?.team??record.target)
+        } catch {return fail('RECEIPT_MAILBOX_COMMIT_FAILED',true)}
+        return {confirmed:true}
+      }
+      if(lane.kind==='local-session') {
+        const receiver=sessionNodes.get(lane.sessionId)
+        if(!receiver)return fail('RECEIPT_ROUTE_UNAVAILABLE',true)
+        const prior=taskLedger.deliveryFor(record.transportId)
+        if(reconcile&&(!prior||prior.state==='reserved'))return fail('RECEIPT_ACCEPTANCE_UNKNOWN',true,true)
+        if(prior&&(prior.state==='cancelled'||prior.state==='failed'))return fail('RECEIPT_PRIOR_TERMINAL',false)
+        const header='[A2A direct] (task '+record.transportId+') 未验证（in-process） '+sanitizeFromClause(record.caller)+' (routed to '+record.target+') sent:'
+        followupRelay(receiver,header+'\n\n'+record.text,record.caller,record.authorId,record.transportId,undefined,false)
+        const persisted=taskLedger.deliveryFor(record.transportId)
+        return persisted&&(persisted.state==='enqueued'||persisted.state==='claimed')?{confirmed:true}:fail('RECEIPT_LOCAL_INSERTION_UNCONFIRMED',true,true)
+      }
+      const qualified=splitCanvasOwner(record.target)
+      const wireTeam=qualified.owner===canvasOwnerFingerprint(lane.key)?qualified.team:record.target
+      if(reconcile) {
+        const fingerprint=peerPayloadFingerprint({caller:record.caller,message:record.text,noWait:true,team:wireTeam})
+        const verdict=await client.queryOutcome(lane.url,record.transportId,fingerprint,new AbortController().signal)
+        if(verdict?.found&&verdict.status==='completed'&&verdict.receiptDelivery==='delivered')return {confirmed:true}
+        if(verdict?.found&&verdict.status==='completed'&&verdict.receiptDelivery==='refused')return fail('RECEIPT_SETTLEMENT_REFUSED',false)
+        if(verdict?.found&&verdict.status==='failed')return fail('RECEIPT_PRIOR_FAILED',false)
+        // A fixed id can be replayed safely only while its first claim is still retained, never after unknown/expiry.
+        if(!verdict?.found||verdict.status!=='pending')return fail('RECEIPT_ACCEPTANCE_UNKNOWN',true,true)
+        return fail('RECEIPT_PRIOR_PENDING',true,true)
+      }
+      const result=await client.routeDirect(lane.url,record.target,record.text,record.contextId,new AbortController().signal,record.caller,true,record.transportId)
+      recordActivity('out',record.target,lane.url,result.ok)
+      if(!result.ok&&result.code===WIRE_ERROR_REPLAY_REJECTED) {
+        const prior=await client.queryOutcome(lane.url,record.transportId,peerPayloadFingerprint({caller:record.caller,message:record.text,noWait:true,team:wireTeam}),new AbortController().signal)
+        return prior?.found&&prior.status==='completed'&&prior.receiptDelivery==='delivered'?{confirmed:true}:fail('RECEIPT_REPLAY_UNCONFIRMED',true,true)
+      }
+      // #747 review M1: an unknown acceptance outranks a no-insertion capability, even an inconsistent one: query, never repost.
+      if(!result.ok&&result[RECEIPT_NOT_INSERTED]===true&&result.acceptance!=='unknown')return fail('RECEIPT_NOT_INSERTED',true)
+      // #708 R1: a connection refused before it opened inserted nothing; the same frozen transport is resent when due, never queried forever.
+      if(!result.ok&&result[RECEIPT_PRECONNECT_REFUSED]===true&&result.acceptance!=='unknown')return fail('RECEIPT_PRECONNECT_REFUSED',true)
+      if(result.ok&&result.settlementRefused===true)return fail('RECEIPT_SETTLEMENT_REFUSED',false)
+      if(result.ok&&(result[RECEIPT_CONFIRMED]!==true||result.acceptance==='inserted'||result.receiverBookkeeping==='failed'))return fail('RECEIPT_ACCEPTANCE_UNKNOWN',true,true)
+      if(result.ok)return result.task_id!==record.transportId?fail('RECEIPT_TRANSPORT_ID_MISMATCH',false,true):result.settlementRefused===true?fail('RECEIPT_SETTLEMENT_REFUSED',false):{confirmed:true}
+      if(result.acceptance==='unknown'||result.code===-32005)return fail('RECEIPT_ACCEPTANCE_UNKNOWN',true,true)
+      if(result.code===-32011||result[RECEIPT_RETRYABLE]===true)return fail('RECEIPT_TRANSPORT_UNCONFIRMED',true,true)
+      return fail(result.code===-32002?'RECEIPT_PAYLOAD_CONFLICT':'RECEIPT_DELIVERY_REFUSED',false)
+    },
+    settle:record=>{
+      const row=taskLedger.find(record.taskId)
+      if(!row)return taskLedger.archive().some(r=>r.taskId===record.taskId&&r.endedBy==='receipt')
+      if(row.direction==='inbound')return settleOwnInbound(record.text,record.target,{caller:record.payer,proof:'in-process',ingress:'local'})&&taskLedger.find(record.taskId)===undefined
+      const judge=settlementJudgeFor({caller:record.payer,proof:'in-process',ingress:'local'},parseReceipt(record.text),true)
+      return taskLedger.resolveFromMessage(record.text,judge)!==undefined
+    },
+    notify:record=>{logger.warn('a2a: receipt delivery blocked ref=%s; retained original return only',nudgeRef(record.taskId));requestReminderScan()},
+    schedule:ms=>{
+      let dispose:()=>void
+      dispose=ctx.timer.timeout(()=>{receiptTimers.delete(dispose);void receiptOutbox.scan()},ms);receiptTimers.add(dispose)
+    },
+    warn:code=>logger.warn('a2a: receipt outbox %s',code),
+  })
+  ctx.effect(()=>{const timer=ctx.timer.interval(()=>{void receiptOutbox.scan()},REMINDER_SCAN_MS);queueMicrotask(()=>{void receiptOutbox.scan()});return ()=>{receiptOutbox.stop();timer();for(const stop of receiptTimers)stop();receiptTimers.clear();receiptValidationStamps.clear()}},'a2a: durable original receipt return')
+  async function deliverRetainedReceipt(record:ReceiptOutboxRecord):Promise<Record<string,JsonValue>> {
+    try {
+      const result=await receiptOutbox.send(record.taskId)
+      return result.confirmed?{ok:true,team:record.target,reply:'original receipt delivered',task_id:record.transportId,context_id:record.contextId??'',task_status:'TASK_STATE_COMPLETED',receipt:'none',peer_content:record.lane.kind==='peer'}:{ok:false,error:'receipt retained; delivery blocked ('+result.code+'); do not redo the original work or replace this receipt',code:-32000,task_id:record.transportId,receipt:'none',peer_content:false}
+    }catch{return {ok:false,error:'receipt delivery could not be confirmed; reconcile the retained original transport, do not resend the work',code:-32000,receipt:'none',peer_content:false}}
+  }
+  function sendAuthoredReceipt(author:Agent,row:TaskRecord,to:string,text:string):Promise<Record<string,JsonValue>> {
+    let record:ReceiptOutboxRecord
+    try {record=reserveAuthoredReceipt(author,row,to,text,false)}catch{return Promise.resolve({ok:false,error:'original receipt could not be durably reserved; no delivery attempted',code:-32000,receipt:'none',peer_content:false})}
+    return deliverRetainedReceipt(record)
+  }
 
   function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {
     if (!callerTeam || callerTeam === '') return
@@ -2597,7 +2882,6 @@ export function apply(ctx: Context, config: Config): void {
       // session has no product, and hook 3 would otherwise ledger the
       // placeholder as one on the same-node loop-back.
       if (placeholder === true) return
-      taskLedger.markAnswered(taskId, sessionTeamOf(target))
       // Idempotency: a row THIS ledger tracks must still be pending
       // (settled/dead rows never re-send). A foreign task id (an inbound
       // route the caller tracks on ITS node) has no local row — the final
@@ -2616,45 +2900,10 @@ export function apply(ctx: Context, config: Config): void {
         onBehalfOf: sessionTeamOf(target),
         ...(row?.auth !== undefined ? { authRef: authorizationRef(row.auth) } : {}),
       })
-      // Three-tier hard order (work-order P2): caller lane first; on failure
-      // escalate ONCE to the owner mailbox — the outcome never evaporates
-      // just because the original waiter died. Archive holds truth regardless.
-      // The deliver closure is a FULL dispatch (local first, then the
-      // directory walk with failover, throwing when nothing delivers): the
-      // callback address may be another node's team, and a local-only
-      // closure would silently no-op there — runReceiptLadder reads a
-      // settled undefined as tier-1 success, so the receipt would vanish
-      // without a log.
-      const transportId='r-'+createHash('sha256').update(taskId+'\0'+callerTeam+'\0'+receipt).digest('base64url').slice(0,12)
-      const deliverReceipt=async(team:string):Promise<void>=>{
-        const peerCaller=row?.auth?.target.includes('/')===true?sessionTeamOf(target):undefined
-        const delivered=await dispatchAnywhere(team,receipt,session,undefined,new AbortController().signal,true,transportId,peerCaller)
-        if(team===callerTeam&&delivered.settlementRefused!==true&&!settleOwnInbound(receipt,callerTeam,{caller:session,proof:'in-process',ingress:'local'}))throw receiptFailure({error:'task ledger write failed after receipt delivery',code:-32011})
+      if(row!==undefined) {
+        const retained=reserveAuthoredReceipt(target,row,callerTeam,receipt,true) // throws synchronously: the final waiter remains for a later idle
+        void deliverRetainedReceipt(retained)
       }
-      /* Legacy permanent-failure ladder remains the owner-settlement policy. */
-      const ladder=()=>runReceiptLadder(
-        {
-          deliver: deliverReceipt,
-          // Unknown admission must stop the owner lane; unlike a transport transient,
-          // it is not retryable by retryReceiptDelivery and retains the original debt.
-          transient:error=>error instanceof FollowupAcceptanceUnknown||transientReceiptFailure(error),
-          ownerTeam: config.team,
-          log: (stage, error) => {
-            // N2 (observability): throttled per task to avoid ping-pong noise.
-            const key = `receipt:${taskId}`
-            if ((receiptWarnAt.get(key) ?? 0) + 60_000 > Date.now()) return
-            receiptWarnAt.set(key, Date.now())
-            logger.warn(`a2a: receipt autosend ${stage} for task ${taskId} failed: ${String(error).slice(0, 120)}`)
-          },
-        },
-        callerTeam,
-      )
-      const wait=(ms:number)=>receiptRetryWait(ctx,ms)
-      void retryReceiptDelivery({
-        attempt:()=>ladder(),
-        notify:async()=>{await dispatchAnywhere(config.team,'[A2A receipt delivery notice] ref '+nudgeRef(taskId)+'; delivery to the original caller is temporarily unconfirmed; host retry is responsible. This notice is not a receipt and does not settle work.',session,undefined,new AbortController().signal,true)},
-        pending:()=>row===undefined||taskLedger.isPending(taskId),wait,log:()=>{logger.warn('a2a: receipt delivery temporarily unconfirmed ref=%s',nudgeRef(taskId))},
-      }).catch(()=>{/* permanent ladder failure remains visible in the original owed row */})
     }, { taskId, steerFloor }, 'receipt')
   }
 
@@ -2700,7 +2949,7 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   async function routeIntoAgent(team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number,acceptance?:'inserted'|void) => void, callerKey?: string): Promise<
-    { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; status?: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; localMiss?: true }
+    { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; status?: string; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; localMiss?: true; refusal?: CapacityRefusal }
   > {
     const agent = resolveAgentForTeam(team) ?? canvasLiveAgent(parseCanvasTeamName(team))
     if (agent !== undefined) {
@@ -2741,7 +2990,7 @@ export function apply(ctx: Context, config: Config): void {
    * @returns the agent's final reply, or the explicit failure.
    */
   function routeIntoAgentFor(agent: Agent, team: string, message: string, caller: string, taskId?: string, proofClause?: string, buildHeader?: (from: string) => string, localFrom?: string, onSteered?: (target: Agent, floor: number,acceptance?:'inserted'|void) => void, callerKey?: string): Promise<
-    { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown' }
+    { ok: true; reply: string; acceptance?:'inserted'; receiverBookkeeping?:'failed'; placeholder?: boolean; ownTurn?: true } | { ok: false; error: string; acceptance?:'unknown'; refusal?: CapacityRefusal }
   > {
     // superagent v4: whatever address resolved to it (a canvas team, the node team), the router takes no A2A work.
     if (superagentTeams?.ofSession(String(agent.id)) !== undefined) {
@@ -2797,6 +3046,8 @@ export function apply(ctx: Context, config: Config): void {
         waiter.timeoutDisposer?.()
         if(error instanceof AdmittedBookkeepingError){resolve({ok:true,reply:ADMITTED_BOOKKEEPING_NOTE,receiverBookkeeping:'failed',placeholder:true});return}
         if(error instanceof FollowupAcceptanceUnknown){resolve({ok:false,error:ACCEPTANCE_UNKNOWN_NOTE,acceptance:'unknown'});return}
+        // #713 A2: reserve refused before enqueue — this occurrence was not sent; say so, typed.
+        const refusal=capacityRefusalOf(error);if(refusal){resolve({ok:false,error:capacityRefusalNote(refusal),refusal});return}
         resolve({ ok: false, error: `The DSH session rejected the message: ${String(error)}` })
       }
     })
@@ -2967,7 +3218,7 @@ export function apply(ctx: Context, config: Config): void {
     // shared zone string was "us". True self is the loopback self-fetch
     // face: the caller's card URL origin equals OUR card URL origin.
     try {
-      if (callerUrl !== '' && isRootOriginUrl(callerUrl) && new URL(callerUrl).origin === new URL(ownCardUrl).origin) return true
+      if (callerUrl !== '' && isOwnClaimCaller(callerUrl, allOwnClaimUrls(originClaimByPeer.rules, ownCardUrl))) return true
     } catch { /* malformed callerUrl — falls through to the record bases */ }
     for (const id of joinedSessions.list()) {
       if (`${config.team}/${id8(id)}` === caller) return true
@@ -2996,15 +3247,12 @@ export function apply(ctx: Context, config: Config): void {
     // shadow only corroborates.
     // #189: a ROOT claim URL speaks for its origin; a path-prefixed one only for the exact peer URL we seeded (a mounted card).
     if (callerCard !== undefined && ownCardUrl !== '') {
-      const ourOrigin = new URL(ownCardUrl).origin
       const callerOrigin = new URL(callerUrl).origin
       const weSeedThem = config.peers.some(peer => {
         try { return isRootOriginUrl(callerUrl) ? new URL(peer).origin === callerOrigin : sameMountedUrl(peer, callerUrl) } catch { return false }
       })
-      const theySeedUs = (callerCard.peers ?? []).some(peer => {
-        try { return new URL(peer).origin === ourOrigin } catch { return false }
-      })
-      if (weSeedThem && theySeedUs) return true
+      // #787: only the default ownCardUrl and the claim URL mapped for THIS caller count as us.
+      if (weSeedThem && cardListsOwnClaim(callerCard.peers, ownClaimUrlsFor(callerUrl))) return true
     }
     return false
   }
@@ -3124,8 +3372,9 @@ export function apply(ctx: Context, config: Config): void {
   function intakeHostLinked(origin: string, key: string): boolean {
     const ourOrigin = ownCardUrl === '' ? '' : (() => { try { return new URL(ownCardUrl).origin } catch { return '' } })()
     const sameOrigin = (u: string): boolean => { try { return new URL(u).origin === origin } catch { return false } }
+    const peerUrl = config.peers.find(sameOrigin) ?? origin
     const bilateral = ourOrigin !== '' && config.peers.some(sameOrigin) && [...cardCache.entries()].some(([url, entry]) =>
-      sameOrigin(url) && entry.card?.publicKey === key && (entry.card.peers ?? []).some(peer => { try { return new URL(peer).origin === ourOrigin } catch { return false } }))
+      sameOrigin(url) && entry.card?.publicKey === key && cardListsOwnClaim(entry.card.peers, ownClaimUrlsFor(peerUrl)))
     if (bilateral) return true
     const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))
     return canvasStore.list().some(name => canvasStore.remoteMembersOf(name).some(ref => splitQualifiedMember(ref) !== undefined && canvasStore.ownerKeyOf(ref) === key && memberProvenance(ref, key, ownKey) === 'confirmed-remote'))
@@ -3239,7 +3488,7 @@ export function apply(ctx: Context, config: Config): void {
       cause,
       rows: () => taskLedger.list(),
       // A local-candidate record (#139) is judged as the local candidate admits; every other one by the wire face.
-      judge: (caller, target, ingress, auth, taskId) => auth.admission_rule === 'remote-ref-cli' ? recheckRemoteCliAuthorization(admissionRecords, auth) : auth.admission_rule === 'superagent-intake' ? recheckSuperagentIntake(target, caller, auth, taskId) : (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
+      judge: (caller, target, ingress, auth, taskId) => auth.admission_rule === 'request-recovery' ? (requestRecovery.authority(auth.basis[0]??'',caller,target,taskId)?{ok:true,via:'peer-org',rule:'request-recovery',basis:auth.basis}:{ok:false,refusal:'original one-request authority revoked or corrupt'}) : auth.admission_rule === 'remote-ref-cli' ? recheckRemoteCliAuthorization(admissionRecords, auth) : auth.admission_rule === 'superagent-intake' ? recheckSuperagentIntake(target, caller, auth, taskId) : (ingress === 'local' ? localCandidateAdmission(admissionRecords, caller, target) : callerAdmission(admissionRecords, caller, target)),
     })
     if (entry === undefined) return
     const revoke = entry.tasks.filter(task => task.verdict === 'would-revoke').length
@@ -3330,12 +3579,14 @@ export function apply(ctx: Context, config: Config): void {
       config,
       cliDeposits,
       keepTaskBody,
+      requestRecovery,
       canvasStore, canvasMemberForWrite,
       teamCanvasRefusal: (canvas: string, member: string) => superagentTeams?.canvasMemberRefusal(canvas, member, sessionPresetOf),
       teamCanvasBound: (canvas: string) => superagentTeams?.ofCanvas(canvas) !== undefined,
       superagentInbound: team => superagentRouterRefusal(undefined, team),
       superagentIntake: team => superagentTeams?.all().some(host => host.a2aAddress === team) === true,
       sidebarReceipt: (team, message, caller, settled) => sidebarSends.take(team, message, caller, settled),
+      sidebarClaims: (team, message) => sidebarSends.claims(team, message),
       teamMailboxOf: team => teamMailboxOf(team),
       teamAddressRefusal: (team, message) => teamAddressRefusal(team, message),
       canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
@@ -3608,6 +3859,7 @@ export function apply(ctx: Context, config: Config): void {
       linkRequester: (canvas: string, handle: string, home: unknown) => linkRootRequester({ store: canvasStore, deposited: h => cliDeposits.directoryRows().some(row => row.team === h), pinHome: cliHomeForAdd }, canvas, handle, home),
     })
   })
+  whenWebServerSettled(webServer=>registerRequestRecoveryFace(webServer,{ctx,controlRoute,readJsonBody,recovery:requestRecovery}))
   const cardCacheInFlight = new Map<string, Promise<A2aPeerCard | undefined>>()
   // #114 S6: the change hooks and the boot observation start only once every
   // record admission reads exists (the peer-org basis reads cardCache above).
@@ -3655,7 +3907,8 @@ export function apply(ctx: Context, config: Config): void {
    */
   function peerLinkState(peerUrl: string): { link: 'linked' | 'stranger'; verified: boolean } {
     return peerLinkDisplay(peerUrl, {
-      card: cardCache.get(peerUrl)?.card, ownUrl: ownCardUrl, ownAudiences: config.originClaimAudiences, seeds: config.peers,
+      card: cardCache.get(peerUrl)?.card, ownUrl: ownCardUrl, ownAudiences: config.originClaimAudiences,
+      ownPeerClaimUrls: ownClaimUrlsFor(peerUrl).filter(url => url !== ownCardUrl), seeds: config.peers,
       refs: canvasStore.list().flatMap(name => [...canvasStore.remoteMembersOf(name)]),
       ownHandles: new Set([...joinedSessions.list(), ...liveRoots.keys()].map(id => `${config.team}/${id8(id)}`)),
       cards: [...cardCache.values()].flatMap(entry => entry.card === undefined ? [] : [entry.card]),
@@ -3675,14 +3928,10 @@ export function apply(ctx: Context, config: Config): void {
     if (cached !== undefined && ownCardUrl !== '') {
       try {
         const peerOrigin = new URL(peerUrl).origin
-        const ourOrigin = new URL(ownCardUrl).origin
         const weSeedThem = config.peers.some(peer => {
           try { return new URL(peer).origin === peerOrigin } catch { return false }
         })
-        const theySeedUs = (cached.peers ?? []).some(peer => {
-          try { return new URL(peer).origin === ourOrigin } catch { return false }
-        })
-        if (weSeedThem && theySeedUs) linked = true
+        if (weSeedThem && cardListsOwnClaim(cached.peers, ownClaimUrlsFor(peerUrl))) linked = true
       } catch { /* malformed peer URL — falls through to the canvas basis */ }
     }
     // Basis 2: a canvas remote ref names the peer's zone or one of its
@@ -3781,7 +4030,10 @@ export function apply(ctx: Context, config: Config): void {
       cardCache.set(url, { at: Date.now(), card })
       if (peerAdmissionLinkState(url).link !== 'linked') continue
       const row = card.sessionTeams?.find(item => item.team === handle)
-      if (row !== undefined) return { origin: home, viaUrl: claim.callerUrl, bound: true, online: row.offline === false }
+      if (row !== undefined) {
+        const cliCard=row.offline===false?await client.fetchCard(home+'/a2a/cli/'+encodeURIComponent(handle)):undefined
+        return {origin:home,viaUrl:claim.callerUrl,bound:true,online:row.offline===false&&cliCard?.team===handle,...(cliCard?.team===handle?{key:cliCard.publicKey}:{})}
+      }
     }
     return { origin: home, viaUrl: claim.callerUrl, bound: true, online: false }
   }
@@ -4192,7 +4444,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       a2aJoinGateRefusal(agent === undefined ? undefined : { agent })
       // #282 S2: an owner-qualified canvas id. Our own fingerprint is our canvas; a foreign one never
       // lands on a same-named local canvas, and the directory walk keeps only that owner.
-      const requestedMember=splitQualifiedMember(String(args.team ?? '').trim())
+      const requestedReceiptTarget=String(args.team ?? '').trim()
+      const requestedMember=splitQualifiedMember(requestedReceiptTarget)
       if(requestedMember && localHandleResolver()(String(args.team).trim())!==undefined) args={...args,team:requestedMember.handle}
       const ownerQualified = splitCanvasOwner(String(args.team ?? '').trim())
       const foreignOwner = ownerQualified.owner !== undefined && ownerQualified.owner !== ownCanvasFingerprint ? ownerQualified.owner : undefined
@@ -4203,9 +4456,12 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       }
       // A receipt may use only its own frozen return lane; local answer state is not delivery proof.
       const answer = parseReceipt(args.message)
+      if(answer!==null&&taskLedger.archive().some(row=>row.taskId===answer.taskId&&row.endedBy==='receipt'))return {ok:false,error:'original task already settled; no duplicate receipt sent',code:-32000,receipt:'none',peer_content:false}
       const receiptRow=answer===null?undefined:taskLedger.find(answer.taskId)
-      if(agent!==undefined&&answer!==null) {
-        try {taskLedger.markAnswered(answer.taskId,sessionTeamOf(agent))}catch{return {ok:false,error:'task ledger write failed; receipt was not sent',code:-32000,peer_content:false}}
+      const retainedTarget=receiptRow?.auth?.receipt_target??receiptRow?.sender?.id??(receiptRow?.peer.startsWith('local:')?receiptRow.peer.slice(6):undefined)
+      const originalReceiver=agent!==undefined&&receiptRow?.status==='pending'&&(receiptRow.direction==='inbound'||receiptRow.peer==='local')&&(receiptRow.deliveredTo??receiptRow.team)===sessionTeamOf(agent)&&(receiptRow.receiverSessionId===undefined||receiptRow.receiverSessionId===String(agent.id))
+      if(originalReceiver&&answer!==null&&!holdsRow(answer.envelope)&&retainedTarget===requestedReceiptTarget) {
+        return sendAuthoredReceipt(agent!,receiptRow!,requestedReceiptTarget,args.message)
       }
       const ownReceipt=agent!==undefined&&receiptRow?.status==='pending'&&receiptRow.direction==='inbound'&&receiptRow.receiptExpected!==false&&receiptRow.auth?.receipt_target===args.team&&(receiptRow.deliveredTo??receiptRow.team)===sessionTeamOf(agent)&&(receiptRow.receiverSessionId===undefined||receiptRow.receiverSessionId===String(agent.id))
       if(ownReceipt&&receiptRow.auth?.proof==='origin-claim'&&receiptRow.auth.claim!==undefined) {
@@ -4277,10 +4533,17 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // the target correlates with the route's own result verbatim.
       const taskId = `direct-${Math.random().toString(16).slice(2, 10)}`
       const routedReceipt = parseReceipt(args.message) !== null
+      if(!routedReceipt&&!taskLedger.receiptCapacityAvailable())return localRoute({ok:false,error:'receipt-protected capacity is full; nothing delivered',code:WIRE_ERROR_QUEUE_FULL})
+      let retainDispatch=false
+      if(!routedReceipt)try{taskLedger.reserveDispatch(taskId,peerPayloadFingerprint({caller:callerSession??session,message:JSON.stringify([args.message,args.context_id??'',callbackAddress??'']),noWait:args.async===true,team:args.team}))}catch{return localRoute({ok:false,error:'original dispatch could not reserve durable ledger capacity; nothing delivered',code:WIRE_ERROR_QUEUE_FULL})}
+      try {
       // Candidate order: this host's own teams first (an in-process steer —
       // cheapest possible and immune to nested-signal aborts), then direct
       // publishers, then zone delegations, deduplicated by URL.
       const failures: string[] = []
+      // #713 A2: candidates refused for their host's full correspondence window (a fact about each such host, not the network).
+      const capacityRefusals: CapacityRefusal[] = []
+      let capacityCounted = 0
       if (signal?.aborted) return localRoute({ ok: false, error: 'route aborted before dispatch', code: -32000 })
       const outcome = foreignOwner !== undefined ? undefined : await dispatchLocalCandidate(args.team, args.message, callerSession, args.context_id, signal, args.async === true, taskId, callbackAddress, agent === undefined ? undefined : String(agent.id))
       const localBirth = localBirths.get(taskId)
@@ -4292,7 +4555,8 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           // gh#198: host-built delivery notes, or a reply from a clean local session (resolved as routeIntoAgent does), are this host's alone.
           return ((outcome.bridge === undefined && (outcome.task_status === 'TASK_STATE_DELIVERED' || outcome.task_status === 'TASK_STATE_ABORTED_WAIT' || (t => t !== undefined && nodeTaint.of(String(t.id)) === '')(resolveAgentForTeam(args.team) ?? canvasLiveAgent(parseCanvasTeamName(args.team))))) ? localRoute(outcome) : outcome) as unknown as Record<string, JsonValue>
         }
-        if(outcome.acceptance==='unknown')return localRoute(outcome) as unknown as Record<string,JsonValue>
+        if(outcome.acceptance==='unknown'){retainDispatch=true;return localRoute(outcome) as unknown as Record<string,JsonValue>}
+        if (outcome.refusal) capacityRefusals.push(outcome.refusal)
         failures.push(`local: ${outcome.error}`)
       }
       // Failover seam for canvas teams: after the local tiers miss, the
@@ -4338,7 +4602,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           peerAsync = card !== undefined && caps?.async === true
         }
         const result = await dispatchPeerCandidate(candidate, target, args.message, args.context_id, signal, callerSession, peerAsync, taskId, callbackAddress)
-        if(!result.ok&&result.acceptance==='unknown')return result as unknown as Record<string,JsonValue>
+        if(!result.ok&&(result.acceptance==='unknown'||result.code===-32005)){retainDispatch=true;return result as unknown as Record<string,JsonValue>}
         if (result.ok || signal.aborted) {
           // A receipt the creditor refused (its enforce verdict) pays nothing here either (review of PR #149 P2-2).
           if (result.ok && routedReceipt) {
@@ -4357,11 +4621,14 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
           }
           return { ...result, ...(result.ok ? { team: args.team } : {}) } as unknown as Record<string, JsonValue>
         }
+        if (!result.ok && result.refusal) capacityRefusals.push(result.refusal)
+        else if (!result.ok && result.capacityRefusals !== undefined) capacityCounted += result.capacityRefusals
         failures.push(`${candidate}: ${result.error}`)
       }
       if (failures.length > 0) logger.warn(`route to team "${args.team}" exhausted its candidates: ${failures.join('; ')}`)
       const verdict = routeVerdict(args.team, failures, candidatePool.length)
-      return { ...verdict, error: await diagnoseCanvas(args.team, verdict.error, callerSession) }
+      return { ...verdict, error: await diagnoseCanvas(args.team, verdict.error, callerSession), ...capacityRefusalFields(capacityRefusals, failures.length, capacityCounted) } as unknown as Record<string, JsonValue>
+      }catch{retainDispatch=true;return {ok:false,acceptance:'unknown',task_id:taskId,error:'original dispatch or its final ledger commit is unresolved; reconcile this task id and retained reservation, do not resend the work',code:-32000,receipt:'none',peer_content:false}}finally{if(!routedReceipt&&!retainDispatch)try{taskLedger.releaseDispatch(taskId)}catch{logger.warn('a2a: dispatch reservation release remains blocked')}}
   }
 
   /**
@@ -4407,7 +4674,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // gh#224: a full target queue refuses a same-host delivery as the wire face does (receipts, CLI mailboxes pass).
     // p1-mailbox-owes (S33): a deposit that declares it owes receipts is under the cap like a session.
     // superagent v4: a request to the team's A2A address is a Trigger; the engine's worker slots govern it, not this cap.
-    const queueRefusal = queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(mailTeam) !== undefined && !cliDeposits.owes(mailTeam)) || superagentHost?.a2aAddress === mailTeam, ownTask)
+    const queueRefusal = parseReceipt(message)===null&&!taskLedger.receiptCapacityAvailable(taskIdFromCaller)?'receipt-protected capacity is full; nothing delivered':queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(mailTeam) !== undefined && !cliDeposits.owes(mailTeam)) || superagentHost?.a2aAddress === mailTeam, ownTask)
     if (queueRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL, next: QUEUE_FULL_NEXT }
@@ -4535,6 +4802,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
         endRoute(flight)
         recordActivity('out', team, 'local', false)
         if(error instanceof FollowupAcceptanceUnknown)return{ok:false,error:ACCEPTANCE_UNKNOWN_NOTE,acceptance:'unknown',task_id:taskId,code:-32000}
+        const refusal=capacityRefusalOf(error);if(refusal)return{ok:false,error:capacityRefusalNote(refusal),refusal,task_id:taskId,code:-32000}
         return { ok: false, error: `waking or steering the session for team "${team}" failed: ${String(error)}`, code: -32000 }
       }
     }
@@ -4645,6 +4913,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       const reading = readReceiptReplay(await client.queryOutcome(url, taskIdFromCaller, fingerprint, signal))
       if (reading === 'delivered') return { ok: true, team, reply: 'receipt already delivered: the receiver answered an idempotency replay for this transport id', task_id: taskIdFromCaller, context_id: contextId ?? '', task_status: 'TASK_STATE_COMPLETED', receipt: 'none' }
       if (reading === 'retry') return { ...result, [RECEIPT_RETRYABLE]: true }
+      if (reading === 'unknown') return { ...result, acceptance:'unknown', error:'receipt replay is not delivery evidence; reconcile the original transport, do not resend the work' }
       return { ...result, error: `${result.error} (the receiver recorded the prior attempt of this receipt as failed)` }
     }
     return result

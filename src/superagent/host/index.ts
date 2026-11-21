@@ -28,10 +28,14 @@ import { RosterReports } from './roster.ts'
 import { MemberExecutor, runOf, transientError, type MemberTurn, type PrepareRunner, type QueuedAssignment } from './executor.ts'
 import { PiEvents } from './pi-events.ts'
 import { ReviewRequests } from './review-requests.ts'
-import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, type OutboundAsk } from './outbound.ts'
+import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, type OutboundAsk, type OutboundRecord, type OutboundApproval } from './outbound.ts'
+import {legacyOutboundApproval} from './legacy-outbound-approval.ts'
+import {NarrowOutboundRecovery} from './narrow-outbound.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { SettingsHistory } from './settings-history.ts'
 import { HealthReminders, HEALTH_TICK_MS, type HealthProblem } from './health-reminders.ts'
+import { DecisionPush, PUSH_TICK_MS } from './decision-push.ts'
+import { QuestionGate, questionToken } from './question-gate.ts'
 import { DECISION_FILES_MAX, DecisionBook, decisionFiles, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
@@ -121,6 +125,11 @@ export const SENDER_TAKE = '接这一单', SENDER_TAKE_LIST = '接这一单，�
 /** M12 limits: open `sender` cards at a time, and how old a message may be to wait on one. */
 export const SENDER_CARDS_MAX = 10, SENDER_HOLD_MAX_AGE_MS = 24 * 3_600_000
 
+/** Observer phase 1: how many intervention rows one read returns by default, and at most (the plugin's own cap). */
+const INTERVENTIONS_READ_DEFAULT = 100, INTERVENTIONS_READ_MAX = 500
+/** #764 review: per target session, at most this many casts an hour, and one wake per this window. */
+const CAST_PER_HOUR = 3, CAST_WAKE_MS = 15 * 60_000
+
 export class SuperagentHost {
   readonly store: JsonRepositories
   readonly engine: Engine
@@ -134,6 +143,7 @@ export class SuperagentHost {
   /** GitHub issues as a source of requests (design github-issues). */
   private readonly issues: IssueSource
   private readonly reviews: ReviewRequests
+  private readonly narrowOutbound: NarrowOutboundRecovery
   private readonly outbound: OutboundRequests
   /** Proposals to change a rule set, each set's revision and last change (design D8–D10b). */
   readonly ruleChanges: RuleChanges
@@ -148,6 +158,8 @@ export class SuperagentHost {
   private readonly settingsHistory: SettingsHistory
   /** The team's health reminders: one card per problem, taken back when it goes away (reliability R7). */
   private readonly healthReminders: HealthReminders
+  /** R7b: questions that go to the observer first. */
+  private readonly questionGate: QuestionGate
   /** The A2A Source (PR-B2b): the team's A2A address and its mailbox loop. */
   readonly a2a: A2aSource
   /** What the team owes A2A requesters (host/receipts.ts). */
@@ -160,6 +172,9 @@ export class SuperagentHost {
   /** docs/design/superagent-root-team.md R2-R4: this team's child teams, when it is a root. */
   readonly root: RootDispatch
   private readonly roster: RosterReports
+  /** T8: the router's and observer's decision cards to the market, on the roster's route. */
+  readonly decisionPush: DecisionPush
+  private pushTimer: (() => void) | undefined
   /** Outbox messages being sent right now, so a pass never sends one twice at once. */
   private readonly sending = new Set<string>()
   private started = false
@@ -227,6 +242,20 @@ export class SuperagentHost {
       handleOf: id => d.handleOf?.(id) ?? id, nameOf: id => plainName(d.sessionName?.(id)), online: id => d.sessionLoaded?.(id) ?? false, seatIdOf: id => this.named.seatIdOf(id),
       loadOf: id => this.executor.loadOf(id), hostFingerprint: () => d.hostFingerprint?.(), warm: () => d.warmPeerCards?.(), nowMs: () => Date.parse(this.now()), logger: d.logger,
     })
+    // T8 step 1: the roster's recipients, transport and canvas address; the outbox is kept across restarts.
+    const pushPath = join(dir, 'decision-push.json')
+    this.decisionPush = new DecisionPush({
+      on: () => this.settingsValue.decisionPush === true,
+      holds: cardId => this.decisions?.get(cardId) !== undefined,
+      team: () => { const s = this.settings; if (s.canvas === undefined) return undefined; const router = s.router ?? s.members[0]; const zone = router === undefined ? undefined : (d.handleOf?.(router) ?? router).split('/')[0]; return zone === undefined || zone === '' ? undefined : { canvas: s.canvas, address: `${zone}/canvas/${s.canvas}` } },
+      remotes: canvas => (d.canvasTeam?.(canvas)?.remote ?? []).map(r => r.ref),
+      declares: (ref, capability) => d.memberDeclares?.(ref, capability) === true,
+      send: async (ref, text, taskId) => { if (d.rosterSend === undefined) throw new Error('no roster send on this host'); await d.rosterSend(ref, text, taskId) },
+      hostFingerprint: () => d.hostFingerprint?.(),
+      load: () => { try { return existsSync(pushPath) ? JSON.parse(readFileSync(pushPath, 'utf8')) as unknown : undefined } catch { return undefined } },
+      save: kept => { mkdirSync(dir, { recursive: true }); const tmp = `${pushPath}.tmp-${randomUUID()}`; writeFileSync(tmp, JSON.stringify(kept), { mode: 0o600 }); renameSync(tmp, pushPath) },
+      nowMs: () => Date.parse(this.now()), logger: d.logger,
+    })
     const progressPath = join(dir, 'progress.json')
     this.progress = new ProgressReceipts({
       store: this.store, a2a: this.a2a, on: () => this.settingsValue.sources.a2a && this.settingsValue.progressOff !== true, nowMs: () => Date.parse(this.now()),
@@ -253,13 +282,38 @@ export class SuperagentHost {
     // The book prunes decided cards by age: on the host's clock, the one the cards are stamped with (a real clock here would
     // drop a card the host decided "just now" whenever the two disagree, e.g. a host or test with an injected clock).
     this.decisions = new DecisionBook(join(dir, 'decisions.json'), ticketId => { const ticket = this.store.tickets.get(ticketId); return ticket !== undefined && ticket.ended === undefined }, () => Date.parse(this.now()))
+    // T8: the book tells the push when a card is raised, decided or dropped (router and observer cards go to the market).
+    this.decisions.onChange = (event, card) => { this.decisionPush?.noted(event, card) }
     this.healthReminders = new HealthReminders(
       (question, key, at) => { const out = this.decisions.propose({ source: 'health', by: 'health', question, reason: key, at, spec: { level: 'P2', options: ['去处理', '先忽略 24 小时'], recommended: '去处理' } }); return out.ok ? out.id : undefined },
       cardId => this.decisions.withdraw(cardId),
       () => this.decisions.open().filter(card => card.source === 'health').map(card => ({ id: card.id, ...(card.reason !== undefined ? { reason: card.reason } : {}) })),
       () => this.now(),
+      // R7a (workbench-market 18 §八): a loaded observer the problem is not about sees it first.
+      { pick: problem => this.settings.observers.find(id => id !== problem.session && (d.sessionLoaded?.(id) ?? true)),
+        tell: (observer, text) => d.deliverToSession(observer, text),
+        // #754 review: the observer's hour survives a restart (written whole, then renamed into place).
+        persist: { load: () => { const path = join(dir, 'observer-health.json'); return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) as Array<{ key: string; observer: string; since: number }> : [] },
+          save: rows => { const path = join(dir, 'observer-health.json'), temporary = `${path}.tmp-${String(process.pid)}`; mkdirSync(dir, { recursive: true }); writeFileSync(temporary, JSON.stringify(rows), { mode: 0o600 }); renameSync(temporary, path) } } },
     )
-    this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), ask: (address, text) => this.a2a.askReview(address, text), logger: d.logger, now: () => this.now(), note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: outbound note on %s lost: %s', ticketId, String(error)) } } })
+    // R7b (workbench-market 18, #880): a member's question goes to the team's loaded observer first.
+    this.questionGate = new QuestionGate({
+      pick: reporter => this.settings.observers.find(id => id !== reporter && (d.sessionLoaded?.(id) ?? true)),
+      loaded: id => d.sessionLoaded?.(id) ?? true,
+      tell: (observer, text) => d.deliverToSession(observer, text),
+      persist: { load: () => { const path = join(dir, 'observer-questions.json'); return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) as unknown : undefined },
+        save: kept => { const path = join(dir, 'observer-questions.json'), temporary = `${path}.tmp-${String(process.pid)}`; mkdirSync(dir, { recursive: true }); writeFileSync(temporary, JSON.stringify(kept), { mode: 0o600 }); renameSync(temporary, path) } },
+    })
+    this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), ask: (address, text, task, sender) => this.a2a.askApproved(address, text, task!, sender!),
+      sender: create => create ? this.a2a.ensureIdentity() : Promise.resolve(this.a2a.address ?? ''), approval: record => this.outboundApproval(record),
+      narrowReceipt:(binding,caller,message)=>this.d.narrowRecovery?.receipt(binding,caller,message)===true,
+      narrowNote:(ticketId,text)=>{try{const ticket=this.store.tickets.get(ticketId);if(!ticket||ticket.ended)return false;if(!ticket.inputs.some(input=>input.kind==='note'&&input.text===text))this.engine.note(ticketId,text);return true}catch{return false}},
+      query: async (record, attempt) => d.outboundOutcome?.({ sender: attempt.sender, task: attempt.task, address: record.address, message: record.approval!.message }) ?? { delivery: 'unknown' }, logger: d.logger, now: () => this.now(), note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: outbound note on %s lost: %s', ticketId, String(error)) } } })
+    this.narrowOutbound=new NarrowOutboundRecovery({outbound:this.outbound,now:()=>Date.parse(this.now()),
+      approval:record=>{if(!this.settingsValue.sources.a2a||this.settingsValue.paused)return undefined;const t=this.store.tickets.get(record.ticketId);return t&&!t.ended?legacyOutboundApproval(record,this.decisions.retainedForRecovery(record.card),this.settingsValue.canvas??'',Date.parse(this.now())):undefined},
+      identity:()=>this.d.narrowRecovery?.identity(this.a2a.address??''),
+      proposal:binding=>{if(!this.d.narrowRecovery)throw Error('narrow recovery unavailable');return this.d.narrowRecovery.proposal(binding)},
+      transport:(permit,mode,current)=>{if(!this.d.narrowRecovery)throw Error('narrow recovery unavailable');return this.d.narrowRecovery.transport(permit,mode,current)}})
     this.reviews = new ReviewRequests({
       path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
       ask: (address, text) => this.a2a.askReview(address, text),
@@ -341,8 +395,13 @@ export class SuperagentHost {
     this.disposeTimer = this.d.interval(() => this.pass(), PASS_MS)
     // Reliability R7: look at the team's health every 15 minutes; a new problem raises one card (the boot grace period
     // keeps health() quiet, so nothing is raised from it either).
-    this.healthTimer = this.d.interval(() => { this.healthReminders.tick(this.health() as readonly HealthProblem[], Date.parse(this.now())) }, HEALTH_TICK_MS)
+    // #761 review: each look stands alone, so a fault in the health look never skips the question look (or the other way round).
+    this.healthTimer = this.d.interval(() => {
+      try { this.healthReminders.tick(this.health() as readonly HealthProblem[], Date.parse(this.now())) } catch (error) { this.d.logger.warn('superagent: health look skipped: %s', String(error)) }
+      this.questionTick()
+    }, HEALTH_TICK_MS)
     this.roster.start(this.d.interval)
+    this.pushTimer ??= this.d.interval(() => { void this.decisionPush.tick().catch((error: unknown) => { this.d.logger.warn('superagent: decision push skipped: %s', String(error)) }) }, PUSH_TICK_MS)
     // Defer: start() may run while the plugin's apply() still executes, when the canvas lookups it touches are not
     // initialized yet (a TDZ crash took the plugin down on hosts with models set - review of #566). A microtask runs
     // after apply() finishes; the catch inside applyModels is the second fence.
@@ -354,7 +413,7 @@ export class SuperagentHost {
     this.pass()
   }
 
-  stop(): Promise<void> { this.roster.close(); this.disposeTimer?.(); this.disposeTimer = undefined; this.healthTimer?.(); this.healthTimer = undefined; this.started = false; return this.a2a.stop() }
+  stop(): Promise<void> { this.roster.close(); this.disposeTimer?.(); this.disposeTimer = undefined; this.healthTimer?.(); this.healthTimer = undefined; this.pushTimer?.(); this.pushTimer = undefined; this.started = false; return this.a2a.stop() }
 
   /** Run the A2A Source's mailbox loop exactly while its Source is on. */
   private syncA2a(): void {
@@ -626,9 +685,10 @@ export class SuperagentHost {
   /**
    * The team's workers: the canvas's local members and its remote members — except a remote member the team lists as an
    * A2A bot, which is a caller (the workbench market sits on the canvas to be linked, docs/ops/superagent-market-team.md),
-   * never one that takes tickets.
+   * never one that takes tickets. Nor is an observer (workbench-market 18 §八, design D19): it stands outside the execution
+   * and takes no ticket; it stays a member of the team for the gate, its requests and its cards.
    */
-  private pool(): string[] { const now = this.settings; return [...now.members, ...workerRemotes(now), ...this.childTeams().map(c => c.ref)] }
+  private pool(): string[] { const now = this.settings; return [...now.members.filter(id => !now.observers.includes(id)), ...workerRemotes(now), ...this.childTeams().map(c => c.ref)] }
   /** superagent-root-team: a root team's child teams, from its canvas (none for a plain team). */
   private childTeams(): ReadonlyArray<{ ref: string; slots: number }> {
     const canvas = this.settingsValue.canvas
@@ -957,7 +1017,9 @@ export class SuperagentHost {
   /** File an observer's own request (design D15). It reaches the router as any request does; the host only keeps a loop from flooding it. */
   requestForObserver(session: string, text: string): Record<string, unknown> {
     if (!this.isObserver(session)) return { ok: false, code: 'not-observer', error: 'a2a_ticket_request serves only the sessions on this team created under the observer preset' }
-    return this.fileProposal(observerActor(session), text, { observer: session })
+    const filed = this.fileProposal(observerActor(session), text, { observer: session })
+    if (filed.ok === true) { const at = Date.parse(this.now()); this.healthReminders.observerActed(session, text, at); this.questionGate.acted(session, text, at) }
+    return filed
   }
 
   /**
@@ -1012,8 +1074,158 @@ export class SuperagentHost {
 
   /** Raise a card of the router's or an observer's own (decision cards C2, C8). */
   proposeDecision(source: 'router' | 'observer', by: string, question: string, spec: DecisionSpec, reason?: string, files?: readonly DecisionFile[]): Record<string, unknown> {
-    return this.decisions.propose({ source, by, question, spec, at: this.now(), ...(reason !== undefined && reason.trim() !== '' ? { reason: reason.trim() } : {}), ...(files !== undefined ? { files } : {}) })
+    const out = this.decisions.propose({ source, by, question, spec, at: this.now(), ...(reason !== undefined && reason.trim() !== '' ? { reason: reason.trim() } : {}), ...(files !== undefined ? { files } : {}) })
+    // R7a: an observer's card that names a health problem it was told about counts as acting on it.
+    if (out.ok && source === 'observer') { const at = Date.parse(this.now()); this.healthReminders.observerActed(by, `${question}\n${reason ?? ''}`, at); this.questionGate.acted(by, `${question}\n${reason ?? ''}`, at) }
+    return out
   }
+
+  /**
+   * R7b: the observer leaves a note on one of this team's open tickets. It reaches the member holding it as a fact that
+   * grants nothing, like the router's notes; it cannot change, stop or reassign the ticket. A note carrying a question's
+   * `[提问 <ticket>]` token handles that question, and starts the no-loop hour on the ticket.
+   */
+  observerNote(session: string, ticketId: string, text: string): Record<string, unknown> {
+    if (!this.isObserver(session)) return { ok: false, code: 'not-observer', error: 'a2a_ticket_note serves only the team\'s observer' }
+    const body = text.trim()
+    if (body === '' || body.length > 4_000) return { ok: false, code: 'text', error: 'text must be 1..4000 characters' }
+    const ticket = this.store.tickets.get(ticketId)
+    if (ticket === undefined || ticket.ended !== undefined) return { ok: false, code: 'ticket', error: 'name an open ticket of this team' }
+    try { this.engine.note(ticketId, `[观察者留言] ${body}`) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
+    const at = Date.parse(this.now())
+    this.questionGate.notedOn(ticketId, at)
+    this.questionGate.acted(session, body, at)
+    this.pass()
+    return { ok: true, ticketId }
+  }
+
+  /** R7b: questions the observer did not settle go on to the person by the existing route. */
+  private questionTick(): void {
+    let moved: Array<{ ticketId: string; why: string }>
+    try { moved = this.questionGate.tick(id => { const t = this.store.tickets.get(id); return t !== undefined && t.ended === undefined && t.attention !== undefined }, Date.parse(this.now())) } catch (error) { this.d.logger.warn('superagent: question look skipped: %s', String(error)); return }
+    const words: Record<string, string> = { unloaded: '观察者会话没有加载', silent: '观察者一小时内没有处理', 'still-waiting': '观察者处理后一小时单子仍在等' }
+    for (const { ticketId, why } of moved) {
+      const ticket = this.store.tickets.get(ticketId)
+      if (ticket === undefined) continue
+      this.relayReport(ticketId, 'waiting', `${words[why] ?? why}，问题按原路交给人。`)
+    }
+    if (moved.length > 0) this.pass()
+  }
+
+  /**
+   * Observer phase 1 (workbench-market 18 #883): what the observer reads of the same host's prompt-template plugin —
+   * the card library, one session's own templates, and the intervention log (digests, never text). The plugin's
+   * read-only routes are the source in phase 1. A host without the plugin, or with one older than 0.16 (schema 9),
+   * answers `available: false` with why, never an error that stops the observer.
+   */
+  async promptTemplates(kind: 'library' | 'templates' | 'interventions', q: { session_id?: string; since?: string; source?: string; limit?: number } = {}): Promise<Record<string, unknown>> {
+    // The plugin's /plugins/ routes answer this host's own loopback without a token; the observer never sees a credential.
+    const read = this.d.templatesRead ?? (async (path: string) => {
+      const home = this.d.homeUrl?.()
+      if (home === undefined) throw new Error('web server not up')
+      const res = await fetch(`${home}/plugins/dsh-prompt-templates/${path}`, { signal: AbortSignal.timeout(5_000) })
+      return { status: res.status, body: await res.json().catch(() => undefined) }
+    })
+    // #762 review: one domain, one observer — templates and interventions are read for this team's own sessions only.
+    // The library is the host's shared card set and is read whole.
+    const team = new Set([this.settings.router, ...this.settings.members].filter((id): id is string => typeof id === 'string'))
+    const session = q.session_id?.trim() ?? ''
+    if (kind !== 'library' && session !== '' && !team.has(session)) return { ok: false, code: 'not-in-team', error: 'that session is not a member of this team: an observer reads its own team\'s sessions only' }
+    const params = new URLSearchParams()
+    let limit = INTERVENTIONS_READ_DEFAULT
+    if (kind === 'templates') {
+      if (session === '') return { ok: false, code: 'session_id', error: 'kind templates needs session_id: the session whose own templates to read' }
+      params.set('session_id', session)
+    }
+    if (kind === 'interventions') {
+      if (q.since !== undefined && q.since.trim() !== '') {
+        const at = Date.parse(q.since.trim())
+        if (!/^\d{4}-\d{2}-\d{2}/.test(q.since.trim()) || Number.isNaN(at)) return { ok: false, code: 'since', error: 'since must be an ISO time, e.g. 2026-11-20T08:00:00Z' }
+        params.set('since', new Date(at).toISOString())
+      }
+      if (q.source !== undefined && q.source.trim() !== '') {
+        if (!['schedule', 'event', 'manual', 'plugin'].includes(q.source.trim())) return { ok: false, code: 'source', error: 'source must be schedule, event, manual or plugin' }
+        params.set('source', q.source.trim())
+      }
+      if (q.limit !== undefined && Number.isFinite(q.limit)) limit = Math.max(1, Math.min(INTERVENTIONS_READ_MAX, Math.trunc(q.limit)))
+      if (session !== '') params.set('session_id', session)
+      // Without a session the plugin is asked for its widest page and the rows are kept to this team's sessions.
+      params.set('limit', String(session !== '' ? limit : INTERVENTIONS_READ_MAX))
+    }
+    const target = `${kind === 'interventions' ? 'interventions' : 'library'}${params.size > 0 ? `?${params.toString()}` : ''}`
+    // Fixed words to the observer; the plugin's own error text goes to the host log only.
+    const unavailable = (reason: string, detail?: string): Record<string, unknown> => {
+      if (detail !== undefined) this.d.logger.warn('superagent: prompt-templates %s read: %s', kind, detail)
+      return { ok: true, available: false, reason }
+    }
+    let out: { status: number; body: unknown }
+    try { out = await read(target) } catch (error) { return unavailable('dsh-prompt-templates could not be read on this host right now', error instanceof Error ? error.message : String(error)) }
+    if (out.status === 404) return unavailable('dsh-prompt-templates is not installed on this host, or is older than 0.16')
+    const body = out.body as { schema?: unknown; items?: unknown } | undefined
+    if (out.status !== 200 || body === undefined) return unavailable('dsh-prompt-templates did not answer the read', `HTTP ${String(out.status)}`)
+    if (typeof body.schema !== 'number' || body.schema < 9 || !Array.isArray(body.items)) return unavailable('dsh-prompt-templates is older than 0.16 (schema 9): upgrade it to read the library and the log')
+    let items = body.items as Array<Record<string, unknown>>
+    if (kind === 'interventions' && session === '') items = items.filter(row => typeof row['session_id'] === 'string' && team.has(row['session_id'] as string)).slice(-limit)
+    return { ok: true, available: true, schema: body.schema, items }
+  }
+
+  /**
+   * Observer phase 2 (T5-A): the observer casts one card into one of its own team's sessions, through the same host's
+   * prompt-template plugin. The plugin only recognizes the caller as this a2a plugin, so who may cast is checked here:
+   * the team's observer (by the session calling, never a parameter), into a session of this team other than itself, while
+   * the owner has turned observerCast on. The target is woken so the card goes in at its next step.
+   */
+  castCard(observer: string, input: { session_id?: unknown; template_id?: unknown; reason?: unknown }): Record<string, unknown> {
+    if (!this.isObserver(observer)) return { ok: false, code: 'not-observer', error: 'a2a_card_cast serves only the team\'s observer' }
+    if (this.settingsValue.observerCast !== true) return { ok: false, code: 'off', error: 'casting cards is off for this team (the owner turns on observerCast)' }
+    const target = String(input.session_id ?? '').trim()
+    const team = new Set([this.settings.router, ...this.settings.members].filter((id): id is string => typeof id === 'string'))
+    if (target === '' || !team.has(target) || target === observer) return { ok: false, code: 'not-in-team', error: 'cast only into another session of this team' }
+    const templateId = String(input.template_id ?? '').trim()
+    const reason = String(input.reason ?? '')
+    if (templateId === '') return { ok: false, code: 'template', error: 'name the card (template_id from a2a_ticket_read kind library or templates)' }
+    // #764 review: per target, at most CAST_PER_HOUR casts an hour and one wake per CAST_WAKE_MS; kept across restarts.
+    const now = Date.parse(this.now())
+    const limits = this.castLimits()
+    const entry = limits[target] ?? { casts: [], wakeAt: 0 }
+    entry.casts = entry.casts.filter(at => now - at < 3_600_000 && at <= now + 60_000)
+    if (entry.casts.length >= CAST_PER_HOUR) return { ok: false, code: 'rate-limited', error: `at most ${String(CAST_PER_HOUR)} casts an hour into one session` }
+    const out = this.d.castCard?.({ sessionId: target, templateId, reason })
+    if (out === undefined) return { ok: true, available: false, reason: 'dsh-prompt-templates with the cast service (0.17+) is not on this host' }
+    if (!out.ok) return { ok: false, code: out.code ?? 'refused', error: out.error ?? 'the card was not cast' }
+    entry.casts.push(now)
+    // Wake the target so the card goes in at its next step (a wake carries no instruction of its own), at most once per window.
+    const wake = now - entry.wakeAt >= CAST_WAKE_MS || entry.wakeAt > now + 60_000
+    if (wake) {
+      entry.wakeAt = now
+      try { this.d.deliverToSession(target, '[superagent card] 团队观察者投来一张卡，会在你下一步看到；它不是新的指令，不授予任何权限。') } catch { /* the card still waits for its next step */ }
+    }
+    limits[target] = entry
+    this.saveCastLimits(limits)
+    return { ok: true, queued: out.queued ?? 1, woken: wake }
+  }
+
+  /** #764 review: the per-target cast limits, kept in the team's observer-casts.json. */
+  private castLimitsPath(): string { return join(this.stateDir, 'observer-casts.json') }
+  private castLimits(): Record<string, { casts: number[]; wakeAt: number }> {
+    try {
+      const path = this.castLimitsPath()
+      if (!existsSync(path)) return {}
+      const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, { casts?: unknown; wakeAt?: unknown }>
+      const out: Record<string, { casts: number[]; wakeAt: number }> = {}
+      for (const [k, v] of Object.entries(raw ?? {})) out[k] = { casts: Array.isArray(v?.casts) ? v.casts.filter((n): n is number => typeof n === 'number' && Number.isFinite(n)) : [], wakeAt: typeof v?.wakeAt === 'number' ? v.wakeAt : 0 }
+      return out
+    } catch { return {} }
+  }
+  private saveCastLimits(limits: Record<string, { casts: number[]; wakeAt: number }>): void {
+    try {
+      const path = this.castLimitsPath(), temporary = `${path}.tmp-${String(process.pid)}`
+      mkdirSync(this.stateDir, { recursive: true }); writeFileSync(temporary, JSON.stringify(limits), { mode: 0o600 }); renameSync(temporary, path)
+    } catch (error) { this.d.logger.warn('superagent: cast limits not saved: %s', String(error)) }
+  }
+
+  /** R7b: what the observer holds now (for the team state). */
+  observerQuestions(): { pending: string[]; handled: string[] } { return this.questionGate.holds() }
 
   /**
    * A ready report from a member that has ygl-trees but names nothing it wrote there is sent back once (design Y2): the
@@ -1054,12 +1266,39 @@ export class SuperagentHost {
   /** Design outbound-requests O1, O2: a team session asks for a message to another team on a ticket; a P0 card decides it. */
   requestOutbound(session: string, ask: OutboundAsk): Record<string, unknown> {
     const ticket = typeof ask.ticket_id === 'string' ? this.store.tickets.get(ask.ticket_id.trim()) : undefined
-    const checked = this.outbound.check(session, ask, { role: this.toolRoleOf(session), a2aOn: this.settingsValue.sources.a2a, own: ownAddresses(this.d.handleOf, this.settingsValue.canvas, [this.settingsValue.router, ...this.pool()]),
+    const checked = this.outbound.check(session, ask, { role: this.toolRoleOf(session), a2aOn: this.settingsValue.sources.a2a, own: ownAddresses(this.d.handleOf, this.settingsValue.canvas, [this.settingsValue.router, ...this.pool(), ...this.settings.observers]),
       ticket: ticket === undefined ? undefined : { open: !ticket.ended, title: ticket.title, holder: this.executor.list().find(b => b.ticketId === ticket.id)?.member } })
     if (!checked.ok) return checked
-    const out = this.decisions.propose({ source: 'outbound', by: session, at: this.now(), question: `${this.memberName(session)} ${checked.question}`, ...(checked.reason !== undefined ? { reason: checked.reason } : {}), spec: { level: 'P0', options: [OUTBOUND_APPROVE, OUTBOUND_DECLINE], recommended: OUTBOUND_APPROVE } })
+    const out = this.decisions.propose({ source: 'outbound', by: session, at: this.now(), question: `${this.memberName(session)} ${checked.question}`, ...(checked.reason !== undefined ? { reason: checked.reason } : {}), spec: { level: 'P0', options: [OUTBOUND_APPROVE, OUTBOUND_DECLINE], recommended: OUTBOUND_APPROVE }, outbound: { ticketId: checked.ticketId, address: checked.address, text: checked.text, team: this.settingsValue.canvas ?? '', title: ticket!.title } })
     if (out.ok && out.reused !== true) this.outbound.waiting(out.id, checked.ticketId, checked.address, checked.text, session)
     return out.ok ? { ok: true, card_id: out.id } : out
+  }
+
+  /** Validate retained server-owned approval, not recovery-call text or a member's assertion. */
+  private outboundApproval(record: Readonly<OutboundRecord>): OutboundApproval {
+    const deny = (code: string, error: string): OutboundApproval => ({ ok: false, code, error })
+    if (!this.settingsValue.sources.a2a || this.settingsValue.paused) return deny('a2a-off', '团队来源已停用或暂停，未恢复发送。')
+    const ticket = this.store.tickets.get(record.ticketId)
+    if (ticket === undefined || ticket.ended !== undefined) return deny('ticket', '原工单不存在或已结束，未恢复发送。')
+    const card = this.decisions.get(record.card), payload = card?.outbound
+    if (card?.source !== 'outbound' || card.decided === undefined || card.by !== record.by || payload === undefined
+      || card.decided.text.split('\n')[0] !== '决定：' + OUTBOUND_APPROVE
+      || !Number.isFinite(Date.parse(card.decided.at)) || Date.parse(this.now()) < Date.parse(card.decided.at)
+      || Date.parse(this.now()) - Date.parse(card.decided.at) > 30 * 86_400_000
+      || payload.ticketId !== record.ticketId || payload.address !== record.address || payload.text !== record.text
+      || payload.team === '' || payload.team !== this.settingsValue.canvas) return deny('outbound-approval', '缺少相符且有效的原批准载荷，未恢复发送；旧记录需维护核账。')
+    const title = payload.title.length > 80 ? payload.title.slice(0, 80) + '…' : payload.title
+    return { ok: true, at: card.decided.at, team: payload.team,
+      message: '[来自 superagent 团队 ' + payload.team + ' 的请求 · 工单「' + title + '」]\n' + payload.text }
+  }
+
+  async prepareNarrowOutbound(card:string,task:string,receiver:{home:string;key:string;session:string},reconciliation:string):Promise<Record<string,unknown>> {try{return {ok:true,proposal:await this.narrowOutbound.prepare(card,task,receiver,reconciliation)}}catch{return {ok:false,code:'narrow-recovery-refused',error:'原批准、尝试链或精确接收身份无法可靠核验，未发送。'}}}
+  async runNarrowOutbound(card:string,task:string,permit:unknown,send:boolean):Promise<Record<string,unknown>> {try{return {...await this.narrowOutbound.run(card,task,permit,send)}}catch{return {ok:false,code:'narrow-recovery-refused',error:'窄恢复许可或原请求状态不匹配，未发送。'}}}
+
+  /** Only invoked by the browser-owner face; this does not expand any model role's tools. */
+  async recoverOutbound(card: string, task: string, retry: boolean): Promise<Record<string, unknown>> {
+    try { return { ...await this.outbound.recover(card, task, retry) } }
+    catch { return { ok: false, code: 'outbound-storage', error: '外发状态未能可靠保存，未确认再次发送；请按原 task 对账。' } }
   }
 
   /** Design outbound-requests O3: an approver the owner named decides an outbound card it did not raise, with a reason. */
@@ -1098,11 +1337,16 @@ export class SuperagentHost {
   decisionCards(): Array<StoredCard & { readonly title?: string }> {
     const onTickets = this.store.tickets.list().flatMap((ticket): Array<StoredCard & { title: string }> => {
       if (ticket.ended !== undefined || ticket.attention === undefined) return []
+      // R7b: while the observer holds the question it has not reached the person.
+      if (this.questionGate.held(ticket.id)) return []
       const id = ticketCardId(ticket.id, ticket.attention.question)
       const card = this.decisions.get(id)
       if (card?.decided !== undefined) return []
+      // The person's clock (workbench-market 15) starts when the question reached them, not when the member asked.
+      const reached = this.questionGate.reachedAt(ticket.id)
+      const since = reached !== undefined ? { at: new Date(reached).toISOString() } : {}
       // A question asked before cards, or by an older member: it has no recommendation, so it is the strictest kind.
-      return [{ ...(card ?? { id, question: ticket.attention.question, source: 'ticket' as const, by: '', ticketId: ticket.id, at: ticket.updatedAt, level: 'P1' as const, options: [], recommended: '' }), title: ticket.title }]
+      return [{ ...(card ?? { id, question: ticket.attention.question, source: 'ticket' as const, by: '', ticketId: ticket.id, at: ticket.updatedAt, level: 'P1' as const, options: [], recommended: '' }), ...since, title: ticket.title }]
     })
     return [...this.decisions.open().filter(card => card.source !== 'ticket'), ...onTickets]
   }
@@ -1168,7 +1412,13 @@ export class SuperagentHost {
       return { ok: true, granted: chosen.startsWith('批准') }
     }
     // Design outbound-requests O4: the decision sends, or not; the result reaches the ticket as a note.
-    if (card.source === 'outbound') { this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored); void this.outbound.decided(card.id, chosen === OUTBOUND_APPROVE, this.settingsValue.canvas ?? '', ticketId => this.store.tickets.get(ticketId)?.title); return { ok: true, approved: chosen === OUTBOUND_APPROVE } }
+    if (card.source === 'outbound') {
+      // Refuse before consuming the decision: re-enabling the Source can then approve this same card.
+      if (chosen === OUTBOUND_APPROVE && (!this.settingsValue.sources.a2a || this.settingsValue.paused)) return { ok: false, code: 'a2a-off', error: '团队来源已停用或暂停；原卡仍待批准，没有发出。' }
+      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      void this.outbound.decided(card.id, chosen === OUTBOUND_APPROVE, this.settingsValue.canvas ?? '', ticketId => this.store.tickets.get(ticketId)?.title).catch(error => this.d.logger.warn('superagent: approved outbound %s needs reconciliation: %s', card.id, String(error)))
+      return { ok: true, approved: chosen === OUTBOUND_APPROVE }
+    }
     if (card.ticketId !== undefined) {
       const out = this.answer(card.ticketId, answer)
       if (!out.ok) return out
@@ -1351,7 +1601,10 @@ export class SuperagentHost {
     try { ticket = this.engine.report(binding.ticketId, report) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
     const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
     if (decision !== undefined && typeof report.question === 'string') this.decisions.forTicket({ ticketId: ticket.id, by: member, question: report.question, spec: { level: decision.level, options: decision.options, recommended: decision.recommended }, at: this.now(), ...(decision.files !== undefined ? { files: decision.files } : {}) })
-    this.relayReport(ticket.id, report.state, report.summary)
+    // R7b: a new question for a person goes to the observer first; the person path waits while it holds it.
+    const asks = typeof report.question === 'string' && report.question.trim() !== '' && ticket.attention !== undefined && ticket.ended === undefined
+    const route = asks ? this.questionGate.ask(ticket.id, member, ticket.title, ticket.attention!.question, Date.parse(this.now())) : 'person'
+    this.relayReport(ticket.id, report.state, report.summary, route === 'observer')
     this.pass()
     return { ok: true, ticketId: ticket.id, stage }
   }
@@ -1374,11 +1627,13 @@ export class SuperagentHost {
   }
 
   /** The router hears a report in its own session, so it can hand a result or a question to the person. */
-  private relayReport(ticketId: string, state: string, summary: string): void {
+  private relayReport(ticketId: string, state: string, summary: string, held = false): void {
     const router = this.settingsValue.router, ticket = this.store.tickets.get(ticketId)
     if (router === undefined || ticket === undefined) return
     const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
-    const question = ticket.attention !== undefined ? `\nquestion for the person (send it with superagent_reply purpose attention, copied exactly): ${ticket.attention.question}` : ''
+    const question = ticket.attention === undefined ? ''
+      : held || this.questionGate.held(ticket.id) ? `\nThe team's observer has this ticket's question first (${questionToken(ticket.id)}): do not send it to the person yet. The host passes it on by this same route if the observer does not settle it within the hour.`
+      : `\nquestion for the person (send it with superagent_reply purpose attention, copied exactly): ${ticket.attention.question}`
     // The owner asked for this in the router's own session, and reads the answer there: superagent_reply goes to the team page.
     const inChat = (state === 'ready' || state === 'failed' || state === 'dropped' || ticket.attention !== undefined) && ticket.origin.triggerIds.some(id => this.ruleChanges.filedFromChat(id))
       ? '\nThe owner asked for this in this session: besides superagent_reply, tell them here in plain words what came of it, or what you need from them.' : ''
@@ -1493,6 +1748,7 @@ export class SuperagentHost {
 
   pass(): void {
     if (this.store.loadError !== undefined) return
+    try{this.outbound.flushNarrowNotes()}catch{this.d.logger.warn('superagent: original recovery result note remains pending')}
     try { this.readMcpTools() } catch (error) { this.d.logger.warn('superagent: team MCP check failed: %s', String(error)) }
     try { this.engine.evaluateDue() } catch (error) { this.d.logger.warn('superagent: evaluation pass failed: %s', String(error)) }
     this.flushCandidates()
@@ -1771,6 +2027,50 @@ export class SuperagentHost {
     }
     // A queued ticket has no binding, so the quiet check above never sees it: say what it has waited for, and for how long.
     out.push(...queuedProblems(this.executor.queued(), q => this.queuedSince(q), id => this.store.tickets.get(id)?.title ?? id, now))
+    // T8: a decision card the market refused (or this host could not shape for it) stays visible: one problem per team and card.
+    for (const refused of this.decisionPush.problems()) out.push({ code: 'decision-push-refused', title: `${this.settings.canvas ?? ''}/${refused.cardId}`, detail: refused.why })
+    if (this.settingsValue.idleSweep === true) out.push(...this.idleSweep(now))
+    return out
+  }
+
+  /**
+   * T5-B (workbench-market 18, the session idle sweep): what the wrap-up self-check log says about the members holding a
+   * ticket. Three problems, each going to the observer first (R7a): a registered wait past its deadline with nothing
+   * newer (session-wait-overdue), an orphan stop as the latest word (session-orphan-stop), and a member that has held a
+   * ticket for QUIET_MINUTES with no self-check record at all (session-no-selfcheck: the check never ran — an error, an
+   * interruption, a session not loaded). Only rows written since this Assignment began count: a member's earlier ticket
+   * says nothing about this one (#765 review X1–X3). The latest word is the latest orphan or concluded row; rows the
+   * check writes along the way (written, hint, no-template, injected) never hide it (X4). Silent when the self-check log
+   * is not readable or the check is off; a member whose log read throws is skipped, the others are still swept.
+   */
+  private idleSweep(now: number): Array<{ code: string; session: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> {
+    const out: Array<{ code: string; session: string; ticketId?: string; title?: string; minutes?: number; detail?: string }> = []
+    if (this.d.selfChecksOf === undefined) return out
+    for (const binding of this.executor.list()) {
+      const member = binding.member
+      if (member.includes('@')) continue
+      const ticket = this.store.tickets.get(binding.ticketId)
+      if (ticket === undefined || ticket.ended !== undefined) continue
+      const since = Date.parse(ticket.assignments.find(a => a.id === binding.assignmentId)?.createdAt ?? '')
+      if (!Number.isFinite(since)) continue
+      let rows: ReadonlyArray<{ kind: string; conclusion: string | null; deadline: string | null; at: string }> | undefined
+      try { rows = this.d.selfChecksOf(member) } catch { continue }
+      if (rows === undefined) return out
+      const ref = { session: member, ticketId: ticket.id, title: ticket.title }
+      const current = rows.filter(row => Date.parse(row.at) >= since)
+      if (current.length === 0) {
+        const minutes = Math.floor((now - since) / 60_000)
+        if (minutes >= QUIET_MINUTES) out.push({ code: 'session-no-selfcheck', ...ref, minutes })
+        continue
+      }
+      const last = current.filter(row => row.kind === 'orphan' || row.kind === 'concluded').at(-1)
+      if (last === undefined) continue
+      if (last.kind === 'orphan' || last.conclusion === 'orphan') { out.push({ code: 'session-orphan-stop', ...ref }); continue }
+      if (last.conclusion === 'waiting' && last.deadline !== null) {
+        const due = Date.parse(last.deadline)
+        if (Number.isFinite(due) && now > due) out.push({ code: 'session-wait-overdue', ...ref, minutes: Math.floor((now - due) / 60_000), detail: last.deadline })
+      }
+    }
     return out
   }
 

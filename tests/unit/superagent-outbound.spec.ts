@@ -4,6 +4,7 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { approverCheck, OUTBOUND_APPROVE, OUTBOUND_DECLINE, OutboundRequests, ownAddresses, type OutboundContext } from '../../src/superagent/host/outbound.ts'
 import { DEFAULT_SETTINGS, parseSettings } from '../../src/superagent/host/policy.ts'
 import { touchesRules } from '../../src/superagent/host/owner-proof.ts'
@@ -56,7 +57,7 @@ describe('deciding and sending (O3, O4)', () => {
     const sent = book()
     sent.out.waiting('c1', 't1', 'dsh/canvas/other', '原文', 'session-m')
     expect(await sent.out.decided('c1', true, 'team', () => '调研')).toBe('direct-out000001')
-    expect(sent.ask).toHaveBeenCalledWith('dsh/canvas/other', '[来自 superagent 团队 team 的请求 · 工单「调研」]\n原文')
+    expect(sent.ask).toHaveBeenCalledWith('dsh/canvas/other', '[来自 superagent 团队 team 的请求 · 工单「调研」]\n原文', expect.stringMatching(/^out-/), '')
     expect(sent.out.list()[0]).toMatchObject({ state: 'sent', task: 'direct-out000001' })
     expect(await sent.out.decided('c1', true, 'team', () => '调研')).toBeUndefined()
     const declined = book()
@@ -69,7 +70,7 @@ describe('deciding and sending (O3, O4)', () => {
     lost.out.waiting('c3', 't1', 'dsh/canvas/other', '原文', 'session-m')
     await lost.out.decided('c3', true, 'team', () => '调研')
     expect(lost.out.list()[0]!.state).toBe('failed')
-    expect(lost.note.mock.calls[0]![1]).toContain('没能发出')
+    expect(lost.note.mock.calls[0]![1]).toContain('接纳状态未知')
   })
 })
 
@@ -95,6 +96,7 @@ describe('approvers in the settings (O3)', () => {
     const set = parseSettings({ approvers: ['session-0123abcd-ef'] }, DEFAULT_SETTINGS) as { settings: typeof DEFAULT_SETTINGS }
     expect((parseSettings({ approvers: [] }, set.settings) as { settings: { approvers?: unknown } }).settings.approvers).toBeUndefined()
     expect(touchesRules({ approvers: [] })).toBe(true)
+    expect(touchesRules({ observerCast: true })).toBe(true)
   })
 })
 
@@ -107,7 +109,12 @@ describe('the whole way, on a team (O1–O5)', () => {
     const h = new SuperagentHost({
       canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', 'session-m', 'session-o'], remote: [] } : undefined, home: mkdtempSync(join(tmpdir(), 'sa-out-host-')), logger: { info: () => {}, warn: () => {} },
       deliverToSession: () => true, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id, presetOf: (id: string) => presets[id], handleOf: (id: string) => `dsh/${id}`, homeUrl: () => 'http://127.0.0.1:1',
-      runCli: async (args: string[]) => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : args[0] === 'route' ? JSON.stringify({ task_id: 'direct-out000002' }) : '{}' },
+      runCli: async (args: string[], env: NodeJS.ProcessEnv) => {
+        calls.push(args)
+        if (args[0] === 'init') { mkdirSync(env.A2A_CLI_HOME!, { recursive: true }); writeFileSync(join(env.A2A_CLI_HOME!, 'cli.json'), JSON.stringify({ handle: 'superagent-team/0123456789abcdef' })); return '{}' }
+        if (args[0] === 'admission') return JSON.stringify({ admitted: true, rule: 'cli-deposit' })
+        return args[0] === 'route' ? JSON.stringify({ delivered: true, task_id: args[args.indexOf('--task') + 1] }) : '{}'
+      },
     } as never)
     expect(h.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, approvers: ['session-o'] }, () => true)).toMatchObject({ ok: true })
     h.start()

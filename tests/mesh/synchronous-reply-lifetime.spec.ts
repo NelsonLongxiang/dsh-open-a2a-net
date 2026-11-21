@@ -3,9 +3,10 @@ import{generateKeyPairSync}from'node:crypto'
 import{bootNode,reservePort,runContext,type MeshNode}from'./harness.ts'
 import{signCard}from'../../src/card.ts'
 import{signOriginClaim}from'../../src/origin-claim.ts'
+const nativeFetch=globalThis.fetch.bind(globalThis)
 const cli='sync-cli/0123456789abcdef',id='session-bbbbbbbb11112222',target='beta/bbbbbbbb'
-const post=(n:MeshNode,path:string,body:unknown)=>fetch(n.baseUrl+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json())
-const state=(n:MeshNode)=>fetch(n.baseUrl+'/__dsh_a2a/state').then(r=>r.json())
+const post=(n:MeshNode,path:string,body:unknown)=>nativeFetch(n.baseUrl+path,{method:'POST',headers:{'Content-Type':'application/json',Connection:'close'},body:JSON.stringify(body)}).then(r=>r.json())
+const state=(n:MeshNode)=>nativeFetch(n.baseUrl+'/__dsh_a2a/state',{headers:{Connection:'close'}}).then(r=>r.json())
 async function fixture(ttl=60000){
  const pa=await reservePort(),pb=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb
  const a=await bootNode({name:'syncA',session:'syncA',team:'alpha',port:pa,peers:[bu],sessionNodes:true,teamScopeRouting:false,silent:true,asyncNudgeDelayMs:86400000})
@@ -15,9 +16,9 @@ async function fixture(ttl=60000){
  await post(a,'/__dsh_a2a/cli-deposit',{action:'publish',card:JSON.stringify(signCard({name:'sync-cli',session:'sync-cli',team:cli,capabilities:{route:true,async:true},expiresAt:Date.now()+3600000},key))})
  await post(a,'/__dsh_a2a/canvas',{action:'add-member',name:'sync',id:cli});await post(a,'/__dsh_a2a/canvas',{action:'add-member',name:'sync',id:target,peer:bu});await post(b,'/__dsh_a2a/canvas',{action:'add-member',name:'sync',id:cli,home:au})
  const queued:any[]=[];b.agents.agent!.followup=m=>queued.push(m)
- const timeouts:Array<{delay:number;dispose:ReturnType<typeof vi.fn>}>=[],timeout=b.ctx.timer.timeout.bind(b.ctx.timer)
- vi.spyOn(b.ctx.timer,'timeout').mockImplementation(((fn:()=>void,delay:number)=>{const dispose=vi.fn(timeout(fn,delay));timeouts.push({delay,dispose});return dispose})as any)
- const send=(task:string)=>{const url=au+'/a2a/direct',body=JSON.stringify({team:target,caller_session:cli,task_id:task,message:'sync work',wait:true});return fetch(url,{method:'POST',headers:{'Content-Type':'application/json',...signOriginClaim({url,method:'POST',body},{caller:'sync-cli',callerUrl:au+'/a2a/cli/'+encodeURIComponent(cli),privateKey:key,unbound:false,now:Date.now()})},body}).then(r=>r.json())}
+ const timeouts:Array<{delay:number;dispose:ReturnType<typeof vi.fn>;fire:()=>void}>=[],timeout=b.ctx.timer.timeout.bind(b.ctx.timer)
+ vi.spyOn(b.ctx.timer,'timeout').mockImplementation(((fn:()=>void,delay:number)=>{const dispose=vi.fn(timeout(fn,delay));timeouts.push({delay,dispose,fire:fn});return dispose})as any)
+ const send=(task:string)=>{const url=au+'/a2a/direct',body=JSON.stringify({team:target,caller_session:cli,task_id:task,message:'sync work',wait:true});return nativeFetch(url,{method:'POST',headers:{'Content-Type':'application/json',Connection:'close',...signOriginClaim({url,method:'POST',body},{caller:'sync-cli',callerUrl:au+'/a2a/cli/'+encodeURIComponent(cli),privateKey:key,unbound:false,now:Date.now()})},body}).then(r=>r.json())}
  const finish=(task:string,text='own final',kind='completed')=>{const m=queued.find(x=>x.source.taskId===task);(b.agents.agent!.session as any).events.push({type:'turn/start'},{type:'user/message',data:{content:m.content}},...(text?[{type:'assistant/message',data:{message:{content:[{type:'text',text}]}}}]:[]),{type:'turn/end',data:{reason:{kind}}});b.ctx.emit('agent/status',{agent:b.agents.agent!,status:'idle'})}
  return{a,b,queued,send,finish,timeouts,dispose:async()=>{await a.dispose();await b.dispose()}}
 }
@@ -49,23 +50,43 @@ it('late reading-turn final after HTTP expiry emits one receipt across duplicate
  }finally{await f.dispose()}
 })
 it('cancellation and original task TTL prevent a late final from sending any receipt',async()=>{
- for(const stop of['cancel','ttl']){
-  const f=await fixture(stop==='ttl'?180:60000);try{
-   await f.send('sync-stop');if(stop==='cancel')await post(f.b,'/__dsh_a2a/tasks/cancel',{task_id:'sync-stop'});else await new Promise(r=>setTimeout(r,200))
-   const before=(await state(f.a)).archived.length;f.finish('sync-stop');await Promise.resolve();expect((await state(f.a)).archived.length).toBe(before)
-  }finally{await f.dispose()}
- }
+ // One real mesh covers both endings; expire the exact captured receipt timer, not a short wall-clock race.
+ const f=await fixture();let clock:ReturnType<typeof vi.spyOn>|undefined
+ try{
+  await f.send('sync-cancel')
+  await post(f.b,'/__dsh_a2a/tasks/cancel',{task_id:'sync-cancel'})
+  const before=(await state(f.a)).archived.length
+  f.finish('sync-cancel');await Promise.resolve();expect((await state(f.a)).archived.length).toBe(before)
+  await f.send('sync-ttl')
+  const receiptTimer=f.timeouts.filter(x=>x.delay>50000).at(-1)!
+  expect(receiptTimer).toBeDefined();expect(receiptTimer.dispose).not.toHaveBeenCalled()
+  const row=(await state(f.b)).tasks.find((r:any)=>r.taskId==='sync-ttl')
+  clock=vi.spyOn(Date,'now').mockReturnValue(row.startedAt+60001)
+  receiptTimer.fire();expect(receiptTimer.dispose).toHaveBeenCalledTimes(1)
+  expect((await state(f.b)).tasksDead.some((r:any)=>r.taskId==='sync-ttl')).toBe(true)
+  const beforeTtl=(await state(f.a)).archived.length
+  f.finish('sync-ttl');await Promise.resolve();expect((await state(f.a)).archived.length).toBe(beforeTtl)
+ }finally{clock?.mockRestore();await f.dispose()}
 })
-it('late final transient retry has one fixed receipt identity, one business delivery and one settlement',async()=>{
+it('late final with unknown insertion retains one receipt and never blindly reposts or re-executes',async()=>{
  const f=await fixture(3600000);const original=globalThis.fetch,bodies:string[]=[],accepted:string[]=[];let failed=false
  try{
   await f.send('sync-retry')
   const spy=vi.spyOn(globalThis,'fetch').mockImplementation(async(url,init)=>{
    const receipt=String(url)===f.a.baseUrl+'/a2a/direct'&&init?.method==='POST'&&String(init.body).includes('[A2A receipt] task sync-retry')
-   if(receipt){bodies.push(String(init!.body));if(!failed){failed=true;throw new TypeError('fetch failed')}}
+   if(receipt){bodies.push(String(init!.body));if(!failed){failed=true;throw new TypeError('fetch failed')}await releaseRetry.promise}
    const r=await original(url,init);if(receipt&&r.ok)accepted.push(String(init!.body));return r
   })
-  try{f.finish('sync-retry');await vi.waitFor(()=>expect(bodies).toHaveLength(1));const now=Date.now(),clock=vi.spyOn(Date,'now').mockImplementation(()=>now+300000);try{(f.b.agents.agent as any).status='idle';f.b.ctx.emit('agent/status',{agent:f.b.agents.agent!,status:'idle'});await vi.waitFor(async()=>expect((await state(f.b)).tasks.find((r:any)=>r.taskId==='sync-retry').reminderAttempts).toBe(1))}finally{clock.mockRestore()}for(let i=0;i<5;i++)f.b.ctx.emit('agent/status',{agent:f.b.agents.agent!,status:'idle'});await vi.waitFor(async()=>{expect((await state(f.a)).archived.filter((r:any)=>r.taskId==='sync-retry')).toHaveLength(1);expect((await state(f.b)).archived.filter((r:any)=>r.taskId==='sync-retry')).toHaveLength(1)},{timeout:3000});expect(new Set(bodies).size).toBe(1);expect(bodies).toHaveLength(2);expect(accepted).toHaveLength(1);expect(f.queued.filter(m=>m.source.taskId==='sync-retry')).toHaveLength(1)}finally{spy.mockRestore()}
+  try{
+   f.finish('sync-retry');await vi.waitFor(()=>expect(bodies).toHaveLength(1))
+   for(let i=0;i<5;i++)f.b.ctx.emit('agent/status',{agent:f.b.agents.agent!,status:'idle'})
+   await vi.waitFor(async()=>expect((await state(f.b)).tasks.find((r:any)=>r.taskId==='sync-retry')).toMatchObject({answeredAt:expect.any(Number),receiptRecovery:{state:'retained'}}))
+   // Unknown insertion is queried, not reposted or paid to an owner instead.
+   expect(bodies).toHaveLength(1);expect(accepted).toHaveLength(0);expect(new Set(bodies).size).toBe(1)
+   expect((await state(f.a)).archived.some((r:any)=>r.taskId==='sync-retry')).toBe(false)
+   expect((await state(f.b)).archived.some((r:any)=>r.taskId==='sync-retry')).toBe(false)
+   expect(f.queued.filter(m=>m.source.taskId==='sync-retry')).toHaveLength(1)
+  }finally{spy.mockRestore()}
  }finally{await f.dispose()}
 })
 it('receipt TTL timer is disposed on cancellation and all resources disappear on unload',async()=>{

@@ -23,6 +23,12 @@ export function splitCanvasOwner(team: string): { team: string; owner?: string }
   return m === null ? { team } : { team: m[1]!, owner: m[2]! }
 }
 
+/** Match the home delivery face: only this host's owner-qualified canvas has a bare local target. */
+export function homeCanvasTeam(team: string, ownFingerprint: string): string {
+  const qualified = splitCanvasOwner(team)
+  return qualified.owner !== undefined && qualified.owner === ownFingerprint ? qualified.team : team
+}
+
 /** The display/routing id of a canvas team owned by the card holding `publicKey`. */
 export function qualifiedCanvasId(team: string, publicKey: string | undefined): string {
   const fp = canvasOwnerFingerprint(publicKey)

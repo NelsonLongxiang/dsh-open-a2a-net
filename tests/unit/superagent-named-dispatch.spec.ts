@@ -4,7 +4,7 @@
  * a seat that cannot take it holds the ticket and asks the requester 「等」 or 「换人」; rework the market returns is taken
  * in at once as a new ticket. Only from a signed caller whose card declares the capability.
  */
-import { mkdtempSync } from '../temp-dirs.ts'
+import { cleanupBeforeTempDirs, mkdtempSync } from '../temp-dirs.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -26,6 +26,7 @@ async function team(options: { declares?: readonly string[]; profiled?: boolean 
     homeUrl: () => 'http://127.0.0.1:1', sessionName: (id: string) => id, sessionLoaded: (id: string) => loaded.has(id),
     callerDeclares: (caller: string, capability: string) => caller === bot && declared.has(capability),
     runCli: async (args: string[]) => { calls.push(args); return args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' } } as never)
+  cleanupBeforeTempDirs(() => host.stop())
   expect(host.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Do what the market dispatches.' }],
     ...(options.profiled === true ? { profiles: { 'session-a': { role: '写作' }, 'session-b': { role: '审校' } } } : {}) }, () => true)).toMatchObject({ ok: true })
   const settle = async () => { for (let i = 0; i < 20; i++) { host.pass(); await new Promise(r => setTimeout(r, 5)) } }
@@ -169,6 +170,7 @@ describe('the roster', () => {
       home: mkdtempSync(join(tmpdir(), 'sa-named-name-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
       homeUrl: () => 'http://127.0.0.1:1', sessionLoaded: () => true, runCli: async () => '{}',
       sessionName: (id: string) => id === 'session-r' ? '总工 (26b40ae2)' : '市场试联成员二就绪 (a0000000)' } as never)
+    cleanupBeforeTempDirs(() => host.stop())
     expect(host.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true } }, () => true)).toMatchObject({ ok: true })
     host.engine.receive({ id: 'w1', source: 'workbench', threads: [{ source: 'workbench', id: 'w1' }], actor: { source: 'workbench', id: 'owner' }, human: true, addressed: 'direct', at: new Date().toISOString(), text: 'x' } as never)
     const { routeItem } = await import('../../src/superagent/host/tools.ts')
@@ -299,6 +301,7 @@ describe('at boot', () => {
     const host = new SuperagentHost({ canvasTeam: (name: string) => { if (booting) throw new ReferenceError("Cannot access 'cardCache' before initialization"); return name === 'team' ? { local: ['session-r', 'session-a'], remote: [] } : undefined },
       home: mkdtempSync(join(tmpdir(), 'sa-named-boot-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {},
       homeUrl: () => 'http://127.0.0.1:1', sessionName: (id: string) => id, sessionLoaded: () => true, runCli: async () => '{}' } as never)
+    cleanupBeforeTempDirs(() => host.stop())
     booting = false
     expect(host.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true } }, () => true)).toMatchObject({ ok: true })
     booting = true

@@ -96,7 +96,8 @@ npm i @nelsonlongxiang/dsh-open-a2a-net@0.6.39 @deepseek-ai/cordis@4.0.5 @deepse
   "apiKey": "<与所有互联主机相同的强随机 key>",
   "peers": ["http://100.64.0.10:13080"],
   "originClaimUrl": "",
-  "originClaimAudiences": []
+  "originClaimAudiences": [],
+  "originClaimByPeer": {}
 }
 ```
 
@@ -110,6 +111,7 @@ npm i @nelsonlongxiang/dsh-open-a2a-net@0.6.39 @deepseek-ai/cordis@4.0.5 @deepse
 | `apiKey` | `''` | 绑 `0.0.0.0` 时必须设置。设置后所有控制路由（含 state、CLI 户口、canvas）和投递面都要求 `X-API-Key`。互联主机必须用**同一把** key，否则对端请求 401。 |
 | `peers` | `[]` | 要互联的 DSH 宿主 URL。对方也要把本节点 URL 加进它的 `peers`（双向种子才算互联）。 |
 | `originClaimUrl` / `originClaimAudiences` | | 端口映射、反代、pocket 隧道时使用，规则与 DSH 宿主相同（见 `docs/ops/lan-deploy-plan-a.md`）。 |
+| `originClaimByPeer` | `{}` | 仅对指定对端改用另一本机声明地址（#787）。例如只对云中心声明 Tailscale 地址，原 LAN peer 仍声明 LAN。不改全局 `originClaimUrl`。规则与 DSH 宿主相同。 |
 | `forwardDirect` | `true` | 一跳 CLI 转发，0.6.38 起默认开启。 |
 
 固定由 serve 设定、文件里改不了的键：`sessionNodes: true`（挂载控制面）、`wakeJoinedOnBoot: false`；`announce` 默认 `true`。

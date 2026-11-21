@@ -3,6 +3,8 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/deps
  */
 import type { SuperagentHost } from './index.ts'
+import type {RecoveryBinding,RecoveryPermit,RecoveryProposal} from '../../request-recovery.ts'
+import type {NarrowIdentity} from './narrow-outbound.ts'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
@@ -87,10 +89,34 @@ export interface SuperagentHostDeps {
   readonly now?: () => string
   /** This host's own base URL for the team identity's CLI, once the web server listens. */
   readonly homeUrl?: () => string | undefined
+  /**
+   * Observer phase 1: read the same host's dsh-prompt-templates read-only faces (`/plugins/dsh-prompt-templates/<path>`).
+   * Defaults to a loopback GET through homeUrl; tests stub it. Resolves to the HTTP status and parsed body.
+   */
+  readonly templatesRead?: (path: string) => Promise<{ status: number; body: unknown }>
+  /**
+   * T5-B: one session's wrap-up self-check log from the same host's dsh-prompt-templates; undefined when the plugin, its
+   * self-check, or a version with the read is not there (the sweep then says nothing about self-checks).
+   */
+  readonly selfChecksOf?: (sessionId: string) => ReadonlyArray<{ kind: string; conclusion: string | null; deadline: string | null; at: string }> | undefined
+  /**
+   * Observer phase 2 (T5-A): cast a card through the same host's dsh-prompt-templates service (`ctx.promptTemplates`).
+   * Undefined when the plugin, or a version with the service, is not on this host. The plugin recognizes the caller as
+   * this a2a plugin; who may ask (the team's observer, into its own team's sessions) is checked here, before this call.
+   */
+  readonly castCard?: (input: { sessionId: string; templateId: string; reason: string }) => { ok: boolean; code?: string; error?: string; queued?: number } | undefined
   /** This host's API key (the CLI's control credential). */
   readonly apiKey?: () => string | undefined
   /** The origin this host publishes as its own (its card URL's): what the team identity's claims are bound to. */
   readonly claimAudience?: () => string | undefined
+  /** Query only this team's exact persisted outbound attempt; missing/failed is not non-delivery evidence. */
+  readonly narrowRecovery?: {
+    identity:(caller:string)=>NarrowIdentity|undefined
+    proposal:(binding:RecoveryBinding)=>Promise<RecoveryProposal>
+    transport:(permit:RecoveryPermit,mode:'send'|'query',current:()=>boolean)=>Promise<{accepted:boolean;ready?:boolean}>
+    receipt:(binding:RecoveryBinding,caller:string,message:string)=>boolean
+  }
+  readonly outboundOutcome?: (input: { sender: string; task: string; address: string; message: string }) => { delivery: 'unknown' | 'not-sent' | 'accepted' }
   /**
    * PR-C2: a signed request to another a2a host (OriginClaim, body-bound, on this host's card key). Absent: no remote
    * members can be reached and no team can be served.

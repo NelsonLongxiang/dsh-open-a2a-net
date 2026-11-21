@@ -164,7 +164,7 @@ describe('idle redelivery of an unconsumed delivery', () => {
     bodies.keep('direct-1', 'session-a', 'cli/0123456789abcdef', '完整正文')
     const followup = vi.fn(), redelivered: string[] = [], tracked = new Map<string, { state: string }>()
     const reminders = new ReconciliationReminders({
-      ledger, agents: () => [target], resolve: () => target, sender: () => undefined, followup, now: () => now, warn: vi.fn(),
+      ledger, agents: () => [target], resolve: () => target, sender: () => undefined, available: () => true, followup, now: () => now, warn: vi.fn(),
       redeliver: (_agent, row: TaskRecord) => redeliverLost({ deliveryFor: () => tracked.get(row.taskId), bodies, relay: (text, _from, taskId) => { redelivered.push(text.slice(text.lastIndexOf('\n') + 1)); tracked.set(taskId, { state: 'enqueued' }) }, warn: vi.fn() }, 'session-a', row.taskId),
     })
     return { reminders, followup, redelivered, target, advance: (ms: number) => { now += ms } }
