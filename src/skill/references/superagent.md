@@ -180,7 +180,8 @@ A request whose first line is `[A2A dispatch] {json}` is read by the host, not o
 ## The team builder (组队顾问, BS1)
 
 - **What it is.** A session the owner creates under the `superagent-builder` preset. It holds no team role.
-- **What it can do.** It reads the organisation with `superagent_org_read` and drafts rules from `superagent_rule_templates`. It may read files (`read` / `glob` / `grep`). Nothing else is allowed: no shell, no writes, no other session, no A2A.
+- **What it can do.** It reads the organisation with `superagent_org_read` and drafts rules from `superagent_rule_templates`. It may read files (`read` / `glob` / `grep`) and check itself and the network read-only (`a2a_whoami`, `a2a_status`, `a2a_tasks`, `a2a_teams`). Nothing else is allowed: no shell, no writes, no other session, no A2A sending.
+- **Issues (#791).** It drafts an issue about a problem it found with `superagent_issue_propose` (only a repository configured for a team) and shows the owner. Only after the owner's own typed message in that session does `superagent_issue_file` let the host file it with the operator's `gh`; the builder never touches GitHub or a credential.
 - **What it does with that.** It advises the owner in its own session.
 - **Blueprints (BS2).** It drafts a blueprint with `superagent_blueprint_propose`: a batch of the staffing changes below, with a diff it shows the owner.
   - Only after the owner's own typed message in that session does `superagent_blueprint_apply` let the host carry it out. A blueprint that touches an existing team also waits for that team's card.

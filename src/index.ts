@@ -148,7 +148,8 @@ import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
 import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
-import { registerBuilderTools } from './superagent/host/builder-tools.ts'
+import { registerBuilderIssueTools, registerBuilderTools } from './superagent/host/builder-tools.ts'
+import { defaultGh } from './superagent/host/pr-follow.ts'
 import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
@@ -2297,6 +2298,12 @@ export function apply(ctx: Context, config: Config): void {
       sessions: joinedSessions.list().filter(id => sessionNodes.has(id)), nameOf: id => { const agent = sessionNodes.get(id); return agent === undefined ? id : nodeMetadataOf(agent).name }, presetOf: sessionPresetOf, staffing: staffing?.list() ?? [],
     }), { staffing: () => staffing, personMessage: id => { const agent = ctx.get('agents')?.get(SessionId(id)) as Agent | undefined; return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
       teamRules: ref => { const team = superagentTeams!.get(ref === 'primary' ? '' : ref); return team === undefined || (ref === '' ) ? undefined : { ...(team.settings.canvas !== undefined ? { canvas: team.settings.canvas } : {}), rules: team.settings.rules, dispatch: team.settings.dispatch } } })
+    // #791: the builder drafts an issue; the host files it with the operator's gh after the owner's own typed message.
+    registerBuilderIssueTools(ctx, id => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET, {
+      gh: defaultGh,
+      repos: () => [...new Set(superagentTeams!.all().flatMap(team => Object.values(team.settings.repos ?? {})).filter((repo): repo is string => typeof repo === 'string' && repo !== ''))],
+      personMessage: id => { const agent = ctx.get('agents')?.get(SessionId(id)) as Agent | undefined; return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
+    })
     // superagent-team-mcp M2: each allowed tool of a team's MCP server is a tool of its own; the host holds the token.
     teamMcpTools = new TeamMcpTools(ctx, id => superagentTeams!.ofSession(id), () => superagentTeams!.all(), logger)
     // A member's turn ending is the executor's turn-end fact (PR-C1).
