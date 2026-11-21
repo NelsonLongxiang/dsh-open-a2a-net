@@ -51,14 +51,25 @@ for(const close of[false,true])it(`a pending cold receipt retains recovery capac
    req.on('response',res=>res.resume())
   }
   captured.faultFile=join(a.home,'a2a','tasks.json');captured.faultTask=sent.task_id;captured.fail=true
+  // Observe the real durable commit synchronously; the background scanner may legitimately settle it before the next poll.
+  const checkpoints:any[]=[],journalSessionReceipt=store.journalSessionReceipt.bind(store)
+  vi.spyOn(store,'journalSessionReceipt').mockImplementation((...args:any[])=>{
+   const out=journalSessionReceipt(...args)
+   if(args[0].transportId===transport){
+    const ledger=JSON.parse(readFileSync(captured.faultFile,'utf8')),journal=store.pendingReceiptCommits()
+    checkpoints.push({insertions:a.steered.filter(m=>JSON.stringify(m).includes(text)).length,pending:ledger.tasks.some((r:any)=>r.taskId===sent.task_id),archived:ledger.archived?.some((r:any)=>r.taskId===sent.task_id)??false,journal:journal.length,intent:journal.some((r:any)=>r.transportId===transport),faultHits:captured.hits})
+   }
+   return out
+  })
   a.agents.agent=originalAgent;a.ctx.emit('agent/created',{agent:originalAgent});releaseWake!({agent:originalAgent});releaseWake=undefined
-  await vi.waitFor(()=>expect(captured.hits).toBeGreaterThan(0))
-  await new Promise<void>(r=>setImmediate(r))
-  const ledger=JSON.parse(readFileSync(captured.faultFile,'utf8')),journal=store.pendingReceiptCommits(),insertions=a.steered.filter(m=>JSON.stringify(m).includes(text)).length
-  const diagnostic={insertions,pending:ledger.tasks.some((r:any)=>r.taskId===sent.task_id),archived:ledger.archived?.some((r:any)=>r.taskId===sent.task_id)??false,journal:journal.length,intent:journal.some((r:any)=>r.transportId===transport),faultHits:captured.hits}
+  await vi.waitFor(()=>{expect(checkpoints).toHaveLength(1);expect(a.steered.filter(m=>JSON.stringify(m).includes(text))).toHaveLength(1)})
+  const diagnostic={...checkpoints[0],insertions:a.steered.filter(m=>JSON.stringify(m).includes(text)).length}
   console.log('closed-response-journal-observation',JSON.stringify(diagnostic))
   expect(diagnostic.insertions===0||diagnostic.intent||diagnostic.archived,JSON.stringify(diagnostic)).toBe(true)
   expect(diagnostic).toMatchObject({insertions:1,intent:true,faultHits:1})
+  const current=JSON.parse(readFileSync(captured.faultFile,'utf8')),remaining=store.pendingReceiptCommits()
+  expect(remaining.some((r:any)=>r.transportId===transport)||current.archived?.some((r:any)=>r.taskId===sent.task_id&&r.endedBy==='receipt')).toBe(true)
+  expect(a.steered.filter(m=>JSON.stringify(m).includes(text))).toHaveLength(1)
  }finally{captured.fail=false;req?.destroy();releaseWake?.({error:{message:'fixture disposed'}});await b.dispose();await a.dispose()}
 })
 
