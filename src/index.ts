@@ -152,7 +152,7 @@ import { registerBuilderTools } from './superagent/host/builder-tools.ts'
 import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
-import { touchesRules } from './superagent/host/owner-proof.ts'
+import { browserOwnerProof, touchesRules } from './superagent/host/owner-proof.ts'
 import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, startWhenYglKnown, yglCapabilities, yglSettled } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { IntakeOrigins } from './intake-origins.ts'
@@ -388,11 +388,30 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   /**
+   * No-key trust for the DSH host's own logged-in browser owner (#783). A DSH Web behind a reverse proxy on this host
+   * (Tailscale Serve, Caddy, nginx) reaches us with a forwarding header, so the loopback rule above refuses it — rightly,
+   * since the header says nothing about who is calling. The host's Connection, however, has already authenticated this
+   * very request: its `admit` checks the browser login and the Host/Origin fence (`--trusted-host`). Only the browser-owner
+   * Peer counts — never an API Peer — and this plugin trusts no proxy header itself. The cross-site veto still applies,
+   * and a missing, older or failing Connection service refuses (fail-closed, `owner-auth-unavailable`).
+   * @param req - the inbound control request.
+   * @returns whether the request is the host's authenticated browser owner.
+   */
+  function controlTrustedBrowserOwner(req: IncomingMessage): boolean {
+    const site = req.headers['sec-fetch-site']
+    if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') return false
+    let connection: unknown
+    try { connection = ctx.get('connection') } catch { return false }
+    return browserOwnerProof(connection, req).ok
+  }
+
+  /**
    * Control-route authorization. With `apiKey` set, the `X-API-Key` header
    * (or `api_key` query, for non-browser clients) must match in constant
-   * time. With no key, the same-origin/loopback trust applies — the explicit
-   * exposure assumption: an empty-key deployment accepts control from its
-   * own page and from loopback, and from nothing else.
+   * time. With no key, the loopback trust applies, and so does the host's
+   * authenticated browser owner (#783) — the explicit exposure assumption:
+   * an empty-key deployment accepts control from loopback and from its own
+   * logged-in browser, and from nothing else.
    * @param req - the inbound control request.
    * @returns whether the request may drive the control routes.
    */
@@ -401,7 +420,7 @@ export function apply(ctx: Context, config: Config): void {
       const presented = String(req.headers['x-api-key'] ?? new URL(req.url ?? '/', 'http://x').searchParams.get('api_key') ?? '')
       return secretEqual(presented, config.apiKey)
     }
-    return controlTrustedWithoutKey(req)
+    return controlTrustedWithoutKey(req) || controlTrustedBrowserOwner(req)
   }
 
   /**
