@@ -43,8 +43,19 @@ describe('built package layout', () => {
   it('exports the optional PTC preset entry as built code and declarations', async () => {
     const manifest = JSON.parse(await readFile(artifact('package.json'), 'utf8'))
     expect(manifest.exports['./superagent-ptc']).toEqual({ types: './lib/types/superagent/ptc.d.ts', default: './lib/superagent/ptc.js' })
-    const entry = await import(pathToFileURL(fileURLToPath(artifact(manifest.exports['./superagent-ptc'].default))).href)
-    expect(entry.apply).toBeTypeOf('function')
+    // Import the built entry natively in a child process, as the host-layout test does (#778): an in-process import of
+    // built code under the test runner can leave the native loader's temp directory behind.
+    const inspect = "const entry = await import('" + manifest.exports['./superagent-ptc'].default + "'); console.log('[ptc-layout] ' + JSON.stringify({ apply: typeof entry.apply, inject: entry.inject }))"
+    const imported = spawnSync(process.execPath, ['--input-type=module', '-e', inspect], {
+      cwd: fileURLToPath(root), env: process.env, encoding: 'utf8', timeout: 4000,
+    })
+    expect(imported.error).toBeUndefined()
+    expect(imported.signal).toBeNull()
+    expect(imported.status, imported.stderr).toBe(0)
+    const lines = imported.stdout.split(/\r?\n/).filter(line => line.startsWith('[ptc-layout] '))
+    expect(lines).toHaveLength(1)
+    const entry = JSON.parse(lines[0]!.slice('[ptc-layout] '.length)) as { apply: string; inject: unknown }
+    expect(entry.apply).toBe('function')
     expect(entry.inject).toEqual(['tools', 'systemPrompt', 'loader'])
     await expect(readFile(artifact(manifest.exports['./superagent-ptc'].types), 'utf8')).resolves.toContain('compatiblePtcRuntime')
   })
