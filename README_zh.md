@@ -201,6 +201,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | `exposureExcerpt` | `'full'` | 卡片发布会话活动摘录的程度：`full`、`masked`（仅形状前缀）或 `off`。标题与句柄始终保留。 |
 | `originClaimWindow` | `false` | OriginClaim 过渡窗口，自 #64 第一步起默认关闭：不带信封的投递按验签失败拒绝。设为 `true` 重新打开，这类投递重新走调用方门，并计入 `legacyInbound`。 |
 | `originClaimUrl` | `''` | 信封 `callerUrl` 的覆盖值（pocket 隧道宿主用）；`''` 自动推导。 |
+| `originClaimByPeer` | `{}` | #787：把目标 peer（精确 origin 或精确挂载卡片 URL）映射为本机对该 peer 声明的 OriginClaim 卡片地址。空则所有对端仍用全局 `originClaimUrl` / 推导出的卡片地址。不改节点密钥、`linkKeys` 或接收侧 `originClaimAudiences`。非法、带用户信息、非 http(s)、带查询/片段以及冲突的条目会被忽略。文件通道的 `from` 仍写默认卡片 origin（本映射不覆盖）。 |
 | `originClaimUnboundWindow` | `true` | OriginClaim 受众绑定过渡窗口：同时签发并接受不带受众的旧信封（接受数计入 `unboundInbound`；其中绑定形式在本机未命中的另计 `boundMissInbound`）；`false` 只签发、只接受绑定受众的信封。 |
 | `canvasLegacyBareMembers` | `true` | #335 迁移窗口：未暂停历史裸成员保持旧推断；暂停槽位永不路由/授权，迁移与观察完成后仅属主裁定关窗。 |
 | `originClaimAudiences` | `[]` | 本宿主额外认作信封受众的 origin，用于端口映射或反向代理宿主（对端拨号的 URL 既不是卡片 URL 也不是到达地址）。 |
