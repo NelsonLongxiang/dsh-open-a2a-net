@@ -124,6 +124,30 @@ describe('Y1e: a team kb scope (owner 2026-11-18)', () => {
     expect(now).toContain('kb add what the next session should reuse, with scope "bench:team-ops"')
     expect(now).toContain('make no other project')
   })
+  it('Y2: every card asks for a skill match first and a task for the ticket, todo to doing to done, with its id on the report', () => {
+    const cards = {
+      old: yglCardLines('team-ops', { scope: 'bench:team-ops', caps: yglCapabilitiesOf('0.122.0') }).join('\n'),
+      mid: yglCardLines('team-ops', { scope: 'bench:team-ops', caps: yglCapabilitiesOf('0.123.0') }).join('\n'),
+      now: yglCardLines('team-ops', { scope: 'bench:team-ops', caps: yglCapabilitiesOf('0.126.0') }).join('\n'),
+      bare: yglCardLines().join('\n'),
+    }
+    for (const [name, card] of Object.entries(cards)) {
+      expect(card, name).toContain('mcp__ygl__read domain agent action match with query set to this ticket\'s subject')
+      expect(card, name).toContain('domain skill action show')
+      expect(card, name).toContain('mcp__ygl__write domain task action add with text set to this ticket\'s title')
+      expect(card, name).toContain('domain task action advance id <its id> to doing')
+      expect(card, name).toContain('domain task action advance id <the task id> to done')
+      expect(card, name).toContain('pass the ids you wrote in ygl on a2a_ticket_report, the task id too')
+      // rel attach needs a tree node, and a team project has none until the owner decides its milestones.
+      expect(card, name).not.toContain('rel attach')
+      expect(card, name).not.toContain('domain rel')
+    }
+    for (const name of ['old', 'mid', 'now'] as const) expect(cards[name], name).toContain('title and project "team-ops", then')
+    expect(cards.bare).not.toContain('and project')
+    // The match and task steps come before the work; done comes before kb add.
+    expect(cards.now.indexOf('action match')).toBeLessThan(cards.now.indexOf('as you go'))
+    expect(cards.now.indexOf('to done')).toBeLessThan(cards.now.indexOf('kb add what the next session'))
+  })
   it('the router line names the scope only when there is one', () => {
     expect(yglRouterLine('team-ops')).toContain('pass it as project')
     expect(yglRouterLine('team-ops', 'bench:team-ops')).toContain('scope "bench:team-ops", then with scope ""')

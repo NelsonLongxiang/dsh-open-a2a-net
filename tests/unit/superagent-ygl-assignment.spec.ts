@@ -42,6 +42,9 @@ describe('ygl-trees on the assignment card', () => {
     expect(m.card).toContain('mcp__ygl__write domain project action use name "team-team"')
     expect(m.card).toContain('make no other project')
     expect(m.card).toContain('pass the ids you wrote in ygl on a2a_ticket_report')
+    // Y2: the skill match and the ticket's task are on the card the member receives.
+    expect(m.card).toContain('domain agent action match')
+    expect(m.card).toContain('domain task action add with text set to this ticket\'s title and project "team-team"')
     await m.h.stop()
     const n = await team(false)
     expect(n.card).not.toContain('ygl')
