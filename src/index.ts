@@ -413,17 +413,21 @@ export function apply(ctx: Context, config: Config): void {
   /**
    * Control-route authorization. With `apiKey` set, the `X-API-Key` header
    * (or `api_key` query, for non-browser clients) must match in constant
-   * time. With no key, the loopback trust applies, and so does the host's
-   * authenticated browser owner (#783) — the explicit exposure assumption:
-   * an empty-key deployment accepts control from loopback and from its own
-   * logged-in browser, and from nothing else.
+   * time, or the request is the host's authenticated browser owner (#790,
+   * owner decision 2026-11-21): the browser panel never carries the key, so
+   * without this a keyed host's own logged-in browser could not read its
+   * panel. CLI, API and peer callers still need the key; loopback alone is
+   * not enough. With no key, the loopback trust applies, and so does the
+   * host's authenticated browser owner (#783) — the explicit exposure
+   * assumption: an empty-key deployment accepts control from loopback and
+   * from its own logged-in browser, and from nothing else.
    * @param req - the inbound control request.
    * @returns whether the request may drive the control routes.
    */
   function controlAuthorized(req: IncomingMessage): boolean {
     if (config.apiKey !== '') {
       const presented = String(req.headers['x-api-key'] ?? new URL(req.url ?? '/', 'http://x').searchParams.get('api_key') ?? '')
-      return secretEqual(presented, config.apiKey)
+      return secretEqual(presented, config.apiKey) || controlTrustedBrowserOwner(req)
     }
     return controlTrustedWithoutKey(req) || controlTrustedBrowserOwner(req)
   }

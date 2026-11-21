@@ -2420,13 +2420,45 @@ describe('a2a control-route authorization', () => {
       await ctx.fiber.dispose()
     })
 
-    it('5. with apiKey set the browser login is not a key: behavior unchanged', async () => {
+    it('5. #790: with apiKey set, the key still works without asking the host, and the host\'s browser owner also passes', async () => {
       const { ctx, state, admitted } = await mountWithConnection({ apiKey: 'sekrit' })
-      expect(state(proxied()).state.status).toBe(401)
+      // A key never needs the host: it short-circuits before admit.
       expect(state(proxied({ 'x-api-key': 'sekrit' })).state.status).toBe(200)
-      expect(state(request({}, '127.0.0.1')).state.status).toBe(401)
       expect(admitted()).toBe(0)
+      // The panel's own fetch carries no key; the host's logged-in browser owner is enough (owner decision 2026-11-21).
+      expect(state(proxied()).state.status).toBe(200)
+      expect(state(proxied({ 'sec-fetch-site': 'none' })).state.status).toBe(200)
       await ctx.fiber.dispose()
+    })
+
+    it('5b. #790: with apiKey set, everything else still needs the key', async () => {
+      const { ctx, state, admitted } = await mountWithConnection({ apiKey: 'sekrit' })
+      // A wrong key, no login, an expired login, an API peer, a foreign Host or Origin: all 401.
+      // (A wrong key next to a valid owner login passes as the owner: the key is simply not what admits it.)
+      for (const headers of [{ 'x-api-key': 'wrong', cookie: '' }, { cookie: '' }, { cookie: 'expired-fixture=1' }, { cookie: 'fixture-api-operator=1' }, { host: 'evil.example' }, { origin: 'https://evil.example' }]) {
+        const res = state(proxied(headers))
+        expect(res.state.status, JSON.stringify(headers)).toBe(401)
+        expect(res.state.body).toContain('X-API-Key required')
+      }
+      // Loopback alone is not a key on a keyed host.
+      expect(state(request({}, '127.0.0.1')).state.status).toBe(401)
+      // A cross-site page is refused before the host is asked, even with a valid login.
+      const before = admitted()
+      expect(state(proxied({ 'sec-fetch-site': 'cross-site' })).state.status).toBe(401)
+      expect(admitted()).toBe(before)
+      await ctx.fiber.dispose()
+    })
+
+    it('5c. #790: with apiKey set and no host Connection (or one that throws), a browser login is refused', async () => {
+      for (const mode of ['none', 'throws'] as const) {
+        const { ctx, state } = await mountWithConnection({ apiKey: 'sekrit' }, mode)
+        const res = state(proxied())
+        expect(res.state.status).toBe(401)
+        expect(res.state.body).not.toContain('fixture-provider-error')
+        expect(state(proxied({ 'x-api-key': 'sekrit' })).state.status).toBe(200)
+        vi.restoreAllMocks()
+        await ctx.fiber.dispose()
+      }
     })
 
     it('6. no host Connection, or one that throws, fails closed', async () => {
