@@ -46,6 +46,16 @@ describe('optional team PTC entry', () => {
     expect(compatiblePtcRuntime(null)).toBe(false)
   })
 
+  it('accepts every program format the host runtime reports, including scoped-repl, and refuses an empty or non-string one', () => {
+    // 0.2.2-rc.1..5 report function-body, repl or script; DSH master adds scoped-repl (persistent-in-memory with replScoped).
+    for (const programFormat of ['function-body', 'repl', 'script', 'scoped-repl']) {
+      expect(compatiblePtcRuntime({ ...runtime(), programFormat }), programFormat).toBe(true)
+    }
+    for (const programFormat of ['', 1, true, null, {}]) {
+      expect(compatiblePtcRuntime({ ...runtime(), programFormat }), JSON.stringify(programFormat)).toBe(false)
+    }
+  })
+
   it('imports nothing on old tools even when the old named runtime exists', async () => {
     const h = host({ oldTools: true })
     try {
