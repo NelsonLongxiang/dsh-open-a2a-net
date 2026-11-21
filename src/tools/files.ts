@@ -87,6 +87,7 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
         if (paths.length === 0 || paths.length > FILE_SEND_MAX) return { ok: false, error: `paths must name 1–${String(FILE_SEND_MAX)} files`, peer_content: false }
         const taskId = typeof args.task_id === 'string' && args.task_id.trim() !== '' ? args.task_id.trim() : undefined
         if (taskId !== undefined && !BLOB_TASK_RE.test(taskId)) return { ok: false, error: 'task_id is 1–80 of A-Z a-z 0-9 . _ : -', peer_content: false }
+        // #787: file-channel `from` is still the default ownCardUrl origin, not a per-peer claim URL. A cloud that cannot reach that origin cannot pull the blob; this map does not cover the file channel.
         const from = originOf(d.ownCardUrl())
         if (from === '') return { ok: false, error: 'this host publishes no card URL yet (announce is off or the web server has not settled): a receiver could not pull from it', peer_content: false }
         const cwd = workspaceOf(agent)

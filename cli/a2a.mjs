@@ -298,7 +298,19 @@ async function homeZone() {
  * empty 405 from a front proxy, an old host) becomes an error object, and an
  * HTTP error without its own `error` field carries the status.
  */
+/** The HTTP status behind a reply object, kept off its enumerable fields so `--json` output never changes. */
+const HTTP_STATUS = Symbol('httpStatus')
+/** Host states a waiting caller sits out like a dropped connection: restart (405), stall (408/429), proxy 5xx. */
+const TRANSIENT_STATUS = status => status === 405 || status === 408 || status === 429 || (status >= 500 && status <= 599)
+class TransientHostState extends Error { constructor(status) { super(`host answered HTTP ${String(status)}`); this.name = 'TransientHostState' } }
+
 async function replyOf(res) {
+  const out = await replyBody(res)
+  Object.defineProperty(out, HTTP_STATUS, { value: res.status, enumerable: false })
+  return out
+}
+
+async function replyBody(res) {
   const text = await res.text()
   let body
   try {
@@ -850,9 +862,15 @@ async function cmdSuperagent() {
 }
 
 /** One mailbox read: the rows, plus the gh#113 seq bounds when the host has them. */
-async function fetchMail(handle) {
+async function fetchMail(handle, { transientOk = false } = {}) {
   const out = await control({ action: 'inbox', handle })
-  if (out.ok !== true || !Array.isArray(out.mail)) die(`[inbox] ${String(out.error ?? 'no mail list in the reply')}`)
+  if (out.ok !== true || !Array.isArray(out.mail)) {
+    // Only a waiting caller sits out a transient host state, decided by the HTTP status rather than the error text
+    // (a proxy 502 may carry its own JSON error). A one-shot listing still fails loudly: a broken host is never
+    // reported as an empty mailbox. Auth refusals already exited in control().
+    if (transientOk && TRANSIENT_STATUS(out[HTTP_STATUS])) throw new TransientHostState(out[HTTP_STATUS])
+    die(`[inbox] ${String(out.error ?? 'no mail list in the reply')}`)
+  }
   return out
 }
 
@@ -1007,10 +1025,11 @@ async function cmdInbox() {
     const until = Date.now() + timeout
     let warned = false
     for (;;) {
-      if (has('--renew')) await renewIfExpiring(handle)
       try {
+        // A blip while renewing waits like any other transient state; the loop retries on its next interval.
+        if (has('--renew')) await renewIfExpiring(handle)
         const cursor = readCursor(handle)
-        const box = await fetchMail(handle)
+        const box = await fetchMail(handle, { transientOk: true })
         const { unread, lost } = unreadOf(box, cursor)
         if (unread.length > 0) {
           reportLost(lost)
@@ -1021,7 +1040,8 @@ async function cmdInbox() {
       } catch (error) {
         // A redirect is the home's configuration, not an outage: waiting would only end in "no mail".
         if (error instanceof RedirectRefused) die(`[inbox] ${error.message}`)
-        // A dropped connection mid-wait is retried; auth failures already exited via die().
+        // A dropped connection or a transient host state (TransientHostState) mid-wait is retried; auth failures
+        // and permanent refusals already exited via die().
         if (!warned) { console.error(`[inbox] host unreachable, still waiting: ${String(error?.cause?.code ?? error)}`); warned = true }
       }
       if (Date.now() + interval > until) {

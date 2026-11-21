@@ -114,6 +114,13 @@ export interface Config {
    */
   readonly originClaimUrl: string
   /**
+   * #787: per-peer OriginClaim callerUrl map. Keys are a target peer's
+   * exact origin or exact mounted card URL; values are the local card URL
+   * this host declares to that peer. Empty keeps the global originClaimUrl /
+   * derived ownCardUrl for every peer. See src/origin-claim-by-peer.ts.
+   */
+  readonly originClaimByPeer: Record<string, string>
+  /**
    * gh#8 (N9) escape hatch: when true, team-name resolution also considers
    * the referral-learned peer tail (the legacy whole-store basis) instead
    * of the seeded/delegate subset only. Default false — a team name binds
@@ -397,6 +404,8 @@ export const Config: s<Config> = s.object({
   linkKeys: s.dict(s.string()).default({}),
   /** OriginClaim callerUrl override for pocket-tunneled hosts; '' = auto. */
   originClaimUrl: s.string().default(''),
+  /** #787: target peer → local claim URL; ''/absent keeps the global callerUrl. */
+  originClaimByPeer: s.dict(s.string()).default({}),
 
   /**
    * v0.5.23 (async-stall): delay before a delivered-but-unconsumed async

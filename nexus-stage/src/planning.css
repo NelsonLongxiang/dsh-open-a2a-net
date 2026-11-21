@@ -386,3 +386,5 @@
 #dsh-plan .p-root-compose-err .msg{flex:1; overflow-wrap:anywhere}
 #dsh-plan .p-root-compose-err button{font:inherit; color:inherit; background:transparent; border:0; cursor:pointer; padding:0 2px}
 #dsh-plan .p-root-compose-err button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+/* #735: the target's preview/refusal is real accessible text, not only a dataset or toast. */
+#dsh-plan .p-root-drop-preview{position:absolute; left:6px; right:6px; top:20px; padding:4px 6px; border:1px solid var(--accent); border-radius:6px; background:var(--uupm-bg-0); color:var(--ink); font-size:11px; overflow-wrap:anywhere; pointer-events:none}

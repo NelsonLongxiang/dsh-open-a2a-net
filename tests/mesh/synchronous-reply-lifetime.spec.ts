@@ -16,8 +16,8 @@ async function fixture(ttl=60000){
  await post(a,'/__dsh_a2a/cli-deposit',{action:'publish',card:JSON.stringify(signCard({name:'sync-cli',session:'sync-cli',team:cli,capabilities:{route:true,async:true},expiresAt:Date.now()+3600000},key))})
  await post(a,'/__dsh_a2a/canvas',{action:'add-member',name:'sync',id:cli});await post(a,'/__dsh_a2a/canvas',{action:'add-member',name:'sync',id:target,peer:bu});await post(b,'/__dsh_a2a/canvas',{action:'add-member',name:'sync',id:cli,home:au})
  const queued:any[]=[];b.agents.agent!.followup=m=>queued.push(m)
- const timeouts:Array<{delay:number;dispose:ReturnType<typeof vi.fn>}>=[],timeout=b.ctx.timer.timeout.bind(b.ctx.timer)
- vi.spyOn(b.ctx.timer,'timeout').mockImplementation(((fn:()=>void,delay:number)=>{const dispose=vi.fn(timeout(fn,delay));timeouts.push({delay,dispose});return dispose})as any)
+ const timeouts:Array<{delay:number;dispose:ReturnType<typeof vi.fn>;fire:()=>void}>=[],timeout=b.ctx.timer.timeout.bind(b.ctx.timer)
+ vi.spyOn(b.ctx.timer,'timeout').mockImplementation(((fn:()=>void,delay:number)=>{const dispose=vi.fn(timeout(fn,delay));timeouts.push({delay,dispose,fire:fn});return dispose})as any)
  const send=(task:string)=>{const url=au+'/a2a/direct',body=JSON.stringify({team:target,caller_session:cli,task_id:task,message:'sync work',wait:true});return nativeFetch(url,{method:'POST',headers:{'Content-Type':'application/json',Connection:'close',...signOriginClaim({url,method:'POST',body},{caller:'sync-cli',callerUrl:au+'/a2a/cli/'+encodeURIComponent(cli),privateKey:key,unbound:false,now:Date.now()})},body}).then(r=>r.json())}
  const finish=(task:string,text='own final',kind='completed')=>{const m=queued.find(x=>x.source.taskId===task);(b.agents.agent!.session as any).events.push({type:'turn/start'},{type:'user/message',data:{content:m.content}},...(text?[{type:'assistant/message',data:{message:{content:[{type:'text',text}]}}}]:[]),{type:'turn/end',data:{reason:{kind}}});b.ctx.emit('agent/status',{agent:b.agents.agent!,status:'idle'})}
  return{a,b,queued,send,finish,timeouts,dispose:async()=>{await a.dispose();await b.dispose()}}
@@ -50,12 +50,23 @@ it('late reading-turn final after HTTP expiry emits one receipt across duplicate
  }finally{await f.dispose()}
 })
 it('cancellation and original task TTL prevent a late final from sending any receipt',async()=>{
- for(const stop of['cancel','ttl']){
-  const f=await fixture(stop==='ttl'?180:60000);try{
-   await f.send('sync-stop');if(stop==='cancel')await post(f.b,'/__dsh_a2a/tasks/cancel',{task_id:'sync-stop'});else await new Promise(r=>setTimeout(r,200))
-   const before=(await state(f.a)).archived.length;f.finish('sync-stop');await Promise.resolve();expect((await state(f.a)).archived.length).toBe(before)
-  }finally{await f.dispose()}
- }
+ // One real mesh covers both endings; expire the exact captured receipt timer, not a short wall-clock race.
+ const f=await fixture();let clock:ReturnType<typeof vi.spyOn>|undefined
+ try{
+  await f.send('sync-cancel')
+  await post(f.b,'/__dsh_a2a/tasks/cancel',{task_id:'sync-cancel'})
+  const before=(await state(f.a)).archived.length
+  f.finish('sync-cancel');await Promise.resolve();expect((await state(f.a)).archived.length).toBe(before)
+  await f.send('sync-ttl')
+  const receiptTimer=f.timeouts.filter(x=>x.delay>50000).at(-1)!
+  expect(receiptTimer).toBeDefined();expect(receiptTimer.dispose).not.toHaveBeenCalled()
+  const row=(await state(f.b)).tasks.find((r:any)=>r.taskId==='sync-ttl')
+  clock=vi.spyOn(Date,'now').mockReturnValue(row.startedAt+60001)
+  receiptTimer.fire();expect(receiptTimer.dispose).toHaveBeenCalledTimes(1)
+  expect((await state(f.b)).tasksDead.some((r:any)=>r.taskId==='sync-ttl')).toBe(true)
+  const beforeTtl=(await state(f.a)).archived.length
+  f.finish('sync-ttl');await Promise.resolve();expect((await state(f.a)).archived.length).toBe(beforeTtl)
+ }finally{clock?.mockRestore();await f.dispose()}
 })
 it('late final with unknown insertion retains one receipt and never blindly reposts or re-executes',async()=>{
  const f=await fixture(3600000);const original=globalThis.fetch,bodies:string[]=[],accepted:string[]=[];let failed=false

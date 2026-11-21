@@ -43,6 +43,7 @@ import { dropDispatch, localXY } from './planning-drop'
 import { buildChildChip, childChipTitle } from './planning-root'
 import { createFrameSelection } from './planning-frame-selection'
 import { createRootCompose } from './planning-root-compose'
+import { createRootFrameDrag } from './planning-root-frame-drag'
 import { boardBounds, fitBelowHud, hudBottomOf } from './planning-fit'
 import { WorldModel, nodeRect, deriveInitialFrame, homeTeams, planSeatClear, planTeamClusters, NODE_W, NODE_H } from './world'
 import { applyAction, settleAction, actionTeam, innermostFrameAt, reorderOps, yOrderedMembers, type CanvasAction } from './canvas-ops'
@@ -59,20 +60,11 @@ import { cardText } from './planning-card-text'
 import { createCardElement, paintPrio, workLabel } from './planning-card'
 import { createLegend } from './planning-legend'
 import { UNREACHABLE_HINT, showFrameReachability, unreachableRefs } from './planning-reachability'
-import { viewportBucket, type PlanningDeps, type PlanningInput, type PlanningSession, type PlanningTeam, type PlanningView, type SeamKey, type SeamPointer, type ViewportBucket } from './planning-types'
+import { viewportBucket, type Gesture, type PlanningDeps, type PlanningInput, type PlanningSession, type PlanningTeam, type PlanningView, type SeamKey, type SeamPointer, type ViewportBucket } from './planning-types'
 import './planning.css'
 
 export { viewportBucket } from './planning-types'
 export type { PlanningDeps, PlanningInput, PlanningSession, PlanningTeam, PlanningView, SeamKey, SeamPointer, ViewportBucket } from './planning-types'
-
-
-type Gesture =
-  | { readonly kind: 'none' }
-  | { readonly kind: 'node'; ids: readonly string[]; clicked: string; rosterOrigin?: string; last: { x: number; y: number }; moved: boolean; el: Element | null }
-  | { readonly kind: 'frame'; name: string; snap: NonNullable<ReturnType<WorldModel['beginFrameDrag']>>; origin: { x: number; y: number }; moved: boolean }
-  | { readonly kind: 'frame-resize'; name: string; dir: string; startRect: { x: number; y: number; w: number; h: number }; origin: { x: number; y: number }; moved: boolean }
-  | { readonly kind: 'pan'; last: { x: number; y: number }; moved: boolean }
-  | { readonly kind: 'marquee'; origin: { x: number; y: number }; last: { x: number; y: number }; additive: boolean }
 
 // The card skeleton, its 工作中/空闲 chip and the right-hand chip live in planning-card (module-size cap).
 export { workLabel } from './planning-card'
@@ -437,7 +429,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     for (const [name, el] of [...frameEls]) {
       if (!seen.has(name)) { el.remove(); frameEls.delete(name) }
     }
-    frameSelection.sync(); compose.paint()
+    frameSelection.sync(); compose.paint(); rootDrag.sync()
   }
 
   // ── keyed diff: nodes ──
@@ -665,6 +657,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   })
   // #650: ≥2 selected team frames make 建队 (G) compose a root team; otherwise it is the session team as before.
   const compose = createRootCompose({ root, signal, io: deps.compose, notice, frames: () => frameEls, composed: () => frameSelection.clear() })
+  const rootDrag = createRootFrameDrag({ model, compose, signal, frames: () => frameEls })
   const buildTeam = (): void => { if (!compose.open(frameSelection.names())) menus.startCreateFromSelection() }
 
   // ── 节点列表 drawer (planning-nodelist) ──
@@ -835,7 +828,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       if (!gesture.moved && dx === 0 && dy === 0) return
       gesture.moved = true
       model.applyFrameDrag(gesture.snap, dx, dy)
-      render()
+      render(); rootDrag.move(gesture.name, w)
     } else if (gesture.kind === 'frame-resize') {
       // Re-solve the rect from the start rect plus the world delta, per
       // direction. Minimum 220x120 keeps the titlebar and成员 badges
@@ -917,8 +910,13 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       gesture.el?.classList.remove('dragging')
       render()
     } else if (gesture.kind === 'frame' || gesture.kind === 'frame-resize') {
-      // The frame stays where it was put; neighbours and stray cards yield (planning-overlap).
-      if (gesture.moved) { settleBoard(model, new Set(remoteFramesRef.keys()), gesture.name); markDirty(); render() }
+      if (gesture.moved) {
+        const p = localXY(root, ev)
+        const joined = gesture.kind === 'frame' && rootDrag.drop(gesture.snap, screenToWorld(vp, p.x, p.y))
+        // Ordinary layout drags keep their place; a root join (including a refusal) restores the drag snapshot.
+        if (!joined) { settleBoard(model, new Set(remoteFramesRef.keys()), gesture.name); markDirty() }
+        render()
+      }
     } else if (gesture.kind === 'pan') {
       if (gesture.moved) markDirty() // the viewport persists with the layout
     } else if (gesture.kind === 'marquee') {
@@ -929,7 +927,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
       marquee.style.display = 'none'
       render()
     }
-    gesture = { kind: 'none' }
+    gesture = { kind: 'none' }; rootDrag.clear()
     if (undoBefore !== undefined) { layoutUndo.commit(undoBefore); undoBefore = undefined }
     try { root.releasePointerCapture(ev.pointerId ?? 0) } catch { /* not captured */ }
   }
@@ -941,7 +939,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
     const panned = (gesture.kind === 'pan' && gesture.moved) || rightPress?.moved === true // right-drag pans live in rightPress
     marquee.style.display = 'none'
     rightPress = null
-    gesture = { kind: 'none' }
+    gesture = { kind: 'none' }; rootDrag.clear()
     if (undoBefore !== undefined && layoutUndo.revert(undoBefore)) render()
     if (panned) markDirty() // the pan stays (it is the view, not the layout) and persists like a finished one
     undoBefore = undefined
@@ -1474,7 +1472,7 @@ export function createPlanningView(deps: PlanningDeps): PlanningView {
   function deactivate(): void { root.style.display = 'none' }
 
   function destroy(): void {
-    ac.abort()
+    ac.abort(); rootDrag.clear()
     for (const t of noticeTimers) clearTimeout(t)
   }
 
