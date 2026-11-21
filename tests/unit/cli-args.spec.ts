@@ -648,6 +648,43 @@ describe('a2a-net CLI: inbox --wait', () => {
     expect(caps().at(-1)?.piSeat).toBeUndefined()
   })
 
+  /** A host that answers the inbox read with the given statuses in turn, then with real mail. */
+  async function flakyMailHost(statuses: Array<{ status: number; body: unknown }>) {
+    const replies = [...statuses]
+    const host = await stubHost((path) => {
+      if (path !== '/__dsh_a2a/cli-deposit') return { status: 404, body: {} }
+      const action = String(host.seen.at(-1)?.body.action)
+      if (action === 'list') return { status: 200, body: { ok: true, deposits: [{ handle: 'scout/0123456789abcdef', expiresAt: Date.now() + 3_600_000 * 3 }] } }
+      if (action !== 'inbox') return { status: 200, body: { ok: false, error: 'unknown action' } }
+      return replies.shift() ?? { status: 200, body: { ok: true, mail: [{ at: Date.now(), from: 'cargo/22222222', text: 'after the blip' }] } }
+    })
+    servers.push(host.server)
+    return host
+  }
+
+  it('waits out a restarting host (405) and a proxy 502 that carries its own JSON error, then delivers', async () => {
+    const host = await flakyMailHost([{ status: 405, body: '' }, { status: 502, body: { error: 'bad gateway' } }, { status: 503, body: { error: 'unavailable' } }])
+    const HOME = await scoutHome()
+    const out = await runCli(['inbox', '--wait', '--renew', '--interval', '100ms', '--timeout', '20s'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: host.url })
+    expect(out.code, out.stderr).toBe(0)
+    expect(out.stdout).toContain('cargo/22222222: after the blip')
+    expect(out.stderr).toContain('still waiting')
+    expect(host.seen.filter(r => r.body.action === 'inbox')).toHaveLength(4)
+  })
+
+  it('a permanent refusal (400) still ends the wait at once, and a one-shot listing never hides a 502 as an empty box', async () => {
+    const refusing = await flakyMailHost([{ status: 400, body: { error: 'bad request' } }])
+    const HOME = await scoutHome()
+    const waited = await runCli(['inbox', '--wait', '--interval', '100ms', '--timeout', '20s'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: refusing.url })
+    expect(waited.code).toBe(1)
+    expect(waited.stderr).toContain('[inbox] bad request')
+    const proxy = await flakyMailHost([{ status: 502, body: { error: 'bad gateway' } }])
+    const once = await runCli(['inbox', '--new'], { HOME, A2A_CLI_HOME: HOME, A2A_HOME: proxy.url })
+    expect(once.code).toBe(1)
+    expect(once.stderr).toContain('[inbox] bad gateway')
+    expect(once.stdout).not.toContain('no new mail')
+  })
+
   it('a bad duration is a usage error', async () => {
     const HOME = await scoutHome()
     // POSIX shape note: without the anchor a HOME-only env leaves the CLI
