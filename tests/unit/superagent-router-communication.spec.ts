@@ -54,7 +54,11 @@ it('adds only the shared boundary to original worker personas and leaves the bui
     expect(persona(presets.find(row => row.config?.id === 'superagent-' + role)!).prefix).toBe(presetPrompt(role))
     expect(presetPrompt(role).startsWith(original.trimEnd() + '\n\n')).toBe(true)
   }
-  expect(digest(persona(presets.find(row => row.config?.id === 'superagent-builder')!).prefix)).toBe('9d646ebaf36c2d0aafcf2a05c481a4241f54977a177be44f69fd64a6f5c84053')
+  // #791 (owner 2026-11-21) changed the builder's persona on purpose: read-only self-checks and owner-gated issues; pin the new text.
+  const builder = persona(presets.find(row => row.config?.id === 'superagent-builder')!).prefix as string
+  expect(builder).toContain('only after their own reply in this session call superagent_issue_file')
+  expect(builder).toContain('you never touch GitHub yourself')
+  expect(digest(builder)).toBe('972bb277f63a594b57f73bd3c261f593e27f0f2454f9fe65110a282ac3b14ddb')
 })
 
 it('retains upstream member initiative as a proposal, never a self-assignment or an external send', () => {
