@@ -24,6 +24,7 @@ import { apply, Config as ConfigSchema, type A2aSchedule, type Config } from '..
 import { envelopeFor } from './envelope.ts'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { NodeStore } from '../../src/node-store.ts'
+import { MockGuiConnection, mockGuiLogin } from '../mesh/harness.ts'
 
 /** Fake agents registry: one recoverable root agent or none. */
 class FakeAgentsService extends Service {
@@ -2297,6 +2298,9 @@ describe('a2a control-route authorization', () => {
       headers: { Origin: `http://127.0.0.1:${String(port)}`, Host: `127.0.0.1:${String(port)}` },
     })
     expect(response.status).toBe(200)
+    // #731: the state face names how the a2a journals are kept private on this platform.
+    const body = await response.json() as { filePrivacy?: unknown }
+    expect(body.filePrivacy).toEqual(process.platform === 'win32' ? expect.objectContaining({ mode: 'windows-acl' }) : { mode: 'posix-0600' })
     await ctx.fiber.dispose()
   })
 
@@ -2339,6 +2343,104 @@ describe('a2a control-route authorization', () => {
     const loopbackNoKey = state(request({}, '127.0.0.1'))
     expect(loopbackNoKey.state.status).toBe(401)
     await ctx.fiber.dispose()
+  })
+
+  describe('#783: the host\'s logged-in browser owner behind a reverse proxy', () => {
+    const PROXIED = 'https://dsh.tailnet.example.ts.net'
+    /** Mount the plugin with a host Connection that admits only PROXIED with the fixture browser login. */
+    async function mountWithConnection(overrides: Partial<Config> = {}, connection: 'mock' | 'none' | 'throws' = 'mock'): Promise<{ ctx: Context; state: (req: FakeReq) => FakeRes; admitted: () => number }> {
+      const ctx = new Context()
+      await ctx.plugin(SystemPrompt)
+      await ctx.plugin(ToolRuntime)
+      await ctx.plugin(TimerService)
+      if (connection === 'mock') await ctx.plugin(MockGuiConnection, { origin: PROXIED })
+      const routes: { path: string; handler: (req: FakeReq, res: FakeRes) => void }[] = []
+      ctx.provide('webServer', {
+        register: (route: { path: string; handler: (req: FakeReq, res: FakeRes) => void }) => {
+          routes.push(route)
+          return () => {}
+        },
+      } as never)
+      apply(ctx, makeConfig({ sessionNodes: true, ...overrides }))
+      if (connection === 'throws') {
+        const get = ctx.get.bind(ctx)
+        vi.spyOn(ctx, 'get').mockImplementation(((name: string) => {
+          if (name === 'connection') throw new Error('fixture-provider-error')
+          return get(name)
+        }) as typeof ctx.get)
+      }
+      const stateRoute = routes.find(route => route.path === '/__dsh_a2a/state')
+      if (stateRoute === undefined) throw new Error('state route not registered')
+      return {
+        ctx,
+        state: (req: FakeReq) => {
+          const res = fakeResponse()
+          stateRoute.handler(req, res)
+          return res
+        },
+        admitted: () => connection === 'mock' ? (ctx.get('connection') as unknown as MockGuiConnection).requests.length : 0,
+      }
+    }
+    /** What Tailscale Serve hands DSH: a loopback socket carrying forwarding headers and the browser's own Host/Origin. */
+    const proxied = (headers: Record<string, string> = {}): FakeReq => request({
+      host: new URL(PROXIED).host, origin: PROXIED, 'sec-fetch-site': 'same-origin', 'x-forwarded-for': '100.64.0.7',
+      cookie: mockGuiLogin().Cookie, ...headers,
+    }, '127.0.0.1')
+
+    it('1. loopback without forwarding headers still passes without asking the host (no regression)', async () => {
+      const { ctx, state, admitted } = await mountWithConnection()
+      expect(state(request({ 'sec-fetch-site': 'same-origin' }, '127.0.0.1')).state.status).toBe(200)
+      expect(admitted()).toBe(0)
+      await ctx.fiber.dispose()
+    })
+
+    it('2. a proxied request the host admits as its browser owner passes', async () => {
+      const { ctx, state, admitted } = await mountWithConnection()
+      expect(state(proxied()).state.status).toBe(200)
+      expect(state(proxied({ 'sec-fetch-site': 'none' })).state.status).toBe(200)
+      expect(admitted()).toBe(2)
+      await ctx.fiber.dispose()
+    })
+
+    it('3. a proxied request without a valid login, as an API peer, or off the trusted host is refused', async () => {
+      const { ctx, state } = await mountWithConnection()
+      for (const headers of [{ cookie: '' }, { cookie: 'expired-fixture=1' }, { cookie: 'fixture-api-operator=1' }, { host: 'evil.example' }, { origin: 'https://evil.example' }]) {
+        const res = state(proxied(headers))
+        expect(res.state.status).toBe(403)
+        expect(res.state.body).toContain('untrusted origin')
+      }
+      await ctx.fiber.dispose()
+    })
+
+    it('4. a cross-site page is refused before the host is asked, even with a valid login', async () => {
+      const { ctx, state, admitted } = await mountWithConnection()
+      expect(state(proxied({ 'sec-fetch-site': 'cross-site' })).state.status).toBe(403)
+      expect(state(proxied({ 'sec-fetch-site': 'same-site' })).state.status).toBe(403)
+      expect(admitted()).toBe(0)
+      await ctx.fiber.dispose()
+    })
+
+    it('5. with apiKey set the browser login is not a key: behavior unchanged', async () => {
+      const { ctx, state, admitted } = await mountWithConnection({ apiKey: 'sekrit' })
+      expect(state(proxied()).state.status).toBe(401)
+      expect(state(proxied({ 'x-api-key': 'sekrit' })).state.status).toBe(200)
+      expect(state(request({}, '127.0.0.1')).state.status).toBe(401)
+      expect(admitted()).toBe(0)
+      await ctx.fiber.dispose()
+    })
+
+    it('6. no host Connection, or one that throws, fails closed', async () => {
+      for (const mode of ['none', 'throws'] as const) {
+        const { ctx, state } = await mountWithConnection({}, mode)
+        const res = state(proxied())
+        expect(res.state.status).toBe(403)
+        expect(res.state.body).not.toContain('fixture-provider-error')
+        // Plain loopback keeps working without the host service.
+        expect(state(request({}, '127.0.0.1')).state.status).toBe(200)
+        vi.restoreAllMocks()
+        await ctx.fiber.dispose()
+      }
+    })
   })
 
   it('guards join and leave with the same rule over real HTTP', async () => {
