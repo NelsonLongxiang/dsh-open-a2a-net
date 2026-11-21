@@ -42,6 +42,10 @@
       "types": "./lib/types/superagent/a2a-watch.d.ts",
       "default": "./lib/superagent/a2a-watch.js"
     },
+    "./superagent-ptc": {
+      "types": "./lib/types/superagent/ptc.d.ts",
+      "default": "./lib/superagent/ptc.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
