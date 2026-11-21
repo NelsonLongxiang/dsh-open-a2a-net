@@ -11,6 +11,12 @@ import {A2aClient} from '../../src/a2a-client.ts'
 import {bootNode,reservePort,MockGuiConnection,mockGuiLogin,type MeshNode} from './harness.ts'
 const nativeFetch=globalThis.fetch.bind(globalThis),caller='superagent-team/0123456789abcdef',target='beta/bbbbbbbb',receiverId='session-bbbbbbbb11112222'
 afterEach(()=>vi.restoreAllMocks())
+/** #782 diagnostics: what the receiver's recovery journal holds, without permit bodies or keys. */
+function journalView(home:string):unknown{
+ const path=join(home,'a2a','request-recovery.json')
+ try{const raw=JSON.parse(readFileSync(path,'utf8'));return {entries:(raw.entries??[]).map((e:any)=>({taskId:e?.permit?.proposal?.binding?.taskId,phase:e?.phase,revoked:e?.revokedAt!==undefined}))}}
+ catch(error){return {unreadable:String(error)}}
+}
 async function fixture(){
  const grantErrors:string[]=[],realGrant=RequestRecoveryRuntime.prototype.grant
  vi.spyOn(RequestRecoveryRuntime.prototype,'grant').mockImplementation(async function(this:RequestRecoveryRuntime,...args:Parameters<RequestRecoveryRuntime['grant']>){try{return await realGrant.apply(this,args)}catch(e){grantErrors.push(String(e));throw e}})
@@ -37,7 +43,11 @@ it('real scoped receiver accepts exactly one permitted request and never creates
   const initial=await f.raw();expect(initial.data.error).toContain('no operator-established canvas link');expect(f.b.steered).toHaveLength(0)
   const granted=await f.grant();expect(granted.status,JSON.stringify(granted)).toBe(200);expect(granted.data.ok).toBe(true)
   const permit=granted.data.permit
-  const unused=await f.post(f.b,'/a2a/query',{task_id:f.binding.taskId,fingerprint:recoveryFingerprint(f.binding)});expect(unused.data).toMatchObject({found:true,status:'pending',task_id:f.binding.taskId,recovery_delivery:'ready'});expect(f.b.steered).toHaveLength(0)
+  const unused=await f.post(f.b,'/a2a/query',{task_id:f.binding.taskId,fingerprint:recoveryFingerprint(f.binding)})
+  // #782: one full-suite run saw found:false here and its log is lost. Grant writes the journal synchronously before it
+  // answers, so a miss means outcome() found no row, or read() threw. On failure, print the whole answer and the
+  // receiver's journal (task ids and phases only) so the next red run shows which.
+  expect(unused.data,JSON.stringify({unused:unused.data,journal:journalView(f.b.home)})).toMatchObject({found:true,status:'pending',task_id:f.binding.taskId,recovery_delivery:'ready'});expect(f.b.steered).toHaveLength(0)
   for(const patch of [{message:'replacement body'},{team:'beta/aaaaaaaa'},{task_id:'new-task'},{context_id:'other-context'}]){const refused=await f.raw(patch,permit);expect(refused.data.delivered).not.toBe(true)}
   expect(f.b.steered).toHaveLength(0)
   const accepted=await f.raw({},permit);expect(accepted.data,JSON.stringify(accepted)).toMatchObject({routed:true,delivered:true,recovery_delivery:'accepted',task_id:f.binding.taskId})
