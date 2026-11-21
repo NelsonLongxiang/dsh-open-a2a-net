@@ -19,7 +19,7 @@ Both worker presets mount this package's `superagent-ptc` entry without a runtim
 
 ## Consequences and limits
 
-Before the first compatible provider, a valid preset retains its inherited native executor. Old tools, an incompatible provider and an absent optional executor do not claim code mode. The host deliberately leaves an unavailable scoped executor after an active provider disappears; that state is fail-closed, not permission to fall back to native calls. A compatible replacement may restore the same scope through the ordinary lifecycle.
+A provider is compatible when it has a supported language, a non-empty program format, `retainsState`, `release`, `resolve` and `run`; the program format is not a fixed list, because the plugin never interprets it and the host's executor ships with its runtime (DSH master added `scoped-repl` after 0.2.2-rc.5). Before the first compatible provider, a valid preset retains its inherited native executor. Old tools, an incompatible provider and an absent optional executor do not claim code mode. The host deliberately leaves an unavailable scoped executor after an active provider disappears; that state is fail-closed, not permission to fall back to native calls. A compatible replacement may restore the same scope through the ordinary lifecycle.
 
 The optional package is resolved on entry activation. Installing it later requires the normal authorized plugin/preset reload; this code does not watch the filesystem or install dependencies. Unsupported or broken modules are not hidden by fallback. Host compatibility policy and the one-executor-per-scope rule remain in force.
 

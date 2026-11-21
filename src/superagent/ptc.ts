@@ -8,12 +8,17 @@ export const name = 'superagent-ptc'
 export const inject = ['tools', 'systemPrompt', 'loader']
 const EXECUTOR = '@deepseek-ai/dsh-tool-executor-ptc'
 
-/** The earlier service used the same name but has no retained-state/program-form contract. */
+/**
+ * The earlier service used the same name but has no retained-state/program-form contract. The program format is only
+ * that contract's marker here: this plugin never interprets it, and the host's own PTC executor, which ships with the
+ * runtime, renders instructions for it. So any non-empty format is accepted, not a fixed list that would silently send
+ * members back to native tools whenever DSH adds one (DSH master added `scoped-repl` after 0.2.2-rc.5).
+ */
 export function compatiblePtcRuntime(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false
   const runtime = value as Record<string, unknown>
   return ['typescript', 'python'].includes(String(runtime.language))
-    && ['function-body', 'script', 'repl'].includes(String(runtime.programFormat))
+    && typeof runtime.programFormat === 'string' && runtime.programFormat !== ''
     && typeof runtime.retainsState === 'boolean'
     && typeof runtime.release === 'function'
     && typeof runtime.resolve === 'function'
