@@ -27,6 +27,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import type { Config } from '../index.ts'
+import { normalizeOriginClaimByPeer, originClaimByPeerMap } from '../origin-claim-by-peer.ts'
 import type { CardCacheEntry, InFlightRoute, RouteActivityEntry } from '../runtime.ts'
 import { reminderView } from '../reconciliation-state.ts'
 import { CanvasStore, canvasNameReserved as reservedCanvasName, isRemoteMemberRef, validRemoteMemberRef, legacyBareMember } from '../canvas-store.ts'
@@ -347,7 +348,7 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             })),
           },
           // #332: home-controlled aliases, never inferred from peer cards or a file reference.
-          host: { ...(lanIp !== '' ? { lanIp } : {}), originClaimAudiences: [...config.originClaimAudiences ?? []] },
+          host: { ...(lanIp !== '' ? { lanIp } : {}), originClaimAudiences: [...config.originClaimAudiences ?? []], originClaimByPeer: originClaimByPeerMap(normalizeOriginClaimByPeer(config.originClaimByPeer).rules) },
           // gh#20 W-C (host rail): each peer row also carries its display
           // name and version from the warm card (absent until a fetch),
           // and the last-contact timestamp for the health lamp. W-A's
