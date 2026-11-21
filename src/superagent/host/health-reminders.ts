@@ -135,15 +135,24 @@ export class HealthReminders {
       this.held.delete(key)
       // R7a: the observer sees it first; the owner gets it when there is none, it is not loaded, or it did not act in time.
       const told = this.pending.get(key)
-      const observer = this.observer?.pick(problem)
+      let observer: string | undefined
       let why = ''
+      try { observer = this.observer?.pick(problem) }
+      catch { why = '（观察者状态无法读取，转交属主）' }
       if (told !== undefined) {
         if (observer === told.observer && now - told.since < OBSERVER_SILENCE_MS) continue
         this.pending.delete(key)
-        why = observer === told.observer ? '（观察者一小时内没有处理）' : '（观察者会话没有加载）'
-      } else if (observer !== undefined && this.observer!.tell(observer, observerNotice(problem, key))) {
-        this.pending.set(key, { observer, since: now })
-        continue
+        why ||= observer === told.observer ? '（观察者一小时内没有处理）' : '（观察者会话没有加载）'
+      } else if (observer !== undefined) {
+        // Reserve before the callback: an observer that acts synchronously must not lose that accepted action.
+        const reservation = { observer, since: now }
+        this.pending.set(key, reservation)
+        let delivered = false
+        try { delivered = this.observer!.tell(observer, observerNotice(problem, key)) === true }
+        catch { why = '（观察者通知交付未确认，转交属主）' }
+        if (delivered) continue
+        if (this.pending.get(key) === reservation) this.pending.delete(key)
+        why ||= '（观察者通知未送达，转交属主）'
       }
       const cardId = this.raise(`健康自检：${problemText(problem)}。${why}`, key, this.at())
       if (cardId !== undefined) this.open.set(key, cardId)
