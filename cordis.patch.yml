@@ -193,6 +193,10 @@
             name: '@deepseek-ai/dsh-skill-filesystem'
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
+          # Code mode by default (owner 2026-11-19). The package entry waits for compatible host services; a one-shot
+          # disabled expression cannot activate on a late provider. Old tools or a missing host executor stay native.
+          - id: tool-executor-ptc
+            name: '@nelsonlongxiang/dsh-open-a2a-net/superagent-ptc'
           # Schedules for the session itself (owner 2026-11-10): the host refuses any target but this_session.
           - id: tool-schedule
             name: '@deepseek-ai/dsh-tool-schedule'
@@ -337,6 +341,10 @@
             name: '@deepseek-ai/dsh-skill-filesystem'
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
+          # Code mode by default (owner 2026-11-19). The package entry waits for compatible host services; a one-shot
+          # disabled expression cannot activate on a late provider. Old tools or a missing host executor stay native.
+          - id: tool-executor-ptc
+            name: '@nelsonlongxiang/dsh-open-a2a-net/superagent-ptc'
           # Schedules for the session itself (owner 2026-11-10): the host refuses any target but this_session.
           - id: tool-schedule
             name: '@deepseek-ai/dsh-tool-schedule'
