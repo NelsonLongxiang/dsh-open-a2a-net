@@ -50,7 +50,7 @@ usage: a2a <command> [args] [--home URL] [--key <apiKey>] [--json]
 
 户口制:   init <name> [--uuid 16hex] [--force] · publish [--owes] [--declare progressReceipts,directedSeats,reworkReturns,teamRoster] · inbox [--new|--wait|--hook] · thread <context_id> · receipt <task_id> <result…> · admission <caller> [--local] · revoke
 对齐面:   whoami · teams [query] · route <team> <msg…> [--sync] [--context ID] [--task ID] · status · tasks · probe · tell-host <msg…> [--task ID]
-CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help
+CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) · help · version (also --version)
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
 文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR] · file grants · file revoke <sha256> <to>   (#91: bytes never ride a message)
 superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
@@ -153,6 +153,13 @@ function parseArgs(argv) {
     positional.push(arg)
   }
   return { flags, positional }
+}
+
+// `version` / `--version`: the installed package's version, read next to this file so a global install's symlinked bin
+// (npm -g, pnpm add -g) reports the package it actually runs. Handled before parsing: it takes no flags and needs no home.
+if (process.argv[2] === 'version' || process.argv[2] === '--version') {
+  console.log(JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version)
+  process.exit(0)
 }
 
 // `serve` owns its flags (cli/serve.mjs) and loads the node runtime lazily: the other commands never need it.

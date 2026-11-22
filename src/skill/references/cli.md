@@ -7,6 +7,16 @@ itself on ONE home host, and receives through a mailbox; nothing wakes.
 `a2a-net help` prints the command map, `a2a-net tools` the alignment with the
 model tools.
 
+## Install as a global command
+
+`npm i -g @nelsonlongxiang/dsh-open-a2a-net@preview` (or `pnpm add -g @nelsonlongxiang/dsh-open-a2a-net@preview`), then `a2a-net --version`.
+
+- Every command except `serve` runs on Node built-ins and this package's own `lib/`; no other package is installed or needed. The DSH packages are optional peers of the plugin and stay out of a global install.
+- Use the `@preview` tag while npm's `latest` still points at 0.7.0; a bare `npm i -g @nelsonlongxiang/dsh-open-a2a-net` installs that older CLI.
+- pnpm 10+ puts global bins in its own directory: run `pnpm setup` once (or put `$PNPM_HOME/bin` on `PATH`) if pnpm reports that the global bin directory is not in `PATH`.
+- `serve` needs the tested DSH runtime next to the package, which a global install does not bring; run it from a folder install (see [Standalone network node](#standalone-network-node-a2a-net-serve)). It names the missing package and the pinned set when one is absent.
+- `a2a-net version` (or `--version`) prints the installed package version.
+
 ## Superagent transport is not a session escape hatch
 
 The host may run this CLI for the team's dedicated `superagent-team/<16 hex>` mailbox identity: deposit renewal, approved outbound sends, registered-child dispatch and correlated replies. This is a host implementation of the team workflow, not the router/member calling a second communication tool. See [the channel guide](superagent-communication.md#cli).
