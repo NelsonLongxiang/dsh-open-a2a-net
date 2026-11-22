@@ -43,6 +43,7 @@ export type A2aNetKey =
   | 'team.fromObserver'
   | 'team.fromMember'
   | 'team.fromHealth'
+  | 'team.autoAcked'
   | 'team.fromTool'
   | 'team.fromOutbound'
   | 'team.fromSender'
@@ -110,6 +111,7 @@ export const zh: Record<A2aNetKey, string> = {
   'team.fromObserver': '观察者提出',
   'team.fromMember': '成员提问',
   'team.fromHealth': '健康自检',
+  'team.autoAcked': '知道了（超时自动）：{minutes} 分钟内没有人处理，宿主已于 {at} 按「知道了」结卡。仍可改判。',
   'team.fromTool': '工具申请',
   'team.fromOutbound': '对外请求',
   'team.fromSender': '名单外的需求',
@@ -190,6 +192,7 @@ export const en: Record<A2aNetKey, string> = {
   'team.fromObserver': 'From an observer',
   'team.fromMember': 'From a member',
   'team.fromHealth': 'Health check',
+  'team.autoAcked': 'Acknowledged (timed out): nobody decided within {minutes} minutes, so the host closed it as 「知道了」 at {at}. You can still decide it.',
   'team.fromTool': 'Tool request',
   'team.fromOutbound': 'Outbound request',
   'team.fromSender': 'Request from an unlisted sender',
