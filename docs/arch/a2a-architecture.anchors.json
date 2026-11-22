@@ -4,7 +4,7 @@
   "scope": "Committed source only; no deployment inference",
   "sources": {
     "src/index.ts": "ef341ef6981f002c889ba19f3a80c69d21218ddd358cdb3af5d5bb40a00aa2f4",
-    "src/faces/admin.ts": "4228b2f1ad05a60341240f7f64a88f3997aee9ed63aec01b5d07f5fb9722408c",
+    "src/faces/admin.ts": "7c50b9f3dea174d1397649829792161379f41e693645ff0de5bc2da87526ffe7",
     "src/canvas-store.ts": "ce935c601af66a524949ccb006310c6b106be159718c0a7839c41fd210c20826",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
     "src/cli-deposit.ts": "d9a887fbfad807321d33c410deaf933f1072ac10ccdca3ff7e4f42380292a1d3",
@@ -135,13 +135,13 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:631",
+      "ref": "src/faces/admin.ts:632",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:210",
+      "ref": "src/faces/admin.ts:211",
       "expect": "path: '/__dsh_a2a/state',"
     },
     {
@@ -189,7 +189,7 @@
     {
       "page": "p1-arch",
       "cell": "d7",
-      "ref": "src/faces/admin.ts:376",
+      "ref": "src/faces/admin.ts:377",
       "expect": "activity: recentActivity.slice(),"
     },
     {
@@ -297,7 +297,7 @@
     {
       "page": "p1-arch",
       "cell": "c6",
-      "ref": "src/faces/admin.ts:160",
+      "ref": "src/faces/admin.ts:161",
       "expect": "export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void {"
     },
     {
