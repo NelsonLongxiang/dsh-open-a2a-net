@@ -956,6 +956,8 @@ export class SuperagentHost {
     if (ticket === undefined || ticket.ended !== undefined) return { ok: false, code: 'unknownTicket', error: this.wrongId('ticket', ticketId) }
     const member = this.resolveMember(value)
     if (member === undefined) return { ok: false, code: 'member', error: `no such member: ${value}. ${this.memberListLine()}` }
+    // Ticket 877ca64f: say so instead of ok:true for a member this ticket will never run on.
+    if (this.credentialExcluded(ticketId).includes(member)) return { ok: false, code: 'excluded', error: `${this.memberName(member)} is excluded from this ticket: the owner took this work off it on a credential-access card; give it to another member` }
     const latest = ticket.assignments.at(-1)
     const card = this.executor.list().find(b => b.assignmentId === latest?.id)?.card
     if (card === 'sending') return { ok: false, code: 'assignment-in-flight', error: 'the original assignment card is still in flight; wait for its result or stop that ticket, do not send another card' }
