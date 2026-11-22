@@ -247,6 +247,8 @@ export function applyNetworkOp(op: StaffingOp, p: Readonly<Record<string, unknow
   if (url === '' && !Object.hasOwn(s.originClaimByPeer, peer)) return { ok: false, error: `originClaimByPeer has no entry for ${peer}` }
   const byPeer = { ...s.originClaimByPeer }
   if (url === '') delete byPeer[peer]; else byPeer[peer] = url
+  // #817 R3: two keys naming the same peer with different claims are both dropped at boot: refuse the whole table here.
+  if (url !== '' && normalizeOriginClaimByPeer(byPeer).ignored.length > 0) return { ok: false, error: `originClaimByPeer would then name ${peer} twice with different claim URLs (boot drops both)` }
   return { ok: true, next: { ...s, originClaimByPeer: byPeer }, keys: ['originClaimByPeer'] }
 }
 

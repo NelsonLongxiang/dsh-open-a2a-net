@@ -4,7 +4,11 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { StaffingExecutor, type NetworkSettings, type StaffingChange, type StaffingDeps } from '../../src/superagent/host/staffing.ts'
+import { StaffingExecutor, applyNetworkOp, type NetworkSettings, type StaffingChange, type StaffingDeps } from '../../src/superagent/host/staffing.ts'
+import { networkDeps } from '../../src/superagent/host/staffing-wiring.ts'
+import { writeHomeA2a } from '../../src/owner-settings.ts'
+import { Config } from '../../src/config.ts'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { blueprintDiff } from '../../src/superagent/host/builder-tools.ts'
 
 const PEER = 'http://peer.example:13080', CLAIM = 'http://self.tailnet:3081'
@@ -61,5 +65,31 @@ describe('#808 P2 network ops', () => {
     expect(lines[0]).toBe('1. 本机对等方加 ' + PEER + '（重启后生效）')
     expect(lines[1]).toContain('teamScope = false')
     expect(lines[1]).toContain('重启后生效')
+  })
+})
+
+describe('#817 review findings', () => {
+  const cfg = (x: Record<string, unknown> = {}) => Config(x as never) as unknown as Record<string, unknown>
+  const fs = { exists: existsSync, read: (p: string) => readFileSync(p, 'utf8'), write: (p: string, s: string) => writeFileSync(p, s, 'utf8'), mkdir: (p: string) => { mkdirSync(p, { recursive: true }) } }
+  const home = () => mkdtempSync(join(tmpdir(), 'net-home-'))
+
+  it('R1: an unset teamScope reads as on (as the host reads it), so an undo never writes teamScope: false', () => {
+    expect(networkDeps(home(), cfg()).networkRead().teamScope).toBe(true)
+    expect(networkDeps(home(), cfg({ teamScopeRouting: false })).networkRead().teamScope).toBe(false)
+    expect(networkDeps(home(), cfg({ teamScope: false })).networkRead().teamScope).toBe(false)
+  })
+
+  it('R2: a workbench write before a restart is the base a blueprint reads (and so what its undo restores)', () => {
+    const h = home()
+    expect(writeHomeA2a(h, { teamScope: false, announce: true }, cfg(), cfg(), fs)).toMatchObject({ ok: true })
+    const read = networkDeps(h, cfg()).networkRead()
+    expect(read.teamScope).toBe(false)
+    expect(read.announce).toBe(true)
+  })
+
+  it('R3: a per-peer claim that would name the same peer twice with different URLs is refused', () => {
+    const s: NetworkSettings = { peers: [PEER, PEER + '/'], announce: false, teamScope: true, originClaimUrl: '', originClaimAudiences: [], originClaimByPeer: { [PEER]: CLAIM } }
+    expect(applyNetworkOp('network.originClaimByPeer.set', { peer: PEER + '/', url: 'http://other.tailnet:3081' }, s)).toMatchObject({ ok: false })
+    expect(applyNetworkOp('network.originClaimByPeer.set', { peer: PEER, url: 'http://other.tailnet:3081' }, s)).toMatchObject({ ok: true })
   })
 })

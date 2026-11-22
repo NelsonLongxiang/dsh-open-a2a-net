@@ -190,5 +190,17 @@ export function writeHomeA2a(home: string, changes: OwnerSettings, effective: Re
   const { yaml, restartNeeded } = applyOwnerSettings(current, changes, seed)
   fs.mkdir(home)
   fs.write(path, yaml)
+  // #817 R2: every home-layer a2a write this boot, from the owner panel and from blueprints alike, in one overlay.
+  const overlay = WRITTEN_SINCE_BOOT.get(path) ?? {}
+  for (const key of ['teamJoinAllowlist', 'teamScope', 'announce', 'seatNames'] as const) if (changes[key] !== undefined) overlay[key] = changes[key]
+  for (const [key, value] of Object.entries(changes.network ?? {})) overlay[key] = value
+  WRITTEN_SINCE_BOOT.set(path, overlay)
   return { ok: true, restartNeeded, path }
+}
+
+const WRITTEN_SINCE_BOOT = new Map<string, Record<string, unknown>>()
+
+/** #817 R2: the a2a keys written to this home layer since boot (they take effect on restart), whoever wrote them. */
+export function homeA2aWrittenSinceBoot(home: string): Readonly<Record<string, unknown>> {
+  return { ...WRITTEN_SINCE_BOOT.get(home.replace(/\/+$/, '') + '/cordis.patch.yml') }
 }
