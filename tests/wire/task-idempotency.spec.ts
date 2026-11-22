@@ -401,16 +401,20 @@ describe('/a2a/query outcome retrieval — hooks and honest negatives', () => {
     return globalThis.fetch(`http://127.0.0.1:${String(port)}/a2a/query`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   }
 
-  it('a delivered-but-unsettled noWait round answers pending — the honest registered debt', async () => {
+  it('a delivered-but-unsettled noWait round answers pending — the honest registered debt', async ({ signal, onTestFinished }) => {
     // noWait to a live team: delivered with no settlement hook on this path
     // (the receipt routes to the caller, not back here) — the claim row
     // stays pending and the endpoint says so, never a fabricated product.
     // Preserve the original budget/assertions; a timeout must identify the pending phase.
     const started = performance.now(), finished: Array<[string, number]> = []
-    let stage = 'mount', failedStage: string | undefined, portObserved: number | undefined
+    let stage = 'mount', failedStage: string | undefined, abortedStage: string | undefined, abortedAtMs: number | undefined, portObserved: number | undefined
+    // Vitest aborts this signal at the actual deadline, before late finally work can move the phase.
+    const aborted = () => { abortedStage = stage; abortedAtMs = performance.now() - started }
+    signal.addEventListener('abort', aborted, { once: true })
+    onTestFinished(() => signal.removeEventListener('abort', aborted))
     const at = (next: string) => { finished.push([stage, performance.now() - started]); stage = next }
     onTestFailed(() => console.error('[noWait query diagnostics] ' + JSON.stringify({
-      stage: failedStage ?? stage, elapsedMs: performance.now() - started, finished, port: portObserved, rss: process.memoryUsage().rss,
+      stage: abortedStage ?? failedStage ?? stage, abortedAtMs, elapsedMs: performance.now() - started, finished, port: portObserved, rss: process.memoryUsage().rss,
     })))
     const { port, dispose } = await mount()
     portObserved = port
