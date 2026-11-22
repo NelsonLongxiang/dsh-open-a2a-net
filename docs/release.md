@@ -7,7 +7,7 @@
 
 ## 0.8.1-preview.28（预览版，已发布到 npm 的 preview 标签）
 
-- 状态（2026-11-22）：2026-11-22T06:43:09.229Z 由属主发布到 npmjs，dist-tag 为 `preview`，`latest` 仍是 0.7.0。shasum `75ee0813036ca62f269651b549dcb9d9e4bb9bd8`，integrity `sha512-JX1gvu/UK/I6ZaXRkLtevCPkBGK7ZSEQ49Sz5oWKpJmswMwWi323JptIhs/zTFLl26sFaFkYhqscyWjHufeY+Q==`。回读：已发布 tgz 的 425 个文件与 next/0.8 `2d5788ebda`（发布时的 next/0.8 头，#797 于 06:12 合入）逐文件 sha256 一致；与本发版 PR 的 master 合并树相比只差 `README.md`、`README_zh.md`（master 上 #768 的版本边界说明未进包）。标签 `v0.8.1-preview.28` 因此指向 `2d5788eb`，不是 master 合并提交。
+- 状态（2026-11-22）：2026-11-22T06:43:09.229Z 由属主发布到 npmjs，dist-tag 为 `preview`，`latest` 仍是 0.7.0。shasum `75ee0813036ca62f269651b549dcb9d9e4bb9bd8`，integrity `sha512-JX1gvu/UK/I6ZaXRkLtevCPkBGK7ZSEQ49Sz5oWKpJmswMwWi323JptIhs/zTFLl26sFaFkYhqscyWjHufeY+Q==`。回读：已发布 tgz 的 425 个文件与 next/0.8 `2d5788ebf7`（发布时的 next/0.8 头，#797 于 06:12:07Z 合入）逐文件 sha256 一致；与本发版 PR 的 master 合并树相比只差 `README.md`、`README_zh.md`（master 上 #768 的版本边界说明未进包）。标签 `v0.8.1-preview.28` 因此指向 `2d5788eb`，不是 master 合并提交。
 - 与往常的出入：本版先发布、后补发版 PR 与记录，没有走「同一 tgz 先审后发」的候选流程（[release-provenance](release-provenance.md)）；上面的逐文件回读是事后补的等价性证据，不是事前候选审计。
 - 基线：相对已发布的 0.8.1-preview.27（next/0.8 合并基点 `a9cc84fa`）合入 36 个 PR，包括 preview.27 特意未带的 #709。代码门禁：next/0.8 `7e338170` 的树与在 macOS 完整 `pnpm verify` rc=0 的 `8b4ae610` 相同（root 3191 过 / 4 跳，build-layout 4，nexus 610，临时根残留 0）；其后 #797 只改测试。
 - 升级、回退照 [0.8.1 升级检查](ops/0.8.1-upgrade-check.md)；本版的升级注意见下文「行为变化与升级注意」。
@@ -23,7 +23,7 @@
 
 #### A2A 投递
 
-- **按对端选择 OriginClaim 声明地址（#789，#787）**：新配置 `originClaimByPeer`，局域网节点与 Tailscale 云中心可同时联通；匹配精确，冲突配置整组丢弃。
+- **按对端选择 OriginClaim 声明地址（#789，#787）**：新配置 `originClaimByPeer`，局域网节点与 Tailscale 云中心可同时联通；匹配精确，同一对端的冲突配置整组丢弃，不影响其他对端。
 - **未消费的对账提醒按会话设上限（#709）**。
 - **CLI `inbox --wait` 等宿主重启或代理 5xx，不再直接退出（#788）**。
 
