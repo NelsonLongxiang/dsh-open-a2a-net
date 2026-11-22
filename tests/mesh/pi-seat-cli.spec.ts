@@ -6,6 +6,8 @@
  * copies the extension and never overwrites without --force.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+// #782-era ledger (2026-11-22, contended Windows host): full-suite load exceeded the 5s default in these specs; raised ceiling only, assertions unchanged.
+vi.setConfig({ testTimeout: 25_000 })
 import { generateKeyPairSync } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'

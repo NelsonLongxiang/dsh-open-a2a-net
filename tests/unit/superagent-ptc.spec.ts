@@ -6,9 +6,9 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { mkdtempSync } from '../temp-dirs.ts'
+import { homedir } from 'node:os'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import { apply, compatiblePtcRuntime, inject, name } from '../../src/superagent/ptc.ts'
 
 const runtime = () => ({ language: 'typescript', programFormat: 'function-body', retainsState: false, release() {}, resolve() {}, run() {} })
@@ -68,10 +68,14 @@ describe('optional team PTC entry', () => {
 
   it('the actual legacy tools and runtime service never import the unavailable new executor', async () => {
     const ctx = new Context(), imports: string[] = []
-    // The real PTC runtime loads a native addon; its loader caches binaries under os.tmpdir() and never removes them,
-    // which the verify gate reports as temp residue. Cache in a directory this test owns (removed after the file).
+    // The real PTC runtime loads a native addon whose loader caches binaries under its cache root. A per-run
+    // temp dir cannot work here: the loader `require()`s the staged .node, and a required native binary stays
+    // memory-mapped until process exit on Windows, so in-suite deletion hit EPERM even inside a 3 s retry
+    // window (2026-11-22). Use one stable persistent cache outside every temp root instead: reused across
+    // runs, never owned by temp-dirs, nothing to delete, and the residue gate keeps its meaning.
     const previousCache = process.env.NARB_NATIVE_CACHE_DIR
-    process.env.NARB_NATIVE_CACHE_DIR = mkdtempSync(join(tmpdir(), 'ptc-native-cache-'))
+    process.env.NARB_NATIVE_CACHE_DIR = process.env.NARB_NATIVE_CACHE_DIR ?? join(homedir(), '.dsh-a2a-test', 'narb-native-cache')
+    mkdirSync(process.env.NARB_NATIVE_CACHE_DIR, { recursive: true })
     onTestFinished(() => { if (previousCache === undefined) delete process.env.NARB_NATIVE_CACHE_DIR; else process.env.NARB_NATIVE_CACHE_DIR = previousCache })
     const requireTools = createRequire(import.meta.resolve('@deepseek-ai/dsh-tools'))
     const { PtcRuntime } = await import(pathToFileURL(requireTools.resolve('@deepseek-ai/dsh-ptc-runtime')).href)
