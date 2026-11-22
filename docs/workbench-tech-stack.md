@@ -69,7 +69,7 @@ WorkbenchMode = 'canvas' | 'data'（依 board.available() 每 poll 派生；canv
 | `/__dsh_a2a/fleet-canvas-op` | POST | 舰队级画布编排：中继到对端 `/a2a/canvas-op`（gh#41） |
 | `/__dsh_a2a/cli-deposit` | POST | a2a-net CLI 身份寄存（非工作台消费，同属控制面） |
 
-以上 `/__dsh_a2a/*` 控制面路由（含 GET 读面）在配置了 `apiKey` 时一律验 key；未配 key 时仅信任 loopback 套接字。
+以上 `/__dsh_a2a/*` 控制面路由（含 GET 读面）在配置了 `apiKey` 时验 key，或为经宿主 Connection `admit` 认定的 DSH 浏览器主人（#790；CLI/API/对端仍需 key）；未配 key 时信任不带转发头的 loopback 套接字，以及经宿主 Connection `admit` 认定的 DSH 浏览器主人（#783，反向代理后可用；跨站否决照旧，宿主缺该服务时 fail-closed）。
 
 ## 4. 环境与流程约束（影响前端生效路径的事实）
 

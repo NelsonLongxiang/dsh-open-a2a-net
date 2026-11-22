@@ -14,6 +14,9 @@ export interface RootDropDeps {
   readonly removeTeam: (root: string, ref: string) => Promise<{ ok: boolean; error?: string }>
   /** Show a refusal or a route error on the frame it concerns, in words, with the next step. */
   readonly frameError: (root: string, text: string) => void
+  /** Optional board admission shares the menu's current facts, including missing addresses and unreachable peers. */
+  readonly refusal?: (root: string, dragged: DraggedFrameFacts) => string | undefined
+  readonly signal?: AddEventListenerOptions
 }
 
 export interface RootFrameFacts { readonly name: string; readonly root?: boolean; readonly children?: ReadonlyArray<RootChildRow> }
@@ -30,27 +33,47 @@ export function dropAllowed(root: RootFrameFacts, dragged: DraggedFrameFacts): b
   return dropRefusal(root, dragged).ok
 }
 
-/** Wire one root frame: dragover preview, drop → add-team, chip drag-out → confirm → remove-team. */
-export function wireRootFrame(frame: HTMLElement, root: RootFrameFacts, draggedOf: (event: DragEvent) => DraggedFrameFacts | undefined, d: RootDropDeps): void {
-  frame.addEventListener('dragover', (event: DragEvent) => {
-    const dragged = draggedOf(event)
-    if (dragged === undefined) return
-    event.preventDefault()
-    frame.dataset.rootDropPreview = dragPreviewText(root, dragged)
-  })
-  frame.addEventListener('dragleave', () => { delete frame.dataset.rootDropPreview })
-  frame.addEventListener('drop', async (event: DragEvent) => {
-    const dragged = draggedOf(event)
-    delete frame.dataset.rootDropPreview
-    if (dragged === undefined || !dropAllowed(root, dragged)) return
-    event.preventDefault()
-    const out = await d.addTeam(root.name, dragged.ref)
-    if (!out.ok) d.frameError(root.name, out.error ?? '加入子团队被拒绝')
-  })
+/** One target controller shared by native drops and the board's pointer-capture drag. */
+export interface RootFrameDrop {
+  preview(dragged: DraggedFrameFacts): void
+  leave(): void
+  drop(dragged: DraggedFrameFacts): void
+}
+
+/** Wire once; facts may change on a poll while a keyed frame element and a drag remain alive. */
+export function wireRootFrame(frame: HTMLElement, facts: RootFrameFacts | (() => RootFrameFacts | undefined), draggedOf: (event: DragEvent) => DraggedFrameFacts | undefined, d: Pick<RootDropDeps, 'addTeam' | 'frameError' | 'refusal' | 'signal'>): RootFrameDrop {
+  const current = (): RootFrameFacts | undefined => typeof facts === 'function' ? facts() : facts
+  const leave = (): void => { delete frame.dataset.rootDropPreview; frame.querySelector(':scope > .p-root-drop-preview')?.remove() }
+  const reason = (root: RootFrameFacts, dragged: DraggedFrameFacts): string | undefined => {
+    const verdict = dropRefusal(root, dragged)
+    return verdict.ok ? d.refusal?.(root.name, dragged) : verdict.reason
+  }
+  const preview = (dragged: DraggedFrameFacts): void => {
+    const root = current()
+    if (root?.root !== true) { leave(); return }
+    const refusal = reason(root, dragged)
+    const text = refusal === undefined ? `松开加入为子团队：${dragged.name}` : `不能加入：${refusal}`
+    frame.dataset.rootDropPreview = text
+    let line = frame.querySelector<HTMLElement>(':scope > .p-root-drop-preview')
+    if (line === null) { line = document.createElement('div'); line.className = 'p-root-drop-preview'; line.setAttribute('role', 'status'); frame.append(line) }
+    line.textContent = text
+  }
+  const drop = (dragged: DraggedFrameFacts): void => {
+    const root = current(); leave()
+    if (root?.root !== true) return
+    const refusal = reason(root, dragged)
+    if (refusal !== undefined) { d.frameError(root.name, refusal); return }
+    const alive = (): boolean => d.signal?.signal?.aborted !== true
+    void d.addTeam(root.name, dragged.ref).then(out => { if (alive() && !out.ok) d.frameError(root.name, out.error ?? '加入子团队被拒绝') }, () => { if (alive()) d.frameError(root.name, '加入子团队的结果未知，请刷新核对，不要重复提交') })
+  }
+  frame.addEventListener('dragover', (event: DragEvent) => { const dragged = draggedOf(event); if (dragged === undefined) return; event.preventDefault(); preview(dragged) }, d.signal)
+  frame.addEventListener('dragleave', leave, d.signal)
+  frame.addEventListener('drop', (event: DragEvent) => { const dragged = draggedOf(event); if (dragged === undefined) return; event.preventDefault(); drop(dragged) }, d.signal)
   for (const chip of Array.from(frame.querySelectorAll<HTMLElement>('.planning-root-chip'))) {
     chip.draggable = true
-    chip.addEventListener('dragstart', (event: DragEvent) => { event.dataTransfer?.setData('text/root-child', chip.dataset.ref ?? '') })
+    chip.addEventListener('dragstart', (event: DragEvent) => { event.dataTransfer?.setData('text/root-child', chip.dataset.ref ?? '') }, d.signal)
   }
+  return { preview, leave, drop }
 }
 
 /** A chip dropped outside any root frame (the planning view calls this on its own drop zone): confirm and remove. */

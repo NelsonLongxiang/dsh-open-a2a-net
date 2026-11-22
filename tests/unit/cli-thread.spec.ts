@@ -84,7 +84,8 @@ describe('route journals what the host took (superagent p1-context-read)', () =>
       { handle: SCOUT, at: expect.any(Number), team: 'ops', task_id: 'direct-aaaa1111', context_id: 'ctx-host', text: 'hello there' },
       { handle: SCOUT, at: expect.any(Number), team: 'ops', task_id: 'direct-bbbb2222', context_id: 'ctx-sync', text: 'question', reply: 'the answer' },
     ])
-    expect(statSync(join(env.HOME, 'sent.jsonl')).mode & 0o777).toBe(0o600)
+    // Windows reports emulated mode bits, not POSIX permissions; the journal content contract is checked above.
+    if (process.platform !== 'win32') expect(statSync(join(env.HOME, 'sent.jsonl')).mode & 0o777).toBe(0o600)
   })
 
   it('a -32005 reply names no context: only an explicit --context journals it', async () => {

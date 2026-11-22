@@ -39,11 +39,17 @@ export function personMessageFrom(events: readonly unknown[]): { id: string; atM
  * @param id - the member session.
  * @param events - its events, oldest first.
  * @param jobs - DSH's jobs service, if mounted.
- * @returns the turn's state.
+ * @param warn - told when the jobs registry cannot be read.
+ * @returns the turn's state. A registry that cannot be read counts as background work still running (not quiet): the
+ * turn end is kept, and the executor's background limit settles it later, instead of the idle being lost to a throw.
  */
-export function memberTurnFrom(id: string, events: readonly unknown[], jobs: unknown): { quiet: boolean; text: string } {
+export function memberTurnFrom(id: string, events: readonly unknown[], jobs: unknown, warn?: (message: string) => void): { quiet: boolean; text: string } {
   const list = (jobs as { list?: (caller: string) => readonly { owner?: string; status: string }[] } | undefined)?.list
-  const quiet = !(list?.call(jobs, id) ?? []).some(job => job.owner === id && (job.status === 'running' || job.status === 'stopping'))
+  let quiet: boolean
+  try { quiet = !(list?.call(jobs, id) ?? []).some(job => job.owner === id && (job.status === 'running' || job.status === 'stopping')) } catch (error) {
+    warn?.(`superagent: jobs of ${id} could not be read (${String(error).slice(0, 200)}); the turn end waits for the background limit`)
+    quiet = false
+  }
   const last = [...events].reverse().find(event => (event as { type?: string } | undefined)?.type === 'assistant/message') as { data?: { message?: { content?: TextBlocks } } } | undefined
   return { quiet, text: textOf(last?.data?.message?.content) }
 }

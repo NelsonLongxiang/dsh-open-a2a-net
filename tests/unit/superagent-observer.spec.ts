@@ -53,8 +53,11 @@ describe('the preset decides', () => {
 })
 
 describe('the tool list', () => {
-  it('is a member\'s and one more; since #717 a plain member may request too, the router has not got it', () => {
-    expect(OBSERVER_TOOLS).toEqual([...MEMBER_TOOLS, 'a2a_decision_propose'])
+  it('is a member\'s and two more (cards, and notes on tickets since R7b); since #717 a plain member may request too, the router has not got it', () => {
+    expect(OBSERVER_TOOLS).toEqual([...MEMBER_TOOLS, 'a2a_decision_propose', 'a2a_ticket_note', 'a2a_card_cast'])
+    expect(roleToolRefusal('member', 'a2a_card_cast')).toContain('a2a_card_cast')
+    expect(roleToolRefusal('member', 'a2a_ticket_note')).toContain('a2a_ticket_note')
+    expect(roleToolRefusal('router', 'a2a_ticket_note')).toContain('a2a_ticket_note')
     expect(TEAM_TOOLS).toContain('a2a_ticket_request')
     expect(roleToolRefusal('observer', 'a2a_ticket_request')).toBeUndefined()
     expect(roleToolRefusal('member', 'a2a_ticket_request')).toBeUndefined()
@@ -140,5 +143,26 @@ describe('the gate', () => {
     expect(teamPolicy(DEFAULT_SETTINGS).revalidate(mandate)).toBe(false)
     const effects = policyEffects({ ...DEFAULT_SETTINGS, members: ['m'] }, DEFAULT_SETTINGS, [{ id: 'ticket', mandate } as never])
     expect(effects.get('ticket')).toMatchObject({ requesterAllowed: false })
+  })
+})
+
+describe('D19: the observer takes no tickets', () => {
+  it('is not in the worker pool: not on the member list, not assignable, still a member for its requests', async () => {
+    const m = await team()
+    expect(m.h.memberListLine()).toContain('session-a')
+    expect(m.h.memberListLine()).not.toContain('session-o')
+    expect(m.h.resolveMember('session-o')).toBeUndefined()
+    expect(m.h.resolveMember('session-a')).toBe('session-a')
+    expect(m.h.toolRoleOf('session-o')).toBe('observer')
+    expect(m.file('还要做的一件事')).toMatchObject({ ok: true })
+    await m.h.stop()
+  })
+  it('the persona says it takes no tickets and tags and counts stuck points', async () => {
+    const { readFileSync } = await import('node:fs')
+    const text = readFileSync(join(__dirname, '../../src/superagent/prompts/observer.md'), 'utf8')
+    expect(text).toContain('You take no execution tickets')
+    expect(text).toContain('3 times within two weeks')
+    expect(text).toContain('One domain (team) has one observer')
+    expect(text).not.toContain('[superagent assignment] cards')
   })
 })

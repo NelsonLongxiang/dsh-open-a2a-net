@@ -1,5 +1,7 @@
 /** Synthetic CLI flow regression only; not a replacement integrity verifier or release PASS. */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+// #782-era ledger (2026-11-22, contended Windows host): full-suite load exceeded the 5s default in these specs; raised ceiling only, assertions unchanged.
+vi.setConfig({ testTimeout: 25_000 })
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
