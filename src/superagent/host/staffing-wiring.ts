@@ -9,6 +9,10 @@ import type { SuperagentTeams } from './teams.ts'
 import { isRemoteMemberRef, type CanvasStore } from '../../canvas-store.ts'
 import { addCanvasMember } from '../../canvas-member-write.ts'
 import type { CliHomeDecision } from '../../cli-home.ts'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { writeHomeA2a } from '../../owner-settings.ts'
+import { Config as ConfigSchema } from '../../config.ts'
+import type { NetworkSettings } from './staffing.ts'
 
 export interface StaffingWiring {
   readonly path: string
@@ -22,6 +26,9 @@ export interface StaffingWiring {
   readonly memberForWrite: (id: string, peer?: unknown) => Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }>
   /** #808: the canvas route's CLI home pin for a CLI member. */
   readonly cliHomeForAdd: (handle: string, requested?: unknown) => Promise<CliHomeDecision>
+  /** #808 P2: the DSH home whose cordis.patch.yml holds the home-layer a2a config, and the running a2a config. */
+  readonly a2aHome?: string
+  readonly a2aConfig?: Readonly<Record<string, unknown>>
   readonly teamCanvasRefusal: (canvas: string, member: string) => string | undefined
   readonly revokeCanvasMember: (id: string, reason: 'remove', name: string) => boolean
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
@@ -67,6 +74,7 @@ export function createStaffing(w: StaffingWiring): StaffingExecutor {
     canvasRemoveMember: (name, member) => isRemoteMemberRef(member) ? !w.canvasStore.isSuspended(name, member) && w.canvasStore.removeMember(name, member) : w.revokeCanvasMember(member, 'remove', name),
     canvasMembers: name => w.canvasStore.membersOf(name),
     canvasCliHome: member => w.canvasStore.cliHomeOf(member),
+    ...(w.a2aHome !== undefined && w.a2aConfig !== undefined ? networkDeps(w.a2aHome, w.a2aConfig) : {}),
     teamAdd: (canvas, router) => {
       const out = w.teams.add({ canvas, router }, w.sessionValid, w.presetOf)
       return out.ok ? { ok: true, id: refOfId(out.id) } : out
@@ -77,3 +85,32 @@ export function createStaffing(w: StaffingWiring): StaffingExecutor {
 
 /** A team's card decision, as the executor names the team. */
 export const staffingTeamRef = (teams: SuperagentTeams, team: SuperagentHost): string | undefined => { const id = teams.idOf(team); return id === undefined ? undefined : refOfId(id) }
+
+/**
+ * #808 P2: network settings for the staffing executor. Reads are the running config overlaid with what this boot wrote to
+ * the home layer (so a second blueprint before a restart starts from the first one's result); writes go through the one
+ * home-layer writer, which seeds a new block from the lower layers and refuses to copy credentials.
+ */
+function networkDeps(home: string, running: Readonly<Record<string, unknown>>): { networkRead: () => NetworkSettings; networkWrite: (changes: Partial<NetworkSettings>) => { ok: true } | { ok: false; error: string } } {
+  const written: Partial<Record<keyof NetworkSettings, unknown>> = {}
+  const arr = (v: unknown): string[] => Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+  const read = (): NetworkSettings => {
+    const at = { ...running, ...written } as Record<string, unknown>
+    const byPeer = at.originClaimByPeer !== null && typeof at.originClaimByPeer === 'object' && !Array.isArray(at.originClaimByPeer) ? at.originClaimByPeer as Record<string, string> : {}
+    return { peers: arr(at.peers), announce: at.announce === true, teamScope: at.teamScope === true, originClaimUrl: typeof at.originClaimUrl === 'string' ? at.originClaimUrl : '', originClaimAudiences: arr(at.originClaimAudiences), originClaimByPeer: { ...byPeer } }
+  }
+  return {
+    networkRead: read,
+    networkWrite: changes => {
+      const { announce, teamScope, ...network } = changes
+      try {
+        const out = writeHomeA2a(home, { ...(announce !== undefined ? { announce } : {}), ...(teamScope !== undefined ? { teamScope } : {}), network },
+          running, ConfigSchema({} as never) as unknown as Record<string, unknown>,
+          { exists: existsSync, read: p => readFileSync(p, 'utf8'), write: (p, s) => writeFileSync(p, s, 'utf8'), mkdir: p => { mkdirSync(p, { recursive: true }) } })
+        if (!out.ok) return { ok: false, error: out.error }
+        Object.assign(written, changes)
+        return { ok: true }
+      } catch (error) { return { ok: false, error: `home-layer write failed: ${error instanceof Error ? error.message : String(error)}` } }
+    },
+  }
+}
