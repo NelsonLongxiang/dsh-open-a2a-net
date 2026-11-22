@@ -7,14 +7,21 @@ import { signCard } from '../../src/card.ts'
 import { peerPayloadFingerprint } from '../../src/idempotency-store.ts'
 import { signOriginClaim } from '../../src/origin-claim.ts'
 import { bootNode,reservePort,runContext } from './harness.ts'
+import TimerService from '@deepseek-ai/cordis-plugin-timer'
 const denied=vi.hoisted(()=>({prefix:'',remaining:0,skip:0}))
 vi.mock('node:fs',async original=>{const fs=await original<typeof import('node:fs')>();return {...fs,openSync:(path:any,...args:any[])=>{if(denied.remaining>0&&String(path).startsWith(denied.prefix)){if(denied.skip>0){denied.skip--;return (fs.openSync as any)(path,...args)}denied.remaining--;throw Object.assign(Error('injected unwritable ledger directory'),{code:'EACCES'})}return (fs.openSync as any)(path,...args)}}})
-afterEach(()=>{denied.prefix='';denied.remaining=0;denied.skip=0})
+afterEach(()=>{denied.prefix='';denied.remaining=0;denied.skip=0;vi.restoreAllMocks()})
 const state=async(base:string)=>{const response=await fetch(base+'/__dsh_a2a/state');expect(response.status).toBe(200);return response.json()}
 const finish=(agent:any,ids:string[])=>{for(const id of ids)agent.session.events.push({type:'turn/start'}, {type:'user/message',data:{content:[{type:'text',text:'[A2A direct] (task '+id+') sender sent:'}]}},{type:'assistant/message',data:{message:{content:[{type:'text',text:'completed '+id}]}}},{type:'turn/end',data:{reason:{kind:'completed'}}})}
 describe('ledger errors stay inside the real host event boundary',()=>{
  it('enforce forwarded receipt publishes query completion from precommit authority only after the ledger commits',async()=>{
   const pa=await reservePort(),pb=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb
+  // Capture (and still register) real recovery callbacks; don't race their 1s period against vi.waitFor's 1s window.
+  const scans:Array<()=>void>=[],interval=TimerService.prototype.interval
+  const timerSpy=vi.spyOn(TimerService.prototype,'interval').mockImplementation(function(this:TimerService,...args:any[]){
+   if(typeof args[0]==='function'&&args[1]===1000)scans.push(args[0])
+   return (interval as any).apply(this,args)
+  }as any)
   const a=await bootNode({name:'queryA',session:'queryA',team:'alpha',sessionNodes:true,port:pa,peers:[bu],teamScopeRouting:false,settlementAuth:'enforce',silent:true,forwardDirect:true})
   const b=await bootNode({name:'queryB',session:'queryB',team:'beta',sessionNodes:true,port:pb,peers:[au],teamScopeRouting:false,settlementAuth:'enforce',silent:true})
   const cli=generateKeyPairSync('ed25519').privateKey,handle='query-cli/a1b2c3d4e5f60718',task='enforce-query-commit',message='forward and preserve query result'
@@ -36,11 +43,13 @@ describe('ledger errors stay inside the real host event boundary',()=>{
    expect((await receipt('enforce-query-failure')).status).toBe(503)
    expect(await query()).toMatchObject({found:true,status:'pending'})
    expect((await state(au)).tasks.some((r:any)=>r.taskId===task)).toBe(true)
-   denied.remaining=0;await vi.waitFor(async()=>expect((await state(au)).archived.some((r:any)=>r.taskId===task)).toBe(true)) // Recovery commits the original retained receipt, never another transport.
+   denied.remaining=0
+   expect(scans.length).toBeGreaterThan(0);for(const scan of scans)scan() // Execute the same registered recovery scan once; no second transport.
+   expect((await state(au)).archived.some((r:any)=>r.taskId===task)).toBe(true)
     const accepted=await receipt('enforce-query-failure');expect(accepted.status).toBe(200);expect((await accepted.json()).settlement).toBeUndefined()
    expect((await state(au)).archived.some((r:any)=>r.taskId===task)).toBe(true)
    expect(await query()).toMatchObject({found:true,status:'completed',reply:'exact completed result'})
-  }finally{denied.remaining=0;await a.dispose();await b.dispose()}
+  }finally{denied.remaining=0;timerSpy.mockRestore();await a.dispose();await b.dispose()}
  })
 
  it('reports an own-inbound commit failure after the peer accepted the formal receipt without escaping or clearing local debt',async()=>{

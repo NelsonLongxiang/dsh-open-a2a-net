@@ -1,4 +1,6 @@
 import {it,expect,vi,afterEach}from'vitest'
+// #782-era ledger (2026-11-22, contended Windows host): full-suite load exceeded the 5s default in these specs; raised ceiling only, assertions unchanged.
+vi.setConfig({ testTimeout: 25_000 })
 import {readFileSync,copyFileSync,writeFileSync}from'node:fs'
 import {request as httpRequest}from'node:http'
 import {join}from'node:path'

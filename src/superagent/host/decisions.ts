@@ -91,6 +91,13 @@ export class DecisionBook {
    * and a member's undecided card whose ticket has ended. A card still waiting for the owner is never dropped.
    * @returns how many cards were dropped.
    */
+  /** T8: told after a card is raised, decided or withdrawn (the host pushes the router's and observer's to the market). */
+  onChange?: (event: 'created' | 'decided' | 'dropped', card: StoredCard) => void
+  private changed(event: 'created' | 'decided' | 'dropped', card: StoredCard | undefined): void {
+    if (card === undefined || this.onChange === undefined) return
+    try { this.onChange(event, card) } catch { /* the book never fails on a listener */ }
+  }
+
   prune(): number {
     const cutoff = this.now() - DECIDED_KEEP_MS
     const decided = this.cards.filter(card => card.decided !== undefined).sort((a, b) => b.decided!.at.localeCompare(a.decided!.at))
@@ -141,6 +148,7 @@ export class DecisionBook {
     const id = `d-${randomUUID()}`
     this.cards.push({ id, question, ...(input.reason !== undefined ? { reason: input.reason } : {}), source: input.source, by: input.by, at: input.at, ...input.spec, ...(input.outbound !== undefined ? { outbound: { ...input.outbound } } : {}), ...(input.files !== undefined && input.files.length > 0 ? { files: input.files } : {}) })
     this.save()
+    this.changed('created', this.get(id))
     return { ok: true, id }
   }
 
@@ -154,9 +162,11 @@ export class DecisionBook {
 
   /** Take an undecided card back (reliability R7: a problem that went away recalls its reminder). */
   withdraw(id: string): void {
-    if (this.cards.some(card => card.id === id && card.decided === undefined)) {
-      this.cards = this.cards.filter(card => card.id !== id)
+    const card = this.cards.find(c => c.id === id && c.decided === undefined)
+    if (card !== undefined) {
+      this.cards = this.cards.filter(c => c.id !== id)
       this.save()
+      this.changed('dropped', card)
     }
   }
 
@@ -165,5 +175,6 @@ export class DecisionBook {
     const known = this.cards.some(card => card.id === id)
     this.cards = known ? this.cards.map(card => card.id === id ? { ...card, decided } : card) : [...this.cards, ...(fallback !== undefined ? [{ ...fallback, decided }] : [])]
     this.save()
+    this.changed('decided', this.get(id))
   }
 }

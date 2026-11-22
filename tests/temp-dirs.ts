@@ -31,7 +31,10 @@ afterAll(async () => {
     try {
       // rm does not follow symlink/junction entries; never traverse a substituted root.
       if (existsSync(dir) && lstatSync(dir).isSymbolicLink()) throw Error('owned temp root replaced by link')
-      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+      // #782-era evidence (2026-11-22, Windows host): a staged native-addon cache survived rmSync's
+      // 10 x 50ms retry window with EPERM — the releasing handle outlived it — and deleted cleanly
+      // seconds after process exit. Widen the bounded window instead of failing the whole suite.
+      rmSync(dir, { recursive: true, force: true, maxRetries: 24, retryDelay: 125 })
       owned.delete(dir)
     } catch (error) { failures.push(dir + ': ' + String(error)) }
   }

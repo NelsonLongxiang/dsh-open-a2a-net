@@ -7,6 +7,13 @@
  */
 import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+// These scenarios own routing/executor lifecycles, not an installed external CLI. Preserve the real startup gate with a
+// fixed capability read; dedicated ygl specs exercise creation/version failures without leaking a process into teardown.
+vi.mock('../../src/superagent/host/ygl-home.ts', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../src/superagent/host/ygl-home.ts')>()
+  return { ...actual, ensureTeamYglHome: async () => 'present', ensureTeamYglProject: async () => 'present',
+    startWhenYglKnown: (start: () => void, d: Parameters<typeof actual.startWhenYglKnown>[1]) => actual.startWhenYglKnown(start, { ...d, read: async () => '0.126.0' }) }
+})
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context, Service } from '@deepseek-ai/cordis'
@@ -31,7 +38,7 @@ class ManyAgents extends Service {
   roots(): Agent[] { return [...this.map.values()] }
   get(id: Agent['id']): Agent | undefined { return this.map.get(String(id)) }
 }
-interface TestAgent extends Agent { steered: string[]; host?: Context }
+interface TestAgent extends Agent { steered: string[]; host?: Context; holdAssignmentTurn?: boolean }
 function makeAgent(id: string, name: string): TestAgent {
   const agent = {
     id: SessionId(id), session: { id: SessionId(id), events: [] as unknown[], title: name }, steered: [] as string[],
@@ -43,6 +50,8 @@ function makeAgent(id: string, name: string): TestAgent {
       agent.steered.push(text)
       const events = (agent as unknown as { session: { events: unknown[] } }).session.events
       events.push({ type: 'user/message', data: { content: [{ type: 'text', text }] } })
+      // The fixed-slot scenario models a member still working after assignment. Other tests retain instant idle.
+      if ((agent as unknown as TestAgent).holdAssignmentTurn === true && text.startsWith('[superagent assignment]')) return
       events.push({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: `noted by ${name}` }] } } })
       agent.host?.emit('agent/status', { agent: agent as unknown as Agent, status: 'idle' })
     },
@@ -65,7 +74,8 @@ async function mount(home: string, extra: Partial<Config> = {}, listenPort = 0) 
   for (const a of [R!, M!, O!, X!]) ctx.emit('agent/created', { agent: a as unknown as Agent })
   const port = (ctx as unknown as { webServer: { port: number } }).webServer.port
   const login = mockGuiLogin()
-  const post = async (path: string, body: unknown): Promise<Record<string, any>> => await (await globalThis.fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...login }, body: JSON.stringify(body) })).json() as Record<string, any>
+  // Restart fixtures reuse this listener; never let a prior generation's pooled control socket cross the remount.
+  const post = async (path: string, body: unknown): Promise<Record<string, any>> => await (await globalThis.fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Connection: 'close', ...login }, body: JSON.stringify(body) })).json() as Record<string, any>
   const sa = async (body: unknown): Promise<Record<string, any>> => await post('/__dsh_a2a/superagent', body)
   const state = async (): Promise<Record<string, any>> => await (await globalThis.fetch(`http://127.0.0.1:${port}/__dsh_a2a/superagent`)).json() as Record<string, any>
   const tool = async (name: string, from: Agent, args: Record<string, unknown>): Promise<Record<string, any>> => await ctx.tools.get(name)!.execute(args, execAs(from)) as Record<string, any>
@@ -383,6 +393,17 @@ describe('superagent engine in the a2a host', () => {
     } finally { await m.dispose() }
   }, 60_000)
 
+  it('T5-B: the plugin provides a2aTickets — whether a session holds an open ticket, for the prompt-template self-check', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-host-tickets-'))
+    const m = await mount(home)
+    try {
+      const svc = m.ctx.get('a2aTickets' as never) as unknown as { hasOpenTicket: (id: string) => boolean | undefined }
+      expect(typeof svc.hasOpenTicket).toBe('function')
+      expect(svc.hasOpenTicket(M_ID)).toBe(false)
+      expect(svc.hasOpenTicket('session-nobody')).toBe(false)
+    } finally { await m.dispose() }
+  })
+
   it('PR-B2a: the owner\'s terminal is the workbench Source — a2a-net superagent request / state ride the owner credential', async () => {
     const home = mkdtempSync(join(tmpdir(), 'sa-host-cli-'))
     const m = await mount(home)
@@ -575,6 +596,7 @@ describe('superagent engine in the a2a host', () => {
       expect(await m.sa({ action: 'settings', settings: { router: R_ID, members: [M_ID] } })).toMatchObject({ ok: false, error: expect.stringContaining('canvas') })
       expect(await m.team(R_ID, [M_ID, X_ID])).toMatchObject({ ok: true, settings: { members: [M_ID, X_ID] } })
       const sessionsBefore = m.agents.roots().length
+      m.M.holdAssignmentTurn = true; m.X.holdAssignmentTurn = true
 
       // Three requests, three tickets, two members: two run, one waits.
       const asks: Array<{ triggerId: string; thread: string }> = []

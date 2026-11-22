@@ -35,8 +35,13 @@ describe('memberTurnFrom job service receiver', () => {
     expect(memberTurnFrom('member', [], undefined)).toEqual({ quiet: true, text: '' })
     expect(memberTurnFrom('member', [], {})).toEqual({ quiet: true, text: '' })
   })
-  it('does not turn a real registry read failure into a false quiet result', () => {
-    expect(() => memberTurnFrom('member', [], { list() { throw new Error('registry unavailable') } })).toThrow('registry unavailable')
+  it('does not turn a real registry read failure into a false quiet result: it reads as not quiet, and says so', () => {
+    // #740 review note: a throw here lost the member's turn end; not quiet keeps it for the executor's background limit.
+    const warned: string[] = []
+    expect(memberTurnFrom('member', [], { list() { throw new Error('registry unavailable') } }, m => warned.push(m))).toMatchObject({ quiet: false })
+    expect(warned).toHaveLength(1)
+    expect(warned[0]).toContain('registry unavailable')
+    expect(memberTurnFrom('member', [], { list() { throw new Error('registry unavailable') } })).toMatchObject({ quiet: false })
   })
 })
 

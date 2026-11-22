@@ -65,7 +65,7 @@ describe('#356 actual HTTP queue admission and cancellation',()=>{
 
  it('idle reminders and local sender notices both use sourced followup and never steer',async()=>{
   const n=await bootNode({name:'notice-followup',session:'notice-followup',team:'alpha',silent:true,sessionNodes:true,teamScopeRouting:false,asyncNudgeDelayMs:86400000}),first=n.agents.agent!,targetId='session-bbbbbbbb11112222',followed:any[]=[],notices:any[]=[],steer=vi.fn()
-  const target={id:targetId,session:{events:[]},status:'running',followup:(m:any)=>followed.push(m),steer} as any
+  const target={id:targetId,session:{id:targetId,events:[]},inbox:{nextTurn:[],nextStep:[]},status:'running',followup:(m:any)=>followed.push(m),steer} as any
   first.followup=m=>notices.push(m);first.steer=steer;const service=n.agents as any;service.roots=()=>[first,target];service.get=(id:unknown)=>[first,target].find(a=>String(a.id)===String(id))
   n.ctx.emit('agent/created',{agent:target});for(const id of [String(first.id),targetId])await post(n,'/__dsh_a2a/join',{id})
   for(const id of [String(first.id),targetId])expect((await post(n,'/__dsh_a2a/canvas',{action:'add-member',name:'shared-followup',id})).ok).toBe(true)

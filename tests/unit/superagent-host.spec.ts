@@ -4,6 +4,8 @@
  */
 import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
+// #782-era ledger (2026-11-22, contended Windows host): full-suite load exceeded the 5s default in these specs; raised ceiling only, assertions unchanged.
+vi.setConfig({ testTimeout: 25_000 })
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -1427,11 +1429,11 @@ describe('seatOf at boot reads no canvas (regression of #611 on the test host)',
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const { routeItem } = await import('../../src/superagent/host/tools.ts')
     let booting = false
-    const team = canvasOf(['session-r', 'session-o'])
+    const team = canvasOf(['session-r', 'session-m', 'session-o'])
     const bot = 'market/0123456789abcdef'
     const host = new SuperagentHost({ canvasTeam: (name: string) => { if (booting) throw new ReferenceError("Cannot access 'cardCache' before initialization"); return team(name) },
       home: mkdtempSync(join(tmpdir(), 'sa-seatboot-')), logger: { info: () => {}, warn: () => {} }, deliverToSession: () => true, interval: () => () => {}, homeUrl: () => 'http://127.0.0.1:1',
-      presetOf: (id: string) => id === 'session-o' ? 'superagent-observer' : 'superagent-router', sessionName: (id: string) => id,
+      presetOf: (id: string) => id === 'session-o' ? 'superagent-observer' : id === 'session-m' ? 'superagent-member' : 'superagent-router', sessionName: (id: string) => id,
       runCli: async (args: string[]) => args[0] === 'admission' ? JSON.stringify({ admitted: true, rule: 'cli-deposit' }) : '{}' } as never)
     expect(host.saveSettings({ canvas: 'team', router: 'session-r', sources: { a2a: true }, acceptMode: 'auto', bots: { a2a: [bot] }, rules: [{ name: 'deps', text: 'Upgrade.' }] }, () => true)).toMatchObject({ ok: true })
     const channel = { source: 'a2a', thread: 'a2a:ctx-b', address: { caller: bot, task: 'direct-00000000000b', context: 'ctx-b' } }
@@ -1439,10 +1441,11 @@ describe('seatOf at boot reads no canvas (regression of #611 on the test host)',
     host.pass()
     const routed = routeItem(host, { trigger_id: 'b', kind: 'accept', title: 'boot', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
     for (let i = 0; i < 20; i++) { host.pass(); await new Promise(r => setTimeout(r, 5)) }
-    expect(host.seatOf(routed.ticket_id)).toEqual({ seat: 'session-o', seatId: expect.stringMatching(/^seat-/), role: 'observer' })
+    expect(host.seatOf(routed.ticket_id)).toEqual({ seat: 'session-m', seatId: expect.stringMatching(/^seat-/), role: 'member' })
     booting = true
     // Before the fix the observer check read the canvas settings and threw here (the plugin's start failed with it).
-    expect(host.seatOf(routed.ticket_id)).toEqual({ seat: 'session-o', seatId: expect.stringMatching(/^seat-/), role: 'observer' })
+    // Since D19 the observer takes no ticket, so the member holds it; its role still comes from the preset, not the canvas.
+    expect(host.seatOf(routed.ticket_id)).toEqual({ seat: 'session-m', seatId: expect.stringMatching(/^seat-/), role: 'member' })
     booting = false
     await host.stop()
   })

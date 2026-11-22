@@ -6,7 +6,7 @@
 import { it, expect, vi, afterEach } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { mkdtempSync } from '../temp-dirs.ts'
 import { CliDepositStore } from '../../src/cli-deposit.ts'
 import { RECEIPT_MAILBOX_CAP, receiptMailboxHash, receiptMailboxBirth } from '../../src/receipt-mailbox.ts'
@@ -23,17 +23,17 @@ vi.mock('../../src/task-ledger-persistence.ts',async original=>{
 afterEach(()=>{fault.file='';fault.task='';fault.fail=false;fault.hits=0;vi.restoreAllMocks()})
 it('known full journal declines before insertion or retains an inserted receipt for local settlement',async()=>{
  const home=mkdtempSync(join(tmpdir(),'review708-full-journal-'))
- const ledger=new TaskLedger(join(home,'a2a','tasks.json'))
- const deposits=new CliDepositStore(join(home,'a2a','cli-deposits.json'))
+ // Build real births/counters in memory, then restore one detached fixture snapshot; the test is not an fsync benchmark.
+ const ledger=new TaskLedger('')
+ const receiptCommits: import('../../src/receipt-mailbox.ts').ReceiptMailboxCommit[]=[]
  // Restore a full pending journal after ordinary bounded history removed its original task births.
- // Every journal birth is computed from an actual stored row; use only public store APIs.
- // The runtime scanner then fails closed at the missing-birth check, so these rows cannot be evicted.
+ // The runtime scanner fails closed at the missing-birth check, so these rows cannot be evicted.
  for(let i=0;i<RECEIPT_MAILBOX_CAP;i++){
   const original='retired-original-'+i
   ledger.track(original,'beta/01234567','http://127.0.0.1:1')
   const birth=receiptMailboxBirth(ledger.find(original)!)
   const record={version:1 as const,transportId:'pending-return-'+i,fingerprint:'fingerprint-'+i,handle:'alpha/01234567',targetKey:'session:old-session-'+i,from:'beta/01234567',message:'[A2A receipt] task '+original+' answer',settler:{caller:'beta/01234567',proof:'origin-claim' as const,ingress:'wire' as const},originalBirth:birth,at:Date.now(),phase:'pending' as const}
-  deposits.journalSessionReceipt({...record,hash:receiptMailboxHash(record)})
+  receiptCommits.unshift({...record,hash:receiptMailboxHash(record)})
   ledger.cancel(original,'original stopped before recovery scan')
  }
  for(let i=0;i<ARCHIVE_CAP;i++){
@@ -41,6 +41,17 @@ it('known full journal declines before insertion or retains an inserted receipt 
   ledger.track(task,'beta/01234567','http://127.0.0.1:1');ledger.cancel(task,'ordinary later history')
  }
  expect(ledger.archive().some(r=>r.taskId.startsWith('retired-original-'))).toBe(false)
+ const state=ledger.conservation()
+ expect(state.conserved).toBe(true)
+ mkdirSync(join(home,'a2a'),{recursive:true})
+ writeFileSync(join(home,'a2a','tasks.json'),JSON.stringify({tasks:ledger.list(),archived:ledger.archive(),conservation:{trackedTotal:state.trackedTotal,archivedByEnd:state.archivedByEnd,archiveTrimmed:state.archiveTrimmed,restoreTrimmed:state.restoreTrimmed}}))
+ writeFileSync(join(home,'a2a','cli-deposits.json'),JSON.stringify({deposits:[],mailbox:{},epoch:'full-journal-fixture',nextSeq:{},receiptCommits}))
+ const restored=new TaskLedger(join(home,'a2a','tasks.json')),deposits=new CliDepositStore(join(home,'a2a','cli-deposits.json'))
+ expect(restored.conservation()).toMatchObject({conserved:true,owed:0,archiveTrimmed:RECEIPT_MAILBOX_CAP})
+ expect(restored.archive()).toHaveLength(ARCHIVE_CAP)
+ expect(restored.archive().some(r=>r.taskId.startsWith('retired-original-'))).toBe(false)
+ expect(deposits.pendingReceiptCommits()).toEqual(receiptCommits)
+ expect(deposits.reserveSessionReceiptSlot()).toBeUndefined()
  expect(deposits.pendingReceiptCommits()).toHaveLength(RECEIPT_MAILBOX_CAP)
  const pa=await reservePort(),pb=await reservePort(),au='http://127.0.0.1:'+pa,bu='http://127.0.0.1:'+pb
  const a=await bootNode({home,name:'full-journal-A',session:'full-journal-A',team:'alpha',port:pa,peers:[bu],sessionNodes:true,teamScopeRouting:false,silent:true,settlementAuth:'enforce',asyncNudgeDelayMs:86400000})

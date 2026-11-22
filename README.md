@@ -258,6 +258,7 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `exposureExcerpt` | `'full'` | How much of a session's activity excerpt the card publishes: `full`, `masked` (shape-only prefix) or `off`. Titles and handles stay. |
 | `originClaimWindow` | `false` | OriginClaim transition window, closed by default since #64 step 1: a delivery without an envelope is rejected like a failed signature. `true` reopens it — such deliveries walk the caller gate again, counted as `legacyInbound`. |
 | `originClaimUrl` | `''` | Override for the envelope's `callerUrl` (pocket-tunneled hosts); `''` derives it. |
+| `originClaimByPeer` | `{}` | #787: map a target peer (exact origin or exact mounted card URL) to the local card URL this host declares in OriginClaim to that peer. Empty keeps the global `originClaimUrl` / derived card URL for every peer. Does not change node keys, `linkKeys`, or receive-side `originClaimAudiences`. Malformed, userinfo, non-http(s), query/fragment, and conflicting entries are ignored. File-channel `from` still uses the default card origin (not covered by this map). |
 | `originClaimUnboundWindow` | `true` | OriginClaim audience-binding window: also sign and accept the legacy envelope that names no audience (accepted ones counted as `unboundInbound`; those whose bound form missed here also as `boundMissInbound`); `false` signs and accepts the audience-bound form only. |
 | `canvasLegacyBareMembers` | `true` | #335 migration window: unsuspended historical bare canvas members retain legacy inference; suspended slots never route or authorize. Close only by owner decision after migration and observation. |
 | `originClaimAudiences` | `[]` | Extra origins this host answers to as an envelope audience, for port-mapped or proxied hosts whose dialed URL is neither the card URL nor the arrival address. |
@@ -267,7 +268,7 @@ Row config overlays in the profile's patch layers; every key has a schema defaul
 | `asyncNudgeDelayMs` | `120000` | Delay before an async task delivered through `/a2a/direct` but not yet consumed by its target re-wakes it with a one-line nudge (a busy target gets one round of grace, then the nudge escalates to a queued prompt); `0` disables. |
 | `targetQueueCap` | `3` | At most this many unanswered, receipt-owing tasks queue for one target on this host; the next delivery is refused visibly (`-32009 target-queue-full`, nothing delivered). A receipt for a task this host booked and CLI mailboxes are never refused; a canvas team counts as one target. A refused task id is recorded as failed — retry with a new id. A target-attributed final or its own receipt attempt records `answeredAt` and releases queue capacity even if receipt delivery fails; the row remains owed, with unchanged expiry, late-receipt and conservation semantics. State/board queue counts use this same rule. `0` disables (#224/#253). |
 | `taskStaleTtlMs` | `86400000` | Owed-task stale TTL (24h): past it a pending row auto-dead-letters (a late receipt can still settle it). |
-| `dshHome` | `''` | DSH home directory override for the plugin's state (`<home>/a2a/…`); `''` resolves the default home. |
+| `dshHome` | `''` | DSH home directory override for the plugin's state (`<home>/a2a/…`); `''` resolves the default home. Journals there are owner-only: mode 0600 on POSIX; on Windows, where file modes do not apply, the host gives `<home>/a2a` an owner-only ACL (current user's SID, inherited by new files) at each start and reports the result as `filePrivacy` in `/__dsh_a2a/state` (#731). |
 | `cardTtlMs` / `flushTimeoutMs` / `routeTimeoutMs` | `172800000` / `300000` / `1800000` | Card lifetime (48h, re-signed every quarter of it); how long a session may go without a final reply before the reply waiter is released with a placeholder answer (5 min); per-call timeout of the `a2a_route` tool (30 min). |
 | `cardCacheTtlMs` / `cardCacheNegativeTtlMs` / `remoteRowsTtlMs` / `stateColdRowsTtlMs` | `60000` / `30000` / `15000` / `5000` | Peer card cache (hit / miss), remote session rows refresh window, and cold-row refresh window of the state face. |
 
@@ -294,6 +295,11 @@ and re-offers of it within that window are ignored instead of flickering in and 
 Every `/__dsh_a2a/*` control route — reads included — requires the configured `apiKey` (the `X-API-Key` header, or an `api_key` query parameter for non-browser clients;
 constant-time compare) when one is set. With an empty key only a loopback socket is trusted; a
 `Sec-Fetch-Site` header can only refuse (a cross-site page is rejected even on loopback), never grant, and a request carrying `X-Forwarded-For`, `Forwarded` or `X-Real-IP` gets no loopback trust either (a remote caller arriving through a local reverse proxy or tunnel cannot borrow it to skip the key).
+With an empty key the DSH host's own logged-in browser owner is also trusted, wherever it arrives from (#783): the host's
+Connection `admit` checks the browser login and its Host/Origin fence (`--trusted-host`) on the unchanged request, and only
+its browser-owner Peer counts — so the workbench works behind Tailscale Serve, Caddy or nginx. This plugin trusts no proxy
+header itself, the cross-site veto still applies, and a host without that Connection service refuses (fail-closed).
+With `apiKey` set, the same browser owner is also accepted without the key (#790): the panel's own requests carry no key, so otherwise a keyed host's logged-in browser could not read its panel. CLI, API and peer callers still need the key, and loopback alone is not enough on a keyed host.
 Set an `apiKey` before exposing the listener beyond loopback.
 
 | Control route | Purpose |
