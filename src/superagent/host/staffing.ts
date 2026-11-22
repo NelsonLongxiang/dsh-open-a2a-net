@@ -26,11 +26,12 @@ import { normalizeOriginClaimByPeer } from '../../origin-claim-by-peer.ts'
 import { parseSeatNames } from '../../owner-settings.ts'
 
 /**
- * #808 P4 (owner 2026-11-23): the team settings a blueprint may set with team.settings.set. Not credentials or admission
- * (allowed.workbench/a2a, bots), not what widens an agent (prepare, extraTools, mcp: the owner's to decide), not what other
- * paths own (rules, dispatch, profiles, github, approvers, serves, observers).
+ * #808 P4 (owner 2026-11-23: "all the parameters" means the A2A ones): the team's A2A settings a blueprint may set with
+ * team.settings.set: the A2A Source, progress receipts over A2A, the decision-card push, the reviewer's A2A address. The
+ * team's other settings (intake, models, prompts, limits, pause, tools, MCP, prepare, repos) stay in the workbench GUI;
+ * credentials and admission never come here.
  */
-export const TEAM_SETTING_KEYS = ['acceptMode', 'models', 'prompts', 'maxConcurrent', 'evalTimeoutMs', 'paused', 'sources', 'progressOff', 'observerCast', 'idleSweep', 'decisionPush', 'reviewer', 'repos', 'blockedTools'] as const
+export const TEAM_SETTING_KEYS = ['sources', 'progressOff', 'decisionPush', 'reviewer'] as const
 
 export const STAFFING_OPS = ['team.create', 'team.retire', 'member.add', 'member.retire', 'member.retemplate', 'team.rules.set', 'team.github.set', 'canvas.create', 'canvas.member.add', 'canvas.member.remove', 'network.set', 'network.peer.add', 'network.peer.remove', 'network.originClaimByPeer.set', 'team.approvers.set', 'session.join', 'session.seatName.set', 'team.settings.set'] as const
 export type StaffingOp = typeof STAFFING_OPS[number]
@@ -376,7 +377,7 @@ export class StaffingExecutor {
         const team = teamRef(); if (typeof team !== 'string') return team
         const raw = Object.fromEntries(Object.entries(params).filter(([k]) => k !== 'team'))
         if (Object.keys(raw).length === 0) return { ok: false, code: 'invalid', error: `${where}: name at least one of ${TEAM_SETTING_KEYS.join(', ')}` }
-        if ('sources' in raw && (raw.sources === null || typeof raw.sources !== 'object' || Array.isArray(raw.sources) || Object.keys(raw.sources as object).some(k => k !== 'workbench' && k !== 'a2a'))) return { ok: false, code: 'invalid', error: `${where}.sources sets workbench or a2a (the GitHub Source is team.github.set)` }
+        if ('sources' in raw && (raw.sources === null || typeof raw.sources !== 'object' || Array.isArray(raw.sources) || Object.keys(raw.sources as object).some(k => k !== 'a2a'))) return { ok: false, code: 'invalid', error: `${where}.sources sets only a2a (the GitHub Source is team.github.set; the workbench Source stays in the GUI)` }
         // The team's own checks, as a dry run, when the team is here now.
         const now = this.d.team(team)?.settings as TeamSettings | undefined
         if (now !== undefined) { const dry = parseSettings(raw, now); if (!dry.ok) return { ok: false, code: 'invalid', error: `${where}: ${dry.error}` } }
@@ -671,7 +672,7 @@ export class StaffingExecutor {
       const raw = Object.fromEntries(Object.entries(p).filter(([k]) => k !== 'team'))
       const now = team.settings as unknown as Record<string, unknown>
       const before: Record<string, unknown> = {}
-      for (const key of Object.keys(raw)) before[key] = key === 'sources' ? { workbench: (now.sources as { workbench: boolean }).workbench, a2a: (now.sources as { a2a: boolean }).a2a } : now[key] === undefined && ['models', 'prompts', 'reviewer', 'blockedTools'].includes(key) ? null : now[key]
+      for (const key of Object.keys(raw)) before[key] = key === 'sources' ? { a2a: (now.sources as { a2a: boolean }).a2a } : now[key] === undefined && key === 'reviewer' ? null : now[key]
       const saved = team.saveSettings(raw, by)
       if (!saved.ok) return saved
       onUndo(() => team.saveSettings(before, by).ok)
