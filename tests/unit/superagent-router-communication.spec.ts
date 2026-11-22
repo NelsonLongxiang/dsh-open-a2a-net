@@ -19,7 +19,7 @@ const root = new URL('../../', import.meta.url)
 const patch = readFileSync(new URL('cordis.patch.yml', root), 'utf8')
 const template = readFileSync(new URL('src/superagent/presets.patch.yml', root), 'utf8')
 const rows = (text: string): Row[] => applyEntryPatches([], load(text, { schema: entryListSchema }), (warning: string) => { throw Error(warning) })
-const presets = rows(patch).filter(row => row.name === '@deepseek-ai/dsh-agent-preset')
+const presets = rows(patch).filter(row => row.name === '@deepseek-ai/dsh-agent-preset' && String(row.config?.id).startsWith('superagent-'))
 const router = presets.find(row => row.config?.id === 'superagent-router')!
 const persona = (row: Row) => row.config!.plugins.find((plugin: Row) => plugin.id === 'persona').config
 const prompt: string = persona(router).prefix
@@ -135,6 +135,7 @@ it('checks drift before build and keeps generation fail-closed', () => {
   mkdirSync(join(home, 'src/superagent'), { recursive: true })
   cpSync(new URL('scripts/build-agent-presets.mjs', root), join(home, 'scripts/build-agent-presets.mjs'))
   cpSync(new URL('src/superagent/prompts', root), join(home, 'src/superagent/prompts'), { recursive: true })
+  cpSync(new URL('src/presets', root), join(home, 'src/presets'), { recursive: true })
   writeFileSync(join(home, 'src/superagent/presets.patch.yml'), template)
   const output = join(home, 'cordis.patch.yml')
   writeFileSync(output, 'stale\n')

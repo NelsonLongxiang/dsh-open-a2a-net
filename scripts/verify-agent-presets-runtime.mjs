@@ -22,7 +22,7 @@ const { load } = requireLoader('js-yaml')
 const { entryListSchema, applyEntryPatches } = requireLoader('@deepseek-ai/cordis-plugin-include')
 const rows = applyEntryPatches([], load(readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8'), { schema: entryListSchema }), message => { throw Error(message) })
 const presets = rows.filter(row => row.name === '@deepseek-ai/dsh-agent-preset')
-assert.deepEqual(presets.map(row => row.config.id), ['superagent-router', 'superagent-member', 'superagent-observer', 'superagent-builder'])
+assert.deepEqual(presets.map(row => row.config.id), ['superagent-router', 'superagent-member', 'superagent-observer', 'superagent-builder', 'a2a-net-ptc'])
 
 // Mount only the changed persona rows; do not start MCP servers, sessions or the network plugin.
 for (const row of presets) {
@@ -213,3 +213,54 @@ if (ptc) {
   }
   console.log('PTC checks use real installed Loader/registry/executor consumers and scripted runtime bindings; not a live model or subprocess sandbox acceptance')
 }
+
+// Exercise the new preset's actual PTC executor, replacing only program evaluation with a no-effect fixture.
+const { default: ToolRegistry, defineTool } = await moduleOf('@deepseek-ai/dsh-tools')
+const executorPath = requireDsh.resolve('@deepseek-ai/dsh-tool-executor-ptc')
+const { PtcRuntime } = await import(pathToFileURL(createRequire(executorPath).resolve('@deepseek-ai/dsh-ptc-runtime')).href)
+class FixtureRuntime extends PtcRuntime {
+  language = 'typescript'
+  isolation = 'verification-fixture'
+  resolve(request) { return { ...request, cwd: request.cwd ?? process.cwd(), timeoutMs: 120000 } }
+  run() { throw Error('This verification must not execute a program or business tool') }
+}
+const general = presets.find(row => row.config.id === 'a2a-net-ptc')
+const checkModules = entries => {
+  for (const row of entries) {
+    if (row.disabled === true) continue
+    if (row.group) checkModules(row.config)
+    else requireDsh.resolve(row.name)
+  }
+}
+checkModules(general.config.plugins)
+console.log('a2a-net-ptc: every enabled composition module resolves from the target DSH installation')
+const ptcContext = new Context()
+try {
+  await ptcContext.plugin(SystemPrompt)
+  await ptcContext.plugin(ToolRegistry)
+  await ptcContext.plugin(FixtureRuntime)
+  const owner = {}
+  const scope = createScope(ptcContext, owner)
+  const mounting = scope.ctx.extend({ baseUrl: pathToFileURL(dirname(resolver) + '/').href })
+  await mounting.plugin(Loader)
+  const loader = mounting.get('loader')
+  const executor = general.config.plugins.find(row => row.id === 'tool-executor-ptc')
+  assert.ok(executor)
+  await loader.root.update([{ ...executor, name: pathToFileURL(requireDsh.resolve(executor.name)).href }])
+  await loader.await()
+  const scopeKey = (await import(pathToFileURL(requirePrompt.resolve('@deepseek-ai/dsh-scope')).href)).scopeOf(scope.ctx)
+  const tools = scope.ctx.get('tools')
+  const unregister = tools.register(defineTool({ name: 'a2a_probe_fixture', description: 'Non-executing SDK probe.', parameters: {}, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => { throw Error('not called') } }))
+  const assembly = await ptcContext.systemPrompt.assemble({ scope: scopeKey })
+  assert.deepEqual(assembly.tools.map(tool => tool.name), ['run_code'])
+  assert.ok(assembly.sections.some(section => section.name === 'tools:sdk' && section.text.includes('a2a_probe_fixture')))
+  assert.ok(assembly.sections.some(section => section.name === 'tools:ptc-only'))
+  assert.ok(!assembly.sections.find(section => section.name === 'tools:sdk').text.match(/subagent:|subagent_fork:|workflow:|ralph:/))
+  const direct = await tools.execute({ calls: [{ type: 'tool-call', id: 'preset-direct-probe', name: 'a2a_probe_fixture', arguments: '{}' }], agent: owner, signal: new AbortController().signal })
+  assert.equal(direct.results[0].result.isError, true)
+  assert.equal(direct.results[0].result.error.info.code, 'UNKNOWN_TOOL')
+  unregister()
+  await loader.root.update([])
+  await loader.await()
+  console.log('a2a-net-ptc: real PTC executor exposes only run_code, generates SDK, rejects direct SDK-tool calls and unloads without running business code')
+} finally { await ptcContext.fiber.dispose() }

@@ -62,6 +62,7 @@
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "docs/licenses",
+    "docs/guides/a2a-ptc.md",
     "nexus-stage/src",
     "nexus-stage/scripts",
     "!nexus-stage/scripts/__pycache__",
