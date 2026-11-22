@@ -5,6 +5,56 @@
 
 > 2026-11-10（#569）：预览版从 npm 回读、核对通过后，立即单独提交一次「记录已发布」：把该版本一节的标题改成「已发布到 npm 的 preview 标签」，并写上状态行（标签指向的提交、npm 发布时间、shasum、integrity、回读结果）。不要等到下一版发版时才顺手改。
 
+## 0.8.1-preview.29（预览版，候选，未发布）
+
+- 状态（2026-11-23）：候选，未发布、未打标签。候选提交与包的 sha256／sha1 在发版 PR 中钉定；按属主决策卡，合入 master、打标签 `v0.8.1-preview.29` 与发布到 npm 的 `preview` 标签各需属主另行决定，本席不做。发布后按本文开头（#569）的规定单独提交「记录已发布」。
+- 本版按属主 2026-11-23 决策卡（观察者提出）准备：只发布到 npm 的 `preview` 标签，`latest` 保持 0.7.0。发版与本机、13080 升级插件并重启是两件事，后者由属主指定的观察者核对状态面。
+- 基线：master `12eb960a`（preview.28 发版 PR #798 合入）合入 next/0.8 `e1a93c16`。相对 preview.28 的标签提交 `2d5788eb` 合入 17 个 PR（66 个提交，含合并提交）。PR #831（测试补丁）发版时仍在评审，未收入。
+- 升级、回退照 [0.8.1 升级检查](ops/0.8.1-upgrade-check.md) 的「preview.29 补充」。
+
+### 新功能
+
+#### 组队顾问蓝图（#808 四部分，#801）
+
+- **画布（#809）**：`canvas.create`、`canvas.member.add`（本机会话、带区域的远端会话或 CLI 句柄）、`canvas.member.remove`。加成员与画布路由共用同一套检查（`src/canvas-member-write.ts`）；差异文字写明远端成员会打开跨主机的门。
+- **本机网络设置（#817）**：`network.set`（`announce`、`teamScope`、`originClaimUrl`、`originClaimAudiences`）、`network.peer.add/remove`、`network.originClaimByPeer.set`；需重启生效。凭据（`apiKey`、`linkKeys`）与准入（`teamJoinAllowlist`）永不进蓝图。
+- **出站审批人、加入本机会话、席位名（#820）**：`team.approvers.set`、`session.join`、`session.seatName.set`。
+- **团队的 A2A 设置（#827）**：`team.settings.set` 只接 `sources.a2a`、`progressOff`、`decisionPush`、`reviewer`；其余团队设置（含 `prepare`、`extraTools`、`mcp`）按属主裁定留在工作台 GUI。
+- **团队的 GitHub 来源（#801）**：`team.github.set`。
+- 以上都只在本机属主（owner-local）下可用、一律等属主确认（`confirm`），市场来源为 `off`；失败时按逆序撤销。
+
+#### 凭据访问审计卡（#823、#825、#828）
+
+- **超时自动「知道了」（#823）**：团队设置 `credentialAckMinutes`（默认 15，`0` 关闭，最多 1440，属规则字段、只能由属主浏览器改）。到时只把凭据访问审计卡记为「知道了」，卡上留审计；DSH 右栏保留 24 小时，属主可改选。
+- **另两个选项真执行（#825）**：属主亲手选「停掉这个会话的工单」时，停掉该会话手上开着的工单并以新请求交还总工，该请求（含拆分出的子工单）永不再派给这个会话；选「在团队设置里禁用这个工具」时把触发的工具加进 `blockedTools`。超时与任何 agent（含审批人）都不会触发。
+- **可派成员全被排除时的提示（#828）**：排队原因 `all-excluded`，健康提醒与团队横幅（中英）写明请加成员或手动处理；`superagent_assign` 点名被排除的会话改为拒绝（`excluded`）。
+
+#### 其他
+
+- **`a2a-net version` 与全局安装说明（#799）**。
+
+### 修复
+
+- **回执保护容量（#824）**：一天内结清超过 64 个任务后，被挤出归档的已结清任务的投递被算成孤儿、占「回执保护」名额，结清满 128 个即拒收一切新活。现已修：挤出归档时其投递不再计入（映射保留防重）。状态面新增 `receiptCapacity`（计数与占名额清单），`a2a_status` 给计数；拒收文案写明是这一关及其计数（保留原前缀）；新增只认浏览器属主、留审计的 `POST /__dsh_a2a/receipt-capacity/void`，用于作废真正的孤儿投递。
+- **属主设置首次写入不再遮住下层 a2a 配置（#813）**：home 层新建 a2a `config` 块时先带上 profile 层已有的键。
+- **工作台下拉框不再被状态轮询收起（#803）**。
+- 文档：home 层 a2a 覆盖的诊断与恢复（#818）。
+- 测试：#822（决策推送随机卡号含 4242 的偶发失败）、#826、#829、#830（补评审留下的测试缺口）。
+
+### 行为变化与升级注意
+
+- **`blockedTools` 现在也封成员的工作工具（#825）**：此前团队设置里写了 `bash`、`edit`、`read` 等成员自带工具时实际不生效；升级后会真的对成员与观察者拒绝并隐藏。团队工具（报告、工单、定时、自身 ygl）与 `run_code` 永不可封，总工不受影响。升级前请检查各团队的 `blockedTools`。
+- **凭据访问审计卡 15 分钟后自动「知道了」（#823）**：不想要时把 `credentialAckMinutes` 设为 `0`。
+- **`superagent_assign` 对被排除的会话返回 `excluded`（#828）**，不再是 `ok: true`。
+- **拒收文案变长（#824）**：以 `receipt-protected capacity is full` 开头的匹配不受影响。
+
+### 本版已披露限制
+
+- **13080 上已有的孤儿投递不会因升级自动释放**（#824 的修复是前瞻性的）：要立即解封，须在 13080 的浏览器里经新入口作废，一次至多 64 个，且须先经属主决策卡；否则等 24 小时保留期逐条释放。
+- 被排除的会话没有属主可解除的入口（#828 评审记下，已另提请求）。
+- 本版检查期间 `tests/mesh/request-recovery.spec.ts` 有一次负载下的间歇失败（单跑 3/3 通过，重跑全量通过），已另提稳定化请求。
+- 真实宿主验收未跑（NOT_RUN）：组队顾问各蓝图操作端到端、凭据卡两选项与排除、13080 的容量作废、#813 在真实 home 层上写入。团队横幅的界面渲染未看。
+
 ## 0.8.1-preview.28（预览版，已发布到 npm 的 preview 标签）
 
 - 状态（2026-11-22）：2026-11-22T06:43:09.229Z 由属主发布到 npmjs，dist-tag 为 `preview`，`latest` 仍是 0.7.0。shasum `75ee0813036ca62f269651b549dcb9d9e4bb9bd8`，integrity `sha512-JX1gvu/UK/I6ZaXRkLtevCPkBGK7ZSEQ49Sz5oWKpJmswMwWi323JptIhs/zTFLl26sFaFkYhqscyWjHufeY+Q==`。回读：已发布 tgz 的 425 个文件与 next/0.8 `2d5788ebf7`（发布时的 next/0.8 头，#797 于 06:12:07Z 合入）逐文件 sha256 一致；与本发版 PR 的 master 合并树相比只差 `README.md`、`README_zh.md`（master 上 #768 的版本边界说明未进包）。标签 `v0.8.1-preview.28` 因此指向 `2d5788eb`，不是 master 合并提交。
