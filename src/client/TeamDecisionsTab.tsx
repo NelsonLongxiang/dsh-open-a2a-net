@@ -24,6 +24,8 @@ export interface DecisionRow {
   readonly address?: string
   /** Files the proposer put on the card (C8). */
   readonly files?: ReadonlyArray<{ readonly sha256: string; readonly size: number; readonly name: string }>
+  /** The host closed this credential card as 「知道了」 on a timeout (owner 2026-11-23); the owner may still decide it. */
+  readonly autoAck?: { readonly at: string; readonly minutes: number }
 }
 
 const ROUTE = '/__dsh_a2a/superagent/decisions'
@@ -83,6 +85,7 @@ function Card({ row, t, done }: { readonly row: DecisionRow; readonly done: () =
       </header>
       <p className={styles.question}>{row.question}</p>
       {row.reason !== undefined && <p className={styles.hint}>{row.reason}</p>}
+      {row.autoAck !== undefined && <p role="note" className={styles.hint}>{t('team.autoAcked', { minutes: String(row.autoAck.minutes), at: row.autoAck.at })}</p>}
       {row.files !== undefined && row.files.length > 0 && (
         <div className={styles.files} aria-label={t('team.cardFiles')}>
           {row.files.map(file => <a key={file.sha256} className={styles.link} href={fileHref(row, file.sha256)} download={file.name}>{file.name}（{sizeText(file.size)}）</a>)}

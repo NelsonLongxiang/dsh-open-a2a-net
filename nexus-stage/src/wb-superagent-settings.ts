@@ -18,6 +18,8 @@ export interface TeamFieldValues {
   /** Tools the owner granted beyond each role's list (design tool-requests). */
   readonly extraTools?: { readonly router?: readonly string[]; readonly member?: readonly string[] }
   readonly blockedTools?: readonly string[]
+  /** Minutes before an undecided credential-access card is closed as 「知道了」; absent 15, 0 off. */
+  readonly credentialAckMinutes?: number
   readonly approvers?: readonly string[]
   readonly reviewer?: string
   readonly repos?: Readonly<Record<string, string>>
@@ -173,7 +175,8 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
   const toolsBox = section('工具', '成员和观察者默认可以用这台主机上的全部工具（包括你接入的 MCP 服务），只拦跨出团队的那几类：开会话和子代理、改插件、对外发 A2A、在界面里等人回答。想再收紧，就在「禁用的工具」里写上工具名。总工只用它自己的那组工具；它用到别的工具时会给你提一张 P0 决策卡，批准后出现在「总工额外放行的工具」里。这一块的修改需要在已登录的界面里保存。')
   const routerTools = area('总工额外放行的工具', (s.extraTools?.router ?? []).join('\n'), 2, '一行一个工具名')
   const blockedTools = area('成员和观察者禁用的工具', (s.blockedTools ?? []).join('\n'), 2, '一行一个工具名，例如 mcp__market__publish')
-  toolsBox.append(routerTools, blockedTools)
+  const credentialAck = input('凭据访问提醒：多少分钟没人处理就自动按「知道了」结卡（0 表示不自动）', String(s.credentialAckMinutes ?? 15), '15')
+  toolsBox.append(routerTools, blockedTools, credentialAck)
 
   const approverBox = section('审批人', '团队想请别的团队做事时，会提一张「对外请求」P0 决策卡。除了你，这里列出的成员或观察者也能代为审批（必须写理由，不能批自己提的卡）。填会话 id，一行一个；总工不能当审批人。这一块的修改需要在已登录的界面里保存。')
   const approvers = area('审批人', (s.approvers ?? []).join('\n'), 2, '一行一个会话 id，例如 session-0123abcd-…')
@@ -209,6 +212,9 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
     const cap = capBox.value.trim() === '' ? 0 : Number(capBox.value.trim())
     if (!Number.isInteger(cap) || cap < 0 || cap > 64) return { error: '同时进行的工单上限要是 0–64 的整数' }
     if (cap !== (s.maxConcurrent ?? 0)) out.maxConcurrent = cap
+    const ackMinutes = credentialAck.value.trim() === '' ? 15 : Number(credentialAck.value.trim())
+    if (!Number.isInteger(ackMinutes) || ackMinutes < 0 || ackMinutes > 1440) return { error: '凭据访问提醒的自动确认要是 0–1440 的整数分钟' }
+    if (ackMinutes !== (s.credentialAckMinutes ?? 15)) out.credentialAckMinutes = ackMinutes
 
     const botList = linesOf(bots.value)
     if (!same(botList, s.bots?.a2a ?? [])) out.bots = { a2a: botList }
