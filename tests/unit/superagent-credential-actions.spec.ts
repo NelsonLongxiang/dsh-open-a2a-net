@@ -10,12 +10,13 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 const CALL = { command: 'cat ~/.dsh/a2a/cli.json' }
-async function team(cap = 1) {
+async function team(cap = 1, members: readonly string[] = ['session-a', 'session-b']) {
   const { SuperagentHost, CREDENTIAL_STOP, CREDENTIAL_BLOCK } = await import('../../src/superagent/host/index.ts')
   const { routeItem, registerSuperagentTools } = await import('../../src/superagent/host/tools.ts')
   const clock = { now: Date.parse('2026-11-23T01:00:00.000Z') }
+  const home = mkdtempSync(join(tmpdir(), 'sa-credact-'))
   const h = new SuperagentHost({
-    canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', 'session-a', 'session-b'], remote: [] } : undefined, home: mkdtempSync(join(tmpdir(), 'sa-credact-')), logger: { info: () => {}, warn: () => {} },
+    canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', ...members], remote: [] } : undefined, home, logger: { info: () => {}, warn: () => {} },
     deliverToSession: () => true, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id, presetOf: () => undefined,
     now: () => new Date(clock.now).toISOString(),
   } as never)
@@ -31,7 +32,7 @@ async function team(cap = 1) {
   h.auditCall(holder, 'member', 'bash', CALL)
   const card = () => h.decisionCards().find(c => c.by === 'credential:' + holder)
   const accept = (triggerId: string, title: string) => (routeItem(h, { trigger_id: triggerId, kind: 'accept', title, scope: 's', reason: 'r' } as never) as { ticket_id: string }).ticket_id
-  return { h, clock, ticket, holder, card, registered, accept, CREDENTIAL_STOP, CREDENTIAL_BLOCK }
+  return { h, home, clock, ticket, holder, card, registered, accept, CREDENTIAL_STOP, CREDENTIAL_BLOCK }
 }
 
 describe('credential-access card: the owner\'s own choice acts (4351d67f)', () => {
@@ -124,5 +125,35 @@ describe('credential-access card: the owner\'s own choice acts (4351d67f)', () =
     expect(m.h.decide(teamToolCard.id, 'choose', m.CREDENTIAL_BLOCK)).toMatchObject({ action: 'block-tool', tool: 'a2a_ticket_report', blocked: false })
     expect(m.h.settings.blockedTools).toBeUndefined()
     await m.h.stop()
+  })
+
+  it('#825 re-review: split children of the refiled ticket never go to that session either, even when a part names it', async () => {
+    const m = await team(4, ['session-a', 'session-b', 'session-c', 'session-d'])
+    const out = m.h.decide(m.card()!.id, 'choose', m.CREDENTIAL_STOP) as { refiled: string[] }
+    m.h.pass()
+    const again = m.accept(out.refiled[0]!, '写文档（重派）')
+    const split = m.h.splitParent(again, 'session-r', [{ title: '前半', scope: 'a' }, { title: '后半', scope: 'b', member: m.holder }], 'two parts') as { ok: boolean; children: string[] }
+    expect(split).toMatchObject({ ok: true })
+    await vi.waitFor(() => { for (const child of split.children) expect(m.h.executor.list().some(b => b.ticketId === child)).toBe(true) })
+    for (const child of split.children) expect(m.h.executor.list().find(b => b.ticketId === child)!.member).not.toBe(m.holder)
+    await m.h.stop()
+  })
+
+  it('#825 re-review: the exclusion is written privately and read back after a restart', async () => {
+    const { statSync, readFileSync } = await import('node:fs')
+    const m = await team()
+    const out = m.h.decide(m.card()!.id, 'choose', m.CREDENTIAL_STOP) as { refiled: string[] }
+    const { globSync } = await import('node:fs')
+    const found = (globSync as unknown as (p: string, o: { cwd: string }) => string[])('**/credential-exclusions.json', { cwd: m.home })
+    expect(found).toHaveLength(1)
+    const path = join(m.home, found[0]!)
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ [out.refiled[0]!]: m.holder })
+    expect(statSync(path).mode & 0o777).toBe(0o600)
+    await m.h.stop()
+    const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
+    const again = new SuperagentHost({ canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', 'session-a', 'session-b'], remote: [] } : undefined, home: m.home, logger: { info: () => {}, warn: () => {} },
+      deliverToSession: () => true, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id, presetOf: () => undefined } as never)
+    expect((again as unknown as { credentialExclusions: Map<string, string> }).credentialExclusions.get(out.refiled[0]!)).toBe(m.holder)
+    await again.stop()
   })
 })

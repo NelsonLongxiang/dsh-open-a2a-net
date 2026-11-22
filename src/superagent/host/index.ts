@@ -1871,9 +1871,14 @@ export class SuperagentHost {
    */
   /** #825 review: the sessions a ticket must not go to: those a credential card took the same work off. */
   private credentialExcluded(ticketId: string): string[] {
-    const ticket = this.store.tickets.get(ticketId)
-    const decision = ticket === undefined ? undefined : this.store.decisions.get(ticket.decisionId) as { triggerIds?: readonly string[] } | undefined
-    return (decision?.triggerIds ?? []).flatMap(id => { const session = this.credentialExclusions.get(id); return session === undefined ? [] : [session] })
+    // #825 re-review: a split child is accepted from a new trigger, so walk up to every parent it was split from.
+    const out = new Set<string>()
+    for (let id: string | undefined = ticketId, depth = 0; id !== undefined && depth < 16; id = this.splits.parentOf(id), depth++) {
+      const ticket = this.store.tickets.get(id)
+      const decision = ticket === undefined ? undefined : this.store.decisions.get(ticket.decisionId) as { triggerIds?: readonly string[] } | undefined
+      for (const trigger of decision?.triggerIds ?? []) { const session = this.credentialExclusions.get(trigger); if (session !== undefined) out.add(session) }
+    }
+    return [...out]
   }
 
   private credentialAction(cardId: string, session: string, question: string, chosen: string): Record<string, unknown> {
@@ -1894,7 +1899,8 @@ export class SuperagentHost {
           refiled.push(filed.triggerId)
           this.credentialExclusions.set(filed.triggerId, session)
           for (const old of [...this.credentialExclusions.keys()].slice(0, Math.max(0, this.credentialExclusions.size - 500))) this.credentialExclusions.delete(old)
-          try { writeFileSync(this.exclusionsPath, JSON.stringify(Object.fromEntries(this.credentialExclusions))) } catch (error) { this.d.logger.warn('superagent: credential exclusions not saved: %s', String(error)) }
+          const temporary = `${this.exclusionsPath}.tmp-${randomUUID()}`
+          try { writeFileSync(temporary, JSON.stringify(Object.fromEntries(this.credentialExclusions)), { mode: 0o600 }); renameSync(temporary, this.exclusionsPath) } catch (error) { rmSync(temporary, { force: true }); this.d.logger.warn('superagent: credential exclusions not saved: %s', String(error)) }
         }
         else this.d.logger.warn('superagent: credential card %s: ticket %s stopped but not filed back: %s', cardId, ticket.id, filed.error)
       }
