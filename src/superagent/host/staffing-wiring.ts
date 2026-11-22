@@ -28,6 +28,9 @@ export interface StaffingWiring {
   readonly cliHomeForAdd: (handle: string, requested?: unknown) => Promise<CliHomeDecision>
   /** #808 P2: the DSH home whose cordis.patch.yml holds the home-layer a2a config, and the running a2a config. */
   readonly a2aHome?: string
+  /** #808 P3: session joins and seat names, from the host (the join/leave routes' and the owner panel's own steps). */
+  readonly sessionOps?: { join(id: string): { ok: true } | { ok: false; error: string }; leave(id: string): boolean; joined(id: string): boolean }
+  readonly seatNames?: { read(): Readonly<Record<string, string>>; write(names: Record<string, string>): { ok: true } | { ok: false; error: string } }
   readonly a2aConfig?: Readonly<Record<string, unknown>>
   readonly teamCanvasRefusal: (canvas: string, member: string) => string | undefined
   readonly revokeCanvasMember: (id: string, reason: 'remove', name: string) => boolean
@@ -75,6 +78,8 @@ export function createStaffing(w: StaffingWiring): StaffingExecutor {
     canvasMembers: name => w.canvasStore.membersOf(name),
     canvasCliHome: member => w.canvasStore.cliHomeOf(member),
     ...(w.a2aHome !== undefined && w.a2aConfig !== undefined ? networkDeps(w.a2aHome, w.a2aConfig) : {}),
+    ...(w.sessionOps !== undefined ? { sessionJoin: w.sessionOps.join, sessionLeave: w.sessionOps.leave, sessionJoined: w.sessionOps.joined } : {}),
+    ...(w.seatNames !== undefined ? { seatNamesRead: w.seatNames.read, seatNamesWrite: w.seatNames.write } : {}),
     teamAdd: (canvas, router) => {
       const out = w.teams.add({ canvas, router }, w.sessionValid, w.presetOf)
       return out.ok ? { ok: true, id: refOfId(out.id) } : out
