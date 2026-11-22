@@ -46,7 +46,7 @@ import { canvasOwners, canvasFailure } from './canvas-discovery.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
-import { applyOwnerSettings, loadSeatNames, type OwnerSettings } from './owner-settings.ts'
+import { applyOwnerSettings, loadSeatNames, writeHomeA2a, type OwnerSettings } from './owner-settings.ts'
 import { CLI_HANDLE_RE, CliDepositStore, remoteCliTarget } from './cli-deposit.ts'
 import { cliHomeChoices, decideCliHome } from './cli-home.ts'
 import { forwardScope, outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
@@ -2282,7 +2282,7 @@ export function apply(ctx: Context, config: Config): void {
     hasOpenTicket: (sessionId: string): boolean | undefined => holdsOpenTicket(superagentTeams?.all(), sessionId),
   } as never)
   if (superagentTeams !== undefined) staffing = createStaffing({ path: join(home, 'a2a', 'superagent', 'staffing.json'), teams: superagentTeams, canvasStore, canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
-    sessionValid: id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, presetOf: sessionPresetOf, memberForWrite: (id, peer) => canvasMemberForWrite(id, peer), cliHomeForAdd, a2aHome: home, a2aConfig: config as unknown as Record<string, unknown>,
+    sessionValid: id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, presetOf: sessionPresetOf, memberForWrite: (id, peer) => canvasMemberForWrite(id, peer), cliHomeForAdd, a2aHome: home, a2aConfig: config as unknown as Record<string, unknown>, sessionOps: { join: id => { const agent = liveRoots.get(id); if (agent === undefined) return { ok: false, error: `no live local session ${id}` }; mountSessionNode(agent); joinedSessions.add(id); return { ok: true } }, leave: id => { try { revokeCanvasMember(id, 'leave') } catch { return false } sessionNodes.delete(id); joinedSessions.remove(id); teamMemberships.dropSession(id); return true }, joined: id => joinedSessions.has(id) }, seatNames: { read: () => ownerSeatNames, write: names => { const out = writeHomeA2a(home, { seatNames: names }, config as unknown as Record<string, unknown>, Config({} as never) as unknown as Record<string, unknown>, { exists: existsSync, read: p => readFileSync(p, 'utf8'), write: (p, s) => writeFileSync(p, s, 'utf8'), mkdir: p => { mkdirSync(p, { recursive: true }) } }); if (!out.ok) return { ok: false, error: out.error }; ownerSeatNames = names; return { ok: true } } },
     teamCanvasRefusal: (canvas, member) => superagentTeams.canvasMemberRefusal(canvas, member, sessionPresetOf), revokeCanvasMember: (id, reason, name) => revokeCanvasMember(id, reason, name), logger })
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
