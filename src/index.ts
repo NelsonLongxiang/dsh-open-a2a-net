@@ -168,6 +168,7 @@ import {RequestRecoveryStore} from './request-recovery.ts'
 import { restrictDirToCurrentUser } from './windows-private-dir.ts'
 import {RequestRecoveryRuntime} from './request-recovery-runtime.ts'
 import {registerRequestRecoveryFace} from './faces/request-recovery.ts'
+import {registerReceiptCapacityFace} from './faces/receipt-capacity.ts'
 import { SidebarSends } from './sidebar-sends.ts'
 import { PI_PLATFORM, piDeliverable, piSeatAdmission } from './superagent/platforms/pi.ts'
 import { cancelAgentTurn, memberTurnFrom, personMessageFrom, selectSessionModel, stageCardFiles } from './superagent/session-reads.ts'
@@ -3860,6 +3861,7 @@ export function apply(ctx: Context, config: Config): void {
     })
   })
   whenWebServerSettled(webServer=>registerRequestRecoveryFace(webServer,{ctx,controlRoute,readJsonBody,recovery:requestRecovery}))
+  whenWebServerSettled(webServer=>registerReceiptCapacityFace(webServer,{ctx,controlRoute,readJsonBody:readJsonBody as never,ledger:taskLedger,logger}))
   const cardCacheInFlight = new Map<string, Promise<A2aPeerCard | undefined>>()
   // #114 S6: the change hooks and the boot observation start only once every
   // record admission reads exists (the peer-org basis reads cardCache above).
