@@ -60,6 +60,52 @@ describe('877ca64f: a ticket nobody may take says so', () => {
   })
 })
 
+describe('#828 review: the exclusion holds on every branch, and only for that ticket', () => {
+  it('Q2: a ticket for a repository whose every member is excluded waits as all-excluded, naming the repository', async () => {
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const m = await team(['session-a', 'session-b'])
+    const other = ['session-a', 'session-b'].find(s => s !== m.holder)!
+    expect(m.h.saveSettings({ repos: { [m.holder]: 'acme/one', [other]: 'acme/two' } }, () => true)).toMatchObject({ ok: true })
+    const refiled = m.stop()
+    const again = (routeItem(m.h, { trigger_id: refiled, kind: 'accept', title: '写文档（重派）', scope: 's', reason: 'r', repo: 'acme/one' } as never) as { ticket_id: string }).ticket_id
+    await vi.waitFor(() => { expect(m.h.executor.queued().some(q => q.ticketId === again)).toBe(true) })
+    expect(m.h.executor.queued().find(q => q.ticketId === again)).toMatchObject({ reason: 'all-excluded', member: m.holder, repo: 'acme/one' })
+    await m.h.stop()
+  })
+
+  it('Q3: a ticket named for the excluded member does not read as launching or member-busy', async () => {
+    const m = await team(['session-a'])
+    const again = m.accept(m.stop(), '写文档（重派）')
+    m.h.executor.setMember(again, m.holder)
+    await vi.waitFor(() => { expect(m.h.executor.queued().some(q => q.ticketId === again)).toBe(true) })
+    expect(m.h.executor.queued().find(q => q.ticketId === again)).toMatchObject({ reason: 'all-excluded', member: m.holder })
+    await m.h.stop()
+  })
+
+  it('Q6: a ticket with an exclusion can still be given to a member who is not excluded', async () => {
+    const m = await team(['session-a', 'session-b'])
+    const other = ['session-a', 'session-b'].find(s => s !== m.holder)!
+    const refiled = m.stop()
+    expect(m.h.saveSettings({ paused: true }, () => true)).toMatchObject({ ok: true })
+    const again = m.accept(refiled, '写文档（重派）')
+    expect(m.h.assignTicket(again, other)).toMatchObject({ ok: true })
+    expect(m.h.assignTicket(again, m.holder)).toMatchObject({ ok: false, code: 'excluded' })
+    await m.h.stop()
+  })
+
+  it('Q7: the exclusion is for that ticket, not for the session: it can be given other work', async () => {
+    const m = await team(['session-a', 'session-b'])
+    m.stop()
+    expect(m.h.saveSettings({ paused: true }, () => true)).toMatchObject({ ok: true })
+    const asked = m.h.request('别的事') as { triggerId: string }
+    m.h.pass()
+    const unrelated = m.accept(asked.triggerId, '别的事')
+    expect(m.h.assignTicket(unrelated, m.holder)).toMatchObject({ ok: true })
+    await m.h.stop()
+  })
+})
+
+
 describe('#825 review leftovers', () => {
   it('V5: the exclusion record keeps the newest 500', async () => {
     const m = await team(['session-a', 'session-b'])
