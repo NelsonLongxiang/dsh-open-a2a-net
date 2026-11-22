@@ -4,12 +4,12 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { StaffingExecutor, type StaffingChange, type StaffingDeps, type StaffingTeam } from '../../src/superagent/host/staffing.ts'
+import { DEFAULT_POLICY, StaffingExecutor, type StaffingChange, type StaffingDeps, type StaffingTeam } from '../../src/superagent/host/staffing.ts'
 import { DEFAULT_SETTINGS, parseSettings, type TeamSettings } from '../../src/superagent/host/policy.ts'
 import { blueprintDiff } from '../../src/superagent/host/builder-tools.ts'
 
-function world(failJoin = false) {
-  let settings: TeamSettings = { ...DEFAULT_SETTINGS, canvas: 'ops', reviewer: 'dsh/12345678' }
+function world(failJoin = false, reviewer: string | null = 'dsh/12345678') {
+  let settings: TeamSettings = { ...DEFAULT_SETTINGS, canvas: 'ops', ...(reviewer !== null ? { reviewer } : {}) }
   const team: StaffingTeam = {
     get settings() { return settings },
     saveSettings: raw => { const parsed = parseSettings(raw, settings); if (!parsed.ok) return parsed; settings = parsed.settings; return { ok: true } },
@@ -48,9 +48,24 @@ describe('#808 P4 team.settings.set (A2A settings only)', () => {
     expect(w.settings().decisionPush).toBe(before.decisionPush)
   })
 
+  it('#827 review M12: a reviewer the team never had is unset again after the undo', async () => {
+    const w = world(true, null)
+    expect(w.settings().reviewer).toBeUndefined()
+    await sub(w, 's3', [set({ reviewer: 'dsh/87654321' }), { op: 'session.join', params: { session: 'session-aaaaaaaa-0001' } }])
+    await w.x.agree('s3', 'test'); await w.x.cardDecided('s3', 't-ops', true)
+    expect(w.x.get('s3')!.steps.map(s => s.state)).toEqual(['undone', 'failed'])
+    expect(w.settings().reviewer).toBeUndefined()
+    expect('reviewer' in w.settings()).toBe(false)
+  })
+
+  it('#827 review M10: owner-local asks the owner, the market never runs it', () => {
+    expect(DEFAULT_POLICY['owner-local']['team.settings.set']).toBe('confirm')
+    expect(DEFAULT_POLICY.market['team.settings.set']).toBe('off')
+  })
+
   it('refuses every setting that is not an A2A one, admission, credentials, the other Sources, bad values and the market', async () => {
     const w = world()
-    for (const params of [{ acceptMode: 'auto' }, { models: null }, { prompts: null }, { maxConcurrent: 3 }, { evalTimeoutMs: 60_000 }, { paused: true }, { observerCast: true }, { idleSweep: true }, { repos: {} }, { blockedTools: ['x_tool'] }, { credentialAckMinutes: 5 }, { prepare: 'echo hi' }, { extraTools: { router: ['bash'] } }, { mcp: [] }, { allowed: { a2a: ['x'] } }, { bots: { a2a: [] } }, { apiKey: 'k' }, { teamJoinAllowlist: [] }])
+    for (const params of [{ acceptMode: 'auto' }, { models: null }, { prompts: null }, { maxConcurrent: 3 }, { evalTimeoutMs: 60_000 }, { paused: true }, { observerCast: true }, { idleSweep: true }, { repos: {} }, { blockedTools: ['x_tool'] }, { credentialAckMinutes: 5 }, { prepare: 'echo hi' }, { extraTools: { router: ['bash'] } }, { mcp: [] }, { allowed: { a2a: ['x'] } }, { bots: { a2a: [] } }, { apiKey: 'k' }, { teamJoinAllowlist: [] }, { approvers: ['session-aaaaaaaa-0001'] }, { router: 'session-aaaaaaaa-0001' }, { canvas: 'other' }])
       expect(await sub(w, 'r-' + Object.keys(params)[0], [set(params)])).toMatchObject({ ok: false, code: 'not-allowed' })
     expect(await sub(w, 'r-wb', [set({ sources: { workbench: false } })])).toMatchObject({ ok: false, code: 'invalid' })
     expect(await sub(w, 'r-gh', [set({ sources: { github: true } })])).toMatchObject({ ok: false, code: 'invalid' })
