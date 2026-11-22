@@ -92,7 +92,8 @@ describe('credential-access card: the owner\'s own choice acts (4351d67f)', () =
     const out = m.h.decide(m.card()!.id, 'choose', m.CREDENTIAL_STOP) as { refiled: string[] }
     m.h.pass()
     const again = m.accept(out.refiled[0]!, '写文档（重派）')
-    expect(m.h.assignTicket(again, m.holder)).toMatchObject({ ok: true })
+    // Ticket 877ca64f: naming the excluded session is refused instead of answering ok:true.
+    expect(m.h.assignTicket(again, m.holder)).toMatchObject({ ok: false, code: 'excluded' })
     await vi.waitFor(() => { expect(m.h.executor.list().some(b => b.ticketId === again)).toBe(true) })
     const ran = m.h.executor.list().find(b => b.ticketId === again)!
     expect(ran.member).not.toBe(m.holder)
