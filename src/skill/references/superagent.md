@@ -123,6 +123,7 @@ What reaches the owner follows the team norms (design owner-reporting), which ev
 
 - A member's question in `a2a_ticket_report` is a card: `question` needs `options` and `recommended`, and the decision comes back on that ticket.
 - The router puts every recommendation of its own to the owner with `superagent_decision_propose`. An observer can use `a2a_decision_propose`. Once decided, these reach the router as a request from the owner beginning `[决策卡]`, to accept as any request.
+- A credential-access audit card (P1, recommended 「知道了」, raised by the host when a team session touches credential files, an Authorization header or another session's files) that nobody decides within the team setting `credentialAckMinutes` (default 15, `0` off; a rule field, so only the owner's browser changes it) is closed by the host as 「知道了（超时自动）」, with an audit record (by host, rule `credential-ack-timeout`, minutes, time). Only that card kind, only that option. It runs while the team is paused too: 「知道了」 has no side effect, and a pause holds evaluation, dispatch and replies. The card stays in the right bar for a day and the owner may still choose another option; that choice replaces the automatic one and the audit record stays.
 
 ## For an observer
 
