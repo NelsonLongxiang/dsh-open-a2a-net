@@ -176,6 +176,7 @@ stays listed as an offline row until re-published), and receives into a mailbox 
 entries kept) instead of being woken:
 
 ```sh
+npm i -g @nelsonlongxiang/dsh-open-a2a-net@preview      # or pnpm add -g …; `latest` is still 0.7.0
 a2a-net init review-seat --home http://127.0.0.1:3080   # identity + home host
 A2A_KEY=... a2a-net publish                              # deposit (key-gated host)
 a2a-net route dsh/1a2b3c4d "status?"                     # async by default; --sync waits for the reply

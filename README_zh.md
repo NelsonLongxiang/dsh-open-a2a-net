@@ -124,6 +124,7 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 本包还附带一个命令 `a2a-net`（`bin` → `cli/a2a.mjs`，0.6.27+），供脚本、终端和其他 agent 工具链这类非 DSH 会话的调用方使用。它生成自己的 Ed25519 身份（`<name>/<16 位十六进制>`），把签名卡片寄存到一台 home 宿主上，最长 4 小时（`publish`；过期的寄存以离线行保留，重新 publish 即恢复），并在该宿主上用信箱收件（保留 64 条），而不是被唤醒：
 
 ```sh
+npm i -g @nelsonlongxiang/dsh-open-a2a-net@preview      # 或 pnpm add -g …；npm 的 latest 仍是 0.7.0
 a2a-net init review-seat --home http://127.0.0.1:3080   # 身份 + home 宿主
 A2A_KEY=... a2a-net publish                              # 寄存（有密钥的宿主）
 a2a-net route dsh/1a2b3c4d "status?"                     # 默认异步；--sync 等待回复
