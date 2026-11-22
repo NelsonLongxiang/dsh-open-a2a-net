@@ -6,18 +6,22 @@
 import { StaffingExecutor, type StaffingTeam } from './staffing.ts'
 import type { SuperagentHost } from './index.ts'
 import type { SuperagentTeams } from './teams.ts'
-import type { CanvasStore } from '../../canvas-store.ts'
+import { isRemoteMemberRef, type CanvasStore } from '../../canvas-store.ts'
+import { addCanvasMember } from '../../canvas-member-write.ts'
+import type { CliHomeDecision } from '../../cli-home.ts'
 
 export interface StaffingWiring {
   readonly path: string
   readonly teams: SuperagentTeams
-  readonly canvasStore: Pick<CanvasStore, 'create' | 'remove' | 'hasTeam' | 'addMember'>
+  readonly canvasStore: Pick<CanvasStore, 'create' | 'remove' | 'hasTeam' | 'addMember' | 'rawMembersOf' | 'membersOf' | 'cliHomeOf' | 'removeMember' | 'isSuspended'>
   readonly canvasNameReserved: (name: string) => boolean
   /** A joined (or live) local session. */
   readonly sessionValid: (id: string) => boolean
   readonly presetOf: (id: string) => string | undefined
   /** The canvas route's member proof and the superagent team refusal, as add-member runs them. */
-  readonly memberForWrite: (id: string) => Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }>
+  readonly memberForWrite: (id: string, peer?: unknown) => Promise<{ ok: true; member: string; ownerKey?: string } | { ok: false; error: string }>
+  /** #808: the canvas route's CLI home pin for a CLI member. */
+  readonly cliHomeForAdd: (handle: string, requested?: unknown) => Promise<CliHomeDecision>
   readonly teamCanvasRefusal: (canvas: string, member: string) => string | undefined
   readonly revokeCanvasMember: (id: string, reason: 'remove', name: string) => boolean
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
@@ -57,6 +61,12 @@ export function createStaffing(w: StaffingWiring): StaffingExecutor {
       return w.canvasStore.addMember(name, proof.member, undefined, proof.ownerKey !== undefined ? { ownerKey: proof.ownerKey } : {}) ? { ok: true } : { ok: false, error: `${session} was not added to canvas ${name}` }
     },
     canvasRemoveLocal: (name, session) => w.revokeCanvasMember(session, 'remove', name),
+    // #808: plain canvas members through the canvas route's own write.
+    canvasAddMember: (name, member, home) => addCanvasMember({ canvasStore: w.canvasStore, canvasNameReserved: w.canvasNameReserved, localMember: w.sessionValid,
+      memberForWrite: w.memberForWrite, teamCanvasRefusal: w.teamCanvasRefusal, cliHomeForAdd: w.cliHomeForAdd }, name, member, home !== undefined ? { home } : {}),
+    canvasRemoveMember: (name, member) => isRemoteMemberRef(member) ? !w.canvasStore.isSuspended(name, member) && w.canvasStore.removeMember(name, member) : w.revokeCanvasMember(member, 'remove', name),
+    canvasMembers: name => w.canvasStore.membersOf(name),
+    canvasCliHome: member => w.canvasStore.cliHomeOf(member),
     teamAdd: (canvas, router) => {
       const out = w.teams.add({ canvas, router }, w.sessionValid, w.presetOf)
       return out.ok ? { ok: true, id: refOfId(out.id) } : out
