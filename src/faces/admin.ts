@@ -389,6 +389,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           filePrivacy: d.a2aDirPrivacy,
           deliveryBookkeeping:taskLedger.deliveryBookkeepingState(),
           deliveryCapacity:taskLedger.deliveryCapacityState(),
+          // #eb6d20df: the receipt-protected gate (TASK_CAP), apart from deliveryCapacity, with what holds each slot.
+          receiptCapacity:taskLedger.receiptCapacityState(),
           nudgeEscalations:d.nudgeEscalations?.()??{queued:0,unavailable:0,failed:0},
           reconciliationReminders: d.reminderDiagnostics?.(),
           tasks: taskLedger.list()
