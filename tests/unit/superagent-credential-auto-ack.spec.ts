@@ -8,6 +8,7 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { touchesRules } from '../../src/superagent/host/owner-proof.ts'
 
 const CALL = { command: 'curl -H "Authorization: Bearer sk-test-0000000000000000" http://localhost:9890/mcp' }
 
@@ -49,11 +50,13 @@ describe('credential audit card: closed as 知道了 on a timeout', () => {
     await h.stop()
   })
 
-  it('a closed card leaves the panel after a day', async () => {
+  it('a closed card stays on the panel for a day, then leaves it', async () => {
     const { h, clock, card } = await host()
     h.auditCall('session-m', 'member', 'bash', CALL)
     clock.now += 15 * 60_000; h.ackCredentialCards()
-    clock.now += 24 * 60 * 60_000 + 1
+    clock.now += 23 * 60 * 60_000
+    expect(card()?.autoAck).toBeDefined()
+    clock.now += 60 * 60_000 + 1
     expect(card()).toBeUndefined()
     await h.stop()
   })
@@ -71,6 +74,8 @@ describe('credential audit card: closed as 知道了 on a timeout', () => {
     expect(five.h.ackCredentialCards()).toBe(1)
     expect(five.h.saveSettings({ credentialAckMinutes: 2.5 }, () => true)).toMatchObject({ ok: false })
     expect(five.h.saveSettings({ credentialAckMinutes: -1 }, () => true)).toMatchObject({ ok: false })
+    expect(five.h.saveSettings({ credentialAckMinutes: 1441 }, () => true)).toMatchObject({ ok: false })
+    expect(five.h.saveSettings({ credentialAckMinutes: 1440 }, () => true)).toMatchObject({ ok: true })
     await five.h.stop()
   })
 
@@ -84,5 +89,19 @@ describe('credential audit card: closed as 知道了 on a timeout', () => {
     expect(book.get(other.id!)?.decided).toBeUndefined()
     expect(book.get(observer.id!)?.decided).toBeUndefined()
     await h.stop()
+  })
+
+  it('the host tick closes it, while the team is paused too', async () => {
+    const { h, clock, card } = await host({ paused: true })
+    h.auditCall('session-m', 'member', 'bash', CALL)
+    clock.now += 15 * 60_000
+    h.pass()
+    expect(card()).toMatchObject({ decided: { text: '决定：知道了（超时自动）' }, autoAck: { rule: 'credential-ack-timeout' } })
+    await h.stop()
+  })
+
+  it('#823 review: the timeout is a rule field, so only the owner\'s browser may change it', () => {
+    expect(touchesRules({ credentialAckMinutes: 5 })).toBe(true)
+    expect(touchesRules({ credentialAckMinutes: 0 })).toBe(true)
   })
 })
