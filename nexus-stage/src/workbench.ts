@@ -867,24 +867,26 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
   draftForm.appendChild(draftBtn)
 
   function renderDraftTargets(): void {
+    // #802: an open dropdown closes when its options are replaced; rebuild only when the list changed and it is not in use.
+    if (document.activeElement === draftTarget) return
+    const targets = new Map<string, string>()
+    const state = last
+    if (state !== null) {
+      for (const row of state.sessions ?? []) {
+        if (row.team !== undefined && row.team !== '') targets.set(row.team, `${displayName(row)}（会话队）`)
+      }
+      for (const row of state.canvas?.teams ?? []) targets.set(row.team, `${row.name}（canvas 队）`)
+      for (const row of state.remote ?? []) targets.set(row.team, `${displayName(row)}（远端）`)
+    }
+    const wanted: Array<[string, string]> = [['', '选择目标队…'], ...[...targets].map(([team, label]): [string, string] => [team, `${label} · ${team}`])]
+    const now = Array.from(draftTarget.options).map((o): [string, string] => [o.value, o.textContent ?? ''])
+    if (JSON.stringify(now) === JSON.stringify(wanted)) return
     const previous = draftTarget.value
     clear(draftTarget)
-    const empty = document.createElement('option')
-    empty.value = ''
-    empty.textContent = '选择目标队…'
-    draftTarget.appendChild(empty)
-    if (last === null) return
-    const state = last
-    const targets = new Map<string, string>()
-    for (const row of state.sessions ?? []) {
-      if (row.team !== undefined && row.team !== '') targets.set(row.team, `${displayName(row)}（会话队）`)
-    }
-    for (const row of state.canvas?.teams ?? []) targets.set(row.team, `${row.name}（canvas 队）`)
-    for (const row of state.remote ?? []) targets.set(row.team, `${displayName(row)}（远端）`)
-    for (const [team, label] of targets) {
+    for (const [value, text] of wanted) {
       const opt = document.createElement('option')
-      opt.value = team
-      opt.textContent = `${label} · ${team}`
+      opt.value = value
+      opt.textContent = text
       draftTarget.appendChild(opt)
     }
     if (previous !== '' && targets.has(previous)) draftTarget.value = previous
@@ -1035,9 +1037,12 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     if (state) { note.setAttribute('role', state.failed ? 'alert' : 'status'); note.textContent = state.message }
   }
 
-  function renderInspector(): void {
+  function renderInspector(fromPoll = false): void {
     // A select popover, keyboard focus or pending submit must not be detached by a poll.
     const focused = document.activeElement
+    // #802: a poll never rebuilds the inspector under a form control the person is using (an open dropdown would close,
+    // focus would drop): the owner panel's seat editor, a team card's other forms. A click, save or close still rebuilds.
+    if (fromPoll && focused instanceof HTMLElement && inspectorBody.contains(focused) && (focused.tagName === 'SELECT' || focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA')) return
     const sameTeam = selection?.kind === 'canvas' && canvasForm?.name === selection.row.name
     if (!ownerPanelOpen && sameTeam && canvasForm?.form.isConnected
       && (canvasForm.busy || (focused !== null && canvasForm.form.contains(focused)))) return
@@ -1428,7 +1433,7 @@ export function createWorkbench(deps: WorkbenchDeps): Workbench {
     chat.update(state)
     renderActivity()
     renderPlan()
-    renderInspector()
+    renderInspector(true)
     // Mode is availability-derived every poll: canvas face down → data mode,
     // the board deactivates and the panes return to the stage stack.
     syncMode()
