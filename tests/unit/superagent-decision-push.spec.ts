@@ -2,7 +2,7 @@
 /** T8 step 1: the router's and observer's decision cards go to the market on the roster's route (envelope v1). */
 import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { DECISION_CARD_HEADER, PUSH_TICK_MS, marketClean, decideAt, decidedOption, decisionCardText, finalRefusal, pushedSource } from '../../src/superagent/host/decision-push.ts'
@@ -12,6 +12,17 @@ import { formatFileRef } from '../../src/blob-store.ts'
 
 const SHA = 'a'.repeat(64)
 const bodyOf = (text: string) => JSON.parse(text.split('\n').slice(1).join('\n'))
+/** Verify card.id and decide_at match cardId, then strip them so a random UUID containing digits like '4242' cannot false-positive a leak check. */
+const envelopeWithoutCardId = (envelope: string, cardId: string): string => {
+  const lines = envelope.split('\n')
+  expect(lines).toHaveLength(2)
+  expect(lines[0]).toBe(DECISION_CARD_HEADER)
+  const body = JSON.parse(lines[1]!) as { decide_at: string; card: { id: string; [k: string]: unknown }; [k: string]: unknown }
+  expect(body.card.id).toBe(cardId)
+  expect(body.decide_at).toBe(decideAt(cardId))
+  const { decide_at: _decideAt, card: { id: _id, ...restCard }, ...restBody } = body
+  return `${lines[0]}\n${JSON.stringify({ ...restBody, card: restCard })}`
+}
 
 const card = (over: Record<string, unknown> = {}) => ({ id: 'd-1', question: '用哪个？', source: 'observer', by: 'session-o', at: '2026-11-20T00:00:00Z', level: 'P1', options: ['甲', '乙'], recommended: '甲', reason: 'r', ...over }) as never
 
@@ -158,8 +169,30 @@ describe('T8: on the host', () => {
     await m.h.decisionPush.tick()
     const decided = m.sent.map(([, t]) => t).find(t => bodyOf(t).event === 'decided')!
     expect(decided).toBeDefined()
-    for (const leak of [OWNER_SHA, 'OWNER-SECRET', encodeURIComponent('OWNER-SECRET-合同.pdf'), '4242', '附上合同', '127.0.0.1']) expect(decided, leak).not.toContain(leak)
+    const checked = envelopeWithoutCardId(decided, c.id)
+    for (const leak of [OWNER_SHA, 'OWNER-SECRET', encodeURIComponent('OWNER-SECRET-合同.pdf'), '4242', '附上合同', '127.0.0.1']) expect(checked, leak).not.toContain(leak)
     // The proposer's own files (none on this card) are the only files the envelope may carry.
+    expect(bodyOf(decided).card.files).toEqual([])
+    await m.h.stop()
+  })
+
+  it('#771 review regression: a card id containing 4242 never false-positives the owner-file leak check', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-push-4242-'))
+    const FIXED_ID = 'd-00004242-0000-4000-8000-000000000000'
+    const OWNER_SHA = 'f'.repeat(64)
+    mkdirSync(join(home, 'superagent'), { recursive: true })
+    writeFileSync(join(home, 'superagent', 'decisions.json'), JSON.stringify([
+      { id: FIXED_ID, question: '问题', reason: '理由', source: 'observer', by: 'session-o', at: new Date(T0).toISOString(), ...spec },
+    ]))
+    const m = await team({ home })
+    const ref = formatFileRef({ sha256: OWNER_SHA, size: 4242, name: 'OWNER-SECRET-合同.pdf', from: 'http://127.0.0.1:1' })
+    expect(m.h.decide(FIXED_ID, 'choose', '乙', '附上合同', [ref])).toMatchObject({ ok: true })
+    await m.h.decisionPush.tick()
+    const decided = m.sent.map(([, t]) => t).find(t => bodyOf(t).event === 'decided')!
+    expect(decided).toBeDefined()
+    expect(decided).toContain(FIXED_ID)
+    const checked = envelopeWithoutCardId(decided, FIXED_ID)
+    for (const leak of [OWNER_SHA, 'OWNER-SECRET', encodeURIComponent('OWNER-SECRET-合同.pdf'), '4242', '附上合同', '127.0.0.1']) expect(checked, leak).not.toContain(leak)
     expect(bodyOf(decided).card.files).toEqual([])
     await m.h.stop()
   })
