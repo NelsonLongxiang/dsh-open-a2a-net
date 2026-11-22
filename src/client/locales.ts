@@ -59,6 +59,7 @@ export type A2aNetKey =
   | 'team.healthQueuedBusy'
   | 'team.healthQueuedAbsent'
   | 'team.healthQueuedNoRepo'
+  | 'team.healthQueuedExcluded'
   | 'team.healthQueuedRepoBusy'
   | 'team.healthQueuedCap'
   | 'team.healthQueuedRefused'
@@ -127,6 +128,7 @@ export const zh: Record<A2aNetKey, string> = {
   'team.healthQueuedBusy': '在等成员 {session}，它手上的工单没结束；可让总工改派给空闲成员',
   'team.healthQueuedAbsent': '在等成员 {session}，它已不在团队里；请总工改派',
   'team.healthQueuedNoRepo': '只能派给负责仓库 {repo} 的成员，团队里没有这样的成员',
+  'team.healthQueuedExcluded': '可派的成员都被排除了（属主在凭据审计卡上停掉了 {session} 的这项工作）；请加成员或手动处理',
   'team.healthQueuedRepoBusy': '只能派给负责仓库 {repo} 的成员，他们都在忙',
   'team.healthQueuedCap': '团队已到同时运行的上限',
   'team.healthQueuedRefused': '派给成员 {session} 时被拒绝，还在重试；看看这个成员的会话或它所在主机是否接收',
@@ -208,6 +210,7 @@ export const en: Record<A2aNetKey, string> = {
   'team.healthQueuedBusy': 'waiting for member {session}, whose current ticket has not ended; the router can reassign to an idle member',
   'team.healthQueuedAbsent': 'waiting for member {session}, who is no longer on the team; ask the router to reassign',
   'team.healthQueuedNoRepo': 'only members working in {repo} can take them, and the team has none',
+  'team.healthQueuedExcluded': 'every member who could take them is excluded (the owner took this work off {session} on a credential card); add a member or handle it by hand',
   'team.healthQueuedRepoBusy': 'only members working in {repo} can take them, and they are all busy',
   'team.healthQueuedCap': 'the team is at its limit of tickets running at once',
   'team.healthQueuedRefused': 'delivery to member {session} was refused and is being retried; check that member\'s session or its host',
