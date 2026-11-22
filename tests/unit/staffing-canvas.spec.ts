@@ -14,15 +14,17 @@ import { blueprintDiff } from '../../src/superagent/host/builder-tools.ts'
 
 const LOCAL = 'session-22222222-bbbb', CLI = 'superagent-team/d6bf8b860fee4867', REMOTE = 'dsh/446ce672'
 
-function world(options: { failMember?: string } = {}) {
+function world(options: { failMember?: string; normalize?: Record<string, string>; homes?: Record<string, string> } = {}) {
   const canvases = new Map<string, string[]>([['ops-team', []]])
+  const teamCanvases = new Set(['ops-team'])
   const calls: string[] = []
+  const homesAdded: Array<string | undefined> = []
   const deps: StaffingDeps = {
     path: join(mkdtempSync(join(tmpdir(), 'staffing-canvas-')), 'staffing.json'),
     now: () => new Date().toISOString(),
     logger: { info: () => {}, warn: () => {} },
     team: () => undefined,
-    teamOfCanvas: canvas => canvas === 'ops-team' ? 't-ops' : undefined,
+    teamOfCanvas: canvas => teamCanvases.has(canvas) ? 't-ops' : undefined,
     canvasExists: name => canvases.has(name),
     canvasCreate: name => { calls.push('canvas+:' + name); canvases.set(name, []); return { ok: true } },
     canvasRemove: name => { calls.push('canvas-:' + name); return canvases.delete(name) },
@@ -30,15 +32,19 @@ function world(options: { failMember?: string } = {}) {
     canvasRemoveLocal: () => true,
     teamAdd: () => ({ ok: false, error: 'not here' }),
     teamUnbind: () => true,
-    canvasAddMember: async (name, member) => {
-      calls.push('member+:' + name + ':' + member)
-      if (member === options.failMember) return { ok: false, error: 'no owner proof' }
-      canvases.get(name)?.push(member); return { ok: true, member }
+    canvasAddMember: async (name, raw, home) => {
+      const member = options.normalize?.[raw] ?? raw
+      calls.push('member+:' + name + ':' + member); homesAdded.push(home)
+      if (raw === options.failMember) return { ok: false, error: 'no owner proof' }
+      const list = canvases.get(name)
+      if (list !== undefined && !list.includes(member)) list.push(member)
+      return { ok: true, member }
     },
+    canvasCliHome: member => options.homes?.[member],
     canvasRemoveMember: (name, member) => { calls.push('member-:' + name + ':' + member); const list = canvases.get(name) ?? []; const i = list.indexOf(member); if (i < 0) return false; list.splice(i, 1); return true },
     canvasMembers: name => canvases.get(name) ?? [],
   }
-  return { x: new StaffingExecutor(deps), canvases, calls }
+  return { x: new StaffingExecutor(deps), canvases, calls, teamCanvases, homesAdded }
 }
 
 const link = (id = 'bp-link', source: StaffingChange['source'] = 'owner-local'): StaffingChange => ({
@@ -95,6 +101,45 @@ describe('#808 plain canvas ops in a blueprint', () => {
     expect(w.x.get('r-1')!.state).toBe('done'); expect(w.canvases.get('there')).toEqual([])
     await w.x.submit({ id: 'r-2', source: 'owner-local', by: {}, ops: [{ op: 'canvas.member.remove', params: { canvas: 'there', member: CLI } }] }); await w.x.agree('r-2', 'test')
     expect(w.x.get('r-2')!.state).toBe('failed')
+  })
+
+  it('#809 R1: a canvas op cannot reach a team canvas the same change creates, nor a plain canvas pass for a team', async () => {
+    const w = world()
+    const sub = (id: string, ops: StaffingChange['ops']) => w.x.submit({ id, source: 'owner-local', by: {}, ops })
+    expect(await sub('r1a', [{ op: 'team.create', params: { canvas: 'ops', router: LOCAL } }, { op: 'canvas.member.add', params: { canvas: 'ops', member: REMOTE } }])).toMatchObject({ ok: false, code: 'invalid' })
+    expect(await sub('r1b', [{ op: 'team.create', params: { canvas: 'ops', router: LOCAL } }, { op: 'canvas.member.remove', params: { canvas: 'ops', member: LOCAL } }])).toMatchObject({ ok: false, code: 'invalid' })
+    expect(await sub('r1c', [{ op: 'canvas.create', params: { canvas: 'plain' } }, { op: 'team.rules.set', params: { team: 'plain', scope: 'team', value: ['x'] } }])).toMatchObject({ ok: false, code: 'unknown-team' })
+    expect(await sub('r1d', [{ op: 'canvas.create', params: { canvas: 'plain' } }, { op: 'team.create', params: { canvas: 'plain', router: LOCAL } }])).toMatchObject({ ok: false, code: 'invalid' })
+    expect(w.calls).toEqual([])
+  })
+
+  it('#809 R1: a canvas bound to a team between submit and agree is refused at run time (no member write)', async () => {
+    const w = world(); w.canvases.set('there', [CLI])
+    await w.x.submit({ id: 'toctou', source: 'owner-local', by: {}, ops: [{ op: 'canvas.member.remove', params: { canvas: 'there', member: CLI } }, { op: 'canvas.member.add', params: { canvas: 'there', member: REMOTE } }] })
+    w.teamCanvases.add('there')
+    await w.x.agree('toctou', 'test')
+    expect(w.x.get('toctou')!.state).toBe('failed')
+    expect(w.calls).toEqual([])
+    expect(w.canvases.get('there')).toEqual([CLI])
+  })
+
+  it('#809 R2: re-adding a member the host stores normalized keeps it when a later step undoes', async () => {
+    const QUALIFIED = REMOTE + '@abcd1234'
+    const w = world({ normalize: { [REMOTE]: QUALIFIED }, failMember: LOCAL }); w.canvases.set('there', [QUALIFIED])
+    await w.x.submit({ id: 'r2', source: 'owner-local', by: {}, ops: [{ op: 'canvas.member.add', params: { canvas: 'there', member: REMOTE } }, { op: 'canvas.member.add', params: { canvas: 'there', member: LOCAL } }] })
+    await w.x.agree('r2', 'test')
+    expect(w.x.get('r2')!.state).toBe('failed')
+    expect(w.canvases.get('there')).toEqual([QUALIFIED])
+    expect(w.calls.some(c => c.startsWith('member-:'))).toBe(false)
+  })
+
+  it('#809 R3: undoing a CLI member removal puts its pinned home back', async () => {
+    const w = world({ homes: { [CLI]: 'https://home.example' }, failMember: LOCAL }); w.canvases.set('there', [CLI])
+    await w.x.submit({ id: 'r3', source: 'owner-local', by: {}, ops: [{ op: 'canvas.member.remove', params: { canvas: 'there', member: CLI } }, { op: 'canvas.member.add', params: { canvas: 'there', member: LOCAL } }] })
+    await w.x.agree('r3', 'test')
+    expect(w.x.get('r3')!.steps.map(s => s.state)).toEqual(['undone', 'failed'])
+    expect(w.canvases.get('there')).toEqual([CLI])
+    expect(w.homesAdded.at(-1)).toBe('https://home.example')
   })
 
   it('the owner reads that a remote member opens a cross-host door', () => {

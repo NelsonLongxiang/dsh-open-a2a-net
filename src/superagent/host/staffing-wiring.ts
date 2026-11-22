@@ -66,6 +66,7 @@ export function createStaffing(w: StaffingWiring): StaffingExecutor {
       memberForWrite: w.memberForWrite, teamCanvasRefusal: w.teamCanvasRefusal, cliHomeForAdd: w.cliHomeForAdd }, name, member, home !== undefined ? { home } : {}),
     canvasRemoveMember: (name, member) => isRemoteMemberRef(member) ? !w.canvasStore.isSuspended(name, member) && w.canvasStore.removeMember(name, member) : w.revokeCanvasMember(member, 'remove', name),
     canvasMembers: name => w.canvasStore.membersOf(name),
+    canvasCliHome: member => w.canvasStore.cliHomeOf(member),
     teamAdd: (canvas, router) => {
       const out = w.teams.add({ canvas, router }, w.sessionValid, w.presetOf)
       return out.ok ? { ok: true, id: refOfId(out.id) } : out
