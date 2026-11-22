@@ -42,6 +42,7 @@ import type { LayoutStore } from '../layout-store.ts'
 import { applyOwnerSettings, parseSeatNames, type OwnerSettings } from '../owner-settings.ts'
 import { rosterOp } from '../roster-op.ts'
 import type { CliHomeDecision } from '../cli-home.ts'
+import { addCanvasMember } from '../canvas-member-write.ts'
 import type { PeerStore } from '../peer-store.ts'
 import { resolveStageMount } from '../stage-mount.ts'
 import { ARCHIVE_CAP, archivedEndedBy, type TaskLedger } from '../task-ledger.ts'
@@ -944,36 +945,12 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             const name = typeof body.name === 'string' ? body.name : ''
             payload = JSON.stringify({ ok: canvasStore.remove(name), teams: canvasStore.list() })
           } else if (action === 'add-member') {
+            // #808: one shared write, so the team builder's blueprint passes exactly this gate (src/canvas-member-write.ts).
+            const out = await addCanvasMember({ canvasStore, canvasNameReserved, localMember: id => sessionNodes.has(id) || joinedSessions.has(id),
+              memberForWrite: d.canvasMemberForWrite, ...(d.teamCanvasRefusal !== undefined ? { teamCanvasRefusal: d.teamCanvasRefusal } : {}), cliHomeForAdd: d.cliHomeForAdd },
+            typeof body.name === 'string' ? body.name : '', typeof body.id === 'string' ? body.id : '', { peer: (body as { peer?: unknown }).peer, home: (body as { home?: unknown }).home })
             const name = typeof body.name === 'string' ? body.name : ''
-            const id = typeof body.id === 'string' ? body.id : ''
-            // Dual member shape: a local session id must be a joined node;
-            // a remote ref is a zone-qualified team handle whose shape this
-            // gate checks and whose existence the UI picker (directory
-            // rows) vouches for. Humans compose both via the workbench.
-            const memberValid = isRemoteMemberRef(id)
-              ? validRemoteMemberRef(id)
-              : id !== '' && (sessionNodes.has(id) || joinedSessions.has(id))
-            if (!canvasStore.hasTeam(name) && canvasNameReserved(name)) {
-              payload = JSON.stringify({ ok: false, error: 'roster reserves this canvas name' })
-            } else if (name === '' || !memberValid) {
-              payload = JSON.stringify({ ok: false, error: 'name and a member (joined session id, or a zone-qualified remote team handle like zone/a1b2c3d4) are required' })
-            } else if (legacyBareMember(id) && canvasStore.rawMembersOf(name).includes(id)) {
-              // Re-adding a retained legacy slot is a no-op, never provenance confirmation or restore.
-              payload = JSON.stringify({ ok: true, members: canvasStore.membersOf(name), provenance: 'unknown' })
-            } else {
-              const proof = await d.canvasMemberForWrite(id, (body as { peer?: unknown }).peer)
-              if (!proof.ok) { payload = JSON.stringify(proof); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(payload); return }
-              const teamRefusal = d.teamCanvasRefusal?.(name, proof.member)
-              if (teamRefusal !== undefined) { payload = JSON.stringify({ ok: false, error: teamRefusal }); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(payload); return }
-              const pin = await d.cliHomeForAdd(proof.member, (body as { home?: unknown }).home).catch(() => ({ ok: false as const, error: 'linked home card lookup failed' }))
-              if (!pin.ok) payload = JSON.stringify({ ok: false, error: pin.error })
-              else {
-                canvasStore.create(name)
-                const explicitHome = (body as { home?: unknown }).home !== undefined
-                const home = explicitHome ? pin.home : canvasStore.cliHomeOf(id) ?? pin.home
-                payload = JSON.stringify({ ok: canvasStore.addMember(name, proof.member, home, { replaceHome: explicitHome, ownerKey: proof.ownerKey }), teams: canvasStore.list(), members: canvasStore.membersOf(name) })
-              }
-            }
+            payload = JSON.stringify(!out.ok ? (out.stored === false ? { ok: false, teams: canvasStore.list(), members: canvasStore.membersOf(name) } : out) : out.provenance === 'unknown' ? { ok: true, members: canvasStore.membersOf(name), provenance: 'unknown' } : { ok: true, teams: canvasStore.list(), members: canvasStore.membersOf(name) })
           } else if (action === 'remove-member') {
             const name = typeof body.name === 'string' ? body.name : ''
             const id = typeof body.id === 'string' ? body.id : ''

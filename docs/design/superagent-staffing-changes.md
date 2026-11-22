@@ -54,6 +54,7 @@ The market may ask for six operations. Each has a policy on the node, `auto | co
 | `member.retire` {team, seatId} | the seat takes no new work, finishes its ticket, leaves the canvas; its node is archived, never deleted | **auto** |
 | `member.retemplate` {team, seatId, template} | changes the seat's template; the next ticket starts on a session from the new template | **confirm** |
 | `team.rules.set` {team, rules[]} | replaces the team's intake rules (text only) | **confirm** |
+| `canvas.create` {canvas}, `canvas.member.add` {canvas, member, home?}, `canvas.member.remove` {canvas, member} | a plain canvas and its members, local, remote or CLI, through the canvas route's checks (#808, owner ruling 2026-11-22: the owner's agreement in the builder session is the operator's act) | **confirm** (owner-local); **off** for the market |
 | `team.github.set` {team, enabled?, allowed?, repos?, intake?} | sets the team's GitHub Source (#800, owner 2026-11-22): on/off, whose comments are a person's, which repositories and issues; keys left out stay | **confirm** (both sources: `allowed` admits people) |
 
 - **Extensions (2026-11-12, [superagent-builder](superagent-builder.md) TB3).** `team.rules.set` takes `scope`: `team` (the intake rules above, the default), `dispatch` or `member:<seatId>`, matching the rule sets' three scopes. `member.add` takes an optional `profile` (role, intake rules, repository); with a template it defaults to the template's rules. Both stay text only and `team.rules.set` stays **confirm** whatever its scope.

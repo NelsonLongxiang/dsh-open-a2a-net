@@ -23,18 +23,18 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname } from 'node:path'
 import { GITHUB_REPOS_MAX, REPO_RE } from './policy.ts'
 
-export const STAFFING_OPS = ['team.create', 'team.retire', 'member.add', 'member.retire', 'member.retemplate', 'team.rules.set', 'team.github.set'] as const
+export const STAFFING_OPS = ['team.create', 'team.retire', 'member.add', 'member.retire', 'member.retemplate', 'team.rules.set', 'team.github.set', 'canvas.create', 'canvas.member.add', 'canvas.member.remove'] as const
 export type StaffingOp = typeof STAFFING_OPS[number]
 export type StaffingSource = 'owner-local' | `market:${string}`
 export type PolicyMode = 'auto' | 'confirm' | 'off'
 
 /** What this version carries out; the rest is refused as `not-yet`. */
-const BUILT: ReadonlySet<StaffingOp> = new Set(['team.create', 'member.add', 'member.retire', 'team.rules.set', 'team.github.set'])
+const BUILT: ReadonlySet<StaffingOp> = new Set(['team.create', 'member.add', 'member.retire', 'team.rules.set', 'team.github.set', 'canvas.create', 'canvas.member.add', 'canvas.member.remove'])
 
 /** #626 W2 defaults for the market; `owner-local` (a blueprint, agreed as a whole) is `confirm`, retiring is `off`. */
 export const DEFAULT_POLICY: Readonly<Record<'owner-local' | 'market', Readonly<Record<StaffingOp, PolicyMode>>>> = {
-  'owner-local': { 'team.create': 'confirm', 'team.retire': 'off', 'member.add': 'confirm', 'member.retire': 'confirm', 'member.retemplate': 'off', 'team.rules.set': 'confirm', 'team.github.set': 'confirm' },
-  market: { 'team.create': 'confirm', 'team.retire': 'confirm', 'member.add': 'auto', 'member.retire': 'auto', 'member.retemplate': 'confirm', 'team.rules.set': 'confirm', 'team.github.set': 'confirm' },
+  'owner-local': { 'team.create': 'confirm', 'team.retire': 'off', 'member.add': 'confirm', 'member.retire': 'confirm', 'member.retemplate': 'off', 'team.rules.set': 'confirm', 'team.github.set': 'confirm', 'canvas.create': 'confirm', 'canvas.member.add': 'confirm', 'canvas.member.remove': 'confirm' },
+  market: { 'team.create': 'confirm', 'team.retire': 'confirm', 'member.add': 'auto', 'member.retire': 'auto', 'member.retemplate': 'confirm', 'team.rules.set': 'confirm', 'team.github.set': 'confirm', 'canvas.create': 'off', 'canvas.member.add': 'off', 'canvas.member.remove': 'off' },
 }
 
 /** The parameters each operation takes; any other key is refused (`not-allowed`, #626 W3: nothing outside these). */
@@ -46,6 +46,9 @@ const PARAMS: Readonly<Record<StaffingOp, readonly string[]>> = {
   'member.retemplate': ['team', 'seatId', 'template'],
   'team.rules.set': ['team', 'scope', 'value'],
   'team.github.set': ['team', 'enabled', 'allowed', 'repos', 'intake'],
+  'canvas.create': ['canvas'],
+  'canvas.member.add': ['canvas', 'member', 'home'],
+  'canvas.member.remove': ['canvas', 'member'],
 }
 
 export interface StaffingOpInput { readonly op: StaffingOp; readonly params: Readonly<Record<string, unknown>> }
@@ -112,6 +115,15 @@ export interface StaffingDeps {
   readonly teamAdd: (canvas: string, router: string) => { ok: true; id: string } | { ok: false; error: string }
   /** Unbind a team the change created (its canvas and router cleared). */
   readonly teamUnbind: (teamId: string) => boolean
+  /**
+   * #808: a plain canvas's member write — the canvas route's own add-member checks (src/canvas-member-write.ts): a joined local
+   * session, a zone-qualified remote session with its owner proof, or a CLI handle with its home pinned. Absent: canvas ops fail.
+   */
+  readonly canvasAddMember?: (name: string, member: string, home?: string) => Promise<{ ok: true; member: string } | { ok: false; error: string }>
+  /** The canvas route's remove-member: a local session through its revoke, a remote ref unless suspended. */
+  readonly canvasRemoveMember?: (name: string, member: string) => boolean
+  /** The members a canvas has now. */
+  readonly canvasMembers?: (name: string) => readonly string[]
   /** The owner's policy overrides, by source kind and op. */
   readonly policy?: () => Partial<Record<'owner-local' | 'market', Partial<Record<StaffingOp, PolicyMode>>>>
 }
@@ -167,6 +179,17 @@ function githubSetRefusal(p: Readonly<Record<string, unknown>>): string | undefi
   if ('allowed' in p && (!Array.isArray(p.allowed) || p.allowed.length > 20 || p.allowed.some(x => typeof x !== 'string' || !GITHUB_LOGIN.test(x)))) return 'allowed lists at most 20 GitHub logins of people (no [bot] accounts)'
   if ('repos' in p && (!Array.isArray(p.repos) || p.repos.length > GITHUB_REPOS_MAX || p.repos.some(x => typeof x !== 'string' || !REPO_RE.test(x)))) return `repos lists at most ${String(GITHUB_REPOS_MAX)} repositories as owner/name`
   if ('intake' in p && p.intake !== 'mention' && p.intake !== 'all') return 'intake is mention or all'
+  return undefined
+}
+
+/** A member a plain canvas takes (#808): a local session id, a zone-qualified remote session, or a CLI handle such as superagent-team/<16 hex>. The host checks it again. */
+const CANVAS_MEMBER = /^(session-[0-9a-f-]{8,64}|[A-Za-z0-9._-]{1,64}\/[A-Za-z0-9._@-]{1,96})$/
+
+function canvasOpRefusal(op: StaffingOp, p: Readonly<Record<string, unknown>>): string | undefined {
+  if (typeof p.canvas !== 'string' || !NAME.test(p.canvas)) return 'canvas is a canvas name'
+  if (op === 'canvas.create') return undefined
+  if (typeof p.member !== 'string' || !CANVAS_MEMBER.test(p.member)) return 'member is a local session id, a zone-qualified remote session, or a CLI handle'
+  if ('home' in p && (op !== 'canvas.member.add' || typeof p.home !== 'string' || p.home.length > 200)) return 'home is the CLI member\'s home origin'
   return undefined
 }
 
@@ -237,6 +260,16 @@ export class StaffingExecutor {
         const team = teamRef(); if (typeof team !== 'string') return team
         if (created.has(team)) return { ok: false, code: 'invalid', error: `${where}: a team this change creates has no member to retire yet` }
         if (typeof params.seatId !== 'string' || params.seatId === '') return { ok: false, code: 'invalid', error: `${where}.seatId is the seat of a member on the team now` }
+      } else if (input.op === 'canvas.create' || input.op === 'canvas.member.add' || input.op === 'canvas.member.remove') {
+        const bad = canvasOpRefusal(input.op, params)
+        if (bad !== undefined) return { ok: false, code: 'invalid', error: `${where}.${bad}` }
+        const canvas = params.canvas as string
+        // #808: a superagent team's canvas changes only through member.add / member.retire (the team's own checks and card).
+        if (this.d.teamOfCanvas(canvas) !== undefined) return { ok: false, code: 'invalid', error: `${where}: canvas ${canvas} is a superagent team's canvas: use member.add or member.retire` }
+        if (input.op === 'canvas.create') {
+          if (created.has(canvas) || this.d.canvasExists(canvas)) return { ok: false, code: 'invalid', error: `${where}: canvas ${canvas} exists already` }
+          created.add(canvas)
+        } else if (!created.has(canvas) && !this.d.canvasExists(canvas)) return { ok: false, code: 'invalid', error: `${where}: no canvas ${canvas}: create it first (canvas.create)` }
       } else if (input.op === 'team.github.set') {
         const team = teamRef(); if (typeof team !== 'string') return team
         const bad = githubSetRefusal(params)
@@ -411,6 +444,30 @@ export class StaffingExecutor {
       onUndo(() => this.d.teamUnbind(bound.id))
       created.set(canvas, bound.id)
       return { ok: true, result: { teamId: bound.id, canvas } }
+    }
+    // #808: plain canvas ops. The owner's agreement in the builder session is the operator's own act (owner ruling
+    // 2026-11-22); the member it writes is the explicit canvas record admission reads, traced to this entry in the ledger.
+    if (input.op === 'canvas.create') {
+      const canvas = p.canvas as string
+      const made = this.d.canvasCreate(canvas)
+      if (!made.ok) return made
+      onUndo(() => this.d.canvasRemove(canvas))
+      return { ok: true, result: { canvas, by: `builder-blueprint ${entry.id}` } }
+    }
+    if (input.op === 'canvas.member.add' || input.op === 'canvas.member.remove') {
+      const canvas = p.canvas as string, member = p.member as string
+      if (this.d.canvasAddMember === undefined || this.d.canvasRemoveMember === undefined) return { ok: false, error: 'this host does not carry canvas member writes' }
+      const had = this.d.canvasMembers?.(canvas).includes(member) ?? false
+      if (input.op === 'canvas.member.add') {
+        const added = await this.d.canvasAddMember(canvas, member, typeof p.home === 'string' ? p.home : undefined)
+        if (!added.ok) return added
+        if (!had) onUndo(() => this.d.canvasRemoveMember!(canvas, added.member))
+        return { ok: true, result: { canvas, member: added.member, by: `builder-blueprint ${entry.id}` } }
+      }
+      if (!had) return { ok: false, error: `${member} is not on canvas ${canvas}` }
+      if (!this.d.canvasRemoveMember(canvas, member)) return { ok: false, error: `${member} could not be taken off canvas ${canvas}` }
+      onUndo(async () => (await this.d.canvasAddMember!(canvas, member)).ok)
+      return { ok: true, result: { canvas, member, by: `builder-blueprint ${entry.id}` } }
     }
     const teamId = resolve(p.team)
     const team = teamId === undefined ? undefined : this.d.team(teamId)
