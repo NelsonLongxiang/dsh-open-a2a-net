@@ -214,9 +214,30 @@ if (ptc) {
   console.log('PTC checks use real installed Loader/registry/executor consumers and scripted runtime bindings; not a live model or subprocess sandbox acceptance')
 }
 
+// Ordering affects display, never the host's configured default for a new session.
+{
+  const { default: Registry } = await moduleOf('@deepseek-ai/dsh-agent-preset-registry')
+  const ctx = new Context(), disposers = []
+  let chosen
+  try {
+    await ctx.plugin(SystemPrompt)
+    ctx.provide('agents', { roots: () => [], get: () => undefined })
+    ctx.provide('sessionProjections', { register: async () => ({ stateOf: () => null }) })
+    new Loader(ctx)
+    const registry = new Registry(ctx, { default: 'standard', selectedDefault: { get: () => chosen } })
+    for (const row of presets) disposers.push(await registry.register({ id: row.config.id, order: row.config.order, plugins: [] }))
+    assert.equal(registry.defaultId, 'standard')
+    chosen = 'ptc-no-delegation'
+    assert.equal(registry.defaultId, 'ptc-no-delegation')
+    assert.equal((await registry.list())[0].id, 'a2a-net-ptc')
+    console.log('general preset order: displayed first without changing configured or selected default')
+  } finally { for (const dispose of disposers.reverse()) await dispose(); await ctx.fiber.dispose() }
+}
+
+// General runtime checks require the explicitly selected --ptc capability, just like team PTC checks.
+if (ptc) {
 // Exercise the new preset's actual PTC executor, replacing only program evaluation with a no-effect fixture.
 const { default: ToolRegistry, defineTool } = await moduleOf('@deepseek-ai/dsh-tools')
-const executorPath = requireDsh.resolve('@deepseek-ai/dsh-tool-executor-ptc')
 const generalEntry = '@nelsonlongxiang/dsh-open-a2a-net/general-ptc'
 const generalPlugin = await import(new URL('../lib/presets/ptc.js', import.meta.url))
 const fixtureRuntime = () => ({ language: 'typescript', programFormat: 'function-body', retainsState: false,
@@ -323,7 +344,7 @@ for (const timing of ['ready', 'late']) {
     let provider = timing === 'ready' ? await provide() : undefined
     const registry = new GeneralRegistry(ctx, { default: general.config.id, selectedDefault: { get: () => undefined } })
     const row = general.config.plugins.find(row => row.id === 'tool-executor-ptc')
-    unregister = await registry.register({ id: general.config.id, plugins: [row] })
+    unregister = await registry.register({ id: general.config.id, order: general.config.order, plugins: [row] })
     const lease = await registry.acquireScope(general.config.id)
     try {
       const describe = () => ctx.tools.selectExecutor(lease.key).describe(ctx.tools.definitions(lease.key)).schemas.map(tool => tool.name)
@@ -339,4 +360,6 @@ for (const timing of ['ready', 'late']) {
       console.log('general real preset registry ' + timing + ': same lease fails closed on removal and recovers on replacement')
     } finally { await lease[Symbol.asyncDispose]() }
   } finally { await unregister?.(); await ctx.fiber.dispose() }
+}
+
 }

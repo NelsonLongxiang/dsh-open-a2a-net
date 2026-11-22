@@ -14,6 +14,8 @@ export async function apply(ctx: Context): Promise<void> {
     describe() { throw unavailable() },
     async execute() { throw unavailable() },
   })
+  // dsh-tools 0.2.2-rc.5 public setExecutor declaration: "Unloading leaves the selection
+  // unavailable until it is replaced." The real-host regression checks this contractual seam.
   // The public disposer retains an unavailable selection in this scope. It masks native without
   // occupying the one active-provider slot, which the real executor may subsequently fill.
   release()

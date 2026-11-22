@@ -28,7 +28,9 @@
 - [规划提示词](../../src/presets/prompts/plan-mode.md)：通用计划及批准门。
 - [生成器](../../scripts/build-agent-presets.mjs)：将通用预设和既有 superagent 预设组合为随包[安装补丁](../../cordis.patch.yml)。运行时无需读源码或本机文件。
 
-`pnpm build:presets` 生成，`pnpm verify:presets` 检查漂移；构建和工程主检查已接通这两个入口。[静态回归](../../tests/unit/a2a-ptc-preset.spec.ts)核对通用提示词快照、组合、无本地委派、无个人信息和错误 marker；`pnpm verify:presets-runtime <dsh-cli-package.json>` 使用目标 DSH 的 Loader/persona/PTC executor 检查模型面只有 `run_code` 和生成 SDK，测试不执行业务工具、不启动网络协作。
+宿主契约依据：`@deepseek-ai/dsh-tools@0.2.2-rc.5` 公开类型声明对 `setExecutor` 的 disposer 明确规定“Unloading leaves the selection unavailable until it is replaced”。本预设依赖这个失败关闭语义，不以一般 disposer 惯例推断；真实宿主检查覆盖缺失、晚到、移除及替换，其他版本仍须核对同一契约。预设 `order` 只影响目录显示；真实 registry 检查分别保留 `config.default` 和 `selectedDefault`，不创建会话或改生产默认值。
+
+`pnpm build:presets` 生成，`pnpm verify:presets` 检查漂移；构建和工程主检查已接通这两个入口。[静态回归](../../tests/unit/a2a-ptc-preset.spec.ts)核对通用提示词快照、组合、无本地委派、无个人信息和错误 marker；`pnpm verify:presets-runtime <dsh-cli-package.json>` 仅检查 Loader/persona 和默认选择不变；显式追加 `--ptc` 才加载 PTC 运行检查，核对模型面只有 `run_code` 和生成 SDK、缺运行能力时不回落 native。该检查不隐含在 `verify:core`，交付需单独列出实际宿主版本和结果；测试不执行业务工具、不启动网络协作。
 
 ## 安装与旧本机预设迁移
 
