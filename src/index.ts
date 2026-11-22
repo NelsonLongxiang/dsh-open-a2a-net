@@ -46,7 +46,7 @@ import { canvasOwners, canvasFailure } from './canvas-discovery.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
-import { applyOwnerSettings, loadSeatNames, type OwnerSettings } from './owner-settings.ts'
+import { applyOwnerSettings, loadSeatNames, writeHomeA2a, type OwnerSettings } from './owner-settings.ts'
 import { CLI_HANDLE_RE, CliDepositStore, remoteCliTarget } from './cli-deposit.ts'
 import { cliHomeChoices, decideCliHome } from './cli-home.ts'
 import { forwardScope, outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
@@ -168,6 +168,7 @@ import {RequestRecoveryStore} from './request-recovery.ts'
 import { restrictDirToCurrentUser } from './windows-private-dir.ts'
 import {RequestRecoveryRuntime} from './request-recovery-runtime.ts'
 import {registerRequestRecoveryFace} from './faces/request-recovery.ts'
+import {registerReceiptCapacityFace} from './faces/receipt-capacity.ts'
 import { SidebarSends } from './sidebar-sends.ts'
 import { PI_PLATFORM, piDeliverable, piSeatAdmission } from './superagent/platforms/pi.ts'
 import { cancelAgentTurn, memberTurnFrom, personMessageFrom, selectSessionModel, stageCardFiles } from './superagent/session-reads.ts'
@@ -939,7 +940,7 @@ export function apply(ctx: Context, config: Config): void {
   const sidebarSends = new SidebarSends(join(home, 'a2a', 'sidebar-sends.json'))
   const refuseIfFlooded = createFloodGuard(idempotencyStore, recordActivity)
   const ownTask = (taskId: string): boolean => taskLedger.list().some(r => r.taskId === taskId) || taskLedger.archive().some(r => r.taskId === taskId)
-  const refuseIfQueueFull = createQueueGuard(() => taskLedger.list(), () => config.targetQueueCap, ownTask, idempotencyStore, recordActivity, id=>reminderView(taskLedger.reminderState(id)),()=>taskLedger.receiptCapacityAvailable())
+  const refuseIfQueueFull = createQueueGuard(() => taskLedger.list(), () => config.targetQueueCap, ownTask, idempotencyStore, recordActivity, id=>reminderView(taskLedger.reminderState(id)),()=>taskLedger.receiptCapacityAvailable(),()=>taskLedger.receiptCapacityRefusal('no new work delivered; retained results require reconciliation'))
 
   // Unmasked-identity suppression: gossip mirrors peer lists back and forth,
   // so a URL whose fetch just proved it serves this node — or an already
@@ -2282,7 +2283,7 @@ export function apply(ctx: Context, config: Config): void {
     hasOpenTicket: (sessionId: string): boolean | undefined => holdsOpenTicket(superagentTeams?.all(), sessionId),
   } as never)
   if (superagentTeams !== undefined) staffing = createStaffing({ path: join(home, 'a2a', 'superagent', 'staffing.json'), teams: superagentTeams, canvasStore, canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
-    sessionValid: id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, presetOf: sessionPresetOf, memberForWrite: id => canvasMemberForWrite(id),
+    sessionValid: id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, presetOf: sessionPresetOf, memberForWrite: (id, peer) => canvasMemberForWrite(id, peer), cliHomeForAdd, a2aHome: home, a2aConfig: config as unknown as Record<string, unknown>, sessionOps: { join: id => { const agent = liveRoots.get(id); if (agent === undefined) return { ok: false, error: `no live local session ${id}` }; mountSessionNode(agent); joinedSessions.add(id); return { ok: true } }, leave: id => { try { revokeCanvasMember(id, 'leave') } catch { return false } sessionNodes.delete(id); joinedSessions.remove(id); teamMemberships.dropSession(id); return true }, joined: id => joinedSessions.has(id) }, seatNames: { read: () => ownerSeatNames, write: names => { const out = writeHomeA2a(home, { seatNames: names }, config as unknown as Record<string, unknown>, Config({} as never) as unknown as Record<string, unknown>, { exists: existsSync, read: p => readFileSync(p, 'utf8'), write: (p, s) => writeFileSync(p, s, 'utf8'), mkdir: p => { mkdirSync(p, { recursive: true }) } }); if (!out.ok) return { ok: false, error: out.error }; ownerSeatNames = names; return { ok: true } } },
     teamCanvasRefusal: (canvas, member) => superagentTeams.canvasMemberRefusal(canvas, member, sessionPresetOf), revokeCanvasMember: (id, reason, name) => revokeCanvasMember(id, reason, name), logger })
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
@@ -3860,6 +3861,7 @@ export function apply(ctx: Context, config: Config): void {
     })
   })
   whenWebServerSettled(webServer=>registerRequestRecoveryFace(webServer,{ctx,controlRoute,readJsonBody,recovery:requestRecovery}))
+  whenWebServerSettled(webServer=>registerReceiptCapacityFace(webServer,{ctx,controlRoute,readJsonBody:readJsonBody as never,ledger:taskLedger,logger}))
   const cardCacheInFlight = new Map<string, Promise<A2aPeerCard | undefined>>()
   // #114 S6: the change hooks and the boot observation start only once every
   // record admission reads exists (the peer-org basis reads cardCache above).
@@ -4533,7 +4535,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // the target correlates with the route's own result verbatim.
       const taskId = `direct-${Math.random().toString(16).slice(2, 10)}`
       const routedReceipt = parseReceipt(args.message) !== null
-      if(!routedReceipt&&!taskLedger.receiptCapacityAvailable())return localRoute({ok:false,error:'receipt-protected capacity is full; nothing delivered',code:WIRE_ERROR_QUEUE_FULL})
+      if(!routedReceipt&&!taskLedger.receiptCapacityAvailable())return localRoute({ok:false,error:taskLedger.receiptCapacityRefusal('nothing delivered'),code:WIRE_ERROR_QUEUE_FULL})
       let retainDispatch=false
       if(!routedReceipt)try{taskLedger.reserveDispatch(taskId,peerPayloadFingerprint({caller:callerSession??session,message:JSON.stringify([args.message,args.context_id??'',callbackAddress??'']),noWait:args.async===true,team:args.team}))}catch{return localRoute({ok:false,error:'original dispatch could not reserve durable ledger capacity; nothing delivered',code:WIRE_ERROR_QUEUE_FULL})}
       try {
@@ -4674,7 +4676,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     // gh#224: a full target queue refuses a same-host delivery as the wire face does (receipts, CLI mailboxes pass).
     // p1-mailbox-owes (S33): a deposit that declares it owes receipts is under the cap like a session.
     // superagent v4: a request to the team's A2A address is a Trigger; the engine's worker slots govern it, not this cap.
-    const queueRefusal = parseReceipt(message)===null&&!taskLedger.receiptCapacityAvailable(taskIdFromCaller)?'receipt-protected capacity is full; nothing delivered':queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(mailTeam) !== undefined && !cliDeposits.owes(mailTeam)) || superagentHost?.a2aAddress === mailTeam, ownTask)
+    const queueRefusal = parseReceipt(message)===null&&!taskLedger.receiptCapacityAvailable(taskIdFromCaller)?taskLedger.receiptCapacityRefusal('nothing delivered'):queueFullRefusal(taskLedger.list(), team, message, config.targetQueueCap, (cliDeposits.get(mailTeam) !== undefined && !cliDeposits.owes(mailTeam)) || superagentHost?.a2aAddress === mailTeam, ownTask)
     if (queueRefusal !== undefined) {
       recordActivity('out', team, callerSession ?? 'local', false)
       return { ok: false, error: queueRefusal, code: WIRE_ERROR_QUEUE_FULL, next: QUEUE_FULL_NEXT }

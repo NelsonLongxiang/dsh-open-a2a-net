@@ -100,6 +100,11 @@ export interface TeamSettings {
   readonly approvers?: readonly string[]
   /** Tools the owner keeps from this team's members and observers, on top of the boundary (design tool-requests T6); owner-only. */
   readonly blockedTools?: readonly string[]
+  /**
+   * Minutes after which an undecided credential-access audit card is closed as 「知道了」 by the host (owner 2026-11-23);
+   * absent: CREDENTIAL_ACK_MINUTES_DEFAULT; 0 turns it off. Only that card kind, only that option.
+   */
+  readonly credentialAckMinutes?: number
   /** How long the router may take over a candidate before its Eval expires (upstream: re-queued twice, then unavailable). */
   readonly evalTimeoutMs: number
   /** Pause processing (upstream docs/003): Sources still record Triggers; Evals, dispatch and replies wait. */
@@ -162,6 +167,9 @@ export const memberOfActor = (actor: string): string | undefined => actor.starts
 /** Which kind of agent filed a workbench request of its own (D15, #717), if one did: such a request is never a person's. */
 export const proposerKind = (actor: { source: string; id: string }): 'observer' | 'member' | undefined =>
   actor.source !== 'workbench' ? undefined : observerOfActor(actor.id) !== undefined ? 'observer' : memberOfActor(actor.id) !== undefined ? 'member' : undefined
+
+/** The credential-access audit card's auto-acknowledge delay when the team sets none (owner 2026-11-23). */
+export const CREDENTIAL_ACK_MINUTES_DEFAULT = 15
 
 export const DEFAULT_SETTINGS: TeamSettings = {
   members: [],
@@ -253,6 +261,13 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
     if (raw === null || (Array.isArray(raw) && raw.length === 0)) approvers = undefined
     else if (!Array.isArray(raw) || raw.length > 10 || raw.some(x => typeof x !== 'string' || !/^session-[A-Za-z0-9-]{1,64}$/.test(x))) return { ok: false, error: 'approvers must list at most 10 session ids of this team\'s members or observers' }
     else approvers = [...new Set(raw as string[])]
+  }
+  let credentialAckMinutes = current.credentialAckMinutes
+  if ('credentialAckMinutes' in r) {
+    const raw = r.credentialAckMinutes
+    if (raw === null) credentialAckMinutes = undefined
+    else if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0 || raw > 1440) return { ok: false, error: 'credentialAckMinutes is whole minutes from 0 (off) to 1440' }
+    else credentialAckMinutes = raw
   }
   let blockedTools = current.blockedTools
   if ('blockedTools' in r) {
@@ -404,7 +419,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const observers = current.observers ?? []
   const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
   if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
-  return { ok: true, settings: { ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), ...(approvers !== undefined ? { approvers } : {}), ...(blockedTools !== undefined ? { blockedTools } : {}), evalTimeoutMs, paused, ...(progressOff === true ? { progressOff: true as const } : {}), ...(observerCast === true ? { observerCast: true as const } : {}), ...(idleSweep === true ? { idleSweep: true as const } : {}), ...(decisionPush === true ? { decisionPush: true as const } : {}), ...(mcp !== undefined ? { mcp } : {}) } }
+  return { ok: true, settings: { ...(credentialAckMinutes !== undefined ? { credentialAckMinutes } : {}), ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), ...(approvers !== undefined ? { approvers } : {}), ...(blockedTools !== undefined ? { blockedTools } : {}), evalTimeoutMs, paused, ...(progressOff === true ? { progressOff: true as const } : {}), ...(observerCast === true ? { observerCast: true as const } : {}), ...(idleSweep === true ? { idleSweep: true as const } : {}), ...(decisionPush === true ? { decisionPush: true as const } : {}), ...(mcp !== undefined ? { mcp } : {}) } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
