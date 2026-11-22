@@ -36,6 +36,19 @@ describe('#eb6d20df: settled tasks pushed out of the archive no longer hold the 
     expect(ledger.deliveryFor('work-0')).toMatchObject({ state: 'claimed' })
   })
 
+  it('#824 review Z1: a genuine orphan stays held while settled tasks are pushed out of the archive', { timeout: 30_000 }, () => {
+    let now = Date.parse('2026-11-22T00:00:00.000Z')
+    const ledger = new TaskLedger(file(), { now: () => now })
+    deliver(ledger, 'real-orphan', now)
+    for (let i = 0; i < 70; i++) { now += 60_000; settle(ledger, 'work-' + i, now) }
+    expect(ledger.archive()).toHaveLength(64)
+    expect(ledger.deliveryBookkeepingState().orphaned).toBe(1)
+    const s = ledger.receiptCapacityState()
+    expect(s.retained).toBe(1)
+    expect(s.holders).toEqual([expect.objectContaining({ taskId: 'real-orphan', kind: 'delivery', orphaned: true })])
+    expect(ledger.deliveryFor('real-orphan')).toMatchObject({ taskExpected: true, state: 'claimed' })
+  })
+
   it('the archive trimmed on restore releases those deliveries too', () => {
     let now = Date.parse('2026-11-22T00:00:00.000Z')
     const f = file()
@@ -86,11 +99,14 @@ describe('#eb6d20df: the owner voids genuine orphans, audited', () => {
   }
   const owner = { browserPeer: { id: 'peer-owner' }, admit: () => ({ peer: { id: 'peer-owner' } }) }
   const api = { browserPeer: { id: 'peer-owner' }, admit: () => ({ peer: { id: 'peer-api' } }) }
+  const noLogin = { browserPeer: { id: 'peer-owner' }, admit: () => ({ rejection: 401 }) }
 
   it('the route needs the owner browser, checks its input, and voids through the ledger', () => {
     const { ledger } = orphans()
     expect(route(undefined, ledger)({ task_ids: ['orphan-a'], reason: 'x' }).status).toBe(503)
     expect(route(api, ledger)({ task_ids: ['orphan-a'], reason: 'x' }).status).toBe(403)
+    // #824 review: no browser login (a member session, a shell on this host) is refused with 401, and nothing changes.
+    expect(route(noLogin, ledger)({ task_ids: ['orphan-a'], reason: 'x' })).toMatchObject({ status: 401, body: { ok: false, code: 'owner-proof' } })
     expect(ledger.deliveryFor('orphan-a')).toMatchObject({ state: 'claimed' })
     const call = route(owner, ledger)
     expect(call({ task_ids: ['orphan-a'], reason: 'x' }, 'GET').status).toBe(405)
