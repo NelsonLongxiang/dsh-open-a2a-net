@@ -307,3 +307,36 @@ for (const scenario of ['absent', 'late', 'incompatible', 'missing-executor', 'd
     } finally { await scope.dispose() }
   } finally { await ctx.fiber.dispose() }
 }
+
+// Acquire the declared general entry through the real preset registry, not only a manually created scope.
+const { default: GeneralRegistry } = await moduleOf('@deepseek-ai/dsh-agent-preset-registry')
+for (const timing of ['ready', 'late']) {
+  const ctx = new Context()
+  let unregister
+  try {
+    await ctx.plugin(SystemPrompt); await ctx.plugin(ToolRegistry); await ctx.plugin(NativeExecutor)
+    ctx.provide('agents', { roots: () => [], get: () => undefined })
+    ctx.provide('sessionProjections', { register: async () => ({ stateOf: () => null }) })
+    const loader = new Loader(ctx)
+    loader.internal = { import: async id => id === generalEntry ? generalPlugin : moduleOf(id) }
+    const provide = () => ctx.plugin(child => { child.provide('ptcRuntime', fixtureRuntime()) })
+    let provider = timing === 'ready' ? await provide() : undefined
+    const registry = new GeneralRegistry(ctx, { default: general.config.id, selectedDefault: { get: () => undefined } })
+    const row = general.config.plugins.find(row => row.id === 'tool-executor-ptc')
+    unregister = await registry.register({ id: general.config.id, plugins: [row] })
+    const lease = await registry.acquireScope(general.config.id)
+    try {
+      const describe = () => ctx.tools.selectExecutor(lease.key).describe(ctx.tools.definitions(lease.key)).schemas.map(tool => tool.name)
+      if (timing === 'late') {
+        assert.throws(describe, /executor.*unavailable|PTC.*unavailable/i)
+        provider = await provide(); await new Promise(done => setImmediate(done)); await new Promise(done => setImmediate(done))
+      }
+      assert.deepEqual(describe(), ['run_code'])
+      await provider.dispose(); await new Promise(done => setImmediate(done))
+      assert.throws(describe, /executor.*unavailable|PTC.*unavailable/i)
+      await provide(); await new Promise(done => setImmediate(done)); await new Promise(done => setImmediate(done))
+      assert.deepEqual(describe(), ['run_code'])
+      console.log('general real preset registry ' + timing + ': same lease fails closed on removal and recovers on replacement')
+    } finally { await lease[Symbol.asyncDispose]() }
+  } finally { await unregister?.(); await ctx.fiber.dispose() }
+}
