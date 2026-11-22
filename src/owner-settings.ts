@@ -15,7 +15,13 @@ export interface OwnerSettings {
   teamScope?: boolean
   announce?: boolean
   seatNames?: Record<string, string>
+  /** #808 P2: network keys a blueprint writes (restart needed): peers, originClaimUrl, originClaimAudiences, originClaimByPeer. */
+  network?: Partial<Record<NetworkKey, unknown>>
 }
+
+/** #808 P2: the network keys the home-layer writer may set besides the owner keys. Never credentials. */
+export const NETWORK_KEYS = ['peers', 'originClaimUrl', 'originClaimAudiences', 'originClaimByPeer'] as const
+export type NetworkKey = typeof NETWORK_KEYS[number]
 
 /** A label shaped like a routable address (`dsh/66abc2cf`, `zone/canvas/x`, `name/<16 hex>`) would pass for another
  *  session in the directory and in `a2a-net teams <query>`; labels are display-only, so that shape is refused. */
@@ -102,9 +108,11 @@ export function applyOwnerSettings(patchYaml: string, changes: OwnerSettings, se
   if (changes.teamScope !== undefined) writes.push(`    teamScope: ${changes.teamScope ? 'true' : 'false'}`)
   if (changes.announce !== undefined) writes.push(`    announce: ${changes.announce ? 'true' : 'false'}`)
   if (changes.seatNames !== undefined) writes.push(`    seatNames: ${JSON.stringify(changes.seatNames)}`)
+  for (const key of NETWORK_KEYS) if (changes.network !== undefined && Object.hasOwn(changes.network, key)) { writes.push(`    ${key}: ${JSON.stringify(changes.network[key])}`); restartNeeded = true }
   if (writes.length === 0) return { yaml: patchYaml, restartNeeded }
   // #812: a new config block starts from the lower layers' keys (JSON is YAML flow); the keys written now win.
-  const seeded = Object.entries(seed).filter(([key]) => !Object.hasOwn(changes, key) && !(key === 'teamScopeInfo' && changes.teamScope !== undefined)).map(([key, value]) => `    ${key}: ${JSON.stringify(value)}`)
+  const written = new Set(writes.map(w => w.trim().split(':')[0]!))
+  const seeded = Object.entries(seed).filter(([key]) => !written.has(key) && !(key === 'teamScopeInfo' && changes.teamScope !== undefined)).map(([key, value]) => `    ${key}: ${JSON.stringify(value)}`)
 
   if (entryStart === -1) {
     // Append a canonical entry (the home patch is a top-level list).
@@ -129,7 +137,7 @@ export function applyOwnerSettings(patchYaml: string, changes: OwnerSettings, se
   // Rewrite exactly our keys inside the block; keep foreign lines verbatim.
   const blockIndent = '    '
   let insertAt = configAt + 1
-  for (const key of KEYS) {
+  for (const key of [...KEYS, ...NETWORK_KEYS]) {
     let found = false
     let j = configAt + 1
     while (j < lines.length) {
@@ -145,8 +153,9 @@ export function applyOwnerSettings(patchYaml: string, changes: OwnerSettings, se
         const write = writes.find(w => w.trim().startsWith(`${key}:`))
         if (write !== undefined) {
           lines[j] = write; found = true
-          // A map may have been authored as block YAML. Replace its nested rows too, not just the heading.
-          if (key === 'seatNames') while (j + 1 < lines.length && (/^ {5,}\S/.test(lines[j + 1] ?? '') || /^\s*$/.test(lines[j + 1] ?? ''))) lines.splice(j + 1, 1)
+          // A map or list may have been authored as block YAML (nested rows, or `- item` rows at the key's own indent):
+          // replace them too, not just the heading.
+          while (j + 1 < lines.length && (/^ {5,}\S/.test(lines[j + 1] ?? '') || /^ {4}-\s/.test(lines[j + 1] ?? '') || /^\s*$/.test(lines[j + 1] ?? '') && /^ {4,}\S/.test(lines[j + 2] ?? ''))) lines.splice(j + 1, 1)
         }
         break
       }
@@ -159,4 +168,39 @@ export function applyOwnerSettings(patchYaml: string, changes: OwnerSettings, se
     }
   }
   return { yaml: lines.join('\n'), restartNeeded }
+}
+
+/**
+ * #808 P2 / #812: the one home-layer a2a write, for the owner-settings route and the team builder's network ops alike.
+ * Reads the home patch, seeds a new config block from the lower layers (credentials refuse), writes `changes`.
+ * @param home - the DSH home (the patch file is <home>/cordis.patch.yml).
+ * @param effective - the running a2a config (exactly the lower layers while the home block is absent).
+ * @param defaults - the schema defaults (left out of a seed).
+ */
+export function writeHomeA2a(home: string, changes: OwnerSettings, effective: Readonly<Record<string, unknown>>, defaults: Readonly<Record<string, unknown>>,
+  fs: { exists(p: string): boolean; read(p: string): string; write(p: string, s: string): void; mkdir(p: string): void }): { ok: true; restartNeeded: boolean; path: string } | { ok: false; code: 'credentials'; error: string; path: string } {
+  const path = home.replace(/\/+$/, '') + '/cordis.patch.yml'
+  const current = fs.exists(path) ? fs.read(path) : ''
+  let seed: Record<string, unknown> = {}
+  if (createsConfigBlock(current)) {
+    const lower = lowerLayerSeed(effective, defaults)
+    if (!lower.ok) return { ok: false, code: 'credentials', path, error: `the profile layer sets ${lower.blocked.join(', ')}: a new home-layer a2a config would hide it and credentials are not copied between layers; add the a2a config (with ${lower.blocked.join(', ')}) to ${path} first` }
+    seed = lower.seed
+  }
+  const { yaml, restartNeeded } = applyOwnerSettings(current, changes, seed)
+  fs.mkdir(home)
+  fs.write(path, yaml)
+  // #817 R2: every home-layer a2a write this boot, from the owner panel and from blueprints alike, in one overlay.
+  const overlay = WRITTEN_SINCE_BOOT.get(path) ?? {}
+  for (const key of ['teamJoinAllowlist', 'teamScope', 'announce', 'seatNames'] as const) if (changes[key] !== undefined) overlay[key] = changes[key]
+  for (const [key, value] of Object.entries(changes.network ?? {})) overlay[key] = value
+  WRITTEN_SINCE_BOOT.set(path, overlay)
+  return { ok: true, restartNeeded, path }
+}
+
+const WRITTEN_SINCE_BOOT = new Map<string, Record<string, unknown>>()
+
+/** #817 R2: the a2a keys written to this home layer since boot (they take effect on restart), whoever wrote them. */
+export function homeA2aWrittenSinceBoot(home: string): Readonly<Record<string, unknown>> {
+  return { ...WRITTEN_SINCE_BOOT.get(home.replace(/\/+$/, '') + '/cordis.patch.yml') }
 }

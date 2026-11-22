@@ -39,7 +39,7 @@ import type { ExposureStore } from '../exposure-store.ts'
 import type { IdempotencyStore } from '../idempotency-store.ts'
 import type { JoinedSessions } from '../joined-store.ts'
 import type { LayoutStore } from '../layout-store.ts'
-import { applyOwnerSettings, createsConfigBlock, lowerLayerSeed, parseSeatNames, type OwnerSettings } from '../owner-settings.ts'
+import { parseSeatNames, writeHomeA2a, type OwnerSettings } from '../owner-settings.ts'
 import { Config as ConfigSchema } from '../config.ts'
 import { rosterOp } from '../roster-op.ts'
 import type { CliHomeDecision } from '../cli-home.ts'
@@ -869,21 +869,14 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           return
         }
         try {
-          const patchPath = join(home, 'cordis.patch.yml')
-          const current = existsSync(patchPath) ? readFileSync(patchPath, 'utf8') : ''
-          // #812: a first write creates the home a2a config block, which replaces the lower layers' block whole; carry their keys.
-          let seed: Record<string, unknown> = {}
-          if (createsConfigBlock(current)) {
-            const lower = lowerLayerSeed(config as unknown as Record<string, unknown>, ConfigSchema({} as never) as unknown as Record<string, unknown>)
-            if (!lower.ok) {
-              const payload = JSON.stringify({ ok: false, error: `the profile layer sets ${lower.blocked.join(', ')}: a new home-layer a2a config would hide it and credentials are not copied between layers; add the a2a config (with ${lower.blocked.join(', ')}) to ${patchPath} first` })
-              res.writeHead(409, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload); return
-            }
-            seed = lower.seed
+          // #812/#808: one shared home-layer write (src/owner-settings.ts writeHomeA2a), tested with a real file.
+          const written = writeHomeA2a(home, changes, config as unknown as Record<string, unknown>, ConfigSchema({} as never) as unknown as Record<string, unknown>,
+            { exists: existsSync, read: p => readFileSync(p, 'utf8'), write: (p, s) => writeFileSync(p, s, 'utf8'), mkdir: p => { mkdirSync(p, { recursive: true }) } })
+          if (!written.ok) {
+            const payload = JSON.stringify({ ok: false, error: written.error })
+            res.writeHead(409, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload); return
           }
-          const { yaml, restartNeeded } = applyOwnerSettings(current, changes, seed)
-          mkdirSync(home, { recursive: true })
-          writeFileSync(patchPath, yaml, 'utf8')
+          const { restartNeeded } = written
           // Hot-apply the call-time owner keys.
           if (changes.seatNames !== undefined) d.ownerSeatNames = changes.seatNames
           if (changes.teamJoinAllowlist !== undefined) d.ownerAllowlist = [...changes.teamJoinAllowlist]
