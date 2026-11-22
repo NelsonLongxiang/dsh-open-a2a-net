@@ -42,7 +42,7 @@ import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, grantClass, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
-import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
+import { CREDENTIAL_ACK_MINUTES_DEFAULT, DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 import { searchTeam } from './search.ts'
 import { A2aReceipts, END_RECEIPT_GRACE_MS } from './receipts.ts'
 export { END_RECEIPT_GRACE_MS } from './receipts.ts'
@@ -115,6 +115,8 @@ export function workerRemotes(settings: Pick<TeamSettings, 'remoteMembers' | 'bo
 
 /** The credential-access audit: at most one owner card per session and kind in this long, and how many hits are kept. */
 export const CREDENTIAL_CARD_GAP_MS = 10 * 60_000
+/** How long a credential card the host closed on a timeout stays on the panel, open to the owner's decision. */
+export const AUTO_ACK_SHOWN_MS = 24 * 60 * 60_000
 const CREDENTIAL_HITS_KEPT = 100
 const CREDENTIAL_KIND_TEXT: Record<CredentialKind, string> = { 'credential-file': '凭据类文件或目录', 'authorization-header': '带 Authorization 的请求', 'other-session': '别的会话的文件' }
 
@@ -1351,7 +1353,9 @@ export class SuperagentHost {
       // A question asked before cards, or by an older member: it has no recommendation, so it is the strictest kind.
       return [{ ...(card ?? { id, question: ticket.attention.question, source: 'ticket' as const, by: '', ticketId: ticket.id, at: ticket.updatedAt, level: 'P1' as const, options: [], recommended: '' }), ...since, title: ticket.title }]
     })
-    return [...this.decisions.open().filter(card => card.source !== 'ticket'), ...onTickets]
+    // Owner 2026-11-23: credential cards the host closed on a timeout stay a day, so the owner sees them and may decide again.
+    const autoAcked = this.decisions.autoAcked(Date.parse(this.now()) - AUTO_ACK_SHOWN_MS)
+    return [...this.decisions.open().filter(card => card.source !== 'ticket'), ...autoAcked, ...onTickets]
   }
 
   /**
@@ -1760,6 +1764,7 @@ export class SuperagentHost {
     try { this.admitChildren() } catch (error) { this.d.logger.warn('superagent: child teams not checked yet: %s', String(error)) }
     try { this.a2a.syncDeclarations() } catch (error) { this.d.logger.warn('superagent: declarations not synced yet: %s', String(error)) }
     try { this.named.tick() } catch (error) { this.d.logger.warn('superagent: named dispatch pass failed: %s', String(error)) }
+    try { this.ackCredentialCards() } catch (error) { this.d.logger.warn('superagent: credential card timeout pass failed: %s', String(error)) }
     // Upstream: evaluation, dispatch and outbound delivery hold while paused.
     if (this.settingsValue.paused) return
     this.executor.tick()
@@ -1846,6 +1851,26 @@ export class SuperagentHost {
     if (this.credentialHits.length > CREDENTIAL_HITS_KEPT) this.credentialHits.splice(0, this.credentialHits.length - CREDENTIAL_HITS_KEPT)
     this.d.logger.warn('superagent: credential-access audit: %s (%s) %s touched %s', session, role, tool, kinds.join(','))
     return kinds
+  }
+
+  /**
+   * Owner 2026-11-23: a credential-access audit card nobody decided within the team's credentialAckMinutes (default 15,
+   * 0 off) is closed as 「知道了」, its only option without a side effect. No other card kind, no other option. The card
+   * keeps an audit record and stays on the panel for a day, marked as closed on a timeout, so the owner may decide again.
+   */
+  ackCredentialCards(): number {
+    const minutes = this.settingsValue.credentialAckMinutes ?? CREDENTIAL_ACK_MINUTES_DEFAULT
+    if (minutes === 0) return 0
+    const at = this.now(), nowMs = Date.parse(at)
+    let closed = 0
+    for (const card of this.decisions.open()) {
+      if (card.source !== 'health' || !card.by.startsWith('credential:') || nowMs - Date.parse(card.at) < minutes * 60_000) continue
+      if (!this.decisions.autoAcknowledge(card.id, at, minutes)) continue
+      this.healthReminders.decided(card.id, '知道了', nowMs)
+      this.d.logger.info('superagent: credential card %s closed as 知道了 after %d minutes (credential-ack-timeout)', card.id, minutes)
+      closed += 1
+    }
+    return closed
   }
 
   noteRefusal(rule: string, detail: { caller?: string; target?: string } = {}): void {
