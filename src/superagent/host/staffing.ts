@@ -22,19 +22,20 @@ import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { GITHUB_REPOS_MAX, REPO_RE } from './policy.ts'
+import { normalizeOriginClaimByPeer } from '../../origin-claim-by-peer.ts'
 
-export const STAFFING_OPS = ['team.create', 'team.retire', 'member.add', 'member.retire', 'member.retemplate', 'team.rules.set', 'team.github.set', 'canvas.create', 'canvas.member.add', 'canvas.member.remove'] as const
+export const STAFFING_OPS = ['team.create', 'team.retire', 'member.add', 'member.retire', 'member.retemplate', 'team.rules.set', 'team.github.set', 'canvas.create', 'canvas.member.add', 'canvas.member.remove', 'network.set', 'network.peer.add', 'network.peer.remove', 'network.originClaimByPeer.set'] as const
 export type StaffingOp = typeof STAFFING_OPS[number]
 export type StaffingSource = 'owner-local' | `market:${string}`
 export type PolicyMode = 'auto' | 'confirm' | 'off'
 
 /** What this version carries out; the rest is refused as `not-yet`. */
-const BUILT: ReadonlySet<StaffingOp> = new Set(['team.create', 'member.add', 'member.retire', 'team.rules.set', 'team.github.set', 'canvas.create', 'canvas.member.add', 'canvas.member.remove'])
+const BUILT: ReadonlySet<StaffingOp> = new Set(['team.create', 'member.add', 'member.retire', 'team.rules.set', 'team.github.set', 'canvas.create', 'canvas.member.add', 'canvas.member.remove', 'network.set', 'network.peer.add', 'network.peer.remove', 'network.originClaimByPeer.set'])
 
 /** #626 W2 defaults for the market; `owner-local` (a blueprint, agreed as a whole) is `confirm`, retiring is `off`. */
 export const DEFAULT_POLICY: Readonly<Record<'owner-local' | 'market', Readonly<Record<StaffingOp, PolicyMode>>>> = {
-  'owner-local': { 'team.create': 'confirm', 'team.retire': 'off', 'member.add': 'confirm', 'member.retire': 'confirm', 'member.retemplate': 'off', 'team.rules.set': 'confirm', 'team.github.set': 'confirm', 'canvas.create': 'confirm', 'canvas.member.add': 'confirm', 'canvas.member.remove': 'confirm' },
-  market: { 'team.create': 'confirm', 'team.retire': 'confirm', 'member.add': 'auto', 'member.retire': 'auto', 'member.retemplate': 'confirm', 'team.rules.set': 'confirm', 'team.github.set': 'confirm', 'canvas.create': 'off', 'canvas.member.add': 'off', 'canvas.member.remove': 'off' },
+  'owner-local': { 'team.create': 'confirm', 'team.retire': 'off', 'member.add': 'confirm', 'member.retire': 'confirm', 'member.retemplate': 'off', 'team.rules.set': 'confirm', 'team.github.set': 'confirm', 'canvas.create': 'confirm', 'canvas.member.add': 'confirm', 'canvas.member.remove': 'confirm', 'network.set': 'confirm', 'network.peer.add': 'confirm', 'network.peer.remove': 'confirm', 'network.originClaimByPeer.set': 'confirm' },
+  market: { 'team.create': 'confirm', 'team.retire': 'confirm', 'member.add': 'auto', 'member.retire': 'auto', 'member.retemplate': 'confirm', 'team.rules.set': 'confirm', 'team.github.set': 'confirm', 'canvas.create': 'off', 'canvas.member.add': 'off', 'canvas.member.remove': 'off', 'network.set': 'off', 'network.peer.add': 'off', 'network.peer.remove': 'off', 'network.originClaimByPeer.set': 'off' },
 }
 
 /** The parameters each operation takes; any other key is refused (`not-allowed`, #626 W3: nothing outside these). */
@@ -49,6 +50,10 @@ const PARAMS: Readonly<Record<StaffingOp, readonly string[]>> = {
   'canvas.create': ['canvas'],
   'canvas.member.add': ['canvas', 'member', 'home'],
   'canvas.member.remove': ['canvas', 'member'],
+  'network.set': ['announce', 'teamScope', 'originClaimUrl', 'originClaimAudiences'],
+  'network.peer.add': ['url'],
+  'network.peer.remove': ['url'],
+  'network.originClaimByPeer.set': ['peer', 'url'],
 }
 
 export interface StaffingOpInput { readonly op: StaffingOp; readonly params: Readonly<Record<string, unknown>> }
@@ -124,6 +129,13 @@ export interface StaffingDeps {
   readonly canvasRemoveMember?: (name: string, member: string) => boolean
   /** The members a canvas has now. */
   readonly canvasMembers?: (name: string) => readonly string[]
+  /**
+   * #808 P2: this host's a2a network settings as they will be after a restart (the running config, overlaid with what was
+   * written to the home layer since boot). Absent: network ops fail.
+   */
+  readonly networkRead?: () => NetworkSettings
+  /** #808 P2: merge these keys into the home layer's a2a config (src/owner-settings.ts writeHomeA2a). Takes effect on restart. */
+  readonly networkWrite?: (changes: Partial<NetworkSettings>) => { ok: true } | { ok: false; error: string }
   /** A CLI member's pinned home origin (#809 R3: restored when a removal is undone). */
   readonly canvasCliHome?: (member: string) => string | undefined
   /** The owner's policy overrides, by source kind and op. */
@@ -184,6 +196,62 @@ function githubSetRefusal(p: Readonly<Record<string, unknown>>): string | undefi
   return undefined
 }
 
+/** #808 P2: the network keys a blueprint may set. Never credentials (apiKey, linkKeys) or the join allow-list. */
+export interface NetworkSettings {
+  readonly peers: readonly string[]
+  readonly announce: boolean
+  readonly teamScope: boolean
+  readonly originClaimUrl: string
+  readonly originClaimAudiences: readonly string[]
+  readonly originClaimByPeer: Readonly<Record<string, string>>
+}
+
+/** An http(s) origin-like URL without credentials. */
+function httpUrl(value: unknown): boolean {
+  if (typeof value !== 'string' || value.length > 200) return false
+  try { const u = new URL(value); return (u.protocol === 'http:' || u.protocol === 'https:') && u.username === '' && u.password === '' } catch { return false }
+}
+
+function networkOpRefusal(op: StaffingOp, p: Readonly<Record<string, unknown>>): string | undefined {
+  if (op === 'network.set') {
+    if (Object.keys(p).length === 0) return 'params: name at least one of announce, teamScope, originClaimUrl, originClaimAudiences'
+    if ('announce' in p && typeof p.announce !== 'boolean') return 'announce is true or false'
+    if ('teamScope' in p && typeof p.teamScope !== 'boolean') return 'teamScope is true or false'
+    if ('originClaimUrl' in p && p.originClaimUrl !== '' && !httpUrl(p.originClaimUrl)) return 'originClaimUrl is an http(s) URL, or empty for the card URL'
+    if ('originClaimAudiences' in p && (!Array.isArray(p.originClaimAudiences) || p.originClaimAudiences.length > 16 || !p.originClaimAudiences.every(httpUrl))) return 'originClaimAudiences is a list of up to 16 http(s) URLs'
+    return undefined
+  }
+  if (op === 'network.peer.add' || op === 'network.peer.remove') return httpUrl(p.url) ? undefined : 'url is the peer\'s http(s) URL'
+  if (!httpUrl(p.peer)) return 'peer is a peer URL exactly as written in peers'
+  if (p.url !== '' && !httpUrl(p.url)) return 'url is the http(s) claim URL for that peer, or empty to remove it'
+  if (p.url !== '' && normalizeOriginClaimByPeer({ [p.peer as string]: p.url }).ignored.length > 0) return 'peer and url do not form a usable originClaimByPeer entry'
+  return undefined
+}
+
+/** Apply one network op to settings (pure; the same rule in check() and step()). */
+export function applyNetworkOp(op: StaffingOp, p: Readonly<Record<string, unknown>>, s: NetworkSettings): { ok: true; next: NetworkSettings; keys: Array<keyof NetworkSettings> } | { ok: false; error: string } {
+  if (op === 'network.set') {
+    const next = { ...s, ...p } as NetworkSettings
+    return { ok: true, next, keys: Object.keys(p) as Array<keyof NetworkSettings> }
+  }
+  const url = p.url as string
+  if (op === 'network.peer.add') return s.peers.includes(url) ? { ok: false, error: `peers has ${url} already` } : { ok: true, next: { ...s, peers: [...s.peers, url] }, keys: ['peers'] }
+  if (op === 'network.peer.remove') {
+    if (!s.peers.includes(url)) return { ok: false, error: `peers has no ${url}` }
+    if (Object.hasOwn(s.originClaimByPeer, url)) return { ok: false, error: `originClaimByPeer has an entry for ${url}: remove it first (network.originClaimByPeer.set with url "")` }
+    return { ok: true, next: { ...s, peers: s.peers.filter(x => x !== url) }, keys: ['peers'] }
+  }
+  const peer = p.peer as string
+  // An entry whose key is not written exactly as in peers is ignored at boot with only a log line: refuse it here.
+  if (url !== '' && !s.peers.includes(peer)) return { ok: false, error: `${peer} is not in peers exactly as written: originClaimByPeer would ignore it` }
+  if (url === '' && !Object.hasOwn(s.originClaimByPeer, peer)) return { ok: false, error: `originClaimByPeer has no entry for ${peer}` }
+  const byPeer = { ...s.originClaimByPeer }
+  if (url === '') delete byPeer[peer]; else byPeer[peer] = url
+  // #817 R3: two keys naming the same peer with different claims are both dropped at boot: refuse the whole table here.
+  if (url !== '' && normalizeOriginClaimByPeer(byPeer).ignored.length > 0) return { ok: false, error: `originClaimByPeer would then name ${peer} twice with different claim URLs (boot drops both)` }
+  return { ok: true, next: { ...s, originClaimByPeer: byPeer }, keys: ['originClaimByPeer'] }
+}
+
 /** A member a plain canvas takes (#808): a local session id, a zone-qualified remote session, or a CLI handle such as superagent-team/<16 hex>. The host checks it again. */
 const CANVAS_MEMBER = /^(session-[0-9a-f-]{8,64}|[A-Za-z0-9._-]{1,64}\/[A-Za-z0-9._@-]{1,96})$/
 
@@ -231,6 +299,8 @@ export class StaffingExecutor {
     const created = new Set<string>()
     const createdCanvases = new Set<string>()
     const existing = new Set<string>()
+    // #808 P2: network ops are simulated in order against the settings a restart would load.
+    let net: NetworkSettings | undefined
     for (const [index, input] of change.ops.entries()) {
       const where = `ops[${String(index)}]`
       if (!(STAFFING_OPS as readonly string[]).includes(String(input?.op))) return { ok: false, code: 'invalid', error: `${where}.op is one of ${STAFFING_OPS.join(', ')}` }
@@ -275,6 +345,14 @@ export class StaffingExecutor {
           if (created.has(canvas) || createdCanvases.has(canvas) || this.d.canvasExists(canvas)) return { ok: false, code: 'invalid', error: `${where}: canvas ${canvas} exists already` }
           createdCanvases.add(canvas)
         } else if (!createdCanvases.has(canvas) && !this.d.canvasExists(canvas)) return { ok: false, code: 'invalid', error: `${where}: no canvas ${canvas}: create it first (canvas.create)` }
+      } else if (input.op === 'network.set' || input.op === 'network.peer.add' || input.op === 'network.peer.remove' || input.op === 'network.originClaimByPeer.set') {
+        const bad = networkOpRefusal(input.op, params)
+        if (bad !== undefined) return { ok: false, code: 'invalid', error: `${where}.${bad}` }
+        if (this.d.networkRead === undefined || this.d.networkWrite === undefined) return { ok: false, code: 'not-yet', error: `${where}: this host does not carry network settings writes` }
+        net ??= this.d.networkRead()
+        const applied = applyNetworkOp(input.op, params, net)
+        if (!applied.ok) return { ok: false, code: 'invalid', error: `${where}: ${applied.error}` }
+        net = applied.next
       } else if (input.op === 'team.github.set') {
         const team = teamRef(); if (typeof team !== 'string') return team
         const bad = githubSetRefusal(params)
@@ -452,6 +530,19 @@ export class StaffingExecutor {
     }
     // #808: plain canvas ops. The owner's agreement in the builder session is the operator's own act (owner ruling
     // 2026-11-22); the member it writes is the explicit canvas record admission reads, traced to this entry in the ledger.
+    // #808 P2: network settings, merged key by key into the home layer's a2a config; they take effect on restart.
+    if (input.op === 'network.set' || input.op === 'network.peer.add' || input.op === 'network.peer.remove' || input.op === 'network.originClaimByPeer.set') {
+      if (this.d.networkRead === undefined || this.d.networkWrite === undefined) return { ok: false, error: 'this host does not carry network settings writes' }
+      const before = this.d.networkRead()
+      const applied = applyNetworkOp(input.op, p, before)
+      if (!applied.ok) return applied
+      const changes = Object.fromEntries(applied.keys.map(k => [k, applied.next[k]])) as Partial<NetworkSettings>
+      const wrote = this.d.networkWrite(changes)
+      if (!wrote.ok) return wrote
+      const previous = Object.fromEntries(applied.keys.map(k => [k, before[k]])) as Partial<NetworkSettings>
+      onUndo(() => this.d.networkWrite!(previous).ok)
+      return { ok: true, result: { keys: applied.keys.join(','), takesEffect: 'after a restart', by: `builder-blueprint ${entry.id}` } }
+    }
     // #809 R1: checked again at run time: a canvas bound to a superagent team since submit (or by an earlier step) is refused.
     if ((input.op === 'canvas.create' || input.op === 'canvas.member.add' || input.op === 'canvas.member.remove') && (this.d.teamOfCanvas(p.canvas as string) !== undefined || created.has(p.canvas as string))) {
       return { ok: false, error: `canvas ${String(p.canvas)} is a superagent team's canvas: use member.add or member.retire` }
