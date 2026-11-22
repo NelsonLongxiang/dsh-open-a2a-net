@@ -16,6 +16,16 @@ function fixture(){const sender=key(),receiver=key(),cli=key();let now=1_700_000
  return{sender,receiver,binding,proposal,claim,file,store,tick:(ms:number)=>{now+=ms},reopen:()=>new RequestRecoveryStore(file,()=>now),grant:()=>store.grant(proposal,receiver,'receiver owner checked original attempts and stopped the old chain',true)}
 }
 describe('owner-reconciled one-request admission',()=>{
+ it.each([1,7])('signs a valid maximum-TTL permit while the clock advances %sms between observations',step=>{
+  const f=fixture();let clock=1_700_000_000_000
+  const advancing=new RequestRecoveryStore(f.file,()=>{const value=clock;clock+=step;return value})
+  const permit=advancing.grant(f.proposal,f.receiver,'receiver owner checked exact original attempts',true)
+  expect(permit.expiresAt-permit.issuedAt).toBe(3_600_000)
+  expect(verifyRecoveryPermit(permit)).toEqual(permit)
+  expect(new RequestRecoveryStore(f.file,()=>clock).outcome(f.binding.taskId,recoveryFingerprint(f.binding))).toBe('ready')
+  expect(new RequestRecoveryStore(f.file,()=>permit.expiresAt).outcome(f.binding.taskId,recoveryFingerprint(f.binding))).toBe('unknown')
+ })
+
  it('advertises ready only for an unexpired unused permit and never after consume/revoke',()=>{
   const f=fixture(),p=f.grant(),b=f.binding,fp=recoveryFingerprint(b)
   expect(f.store.outcome(b.taskId,fp)).toBe('ready')

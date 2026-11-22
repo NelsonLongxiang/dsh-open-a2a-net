@@ -103,7 +103,8 @@ export class RequestRecoveryStore {
    if(old){if(recoveryDigest(old.permit.proposal)!==recoveryDigest(proposal)||old.phase!=='ready'||old.revokedAt!==undefined||old.permit.expiresAt<=this.now())throw Error('original recovery grant cannot be replaced or renewed');return old.permit}
    if(entries.some(e=>{const x=e.permit.proposal.binding;return x.taskId===b.taskId||x.originalTasks.some(t=>b.originalTasks.includes(t))||x.caller===b.caller&&recoveryFingerprint(x)===recoveryFingerprint(b)}))throw Error('original request already has a recovery fence')
    if(entries.length>=REQUEST_RECOVERY_CAP)throw Error('request recovery capacity reached; maintenance required')
-   const p={proposal,issuedAt:this.now(),expiresAt:this.now()+ttl,reconciliation},permit={...p,signature:sign(null,Buffer.from('a2a-request-recovery-permit-v1\0'+permitPayload(p)),receiver).toString('base64')}
+   const issuedAt=this.now()
+   const p={proposal,issuedAt,expiresAt:issuedAt+ttl,reconciliation},permit={...p,signature:sign(null,Buffer.from('a2a-request-recovery-permit-v1\0'+permitPayload(p)),receiver).toString('base64')}
    const entry={permit,phase:'ready' as const,at:this.now()};entries.push({...entry,digest:entryDigest(entry)});return permit
   })
  }
