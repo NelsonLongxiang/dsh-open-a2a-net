@@ -21,22 +21,30 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { GITHUB_REPOS_MAX, REPO_RE } from './policy.ts'
+import { GITHUB_REPOS_MAX, REPO_RE, parseSettings, type TeamSettings } from './policy.ts'
 import { normalizeOriginClaimByPeer } from '../../origin-claim-by-peer.ts'
 import { parseSeatNames } from '../../owner-settings.ts'
 
-export const STAFFING_OPS = ['team.create', 'team.retire', 'member.add', 'member.retire', 'member.retemplate', 'team.rules.set', 'team.github.set', 'canvas.create', 'canvas.member.add', 'canvas.member.remove', 'network.set', 'network.peer.add', 'network.peer.remove', 'network.originClaimByPeer.set', 'team.approvers.set', 'session.join', 'session.seatName.set'] as const
+/**
+ * #808 P4 (owner 2026-11-23: "all the parameters" means the A2A ones): the team's A2A settings a blueprint may set with
+ * team.settings.set: the A2A Source, progress receipts over A2A, the decision-card push, the reviewer's A2A address. The
+ * team's other settings (intake, models, prompts, limits, pause, tools, MCP, prepare, repos) stay in the workbench GUI;
+ * credentials and admission never come here.
+ */
+export const TEAM_SETTING_KEYS = ['sources', 'progressOff', 'decisionPush', 'reviewer'] as const
+
+export const STAFFING_OPS = ['team.create', 'team.retire', 'member.add', 'member.retire', 'member.retemplate', 'team.rules.set', 'team.github.set', 'canvas.create', 'canvas.member.add', 'canvas.member.remove', 'network.set', 'network.peer.add', 'network.peer.remove', 'network.originClaimByPeer.set', 'team.approvers.set', 'session.join', 'session.seatName.set', 'team.settings.set'] as const
 export type StaffingOp = typeof STAFFING_OPS[number]
 export type StaffingSource = 'owner-local' | `market:${string}`
 export type PolicyMode = 'auto' | 'confirm' | 'off'
 
 /** What this version carries out; the rest is refused as `not-yet`. */
-const BUILT: ReadonlySet<StaffingOp> = new Set(['team.create', 'member.add', 'member.retire', 'team.rules.set', 'team.github.set', 'canvas.create', 'canvas.member.add', 'canvas.member.remove', 'network.set', 'network.peer.add', 'network.peer.remove', 'network.originClaimByPeer.set', 'team.approvers.set', 'session.join', 'session.seatName.set'])
+const BUILT: ReadonlySet<StaffingOp> = new Set(['team.create', 'member.add', 'member.retire', 'team.rules.set', 'team.github.set', 'canvas.create', 'canvas.member.add', 'canvas.member.remove', 'network.set', 'network.peer.add', 'network.peer.remove', 'network.originClaimByPeer.set', 'team.approvers.set', 'session.join', 'session.seatName.set', 'team.settings.set'])
 
 /** #626 W2 defaults for the market; `owner-local` (a blueprint, agreed as a whole) is `confirm`, retiring is `off`. */
 export const DEFAULT_POLICY: Readonly<Record<'owner-local' | 'market', Readonly<Record<StaffingOp, PolicyMode>>>> = {
-  'owner-local': { 'team.create': 'confirm', 'team.retire': 'off', 'member.add': 'confirm', 'member.retire': 'confirm', 'member.retemplate': 'off', 'team.rules.set': 'confirm', 'team.github.set': 'confirm', 'canvas.create': 'confirm', 'canvas.member.add': 'confirm', 'canvas.member.remove': 'confirm', 'network.set': 'confirm', 'network.peer.add': 'confirm', 'network.peer.remove': 'confirm', 'network.originClaimByPeer.set': 'confirm', 'team.approvers.set': 'confirm', 'session.join': 'confirm', 'session.seatName.set': 'confirm' },
-  market: { 'team.create': 'confirm', 'team.retire': 'confirm', 'member.add': 'auto', 'member.retire': 'auto', 'member.retemplate': 'confirm', 'team.rules.set': 'confirm', 'team.github.set': 'confirm', 'canvas.create': 'off', 'canvas.member.add': 'off', 'canvas.member.remove': 'off', 'network.set': 'off', 'network.peer.add': 'off', 'network.peer.remove': 'off', 'network.originClaimByPeer.set': 'off', 'team.approvers.set': 'off', 'session.join': 'off', 'session.seatName.set': 'off' },
+  'owner-local': { 'team.create': 'confirm', 'team.retire': 'off', 'member.add': 'confirm', 'member.retire': 'confirm', 'member.retemplate': 'off', 'team.rules.set': 'confirm', 'team.github.set': 'confirm', 'canvas.create': 'confirm', 'canvas.member.add': 'confirm', 'canvas.member.remove': 'confirm', 'network.set': 'confirm', 'network.peer.add': 'confirm', 'network.peer.remove': 'confirm', 'network.originClaimByPeer.set': 'confirm', 'team.approvers.set': 'confirm', 'session.join': 'confirm', 'session.seatName.set': 'confirm', 'team.settings.set': 'confirm' },
+  market: { 'team.create': 'confirm', 'team.retire': 'confirm', 'member.add': 'auto', 'member.retire': 'auto', 'member.retemplate': 'confirm', 'team.rules.set': 'confirm', 'team.github.set': 'confirm', 'canvas.create': 'off', 'canvas.member.add': 'off', 'canvas.member.remove': 'off', 'network.set': 'off', 'network.peer.add': 'off', 'network.peer.remove': 'off', 'network.originClaimByPeer.set': 'off', 'team.approvers.set': 'off', 'session.join': 'off', 'session.seatName.set': 'off', 'team.settings.set': 'off' },
 }
 
 /** The parameters each operation takes; any other key is refused (`not-allowed`, #626 W3: nothing outside these). */
@@ -58,6 +66,7 @@ const PARAMS: Readonly<Record<StaffingOp, readonly string[]>> = {
   'team.approvers.set': ['team', 'approvers'],
   'session.join': ['session'],
   'session.seatName.set': ['session', 'name'],
+  'team.settings.set': ['team', ...TEAM_SETTING_KEYS],
 }
 
 export interface StaffingOpInput { readonly op: StaffingOp; readonly params: Readonly<Record<string, unknown>> }
@@ -364,6 +373,14 @@ export class StaffingExecutor {
         const applied = applyNetworkOp(input.op, params, net)
         if (!applied.ok) return { ok: false, code: 'invalid', error: `${where}: ${applied.error}` }
         net = applied.next
+      } else if (input.op === 'team.settings.set') {
+        const team = teamRef(); if (typeof team !== 'string') return team
+        const raw = Object.fromEntries(Object.entries(params).filter(([k]) => k !== 'team'))
+        if (Object.keys(raw).length === 0) return { ok: false, code: 'invalid', error: `${where}: name at least one of ${TEAM_SETTING_KEYS.join(', ')}` }
+        if ('sources' in raw && (raw.sources === null || typeof raw.sources !== 'object' || Array.isArray(raw.sources) || Object.keys(raw.sources as object).some(k => k !== 'a2a'))) return { ok: false, code: 'invalid', error: `${where}.sources sets only a2a (the GitHub Source is team.github.set; the workbench Source stays in the GUI)` }
+        // The team's own checks, as a dry run, when the team is here now.
+        const now = this.d.team(team)?.settings as TeamSettings | undefined
+        if (now !== undefined) { const dry = parseSettings(raw, now); if (!dry.ok) return { ok: false, code: 'invalid', error: `${where}: ${dry.error}` } }
       } else if (input.op === 'team.approvers.set') {
         const team = teamRef(); if (typeof team !== 'string') return team
         if (!Array.isArray(params.approvers) || params.approvers.length > 10 || !params.approvers.every((x: unknown) => typeof x === 'string' && SESSION.test(x))) return { ok: false, code: 'invalid', error: `${where}.approvers is a list of at most 10 session ids ([] clears it)` }
@@ -650,6 +667,17 @@ export class StaffingExecutor {
     }
     // #808 P3: the team's outbound approvers (they may decide outbound cards for the owner; never their own). The team's own
     // checks apply (saveSettings): not the router, at most 10.
+    // #808 P4: other team settings, through the team's own checks; the undo writes back each named key's previous value.
+    if (input.op === 'team.settings.set') {
+      const raw = Object.fromEntries(Object.entries(p).filter(([k]) => k !== 'team'))
+      const now = team.settings as unknown as Record<string, unknown>
+      const before: Record<string, unknown> = {}
+      for (const key of Object.keys(raw)) before[key] = key === 'sources' ? { a2a: (now.sources as { a2a: boolean }).a2a } : now[key] === undefined && key === 'reviewer' ? null : now[key]
+      const saved = team.saveSettings(raw, by)
+      if (!saved.ok) return saved
+      onUndo(() => team.saveSettings(before, by).ok)
+      return { ok: true, result: { teamId, settings: Object.keys(raw).join(','), by: `builder-blueprint ${entry.id}` } }
+    }
     if (input.op === 'team.approvers.set') {
       const before = team.settings.approvers ?? []
       const list = p.approvers as string[]

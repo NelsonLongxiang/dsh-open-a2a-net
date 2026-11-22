@@ -61,6 +61,16 @@ describe('#808 P3', () => {
     expect(w.names()).toEqual({})
   })
 
+  it('#820 M3: an undo keeps a session that was joined before the blueprint and leaves only the one it joined', async () => {
+    const C = 'session-cccccccc-0003'
+    const w = world({ joined: [A], failJoin: B })
+    await sub(w, 'm3', [{ op: 'session.join', params: { session: A } }, { op: 'session.join', params: { session: C } }, { op: 'session.join', params: { session: B } }])
+    await w.x.agree('m3', 'test')
+    expect(w.x.get('m3')!.steps.map(s => s.state)).toEqual(['done', 'undone', 'failed'])
+    expect(w.joined.has(A)).toBe(true)
+    expect(w.joined.has(C)).toBe(false)
+  })
+
   it('refuses address-shaped seat names, non-session approvers, and the market', async () => {
     const w = world()
     expect(await sub(w, 'r1', [{ op: 'session.seatName.set', params: { session: A, name: 'dsh/12345678' } }])).toMatchObject({ ok: false, code: 'invalid' })
