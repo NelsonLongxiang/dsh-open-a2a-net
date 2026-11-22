@@ -2282,7 +2282,7 @@ export function apply(ctx: Context, config: Config): void {
     hasOpenTicket: (sessionId: string): boolean | undefined => holdsOpenTicket(superagentTeams?.all(), sessionId),
   } as never)
   if (superagentTeams !== undefined) staffing = createStaffing({ path: join(home, 'a2a', 'superagent', 'staffing.json'), teams: superagentTeams, canvasStore, canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
-    sessionValid: id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, presetOf: sessionPresetOf, memberForWrite: (id, peer) => canvasMemberForWrite(id, peer), cliHomeForAdd,
+    sessionValid: id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, presetOf: sessionPresetOf, memberForWrite: (id, peer) => canvasMemberForWrite(id, peer), cliHomeForAdd, a2aHome: home, a2aConfig: config as unknown as Record<string, unknown>,
     teamCanvasRefusal: (canvas, member) => superagentTeams.canvasMemberRefusal(canvas, member, sessionPresetOf), revokeCanvasMember: (id, reason, name) => revokeCanvasMember(id, reason, name), logger })
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
