@@ -2,7 +2,7 @@
 
 Status: **approved by the owner, 2026-11-12** (「都交给你办吧，你都可以的」, handing the review seat the open owner items). Not implemented. Written 2026-11-11.
 
-Implementation check (2026-11-18, next/0.8 `44907c00`): S1a is built (#666, `src/superagent/host/staffing.ts`). It carries out `team.create`, `member.add` and `team.rules.set` from the `owner-local` source, and the builder blueprints use it (#670). Since the owner ruling of 2026-11-18 (#741) it also carries out `member.retire` from `owner-local` only (confirm; never the router, a remote member, or a member that owns an open ticket — running, parked or named). Not built yet: S1b (the market entrance), S2 role templates and S3. `team.retire` and `member.retemplate` are refused as `not-yet`, and so is `member.retire` from any other source.
+Implementation check (2026-11-18, next/0.8 `44907c00`): S1a is built (#666, `src/superagent/host/staffing.ts`). It carries out `team.create`, `member.add` and `team.rules.set` from the `owner-local` source, and the builder blueprints use it (#670). Since the owner ruling of 2026-11-18 (#741) it also carries out `member.retire` from `owner-local` only (confirm; never the router, a remote member, or a member that owns an open ticket — running, parked or named). Since #800 (owner 2026-11-22) it also carries out team.github.set (both sources confirm). Not built yet: S1b (the market entrance), S2 role templates and S3. `team.retire` and `member.retemplate` are refused as `not-yet`, and so is `member.retire` from any other source.
 
 - **Rulings:** the five boundary points below are taken as proposed: the W2 defaults, rules proposed from the market and confirmed on the node, the node's approvers confirming, and a retired member's open ticket finishing.
 - **Next:** S1 is queued behind the root-team work. Each step is high tier and needs a non-self review PASS.
@@ -141,5 +141,5 @@ It cannot read or move credentials, widen tools, or reach the owner's user.
 
 ## Unknowns to check before S2/S3
 
-- Starting a new session for a node identity from the team host, and on a linked member host through `serve`: the session-controller path is there for node identities, but not yet driven from superagent.
-- `node-identity.md` §8 rulings still pending (#161): naming and archiving rules may shape `seatId`.
+- Starting a new session for a node identity from the team host, and on a linked member host through `serve`: the session-controller path is there for node identities (`ctx.sessionController.create({ cwd, agentPreset })`, node-identity.md §4.4; the carrier fields exist in `src/node-store.ts`), but superagent does not drive it yet — that wiring IS S2's step 3.
+- ~~`node-identity.md` §8 rulings still pending (#161)~~ — resolved 2026-11-02 (owner ruling, r3 `24ead2c`: items 1-4 as recommended, 5-10 as proposed); `seatId` naming follows the node name.
