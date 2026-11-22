@@ -113,6 +113,10 @@ describe('#eb6d20df: the owner voids genuine orphans, audited', () => {
     expect(call({ task_ids: [], reason: 'x' }).status).toBe(400)
     expect(call({ task_ids: ['orphan-a'], reason: '' }).status).toBe(400)
     expect(call({ task_ids: ['orphan-a'], reason: 'x', all: true }).status).toBe(400)
+    // #826 review Z14: at most 64 ids in one call; 64 well-formed ids are accepted (unknown ones are refused one by one, not the call).
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => 'nope-' + String(i))
+    expect(call({ task_ids: ids(65), reason: 'x' }).status).toBe(400)
+    expect(call({ task_ids: ids(64), reason: 'x' })).toMatchObject({ status: 200, body: { voided: [] } })
     const ok = call({ task_ids: ['orphan-a', 'live'], reason: 'owner card approved' })
     expect(ok).toMatchObject({ status: 200, body: { ok: true, voided: ['orphan-a'], refused: [{ taskId: 'live' }], receiptCapacity: { retained: 2 } } })
   })

@@ -302,8 +302,11 @@ export class MemberExecutor implements Executor {
       // Paused, nothing launches: the team page says so already, and it is no stalled launch.
       if (this.d.paused?.() === true) return { ...base, reason: 'paused' }
       if (cap > 0 && this.bindings.length >= cap) return { ...base, reason: 'at-cap' }
+      // Ticket 877ca64f: the same exclusion free() applies, so a ticket nobody may take says so instead of "launching".
+      const out = this.d.excluded?.(ticketId) ?? []
+      const excluded = (): QueuedAssignment => ({ ...base, reason: 'all-excluded', member: out[0]! })
       const held = this.ticketMembers[ticketId]
-      if (held !== undefined) {
+      if (held !== undefined && !out.includes(held.member)) {
         if (!members.includes(held.member)) return { ...base, reason: 'member-absent', member: held.member }
         return this.available(held.member) ? free({ ...base, reason: 'launching', member: held.member }) : { ...base, reason: 'member-busy', member: held.member }
       }
@@ -311,9 +314,13 @@ export class MemberExecutor implements Executor {
       if (repo !== undefined) {
         const workers = members.filter(m => this.d.repoOf(m) === repo)
         if (workers.length === 0) return { ...base, reason: 'no-repo-member', repo }
-        return workers.some(m => this.available(m)) ? free({ ...base, reason: 'launching', repo }) : { ...base, reason: 'repo-busy', repo }
+        const allowed = workers.filter(m => !out.includes(m))
+        if (allowed.length === 0) return { ...excluded(), repo }
+        return allowed.some(m => this.available(m)) ? free({ ...base, reason: 'launching', repo }) : { ...base, reason: 'repo-busy', repo }
       }
-      return members.some(m => this.available(m)) ? free({ ...base, reason: 'launching' }) : { ...base, reason: 'all-busy' }
+      const allowed = members.filter(m => !out.includes(m))
+      if (out.length > 0 && allowed.length === 0) return excluded()
+      return allowed.some(m => this.available(m)) ? free({ ...base, reason: 'launching' }) : { ...base, reason: 'all-busy' }
     })
   }
   /**
@@ -780,7 +787,8 @@ export class MemberExecutor implements Executor {
 export interface QueuedAssignment {
   readonly ticketId: string
   readonly assignmentId: string
-  readonly reason: 'launching' | 'paused' | 'delivery-refused' | 'member-busy' | 'member-absent' | 'no-repo-member' | 'repo-busy' | 'all-busy' | 'at-cap'
+  /** `all-excluded` (ticket 877ca64f): every member who could take it is one the owner took this work off; `member` names one. */
+  readonly reason: 'launching' | 'paused' | 'delivery-refused' | 'member-busy' | 'member-absent' | 'no-repo-member' | 'repo-busy' | 'all-busy' | 'at-cap' | 'all-excluded'
   readonly member?: string
   readonly repo?: string
   /** For `delivery-refused`: when the last delivery was refused. */
