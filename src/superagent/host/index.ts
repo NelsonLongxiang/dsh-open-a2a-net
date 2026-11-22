@@ -40,7 +40,7 @@ import { DECISION_FILES_MAX, DecisionBook, decisionFiles, oneClick, parseDecisio
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
-import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, grantClass, type Role } from './role-tools.ts'
+import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, blockableTool, grantClass, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
 import { CREDENTIAL_ACK_MINUTES_DEFAULT, DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 import { searchTeam } from './search.ts'
@@ -186,6 +186,9 @@ export class SuperagentHost {
   private readonly refusalCounts = new Map<string, number>()
   private readonly refusalRecent: Array<{ at: string; rule: string; caller?: string; target?: string }> = []
   /** The credential-access audit's recent hits (kinds and a redacted preview, never what was read) and when each session last raised a card. */
+  /** #825 review: the request a credential card filed back, by trigger id, and the session its ticket must not go to. */
+  private readonly credentialExclusions = new Map<string, string>()
+  private readonly exclusionsPath: string
   private readonly credentialHits: Array<{ at: string; session: string; role: string; tool: string; kinds: readonly CredentialKind[]; preview: string; card?: string }> = []
   private readonly credentialCardAt = new Map<string, number>()
   /** docs/design/superagent-team-mcp.md M1–M3: the team's MCP servers, their tokens in this process's memory only. */
@@ -196,6 +199,8 @@ export class SuperagentHost {
     this.settingsPath = join(dir, 'settings.json')
     this.settingsValue = this.loadSettings()
     this.store = new JsonRepositories(join(dir, 'state.json'))
+    this.exclusionsPath = join(dir, 'credential-exclusions.json')
+    try { const raw = JSON.parse(readFileSync(this.exclusionsPath, 'utf8')) as unknown; if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) for (const [trigger, session] of Object.entries(raw as Record<string, unknown>)) if (typeof session === 'string') this.credentialExclusions.set(trigger, session) } catch { /* none yet */ }
     const assessor: Assessor = {
       request: candidate => { this.candidates.set(candidate.evalId, { candidate, delivered: false }); queueMicrotask(() => this.flushCandidates()) },
       release: evalId => { this.candidates.delete(evalId) },
@@ -205,6 +210,7 @@ export class SuperagentHost {
       path: join(dir, 'executor.json'), members: () => this.pool(),
       held: ticketId => this.splitHeld(ticketId) || this.named.held(ticketId),
       repoOf: member => this.settingsValue.repos[member],
+      excluded: ticketId => this.credentialExcluded(ticketId),
       memberNotes: (member, ticket) => this.memberNotes(member, ticket),
       deliver: (member, text, kind, ticketId, run) => this.deliverToMember(member, text, kind, ticketId, run), engine: () => this.engine,
       paused: () => this.settingsValue.paused,
@@ -1863,6 +1869,13 @@ export class SuperagentHost {
    * ticket that session holds and files it back to the router to give to another member; 「在团队设置里禁用这个工具」
    * adds the tool that touched the credentials to the team's blockedTools. Nothing here runs on a timeout or for an agent.
    */
+  /** #825 review: the sessions a ticket must not go to: those a credential card took the same work off. */
+  private credentialExcluded(ticketId: string): string[] {
+    const ticket = this.store.tickets.get(ticketId)
+    const decision = ticket === undefined ? undefined : this.store.decisions.get(ticket.decisionId) as { triggerIds?: readonly string[] } | undefined
+    return (decision?.triggerIds ?? []).flatMap(id => { const session = this.credentialExclusions.get(id); return session === undefined ? [] : [session] })
+  }
+
   private credentialAction(cardId: string, session: string, question: string, chosen: string): Record<string, unknown> {
     const who = this.memberName(session)
     if (chosen === CREDENTIAL_STOP) {
@@ -1872,8 +1885,17 @@ export class SuperagentHost {
         try { this.engine.stopTicket(ticket.id, `属主在凭据访问审计卡上停掉了 ${who} 的工单`) } catch (error) { failed.push(ticket.id); this.d.logger.warn('superagent: credential card %s: ticket %s not stopped: %s', cardId, ticket.id, String(error)); continue }
         stopped.push(ticket.id)
         const scope = ticket.mandate.scope
-        const filed = this.request(clip(`[凭据访问审计] 属主停掉了 ${who} 手上的工单「${ticket.title}」（该会话的调用触及凭据），请交给别的成员重做，不要再派给 ${who}。${scope !== '' ? `\n原范围：${scope}` : ''}`, 4_000))
-        if (filed.ok) refiled.push(filed.triggerId)
+        // #825 review: the host files this on the owner's card decision; the original scope is quoted with its source, never
+        // restated as the owner's own words (it may come from GitHub or a member).
+        const origin = `${ticket.mandate.actor.source}/${ticket.mandate.actor.id}`
+        const quoted = scope.split('\n').map(line => `> ${line}`).join('\n')
+        const filed = this.request(clip(`[凭据访问审计] 宿主按属主在凭据访问审计卡上的决定，把 ${who} 手上的工单「${ticket.title}」交还总工，请交给别的成员重做（宿主不会再派给 ${who}）。${scope !== '' ? `\n下面是原工单的范围，原样引自其原授权来源 ${origin}，不是属主的新指示：\n${quoted}` : ''}`, 4_000))
+        if (filed.ok) {
+          refiled.push(filed.triggerId)
+          this.credentialExclusions.set(filed.triggerId, session)
+          for (const old of [...this.credentialExclusions.keys()].slice(0, Math.max(0, this.credentialExclusions.size - 500))) this.credentialExclusions.delete(old)
+          try { writeFileSync(this.exclusionsPath, JSON.stringify(Object.fromEntries(this.credentialExclusions))) } catch (error) { this.d.logger.warn('superagent: credential exclusions not saved: %s', String(error)) }
+        }
         else this.d.logger.warn('superagent: credential card %s: ticket %s stopped but not filed back: %s', cardId, ticket.id, filed.error)
       }
       this.d.logger.info('superagent: credential card %s: owner stopped %d ticket(s) of %s', cardId, stopped.length, session)
@@ -1881,6 +1903,7 @@ export class SuperagentHost {
     }
     const tool = this.credentialHits.find(hit => hit.card === cardId)?.tool ?? /的 (\S+) 调用触及/.exec(question)?.[1]
     if (tool === undefined || !/^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(tool)) return { action: 'block-tool', blocked: false, note: 'the tool behind this card is not known any more (the host restarted); block it in the team settings' }
+    if (!blockableTool('member', tool)) return { action: 'block-tool', tool, blocked: false, note: `${tool} is a team tool a member needs to report and be stopped (or the run_code transport); it cannot be blocked` }
     const current = this.settingsValue.blockedTools ?? []
     if (current.includes(tool)) return { action: 'block-tool', tool, blocked: true, already: true }
     const saved = this.saveSettings({ blockedTools: [...current, tool] }, () => true, this.d.presetOf ?? (() => undefined))

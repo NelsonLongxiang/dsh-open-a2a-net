@@ -31,6 +31,8 @@ export interface MemberExecutorDeps {
   readonly members: () => readonly string[]
   /** The repository a member works in (`owner/name`), if the owner named one. */
   readonly repoOf: (member: string) => string | undefined
+  /** #825 review: sessions a ticket must not go to (a ticket the owner took off a session on a credential card), even if named. */
+  readonly excluded?: (ticketId: string) => readonly string[]
   /** What a member is told of its own rules and the rules its ticket was accepted on (design D6). */
   readonly memberNotes?: (member: string, ticket: Ticket) => readonly string[]
   /**
@@ -232,10 +234,12 @@ export class MemberExecutor implements Executor {
   }
   /** Members with no ticket bound — for a ticket of a repository, only that repository's members. */
   private free(ticketId?: string): string[] {
+    const out = ticketId !== undefined ? this.d.excluded?.(ticketId) ?? [] : []
     const held = ticketId !== undefined ? this.ticketMembers[ticketId] : undefined
-    if (held !== undefined) return this.d.members().filter(m => m === held.member && this.available(m))
+    // A session the owner took this work off is never offered it again, even when the router names it.
+    if (held !== undefined && !out.includes(held.member)) return this.d.members().filter(m => m === held.member && this.available(m))
     const repo = ticketId !== undefined ? this.ticketRepos[ticketId] : undefined
-    return this.d.members().filter(m => this.available(m) && (repo === undefined || this.d.repoOf(m) === repo))
+    return this.d.members().filter(m => this.available(m) && !out.includes(m) && (repo === undefined || this.d.repoOf(m) === repo))
   }
 
   private available(member: string): boolean {
