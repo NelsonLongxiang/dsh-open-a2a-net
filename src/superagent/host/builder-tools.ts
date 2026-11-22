@@ -78,6 +78,15 @@ export function orgInventory(input: InventoryInput): { [key: string]: JsonValue 
   return { teams, candidates, staffing, note: 'Teams by id (primary for the primary team); members by seatId. Credentials, MCP servers, tool grants, bots, allow-lists, GitHub settings and file paths are never shown.' }
 }
 
+const githubLine = (g: { enabled?: unknown; allowed?: unknown; repos?: unknown; intake?: unknown }): string => {
+  const parts: string[] = []
+  if (g.enabled !== undefined) parts.push(`来源${g.enabled === true ? '开' : '关'}`)
+  if (g.allowed !== undefined) parts.push(`算作人的账号：${Array.isArray(g.allowed) && g.allowed.length > 0 ? g.allowed.join('、') : '（无）'}`)
+  if (g.repos !== undefined) parts.push(`跟随仓库：${Array.isArray(g.repos) && g.repos.length > 0 ? g.repos.join('、') : '（无）'}`)
+  if (g.intake !== undefined) parts.push(`接收：${g.intake === 'all' ? '全部 issue' : '提到团队的 issue'}`)
+  return parts.join('；')
+}
+
 /** What a blueprint changes, in lines the owner reads before agreeing (TB3: the diff). */
 export function blueprintDiff(ops: StaffingChange['ops'], current: (team: string) => { canvas?: string; rules: ReadonlyArray<{ name: string; text: string }>; dispatch: string } | undefined): string[] {
   const rules = (value: unknown): string => Array.isArray(value) ? value.map(r => `「${String((r as { name?: unknown }).name)}」${String((r as { text?: unknown }).text)}`).join('；') : String(value)
@@ -87,6 +96,10 @@ export function blueprintDiff(ops: StaffingChange['ops'], current: (team: string
     if (input.op === 'team.create') return `${n} 新建团队，画布 ${String(p.canvas)}，总工会话 ${String(p.router)}`
     if (input.op === 'member.add') return `${n} 团队 ${String(p.team)} 加成员 ${String(p.session)}${p.profile !== undefined ? `，档案：${JSON.stringify(p.profile)}` : ''}`
     if (input.op === 'member.retire') return `${n} 团队 ${String(p.team)} 请席位 ${String(p.seatId)} 离开`
+    if (input.op === 'team.github.set') {
+      // The builder's inventory leaves GitHub settings out (allow-lists are the owner's): the diff names the change only.
+      return `${n} 团队 ${String(p.team)} 的 GitHub 来源改为：${githubLine(p)}（未提到的不变；现在的设置请在团队页查看）`
+    }
     if (input.op === 'team.rules.set') {
       const now = current(String(p.team))
       const before = now === undefined ? '（新团队）' : p.scope === 'team' ? rules(now.rules) || '（空）' : p.scope === 'dispatch' ? now.dispatch || '（空）' : '（该席位当前规则）'
@@ -135,7 +148,7 @@ export function registerBuilderTools(ctx: Context, isBuilder: (sessionId: string
   const noExecutor = { ok: false, code: 'no-staffing', error: 'this host has no staffing executor' }
   ctx.tools.register(defineTool({
     name: 'superagent_blueprint_propose',
-    description: 'Team builder only: record a blueprint — one batch of staffing changes — as pending. Nothing changes yet. ops: team.create {canvas, router}, member.add {team, session, profile?: {role, rules[], repo}}, member.retire {team, seatId} (a local member leaves the team; not the router, not one working on a ticket), team.rules.set {team, scope: team | dispatch | member:<seatId>, value}. A new team is named by its canvas; an existing team by its id from superagent_org_read. Only existing sessions. Show the owner the returned diff and wait for their own reply; then call superagent_blueprint_apply.',
+    description: 'Team builder only: record a blueprint — one batch of staffing changes — as pending. Nothing changes yet. ops: team.create {canvas, router}, member.add {team, session, profile?: {role, rules[], repo}}, member.retire {team, seatId} (a local member leaves the team; not the router, not one working on a ticket), team.rules.set {team, scope: team | dispatch | member:<seatId>, value}, team.github.set {team, enabled?, allowed?: GitHub logins of people whose comments count, repos?: owner/name[], intake?: mention | all} (the GitHub Source of the team; keys left out stay). An observer is a member: member.add a session created under the superagent-observer preset. A new team is named by its canvas; an existing team by its id from superagent_org_read. Only existing sessions. Show the owner the returned diff and wait for their own reply; then call superagent_blueprint_apply.',
     parameters: {
       summary: { type: 'string', required: true, description: 'What the blueprint does, in the owner\'s language.' },
       ops: { type: 'array', required: true, items: { type: 'object', additionalProperties: true }, description: 'The operations, in order: { op, params }.' },
