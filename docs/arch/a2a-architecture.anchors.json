@@ -3,8 +3,8 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "60a6fc2f53c533d55ccd4553b882cef908e06340d014c20086784f5d5d16d251",
-    "src/faces/admin.ts": "a1ee2ea1ac934f80c6597d6663380272cc76a460cc024a54bcf591aacb61cd20",
+    "src/index.ts": "e60fe9fbd3c50a7bad34bd9bd5e10cd52bc1dadb0a8c1cf6d9bf3ec7305339c2",
+    "src/faces/admin.ts": "6a602f657dfc509de3f1fd69ab8261eb7c78ae2aa76f6a5438ae625244bbc610",
     "src/canvas-store.ts": "ce935c601af66a524949ccb006310c6b106be159718c0a7839c41fd210c20826",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
     "src/cli-deposit.ts": "d9a887fbfad807321d33c410deaf933f1072ac10ccdca3ff7e4f42380292a1d3",
@@ -14,7 +14,7 @@
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
     "nexus-stage/src/planning-card-text.ts": "1cd8c266532093ad7a1d7fe7df3ac34c6440182eff1469a0dc1d5d3e70889033",
     "nexus-stage/src/planning-fit.ts": "cbda0255062632bd412deb2131c7a01e1e16ab9c72d2a70a32c362e108f8c07a",
-    "src/task-ledger.ts": "ed640981691d096d7c4c4bda36e4ee3258131e15ded43f9dfe8d479f97849cea",
+    "src/task-ledger.ts": "be0fb03190b40411a262e432d8fe2b901b3ab778176f9c2099d8fb8d6b6825ec",
     "nexus-stage/src/world.ts": "8191581b4551b3b5ea3658a4a640fcb68cea0311d500743884de666441501cd0",
     "nexus-stage/src/planning-overlap.ts": "f4e7ecf5af229f6107191f35be2b5a10ebab921b175ba0950f577458dacc5019",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
@@ -23,7 +23,7 @@
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
     "src/task-auth.ts": "bdc867d74eed0528c3bebaf4e55f0c024872cd675ca0181ca30cdac3a0356c5a",
     "src/origin-claim.ts": "54079e01ec324ea1054bc892ef403ba813fa52c480bd99ecb9cf8b73190c376a",
-    "src/tools/info.ts": "02f76222a5c7b2e64847baf80bdc18c8ca370352a6841b44afc60ebe42e49a6d",
+    "src/tools/info.ts": "311ab8abc23e5c9eb4ed234eb980f43f2af3c3b6fa60ddbca78fb8103d4b5851",
     "src/tools/act.ts": "20f20e0cc9a610d16efca48555dfb6548ddd2a3859b33e58d258cf5d34b84cf1",
     "src/peer-directory.ts": "1f5eb4c1b19edcb834c168f8e9c36928128085cb92aa75b52e0f040ab2c5f009",
     "src/card.ts": "e22a998925b4a9ab7c7f514e4b39b68bf64b1838e408d7254d794ba5a4e9221a",
@@ -39,7 +39,7 @@
     {
       "page": "p1-arch",
       "cell": "a1",
-      "ref": "src/tools/info.ts:823",
+      "ref": "src/tools/info.ts:828",
       "expect": "name: 'a2a_probe',"
     },
     {
@@ -135,7 +135,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/faces/admin.ts:633",
+      "ref": "src/faces/admin.ts:635",
       "expect": "path: '/__dsh_a2a/join',"
     },
     {
@@ -309,7 +309,7 @@
     {
       "page": "p1-arch",
       "cell": "d10",
-      "ref": "src/task-ledger.ts:806",
+      "ref": "src/task-ledger.ts:826",
       "expect": "private trimOwed(): void {"
     },
     {

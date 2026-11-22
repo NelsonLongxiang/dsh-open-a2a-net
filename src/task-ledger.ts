@@ -271,8 +271,28 @@ export class TaskLedger {
     if(taskId!==undefined&&reserved.has(taskId))return true
     return this.tasks.filter(t=>this.receiptRecords.some(r=>r.taskId===t.taskId)).length+reserved.size<TASK_CAP
   }
+  /**
+   * #eb6d20df: the receipt-protected gate on its own, apart from deliveryCapacity (512): owed receipts plus retained
+   * deliveries and reservations must stay under TASK_CAP. What holds each slot is listed (ids, target session, state,
+   * times; never content), oldest first, at most `limit` rows; a delivery with no ledger row is marked orphaned.
+   */
+  receiptCapacityState(limit=200):{cap:number;owed:number;retained:number;available:boolean;holders:Array<{taskId:string;kind:'owed'|'delivery'|'dispatch';sessionId?:string;state?:string;createdAt:number;releasesAt?:number;orphaned?:true}>;truncated:number} {
+    const now=this.now(),reserved=this.pendingDeliveryBirths()
+    const owedRows=this.tasks.filter(t=>this.receiptRecords.some(r=>r.taskId===t.taskId))
+    const holders:Array<{taskId:string;kind:'owed'|'delivery'|'dispatch';sessionId?:string;state?:string;createdAt:number;releasesAt?:number;orphaned?:true}>=[
+      ...owedRows.map(t=>({taskId:t.taskId,kind:'owed' as const,createdAt:t.startedAt})),
+      ...this.deliveries.filter(d=>reserved.has(d.taskId)&&d.taskExpected===true&&!['cancelled','failed'].includes(d.state)&&now-d.createdAt<=TASK_DELIVERY_RETENTION_MS).map(d=>({taskId:d.taskId,kind:'delivery' as const,sessionId:d.sessionId,state:d.state,createdAt:d.createdAt,releasesAt:d.createdAt+TASK_DELIVERY_RETENTION_MS,...(d.state==='enqueued'||d.state==='claimed'?{orphaned:true as const}:{})})),
+      ...this.dispatchReservations.filter(d=>reserved.has(d.taskId)&&now-d.createdAt<=TASK_DELIVERY_RETENTION_MS).map(d=>({taskId:d.taskId,kind:'dispatch' as const,createdAt:d.createdAt,releasesAt:d.createdAt+TASK_DELIVERY_RETENTION_MS})),
+    ].sort((a,b)=>a.createdAt-b.createdAt)
+    return {cap:TASK_CAP,owed:owedRows.length,retained:reserved.size,available:owedRows.length+reserved.size<TASK_CAP,holders:holders.slice(0,limit),truncated:Math.max(0,holders.length-limit)}
+  }
+  /** #eb6d20df: a refusal that names this gate and its numbers, so nobody reads deliveryCapacity for it. */
+  receiptCapacityRefusal(tail:string):string {
+    const s=this.receiptCapacityState(0)
+    return `receipt-protected capacity is full (owed receipts ${s.owed} + retained deliveries ${s.retained} >= TASK_CAP ${s.cap}; this is not deliveryCapacity, see receiptCapacity on the state route); ${tail}`
+  }
   private protectReceiptCapacity(taskId?:string):void {
-    if(!this.receiptCapacityAvailable(taskId))throw Error('receipt-protected task capacity full; no new work admitted')
+    if(!this.receiptCapacityAvailable(taskId))throw Error(this.receiptCapacityRefusal('no new work admitted'))
   }
   /**
    * Remember one outbound task owed a receipt, most-recent first, bounded by
