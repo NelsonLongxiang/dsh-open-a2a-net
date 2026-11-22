@@ -13,7 +13,7 @@ model tools.
 
 - Every command except `serve` runs on Node built-ins and this package's own `lib/`; no other package is installed or needed. The DSH packages are optional peers of the plugin and stay out of a global install.
 - Use the `@preview` tag while npm's `latest` still points at 0.7.0; a bare `npm i -g @nelsonlongxiang/dsh-open-a2a-net` installs that older CLI.
-- pnpm 10+ puts global bins in its own directory: run `pnpm setup` once (or put `$PNPM_HOME/bin` on `PATH`) if pnpm reports that the global bin directory is not in `PATH`.
+- pnpm puts global bins in its own directory, `$PNPM_HOME` up to pnpm 10 and `$PNPM_HOME/bin` from pnpm 11. If pnpm reports that the global bin directory is not in `PATH`, run `pnpm setup` once, or put the directory that `pnpm bin -g` prints on `PATH`.
 - `serve` needs the tested DSH runtime next to the package, which a global install does not bring; run it from a folder install (see [Standalone network node](#standalone-network-node-a2a-net-serve)). It names the missing package and the pinned set when one is absent.
 - `a2a-net version` (or `--version`) prints the installed package version.
 
