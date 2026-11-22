@@ -129,3 +129,20 @@ The owner approved the four points below on 2026-11-13 (「是的 可以」), an
 - Changing what a router, member or observer may do. The builder only puts existing roles together.
 
 - **TB7 Members can leave (2026-11-18).** Roster self-join is retired, so the team builder is where membership changes: a blueprint may `member.retire {team, seatId}` a local member (never the router, never one working on a ticket; the owner agrees, and the team's card confirms, as for any change to an existing team). Undo puts the member back on the canvas. Retiring a whole team (`team.retire`) stays out of blueprints.
+
+## Every team setting: in a blueprint or kept for the GUI (#808, owner ruling 2026-11-23)
+
+Owner 2026-11-23: "the builder should be able to set every parameter"; credentials and admission (`apiKey`, `linkKeys`, `teamJoinAllowlist`) stay in the GUI, everything else is judged one by one. Every blueprint op keeps the same rules: only the owner's own agreement in the builder session runs it (D10), owner-local only (`off` for the market), `confirm`, undone in reverse; an approver never decides a card it raised; no credential value in a response or a log.
+
+| Setting | Where | Why |
+|---|---|---|
+| `rules`, `dispatch`, member `profiles` | blueprint: `team.rules.set`, `member.add` profile | built (TB3) |
+| `github`, `sources.github`, `allowed.github` | blueprint: `team.github.set` | built (#800) |
+| `approvers` | blueprint: `team.approvers.set` | built (#808 P3) |
+| `acceptMode`, `models`, `prompts`, `maxConcurrent`, `evalTimeoutMs`, `paused`, `sources.workbench`/`sources.a2a`, `progressOff`, `observerCast`, `idleSweep`, `decisionPush`, `reviewer`, `repos`, `blockedTools` | blueprint: `team.settings.set` (new, #808 P4) | how the team works; none admits anyone or widens what an agent may do (`blockedTools` only narrows) |
+| `credentialAckMinutes` | blueprint: `team.settings.set`, once its PR is in | a timeout for one card kind |
+| `allowed.workbench`, `allowed.a2a`, `bots.a2a` | GUI | admission: who may originate work (owner ruling: admission stays in the GUI) |
+| `serves`, `observers` | neither | written by the `serve` control action / derived from the canvas |
+| `prepare` | **owner to decide**; GUI until then | a shell command run as the local user, outside the sandboxes, before every ticket |
+| `extraTools` | **owner to decide**; GUI until then | widens the router's tools beyond its role |
+| `mcp` | **owner to decide**; GUI until then | gives members every tool of a server at a URL |
