@@ -38,7 +38,7 @@ it('ships the fifth, general preset with its own stable id and display name', ()
 
 it('selects the supported PTC executor and omits the entire local delegation capability group', () => {
   const entries = all(plugins), names = entries.map(row => row.name)
-  expect(names.filter(name => name === '@deepseek-ai/dsh-tool-executor-ptc')).toHaveLength(1)
+  expect(names.filter(name => name === '@nelsonlongxiang/dsh-open-a2a-net/general-ptc')).toHaveLength(1)
   expect(names).not.toContain('@deepseek-ai/dsh-tool-executor-native')
   expect(names).not.toContain('@deepseek-ai/dsh-agent-tool-presentation')
   expect(names.join('\n')).not.toMatch(/subagent|workflow|ralph/)

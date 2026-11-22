@@ -46,6 +46,10 @@
       "types": "./lib/types/superagent/ptc.d.ts",
       "default": "./lib/superagent/ptc.js"
     },
+    "./general-ptc": {
+      "types": "./lib/types/presets/ptc.d.ts",
+      "default": "./lib/presets/ptc.js"
+    },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },

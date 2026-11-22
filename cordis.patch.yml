@@ -573,7 +573,7 @@
               fetch: true
               searchTimeoutMs: 60000
           - id: tool-executor-ptc
-            name: '@deepseek-ai/dsh-tool-executor-ptc'
+            name: '@nelsonlongxiang/dsh-open-a2a-net/general-ptc'
           - id: present
             name: '@deepseek-ai/dsh-tool-present'
           - id: tool-plugin-manager

@@ -217,18 +217,18 @@ if (ptc) {
 // Exercise the new preset's actual PTC executor, replacing only program evaluation with a no-effect fixture.
 const { default: ToolRegistry, defineTool } = await moduleOf('@deepseek-ai/dsh-tools')
 const executorPath = requireDsh.resolve('@deepseek-ai/dsh-tool-executor-ptc')
-const { PtcRuntime } = await import(pathToFileURL(createRequire(executorPath).resolve('@deepseek-ai/dsh-ptc-runtime')).href)
-class FixtureRuntime extends PtcRuntime {
-  language = 'typescript'
-  isolation = 'verification-fixture'
-  resolve(request) { return { ...request, cwd: request.cwd ?? process.cwd(), timeoutMs: 120000 } }
-  run() { throw Error('This verification must not execute a program or business tool') }
-}
+const generalEntry = '@nelsonlongxiang/dsh-open-a2a-net/general-ptc'
+const generalPlugin = await import(new URL('../lib/presets/ptc.js', import.meta.url))
+const fixtureRuntime = () => ({ language: 'typescript', programFormat: 'function-body', retainsState: false,
+  release: async () => {}, resolve: request => ({ ...request, cwd: request.cwd ?? process.cwd(), timeoutMs: 120000 }),
+  run() { throw Error('This verification must not execute a program or business tool') } })
+
 const general = presets.find(row => row.config.id === 'a2a-net-ptc')
 const checkModules = entries => {
   for (const row of entries) {
     if (row.disabled === true) continue
     if (row.group) checkModules(row.config)
+    else if (row.name === generalEntry) assert.equal(typeof generalPlugin.apply, 'function')
     else requireDsh.resolve(row.name)
   }
 }
@@ -238,7 +238,7 @@ const ptcContext = new Context()
 try {
   await ptcContext.plugin(SystemPrompt)
   await ptcContext.plugin(ToolRegistry)
-  await ptcContext.plugin(FixtureRuntime)
+  await ptcContext.plugin(child => { child.provide('ptcRuntime', fixtureRuntime()) })
   const owner = {}
   const scope = createScope(ptcContext, owner)
   const mounting = scope.ctx.extend({ baseUrl: pathToFileURL(dirname(resolver) + '/').href })
@@ -246,7 +246,8 @@ try {
   const loader = mounting.get('loader')
   const executor = general.config.plugins.find(row => row.id === 'tool-executor-ptc')
   assert.ok(executor)
-  await loader.root.update([{ ...executor, name: pathToFileURL(requireDsh.resolve(executor.name)).href }])
+  loader.internal = { import: async name => name === generalEntry ? generalPlugin : moduleOf(name) }
+  await loader.root.update([executor])
   await loader.await()
   const scopeKey = (await import(pathToFileURL(requirePrompt.resolve('@deepseek-ai/dsh-scope')).href)).scopeOf(scope.ctx)
   const tools = scope.ctx.get('tools')
@@ -264,3 +265,45 @@ try {
   await loader.await()
   console.log('a2a-net-ptc: real PTC executor exposes only run_code, generates SDK, rejects direct SDK-tool calls and unloads without running business code')
 } finally { await ptcContext.fiber.dispose() }
+
+// The complete required entry must mask an inherited native selection even before a runtime arrives.
+const NativeExecutor = await moduleOf('@deepseek-ai/dsh-tool-executor-native')
+for (const scenario of ['absent', 'late', 'incompatible', 'missing-executor', 'denied']) {
+  const ctx = new Context()
+  try {
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRegistry)
+    await ctx.plugin(NativeExecutor)
+    ctx.tools.register(defineTool({ name: 'native_fixture', description: 'Never called', parameters: {},
+      output: { schema: { type: 'string' }, render: () => [] }, execute: async () => { throw Error('not executed') } }))
+    const owner = {}, scope = createScope(ctx, owner)
+    try {
+      const loader = new Loader(scope.ctx)
+      loader.internal = { import: async id => {
+        if (scenario === 'missing-executor' && id === '@deepseek-ai/dsh-tool-executor-ptc') {
+          const error = new Error("Cannot find package '@deepseek-ai/dsh-tool-executor-ptc'")
+          error.code = 'ERR_MODULE_NOT_FOUND'; throw error
+        }
+        if (scenario === 'denied' && id === '@deepseek-ai/dsh-app-boot') return { prepareProfileEntries: () => [{ disabled: true }] }
+        return moduleOf(id)
+      } }
+      if (scenario === 'denied') scope.ctx.provide('profileContext', {})
+      if (scenario === 'incompatible') await ctx.plugin(child => { child.provide('ptcRuntime', { language: 'typescript' }) })
+      await scope.ctx.plugin(generalPlugin)
+      const names = () => ctx.tools.selectExecutor(owner).describe(ctx.tools.definitions(owner)).schemas.map(tool => tool.name)
+      assert.throws(names, /PTC.*unavailable|executor.*unavailable|executor.*unloaded/i)
+      await assert.rejects(ctx.tools.execute({ agent: owner, calls: [{ type: 'tool-call', id: 'blocked-native', name: 'native_fixture', arguments: '{}' }], signal: new AbortController().signal }), /PTC.*unavailable|executor.*unavailable/i)
+      if (scenario === 'late') {
+        const provider = await ctx.plugin(child => { child.provide('ptcRuntime', fixtureRuntime()) })
+        await new Promise(done => setImmediate(done)); await new Promise(done => setImmediate(done))
+        assert.deepEqual(names(), ['run_code'])
+        await provider.dispose(); await new Promise(done => setImmediate(done))
+        assert.throws(names, /PTC.*unavailable|executor.*unavailable|executor.*unloaded/i)
+        await ctx.plugin(child => { child.provide('ptcRuntime', fixtureRuntime()) })
+        await new Promise(done => setImmediate(done)); await new Promise(done => setImmediate(done))
+        assert.deepEqual(names(), ['run_code'])
+      }
+      console.log('general required PTC ' + scenario + ': no inherited native tools; late provider/replacement checked when applicable')
+    } finally { await scope.dispose() }
+  } finally { await ctx.fiber.dispose() }
+}

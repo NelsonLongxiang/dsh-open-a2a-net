@@ -4,7 +4,7 @@
 
 ## 能力与限制
 
-- 模型直接可调用面只有 `run_code`；文件、搜索、命令、知识技能、任务计划和 A2A 工具按当前 SDK 声明调用。PTC executor 由预设选定，TypeScript runtime 由宿主提供；缺失时预设不能正常激活，不回落成 native 模式。
+- 模型直接可调用面只有 `run_code`；文件、搜索、命令、知识技能、任务计划和 A2A 工具按当前 SDK 声明调用。预设通过包内 `general-ptc` 入口选定宿主 PTC executor，TypeScript runtime 由宿主提供。入口复用现有 PTC 兼容检查和晚到提供者激活，但先在当前作用域保留不可用 executor 选择：runtime 缺失、不兼容、包缺失或宿主兼容策略拒绝时，工具描述与执行失败关闭，不继承父作用域的 native 工具面；兼容 runtime 晚到或替换后可恢复。
 - 组合中不包含 subagent、fork、control、workflow 或 ralph 的声明行；提示词同样禁止用 shell、其他插件或远端代理绕过禁令。部署若另行注入自定义委派能力，仍须按自身安全规则限制；“少了声明行”不是任意第三方工具的全局安全沙箱。
 - 业务范围不限定为编码：研究、分析、运营、内容、业务流程和开发都可使用。专业岗位、权限、批准要求、工作目录、验收和交付要求来自用户任务及项目指令，不在系统提示词中绑定人员、机器路径、岗位编制或具体 MCP/知识库。Office 等领域能力由宿主的技能/工具按需提供，通用预设不挂载特定业务插件。
 - 不自动加入网络、创建团队、发布节点、配置 peers、修改模型、变更默认预设或获取凭据。接入和成员关系由宿主已有控制完成；本预设不增加权限。
@@ -22,7 +22,8 @@
 
 ## 项目内唯一来源
 
-- [预设组合](../../src/presets/a2a-ptc.patch.yml)：通用工具、PTC executor、隔离的规划/压缩组。
+- [预设组合](../../src/presets/a2a-ptc.patch.yml)：通用工具、必需的 PTC 入口、隔离的规划/压缩组。
+- [必需 PTC 入口](../../src/presets/ptc.ts)：以宿主公开的作用域 executor API 禁止 native 回落，复用现有可选激活器，不改变 Superagent 成员的兼容行为。
 - [协作提示词](../../src/presets/prompts/a2a-ptc.md)：通用目标、协作过程、权限和证据纪律。
 - [规划提示词](../../src/presets/prompts/plan-mode.md)：通用计划及批准门。
 - [生成器](../../scripts/build-agent-presets.mjs)：将通用预设和既有 superagent 预设组合为随包[安装补丁](../../cordis.patch.yml)。运行时无需读源码或本机文件。
