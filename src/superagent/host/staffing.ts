@@ -14,25 +14,27 @@
  *   exists also needs that team's confirmation card. `off` refuses the change.
  * - **This version (S1a).** `team.create`, `member.add` (with an optional profile), `team.rules.set` (with a scope) and,
  *   since the owner ruling of 2026-11-18, `member.retire` (a local member leaves the team's canvas; not the router, not a
- *   member working on a ticket). `team.retire` and `member.retemplate` are refused as `not-yet`: a template needs #626 S2. Only existing sessions are used (S39); a template is refused.
+ *   member working on a ticket), and since #800 (owner 2026-11-22) `team.github.set` (the team's GitHub Source: on/off, whose
+ *   comments are a person's, which repositories and issues). `team.retire` and `member.retemplate` are refused as `not-yet`: a template needs #626 S2. Only existing sessions are used (S39); a template is refused.
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/staffing
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { GITHUB_REPOS_MAX, REPO_RE } from './policy.ts'
 
-export const STAFFING_OPS = ['team.create', 'team.retire', 'member.add', 'member.retire', 'member.retemplate', 'team.rules.set'] as const
+export const STAFFING_OPS = ['team.create', 'team.retire', 'member.add', 'member.retire', 'member.retemplate', 'team.rules.set', 'team.github.set'] as const
 export type StaffingOp = typeof STAFFING_OPS[number]
 export type StaffingSource = 'owner-local' | `market:${string}`
 export type PolicyMode = 'auto' | 'confirm' | 'off'
 
 /** What this version carries out; the rest is refused as `not-yet`. */
-const BUILT: ReadonlySet<StaffingOp> = new Set(['team.create', 'member.add', 'member.retire', 'team.rules.set'])
+const BUILT: ReadonlySet<StaffingOp> = new Set(['team.create', 'member.add', 'member.retire', 'team.rules.set', 'team.github.set'])
 
 /** #626 W2 defaults for the market; `owner-local` (a blueprint, agreed as a whole) is `confirm`, retiring is `off`. */
 export const DEFAULT_POLICY: Readonly<Record<'owner-local' | 'market', Readonly<Record<StaffingOp, PolicyMode>>>> = {
-  'owner-local': { 'team.create': 'confirm', 'team.retire': 'off', 'member.add': 'confirm', 'member.retire': 'confirm', 'member.retemplate': 'off', 'team.rules.set': 'confirm' },
-  market: { 'team.create': 'confirm', 'team.retire': 'confirm', 'member.add': 'auto', 'member.retire': 'auto', 'member.retemplate': 'confirm', 'team.rules.set': 'confirm' },
+  'owner-local': { 'team.create': 'confirm', 'team.retire': 'off', 'member.add': 'confirm', 'member.retire': 'confirm', 'member.retemplate': 'off', 'team.rules.set': 'confirm', 'team.github.set': 'confirm' },
+  market: { 'team.create': 'confirm', 'team.retire': 'confirm', 'member.add': 'auto', 'member.retire': 'auto', 'member.retemplate': 'confirm', 'team.rules.set': 'confirm', 'team.github.set': 'confirm' },
 }
 
 /** The parameters each operation takes; any other key is refused (`not-allowed`, #626 W3: nothing outside these). */
@@ -43,6 +45,7 @@ const PARAMS: Readonly<Record<StaffingOp, readonly string[]>> = {
   'member.retire': ['team', 'seatId'],
   'member.retemplate': ['team', 'seatId', 'template'],
   'team.rules.set': ['team', 'scope', 'value'],
+  'team.github.set': ['team', 'enabled', 'allowed', 'repos', 'intake'],
 }
 
 export interface StaffingOpInput { readonly op: StaffingOp; readonly params: Readonly<Record<string, unknown>> }
@@ -79,7 +82,7 @@ export interface StaffingEntry {
 
 /** A team the executor works on: the parts of a superagent team host it needs. */
 export interface StaffingTeam {
-  readonly settings: { readonly canvas?: string; readonly router?: string; readonly members: readonly string[]; readonly rules: ReadonlyArray<{ name: string; text: string; enabled: boolean }>; readonly dispatch: string; readonly profiles: Readonly<Record<string, unknown>> }
+  readonly settings: { readonly canvas?: string; readonly router?: string; readonly members: readonly string[]; readonly rules: ReadonlyArray<{ name: string; text: string; enabled: boolean }>; readonly dispatch: string; readonly profiles: Readonly<Record<string, unknown>>; readonly sources?: { readonly github?: boolean }; readonly allowed?: { readonly github?: readonly string[] }; readonly github?: { readonly repos: readonly string[]; readonly intake: 'mention' | 'all' } }
   saveSettings(raw: unknown, by: string): { ok: true } | { ok: false; error: string }
   /** The session a seat stands for now, or undefined. */
   memberOfSeat(seatId: string): string | undefined
@@ -151,6 +154,22 @@ function parseProfile(value: unknown): { role?: string; rules?: Array<{ name: st
   return { ...(typeof p.role === 'string' ? { role: p.role } : {}), ...(rules !== undefined ? { rules } : {}), ...(typeof p.repo === 'string' ? { repo: p.repo } : {}) }
 }
 
+/** A GitHub login whose comments count as a person's: a person, not a `[bot]` account (allowed lists people). */
+const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/
+
+/**
+ * `team.github.set` (#800): what the team's GitHub Source is — on or off, whose comments are a person's, which repositories'
+ * issues reach it and which of them count. Each key is optional; at least one is given. The host's settings save checks it again.
+ */
+function githubSetRefusal(p: Readonly<Record<string, unknown>>): string | undefined {
+  if (!['enabled', 'allowed', 'repos', 'intake'].some(key => key in p)) return 'team.github.set needs enabled, allowed, repos or intake'
+  if ('enabled' in p && typeof p.enabled !== 'boolean') return 'enabled is true or false'
+  if ('allowed' in p && (!Array.isArray(p.allowed) || p.allowed.length > 20 || p.allowed.some(x => typeof x !== 'string' || !GITHUB_LOGIN.test(x)))) return 'allowed lists at most 20 GitHub logins of people (no [bot] accounts)'
+  if ('repos' in p && (!Array.isArray(p.repos) || p.repos.length > GITHUB_REPOS_MAX || p.repos.some(x => typeof x !== 'string' || !REPO_RE.test(x)))) return `repos lists at most ${String(GITHUB_REPOS_MAX)} repositories as owner/name`
+  if ('intake' in p && p.intake !== 'mention' && p.intake !== 'all') return 'intake is mention or all'
+  return undefined
+}
+
 export class StaffingExecutor {
   private entries: StaffingEntry[] = []
 
@@ -218,6 +237,10 @@ export class StaffingExecutor {
         const team = teamRef(); if (typeof team !== 'string') return team
         if (created.has(team)) return { ok: false, code: 'invalid', error: `${where}: a team this change creates has no member to retire yet` }
         if (typeof params.seatId !== 'string' || params.seatId === '') return { ok: false, code: 'invalid', error: `${where}.seatId is the seat of a member on the team now` }
+      } else if (input.op === 'team.github.set') {
+        const team = teamRef(); if (typeof team !== 'string') return team
+        const bad = githubSetRefusal(params)
+        if (bad !== undefined) return { ok: false, code: 'invalid', error: `${where}.${bad}` }
       } else if (input.op === 'team.rules.set') {
         const team = teamRef(); if (typeof team !== 'string') return team
         if (typeof params.scope !== 'string' || !SCOPE.test(params.scope)) return { ok: false, code: 'invalid', error: `${where}.scope is team, dispatch or member:<seatId>` }
@@ -423,6 +446,22 @@ export class StaffingExecutor {
       if (!this.d.canvasRemoveLocal(canvas, session)) return { ok: false, error: `seat ${seatId} could not be taken off canvas ${canvas}` }
       onUndo(async () => (await this.d.canvasAddLocal(canvas, session)).ok)
       return { ok: true, result: { teamId, seatId, session } }
+    }
+    if (input.op === 'team.github.set') {
+      const s = team.settings
+      const before = { enabled: s.sources?.github ?? false, allowed: s.allowed?.github ?? [], github: s.github }
+      const raw: Record<string, unknown> = {}
+      if ('enabled' in p) raw.sources = { github: p.enabled }
+      if ('allowed' in p) raw.allowed = { github: p.allowed }
+      if ('repos' in p || 'intake' in p) {
+        const repos = 'repos' in p ? p.repos as string[] : before.github?.repos
+        if (repos === undefined) return { ok: false, error: `team ${teamId} follows no repository yet: give repos with intake` }
+        raw.github = repos.length === 0 ? null : { repos, intake: 'intake' in p ? p.intake : before.github?.intake ?? 'mention' }
+      }
+      const saved = team.saveSettings(raw, by)
+      if (!saved.ok) return saved
+      onUndo(() => team.saveSettings({ sources: { github: before.enabled }, allowed: { github: before.allowed }, github: before.github ?? null }, by).ok)
+      return { ok: true, result: { teamId, github: 'set' } }
     }
     // team.rules.set
     const scope = p.scope as string

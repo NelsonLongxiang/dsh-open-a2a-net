@@ -194,7 +194,9 @@ A request whose first line is `[A2A dispatch] {json}` is read by the host, not o
 - **What it is.** The host's executor of staffing changes ([superagent-staffing-changes](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/def0342b8e459ed7f25fbaf3fd96660970f9dda7/docs/design/superagent-staffing-changes.md), [superagent-builder](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/def0342b8e459ed7f25fbaf3fd96660970f9dda7/docs/design/superagent-builder.md) TB3/TB4). A change is one ledger entry with ordered operations:
   - `team.create {canvas, router}`;
   - `member.add {team, session, profile?: {role, rules[], repo}}`;
-  - `team.rules.set {team, scope: team | dispatch | member:<seatId>, value}`.
+  - `team.rules.set {team, scope: team | dispatch | member:<seatId>, value}`;
+  - `team.github.set {team, enabled?, allowed?, repos?, intake?}` (#800): the team's GitHub Source, on or off, the GitHub logins of people whose comments count (no `[bot]` accounts), the repositories it follows and `mention | all`. Keys left out stay; `repos: []` stops following. Always `confirm`; the diff names only the change.
+- **Observers.** An observer is a member: `member.add` a session created under the `superagent-observer` preset. The owner creates that session.
 - **How teams are named.** A team that exists is named by its id (`primary` for the primary team). A team the same change creates is named by its canvas.
 - **Sessions.** Only existing sessions: the host starts none (S39). Any other field is refused as `not-allowed`, and retiring or templates as `not-yet`.
 - **The owner's route.** `POST /__dsh_a2a/superagent/staffing { action: 'submit', change: { id, summary?, ops }, agree?: true }` or `{ action: 'agree', id }`. It needs the GUI login. `GET` lists the ledger.

@@ -54,7 +54,8 @@ A blueprint is a #626 staffing change with a source of `owner-local`. It is one 
 { id, source: 'owner-local', by: { session: <builder session> }, summary,
   ops: [ { op: 'team.create',     params: { canvas, router: <existing session> } },
          { op: 'member.add',      params: { team, session: <existing session>, profile?: { role, rules[], repo? } } },
-         { op: 'team.rules.set',  params: { team, scope: 'team' | 'dispatch' | 'member:<seatId>', value } }, … ] }
+         { op: 'team.rules.set',  params: { team, scope: 'team' | 'dispatch' | 'member:<seatId>', value } },
+         { op: 'team.github.set', params: { team, enabled?, allowed?, repos?, intake? } }, … ] }   // #800, owner 2026-11-22
 ```
 
 - **Only existing sessions.** Until #626 S2 ships, `member.add` and `team.create` accept only a session that already exists, under the role's preset. A template is refused. This keeps S39. Once S2 ships, `member.add` may name a job template like the market does. The node starts the session within the owner's quotas, and the builder still holds no power to start one.
