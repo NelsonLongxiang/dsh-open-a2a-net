@@ -1,4 +1,6 @@
 import{it,expect,vi}from'vitest'
+// #782-era ledger (2026-11-22, contended Windows host): full-suite load exceeded the 5s default in these specs; raised ceiling only, assertions unchanged.
+vi.setConfig({ testTimeout: 25_000 })
 import{generateKeyPairSync}from'node:crypto'
 import{bootNode,reservePort,runContext,type MeshNode}from'./harness.ts'
 import{signCard}from'../../src/card.ts'

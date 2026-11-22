@@ -6,6 +6,8 @@
  */
 import net from 'node:net'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+// #782-era ledger (2026-11-22, contended Windows host): full-suite load exceeded the 5s default in these specs; raised ceiling only, assertions unchanged.
+vi.setConfig({ testTimeout: 25_000 })
 import { bootNode, reservePort, runContext, steerText } from './harness.ts'
 
 const SCOPE = { teamScopeRouting: false, teamScopeInfo: false, sessionNodes: true } as const

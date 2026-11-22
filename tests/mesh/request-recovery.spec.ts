@@ -1,5 +1,7 @@
 // @vitest-environment node
 import {it,expect,vi,afterEach,onTestFailed} from 'vitest'
+// #782-era ledger (2026-11-22, contended Windows host): full-suite load exceeded the 5s default in these specs; raised ceiling only, assertions unchanged.
+vi.setConfig({ testTimeout: 25_000 })
 import {createPrivateKey,generateKeyPairSync} from 'node:crypto'
 import {readFileSync} from 'node:fs'
 import {join} from 'node:path'
