@@ -115,6 +115,8 @@ export function workerRemotes(settings: Pick<TeamSettings, 'remoteMembers' | 'bo
 
 /** The credential-access audit: at most one owner card per session and kind in this long, and how many hits are kept. */
 export const CREDENTIAL_CARD_GAP_MS = 10 * 60_000
+/** The credential-access card's two options that act (ticket 4351d67f), only on the owner's own choice. */
+export const CREDENTIAL_STOP = '停掉这个会话的工单', CREDENTIAL_BLOCK = '在团队设置里禁用这个工具'
 /** How long a credential card the host closed on a timeout stays on the panel, open to the owner's decision. */
 export const AUTO_ACK_SHOWN_MS = 24 * 60 * 60_000
 const CREDENTIAL_HITS_KEPT = 100
@@ -1391,6 +1393,9 @@ export class SuperagentHost {
     if (card.source === 'health') {
       this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
       this.healthReminders.decided(card.id, chosen, Date.parse(at))
+      // Owner ruling 2026-11-23 (ticket 4351d67f): on a credential-access card the owner's own choice acts. Only this
+      // owner route reaches here; the timeout writes 「知道了」 without it, and an approver may decide outbound cards only.
+      if (card.by.startsWith('credential:') && (chosen === CREDENTIAL_STOP || chosen === CREDENTIAL_BLOCK)) return { ok: true, ...this.credentialAction(card.id, card.by.slice('credential:'.length), card.question, chosen) }
       return { ok: true }
     }
     // Staffing changes (S1a): the team's confirmation of a change; the host's executor carries it out once all agree.
@@ -1844,13 +1849,44 @@ export class SuperagentHost {
       const who = this.memberName(session)
       const what = kinds.map(kind => CREDENTIAL_KIND_TEXT[kind]).join('、')
       const out = this.decisions.propose({ source: 'health', by: `credential:${session}`, question: `${who} 的 ${tool} 调用触及${what}（${at}）`, reason: `宿主只记录不拦截；命令预览（已遮蔽）：${preview}`, at,
-        spec: { level: 'P1', options: ['知道了', '停掉这个会话的工单', '在团队设置里禁用这个工具'], recommended: '知道了' } })
+        spec: { level: 'P1', options: ['知道了', CREDENTIAL_STOP, CREDENTIAL_BLOCK], recommended: '知道了' } })
       if (out.ok) card = out.id
     }
     this.credentialHits.push({ at, session, role, tool, kinds, preview, ...(card !== undefined ? { card } : {}) })
     if (this.credentialHits.length > CREDENTIAL_HITS_KEPT) this.credentialHits.splice(0, this.credentialHits.length - CREDENTIAL_HITS_KEPT)
     this.d.logger.warn('superagent: credential-access audit: %s (%s) %s touched %s', session, role, tool, kinds.join(','))
     return kinds
+  }
+
+  /**
+   * Ticket 4351d67f: what the owner's own choice on a credential-access card does. 「停掉这个会话的工单」 stops each open
+   * ticket that session holds and files it back to the router to give to another member; 「在团队设置里禁用这个工具」
+   * adds the tool that touched the credentials to the team's blockedTools. Nothing here runs on a timeout or for an agent.
+   */
+  private credentialAction(cardId: string, session: string, question: string, chosen: string): Record<string, unknown> {
+    const who = this.memberName(session)
+    if (chosen === CREDENTIAL_STOP) {
+      const stopped: string[] = [], refiled: string[] = [], failed: string[] = []
+      for (const ticket of this.store.tickets.list()) {
+        if (ticket.ended !== undefined || this.executor.memberOfTicket(ticket.id)?.member !== session) continue
+        try { this.engine.stopTicket(ticket.id, `属主在凭据访问审计卡上停掉了 ${who} 的工单`) } catch (error) { failed.push(ticket.id); this.d.logger.warn('superagent: credential card %s: ticket %s not stopped: %s', cardId, ticket.id, String(error)); continue }
+        stopped.push(ticket.id)
+        const scope = ticket.mandate.scope
+        const filed = this.request(clip(`[凭据访问审计] 属主停掉了 ${who} 手上的工单「${ticket.title}」（该会话的调用触及凭据），请交给别的成员重做，不要再派给 ${who}。${scope !== '' ? `\n原范围：${scope}` : ''}`, 4_000))
+        if (filed.ok) refiled.push(filed.triggerId)
+        else this.d.logger.warn('superagent: credential card %s: ticket %s stopped but not filed back: %s', cardId, ticket.id, filed.error)
+      }
+      this.d.logger.info('superagent: credential card %s: owner stopped %d ticket(s) of %s', cardId, stopped.length, session)
+      return { action: 'stop-tickets', session, stopped, refiled, ...(failed.length > 0 ? { failed } : {}) }
+    }
+    const tool = this.credentialHits.find(hit => hit.card === cardId)?.tool ?? /的 (\S+) 调用触及/.exec(question)?.[1]
+    if (tool === undefined || !/^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(tool)) return { action: 'block-tool', blocked: false, note: 'the tool behind this card is not known any more (the host restarted); block it in the team settings' }
+    const current = this.settingsValue.blockedTools ?? []
+    if (current.includes(tool)) return { action: 'block-tool', tool, blocked: true, already: true }
+    const saved = this.saveSettings({ blockedTools: [...current, tool] }, () => true, this.d.presetOf ?? (() => undefined))
+    if (!saved.ok) return { action: 'block-tool', tool, blocked: false, note: saved.error }
+    this.d.logger.info('superagent: credential card %s: owner blocked tool %s for the team', cardId, tool)
+    return { action: 'block-tool', tool, blocked: true }
   }
 
   /**
