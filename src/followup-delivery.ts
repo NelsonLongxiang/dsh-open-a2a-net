@@ -24,7 +24,7 @@ export class FollowupDelivery {
       const existing=this.d.ledger.deliveryFor(taskId)
       if(existing) {
         if(existing.sessionId!==sessionId||existing.fingerprint!==fingerprint||existing.callerKey!==callerKey)throw Error('task delivery identity conflict')
-        if(existing.state==='cancelled'||existing.state==='failed')throw Error('task delivery correspondence is terminal; no replay')
+        if(existing.terminalRecorded===true||existing.state==='cancelled'||existing.state==='failed')throw Error('task delivery correspondence is terminal; no replay')
         if(existing.state==='reserved')throw new FollowupAcceptanceUnknown()
         if(this.d.ledger.orphanDelivery(taskId))throw new AdmittedBookkeepingError(undefined)
         return
