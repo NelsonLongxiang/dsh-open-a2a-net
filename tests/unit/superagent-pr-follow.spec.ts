@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { parsePullRequest } from '../../src/superagent/host/pr-follow.ts'
-import { ReviewRequests } from '../../src/superagent/host/review-requests.ts'
+import { ReviewRequests, verdictLineFor } from '../../src/superagent/host/review-requests.ts'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { DEFAULT_SETTINGS, parseSettings } from '../../src/superagent/host/policy.ts'
 
 const URL = 'https://github.com/o/net/pull/7'
@@ -170,6 +171,9 @@ describe('asking for review', () => {
     expect(m.asked[0]![0]).toBe(reviewer)
     expect(m.asked[0]![1]).toContain(URL)
     expect(m.asked[0]![1]).toContain(head)
+    // #874 review: the request teaches the one structured line, with the full head, and still names no ticket.
+    expect(m.asked[0]![1]).toContain(verdictLineFor(head))
+    expect(m.asked[0]![1]).not.toContain('t1')
     await m.r.opened('o/net#7', next, URL, 't1')
     expect(m.asked).toHaveLength(2)
   })
@@ -212,6 +216,10 @@ describe('asking for review', () => {
       ['verdict: PASS head: abcdef1', 'unverified'],
       ['verdict: PASS head: abcdef1999999999', 'unverified'],
       [`verdict: PASS head: ${head}\nverdict: FAIL head: ${head}`, 'unverified'],
+      [`verdict: PASS head: ${head}\nverdict: PASS head: ${head}`, 'unverified'],
+      [`verdict: PA\u017f\u017f head: ${head}`, 'reference'],
+      [`verdict: pass head: ${head}`, 'reference'],
+      [`Verdict: PASS head: ${head}`, 'reference'],
     ]
     for (const [text, checked] of cases) {
       const m = channel()
@@ -255,6 +263,33 @@ describe('asking for review', () => {
     expect(asked).toHaveLength(2)
     expect(after.list()[0]).toMatchObject({ head: next, task: 'direct-2' })
     expect(after.list()[0]!.state).toBeUndefined()
+  })
+
+  it('#874 review: a verdict stored before structured checking loads as a reference, never a pass, and is saved so', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'sa-review-')), 'r.json')
+    writeFileSync(path, JSON.stringify({ 'o/net#7': { thread: 'o/net#7', ticketId: 't1', head, task: 'direct-1', reviewer, at: '2026-11-09T00:00:00Z', verdict: { pass: true, text: 'PASS @ abcdef1', at: '2026-11-09T00:00:00Z' } } }))
+    const r = new ReviewRequests({ path, reviewer: () => reviewer, logger: { warn: () => {} }, note: () => {}, ask: async () => 'x' })
+    expect(r.list()[0]!.verdict).toMatchObject({ pass: false, checked: 'reference' })
+    expect(JSON.parse(readFileSync(path, 'utf8'))['o/net#7'].verdict).toMatchObject({ pass: false, checked: 'reference' })
+  })
+
+  it('#874 review: a second restart before the unknown request was told still tells the ticket, exactly once', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'sa-review-')), 'r.json')
+    const asked: string[] = [], notes: Array<[string, string]> = []
+    const deps = (ask: () => Promise<string | undefined>) => ({ path, reviewer: () => reviewer, logger: { warn: () => {} }, note: (t: string, x: string) => { notes.push([t, x]) }, ask: async (_a: string, x: string) => { asked.push(x); return await ask() } })
+    const first = new ReviewRequests(deps(() => new Promise<string | undefined>(() => {})))
+    void first.opened('o/net#7', head, URL, 't1')
+    await vi.waitFor(() => { expect(asked).toHaveLength(1) })
+    new ReviewRequests(deps(async () => 'direct-2'))
+    expect(notes).toHaveLength(0)
+    const third = new ReviewRequests(deps(async () => 'direct-2'))
+    await third.opened('o/net#7', head, URL, 't1')
+    expect(notes).toHaveLength(1)
+    expect(third.list()[0]).toMatchObject({ state: 'unknown', told: true })
+    const fourth = new ReviewRequests(deps(async () => 'direct-2'))
+    await fourth.opened('o/net#7', head, URL, 't1')
+    expect(notes).toHaveLength(1)
+    expect(asked).toHaveLength(1)
   })
 
   it('#874: a send that throws leaves the earlier record as it was, and a later read asks again', async () => {

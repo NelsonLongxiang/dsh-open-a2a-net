@@ -26,6 +26,8 @@ export interface ReviewRecord {
   readonly at: string
   /** `asking`: recorded before the send, the outcome not yet known; `unknown`: found still asking after a restart. */
   state?: 'asking' | 'unknown'
+  /** For an `unknown` request: the ticket has been told (kept on disk, so a second restart neither loses nor repeats it). */
+  told?: boolean
   verdict?: ReviewVerdict
 }
 
@@ -42,15 +44,20 @@ export interface ReviewVerdict {
   readonly at: string
 }
 
-/** The structured verdict line, one per receipt: `verdict: PASS head: <full commit>` (backticks around it are allowed). */
-const VERDICT_LINE = /^[ \t>*_`-]*verdict:[ \t]*(PASS|FAIL)[ \t]+head:[ \t]*([0-9a-f]{7,64})[ \t`*_]*$/gimu
+/**
+ * The structured verdict line, exactly one per receipt: `verdict: PASS head: <full commit>` (or FAIL; backticks around it
+ * are allowed). ASCII only and case as written: no case folding, so look-alike spellings never read as PASS.
+ */
+const VERDICT_LINE = /^[ \t>*_`-]*verdict:[ \t]*(PASS|FAIL)[ \t]+head:[ \t]*([0-9a-f]{7,64})[ \t`*_]*$/gm
+/** The line a request asks for, with the head filled in. */
+export const verdictLineFor = (head: string): string => `verdict: PASS head: ${head}`
 
 /** Read a receipt's verdict about `head`. Exported for tests. */
 export function readVerdict(text: string, head: string): { readonly pass: boolean; readonly checked: ReviewVerdict['checked']; readonly reason?: string } {
-  const lines = [...text.matchAll(VERDICT_LINE)].map(m => ({ verdict: m[1]!.toUpperCase(), head: m[2]!.toLowerCase() }))
+  const lines = [...text.matchAll(VERDICT_LINE)].map(m => ({ verdict: m[1]!, head: m[2]! }))
   if (lines.length === 0) return { pass: false, checked: 'reference', reason: '没有结构化结论行（verdict: PASS|FAIL head: <完整提交>）' }
+  if (lines.length > 1) return { pass: false, checked: 'unverified', reason: '结构化结论行不止一行（约定只写一行）' }
   const first = lines[0]!
-  if (lines.some(line => line.verdict !== first.verdict || line.head !== first.head)) return { pass: false, checked: 'unverified', reason: '结构化结论行互相矛盾' }
   if (first.head !== head.toLowerCase()) return { pass: false, checked: 'unverified', reason: `结论行的提交 ${first.head} 不是请求的完整提交` }
   return { pass: first.verdict === 'PASS', checked: 'verified' }
 }
@@ -70,19 +77,26 @@ export class ReviewRequests {
   private records: Record<string, ReviewRecord>
   private readonly asking = new Set<string>()
   /** Notes found at start, given on the first call after it: the host builds this before the engine that takes notes. */
-  private startNotes: Array<[string, string]> = []
+  private startNotes: Array<{ readonly thread: string; readonly head: string; readonly ticketId: string; readonly text: string }> = []
 
   constructor(private readonly d: ReviewRequestsDeps) {
     let stored: Record<string, ReviewRecord> = {}
     try { if (existsSync(d.path)) stored = JSON.parse(readFileSync(d.path, 'utf8')) as Record<string, ReviewRecord> } catch { /* start empty */ }
     this.records = stored
-    // Still asking at start: the process stopped between the send and its record. Whether it went out is unknown; asking
-    // again could ask twice, so it is marked and the ticket told once. A new head asks again as usual.
-    const unknown = Object.values(stored).filter(r => r.state === 'asking')
-    for (const r of unknown) r.state = 'unknown'
-    if (unknown.length > 0) {
-      this.save()
-      for (const r of unknown) this.startNotes.push([r.ticketId, `评审请求是否已发给 ${r.reviewer} 未知（发送途中重启，提交 ${r.head.slice(0, 7)}）：不自动重发，以免重复派单。请核对评审人一侧，或推新提交重新请求。`])
+    let changed = false
+    for (const r of Object.values(stored)) {
+      // A verdict stored before structured checking (no `checked`): a reference only, never a pass.
+      if (r.verdict !== undefined && (r.verdict as Partial<ReviewVerdict>).checked === undefined) {
+        r.verdict = { ...r.verdict, pass: false, checked: 'reference', reason: '旧版记录（结构化核对之前），只作参考' }
+        changed = true
+      }
+      // Still asking at start: the process stopped between the send and its record. Whether it went out is unknown;
+      // asking again could ask twice, so it is marked and the ticket told once (`told` on disk). A new head asks as usual.
+      if (r.state === 'asking') { r.state = 'unknown'; r.told = false; changed = true }
+    }
+    if (changed) this.save()
+    for (const r of Object.values(stored)) {
+      if (r.state === 'unknown' && r.told !== true) this.startNotes.push({ thread: r.thread, head: r.head, ticketId: r.ticketId, text: `评审请求是否已发给 ${r.reviewer} 未知（发送途中重启，提交 ${r.head.slice(0, 7)}）：不自动重发，以免重复派单。请核对评审人一侧，或推新提交重新请求。` })
     }
   }
 
@@ -95,9 +109,15 @@ export class ReviewRequests {
   list(): readonly ReviewRecord[] { return Object.values(this.records) }
 
   private flushStartNotes(): void {
+    if (this.startNotes.length === 0) return
     const notes = this.startNotes
     this.startNotes = []
-    for (const [ticketId, text] of notes) this.d.note(ticketId, text)
+    for (const n of notes) {
+      this.d.note(n.ticketId, n.text)
+      const r = this.records[n.thread]
+      if (r !== undefined && r.head === n.head && r.state === 'unknown') r.told = true
+    }
+    this.save()
   }
 
   /** An open pull request was read at `head`. A failure of the ask throws, and the next read tries again. */
@@ -114,7 +134,7 @@ export class ReviewRequests {
       this.save()
       let task: string | undefined
       // A thrown send is tried again on a later read, as before: the record goes back to what it was.
-      try { task = await this.d.ask(reviewer, `[评审请求] ${url} @ ${head}。请在这个提交上评审，结论用回执给出：PASS 或 FAIL，并写上提交号。`) } catch (error) { restore(); throw error }
+      try { task = await this.d.ask(reviewer, `[评审请求] ${url} @ ${head}。请在这个提交上评审，结论用回执给出，并在回执正文里单独写这一行（只写一行；不通过把 PASS 换成 FAIL）：${verdictLineFor(head)}`) } catch (error) { restore(); throw error }
       if (task === undefined) { restore(); this.d.logger.warn('superagent: the reviewer %s is not linked; no review request was sent', reviewer); return }
       this.records[thread] = { thread, ticketId, head, task, reviewer, at: this.records[thread]!.at }
       this.save()
