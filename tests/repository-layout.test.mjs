@@ -109,3 +109,73 @@ test('lifecycle wrapper propagates a nonzero child status', t => {
   assert.equal(result.report.entries, 0)
   assert.equal(existsSync(result.report.root), false)
 })
+
+function worktreeFixture(t) {
+  const home = fixture(t), main = join(home, 'main'), linked = join(home, 'linked checkout')
+  mkdirSync(main)
+  git(main, 'init', '--quiet')
+  git(main, 'config', 'user.name', 'Layout fixture')
+  git(main, 'config', 'user.email', 'layout@example.invalid')
+  writeFileSync(join(main, 'README.md'), 'layout fixture\n')
+  git(main, 'add', 'README.md')
+  git(main, 'commit', '--quiet', '-m', 'layout fixture')
+  git(main, 'worktree', 'add', '--detach', linked, 'HEAD')
+  return { home, main, linked }
+}
+
+test('linked worktree accepts its Git-created pointer without permitting other root files', t => {
+  const { main, linked } = worktreeFixture(t)
+  assert.deepEqual(checkRepositoryLayout(main).findings, [], 'ordinary .git directory remains allowed')
+  assert.match(readFileSync(join(linked, '.git'), 'utf8'), /^gitdir: /)
+  assert.deepEqual(checkRepositoryLayout(linked).findings, [], 'registered linked worktree is accepted')
+  writeFileSync(join(linked, 'surprise.txt'), 'not a root entrypoint')
+  assert.deepEqual(checkRepositoryLayout(linked).findings.map(f => [f.code, f.path]), [['unexpected-root-entry', 'surprise.txt']])
+})
+
+test('git pointer text alone is never an exception to the pure layout policy', () => {
+  assert.deepEqual(layoutFindings([], [{ name: '.git', kind: 'file' }]).map(f => [f.code, f.path]), [['unexpected-root-entry', '.git']])
+})
+
+test('copied git pointer to another live worktree is rejected even when Git can read its index', t => {
+  const { home, linked } = worktreeFixture(t)
+  const impostor = join(home, 'impostor'); mkdirSync(impostor)
+  writeFileSync(join(impostor, '.git'), readFileSync(join(linked, '.git')))
+  assert.equal(git(impostor, 'rev-parse', '--is-inside-work-tree').trim(), 'true', 'Git itself can resolve the copied file')
+  assert.equal(checkRepositoryLayout(impostor).findings.some(f => f.code === 'unexpected-root-entry' && f.path === '.git'), true, 'back pointer must belong to this checkout')
+})
+
+test('malformed or missing-target git pointer never passes the checker CLI', t => {
+  for (const content of ['not a git pointer\n', 'gitdir: missing-administrative-directory\n']) {
+    const root = fixture(t); writeFileSync(join(root, '.git'), content)
+    const result = spawnSync(process.execPath, [join(repo, 'scripts/verify-repository-layout.mjs'), '--root', root], { encoding: 'utf8' })
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /Cannot inspect Git index|repository-layout:/)
+  }
+})
+
+test('separate git directory pointer is not mistaken for a registered linked worktree', t => {
+  const home = fixture(t), root = join(home, 'separate'), admin = join(home, 'admin')
+  mkdirSync(root)
+  git(root, 'init', '--quiet', '--separate-git-dir', admin)
+  assert.equal(git(root, 'rev-parse', '--is-inside-work-tree').trim(), 'true')
+  writeFileSync(join(admin, 'gitdir'), join(root, '.git') + '\n') // Even a forged reverse pointer is not a linked admin directory.
+  assert.equal(checkRepositoryLayout(root).findings.some(f => f.code === 'unexpected-root-entry' && f.path === '.git'), true)
+})
+
+test('linked worktree also accepts a Git-readable relative gitdir pointer', t => {
+  const { linked } = worktreeFixture(t)
+  const admin = git(linked, 'rev-parse', '--absolute-git-dir').trim()
+  writeFileSync(join(linked, '.git'), 'gitdir: ' + relative(linked, admin) + '\n')
+  assert.deepEqual(checkRepositoryLayout(linked).findings, [])
+})
+
+test('Git environment overrides cannot disguise an invalid local git pointer', t => {
+  const { home, main } = worktreeFixture(t)
+  const root = join(home, 'invalid'); mkdirSync(root)
+  writeFileSync(join(root, '.git'), 'gitdir: missing\n')
+  const result = spawnSync(process.execPath, [join(repo, 'scripts/verify-repository-layout.mjs'), '--root', root], {
+    encoding: 'utf8', env: { ...process.env, GIT_DIR: join(main, '.git'), GIT_WORK_TREE: root },
+  })
+  assert.equal(result.status, 2)
+  assert.match(result.stderr, /Cannot inspect Git index/)
+})
