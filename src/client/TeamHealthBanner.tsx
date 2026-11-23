@@ -10,11 +10,26 @@ export interface HealthRow { readonly code: string; readonly team: string; reado
 
 const POLL_MS = 30_000
 
+/** Same cut as the host's: a member name is shown without control characters and at most this long. */
+const NAME_MAX = 120
+/** The client has no way to import the host's cleaner, so this is its twin; tests/unit/team-health-banner.client.spec.tsx feeds both the same names and wants equal output. */
+export const cleanName = (name: string | undefined): string | undefined => {
+  if (name === undefined) return undefined
+  // Line breaks and tabs become one space; other control characters, bidirectional controls and invisible marks are dropped.
+  // The joiners U+200C and U+200D stay: composite emoji (a family) and several scripts (Persian) need them. Tag characters
+  // (U+E0000..) stay too: subdivision-flag emoji are made of them, and a name comes from the session's own metadata.
+  // eslint-disable-next-line no-control-regex
+  const clean = name.replace(/[\n\r\t\u2028\u2029]+/g, ' ').replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, '').replace(/ {2,}/g, ' ').trim()
+  if (clean === '') return undefined
+  const chars = Array.from(clean)
+  return chars.length > NAME_MAX ? `${chars.slice(0, NAME_MAX - 1).join('')}…` : clean
+}
+
 /** The words for one problem. */
 export function healthLine(row: HealthRow, t: PropsLocale<'a2aNet'>['t']): string {
   const team = row.team === '' ? '' : `${row.team}：`
   // The member's seat name or title first; the short id only when the host has no name for it.
-  const who = row.name ?? (row.session ?? '').slice(8, 16)
+  const who = cleanName(row.name) ?? (row.session ?? '').slice(8, 16)
   if (row.code === 'router-not-loaded') return team + t('team.healthRouter', { session: who })
   if (row.code === 'router-turn-failed') return team + t('team.healthRouterFailed', { session: who, detail: (row.detail ?? '').slice(0, 120) })
   if (row.code === 'mcp-no-seat') return team + t('team.healthMcpNoSeat', { server: row.title ?? '' })
