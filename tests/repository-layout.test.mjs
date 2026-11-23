@@ -179,3 +179,25 @@ test('Git environment overrides cannot disguise an invalid local git pointer', t
   assert.equal(result.status, 2)
   assert.match(result.stderr, /Cannot inspect Git index/)
 })
+
+test('separate gitdir with forged commondir and backlink is not a registered worktree', t => {
+  const { home, main } = worktreeFixture(t)
+  const root = join(home, 'forged checkout'), admin = join(home, 'unregistered admin')
+  mkdirSync(root)
+  git(root, 'init', '--quiet', '--separate-git-dir', admin)
+  writeFileSync(join(admin, 'commondir'), git(main, 'rev-parse', '--absolute-git-dir').trim() + '\n')
+  writeFileSync(join(admin, 'gitdir'), join(root, '.git') + '\n')
+  assert.equal(git(root, 'rev-parse', '--is-inside-work-tree').trim(), 'true', 'Git can resolve these individually valid files')
+  const registered = git(root, 'worktree', 'list', '--porcelain', '-z').split('\0').filter(field => field.startsWith('worktree '))
+  assert.equal(registered.includes('worktree ' + root), false, 'the common repository has not registered this checkout')
+  const result = spawnSync(process.execPath, [join(repo, 'scripts/verify-repository-layout.mjs'), '--root', root], { encoding: 'utf8' })
+  assert.equal(result.status, 1, result.stderr + result.stdout)
+  assert.deepEqual(JSON.parse(result.stdout).findings.map(f => [f.code, f.path]), [['unexpected-root-entry', '.git']])
+})
+
+test('another missing registered worktree does not hide a valid linked checkout', t => {
+  const { home, main, linked } = worktreeFixture(t)
+  const valid = join(home, 'valid checkout'); git(main, 'worktree', 'add', '--detach', valid, 'HEAD')
+  rmSync(linked, { recursive: true, force: true }) // Our fixture only: leave a stale registration, without pruning it.
+  assert.deepEqual(checkRepositoryLayout(valid).findings, [])
+})

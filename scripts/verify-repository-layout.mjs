@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Read-only repository layout check. This reports paths; it never moves or deletes them. */
 import { readdirSync, readFileSync, realpathSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
@@ -51,6 +51,19 @@ function readGit(root, args) {
   return spawnSync('git', args, { cwd: root, env, encoding: 'utf8', maxBuffer: 16 << 20 })
 }
 
+/** A separate gitdir may forge common/back pointers; registration must belong to this common repository too. */
+function isRegisteredAdmin(root, admin, common) {
+  if (dirname(admin) !== realpathSync(join(common, 'worktrees'))) return false
+  const listed = readGit(root, ['worktree', 'list', '--porcelain', '-z'])
+  if (listed.error || listed.status !== 0) return false
+  const current = realpathSync(root)
+  return listed.stdout.split('\0').some(field => {
+    if (!field.startsWith('worktree ')) return false
+    // Another registered checkout can already be gone (prunable); it must not hide this valid one.
+    try { return realpathSync(field.slice(9)) === current } catch { return false }
+  })
+}
+
 /** A copied gitfile is not proof: Git's per-worktree admin directory must point back to this exact .git file. */
 function isLinkedWorktree(root) {
   try {
@@ -60,6 +73,7 @@ function isLinkedWorktree(root) {
     if (paths.length !== 4 || paths[3] !== 'true') return false
     const [admin, common, top] = paths.slice(0, 3).map(path => realpathSync(resolve(root, path)))
     if (admin === common || top !== realpathSync(root)) return false
+    if (!isRegisteredAdmin(root, admin, common)) return false
     const back = readFileSync(join(admin, 'gitdir'), 'utf8').replace(/\r?\n$/, '')
     return realpathSync(resolve(admin, back)) === realpathSync(join(root, '.git'))
   } catch {
