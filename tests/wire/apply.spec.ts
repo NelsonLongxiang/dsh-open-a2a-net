@@ -229,6 +229,22 @@ describe('#835 review: the node card lifetime is checked before anything is sign
     expect(card.expiresAt).toBeGreaterThanOrEqual(before)
     expect(card.expiresAt).toBeLessThanOrEqual(Date.now() + CARD_TTL_MIN_MS)
   })
+
+  it('pins the floor value itself: 99 ms is refused and 100 ms is accepted', async () => {
+    // #839 review G5: the cases above are relative to CARD_TTL_MIN_MS, so changing the constant kept them green.
+    // Written as numbers, the floor can only move with this test.
+    expect(CARD_TTL_MIN_MS).toBe(100)
+    const mount = async () => {
+      const ctx = new Context()
+      cleanupBeforeTempDirs(() => ctx.fiber.dispose())
+      await ctx.plugin(TimerService); await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 }); await ctx.plugin(SystemPrompt); await ctx.plugin(ToolRuntime)
+      return ctx
+    }
+    const refused = await mount()
+    expect(() => apply(refused, makeConfig({ announce: true, agentName: 'peer-ttl', dshHome: tmpHome(), cardTtlMs: 99 }))).toThrow(/at least 100 \(got 99\)/)
+    const accepted = await mount()
+    expect(() => apply(accepted, makeConfig({ announce: true, agentName: 'peer-ttl', dshHome: tmpHome(), cardTtlMs: 100 }))).not.toThrow()
+  })
 })
 
 describe('C2-R1 ordinary apply factory home isolation', () => {
