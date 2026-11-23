@@ -742,12 +742,13 @@ export class SuperagentHost {
    * start fans into nothing), accepted at once with the part's title and scope under the parent's rules: the router's
    * split is the decision. A part may name its member. The parent is held from members from now on.
    */
-  splitParent(parentId: string, asked: string, parts: ReadonlyArray<{ title: string; scope: string; member?: string }>, reason: string): { ok: true; children: string[] } | { ok: false; code: string; error: string } {
+  splitParent(parentId: string, asked: string, parts: ReadonlyArray<{ title: string; scope: string; member?: string }>, reason: string): { ok: true; children: string[]; refused: Array<{ part: number; member: string }> } | { ok: false; code: string; error: string } {
     const parent = this.store.tickets.get(parentId)
     const origin = parent === undefined ? undefined : this.store.triggers.get(parent.origin.triggerId)
     if (parent === undefined || origin === undefined || parent.ended) return { ok: false, code: 'ticket', error: 'no open ticket with that id' }
     const rules = parent.mandate.basis.rules ?? []
     const children: string[] = []
+    const refused: Array<{ part: number; member: string }> = []
     const at = this.now()
     for (const [index, part] of parts.entries()) {
       const thread = origin.threads[0]!
@@ -761,14 +762,19 @@ export class SuperagentHost {
         if (decision.ticketId === undefined) return { ok: false, code: 'part', error: `part ${String(index + 1)} opened no ticket` }
         children.push(decision.ticketId)
         const named = this.named.namedOf(parentId)
-        if (part.member !== undefined) this.executor.setMember(decision.ticketId, part.member)
+        // Ticket eabe1586 (#865 review): a part named to a member the owner took this work off is not recorded as that
+        // member's, nor handed to the parent's named seat: like accept, it goes to another member and the result says so. It asks
+        // about the parent: the children are recorded as its split only after this loop, so a child cannot reach it yet.
+        const excluded = part.member !== undefined && this.excludedFrom(parentId, part.member)
+        if (excluded) refused.push({ part: index + 1, member: part.member! })
+        else if (part.member !== undefined) this.executor.setMember(decision.ticketId, part.member)
         else if (named !== undefined) this.named.accepted(decision.ticketId, named)
       } catch (error) { return { ok: false, code: 'part', error: `part ${String(index + 1)}: ${String(error)}` } }
     }
     this.splits.record(parentId, children, asked, at)
     this.d.logger.info('superagent: ticket %s split into %s', parentId, children.join(', '))
     queueMicrotask(() => this.pass())
-    return { ok: true, children }
+    return { ok: true, children, refused }
   }
 
   /**
