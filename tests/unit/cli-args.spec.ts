@@ -8,7 +8,7 @@
 import { mkdtempSync } from '../temp-dirs.ts'
 import { spawn } from 'node:child_process'
 import { createPrivateKey, createPublicKey, verify as edVerify } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -67,6 +67,21 @@ afterEach(async () => {
 })
 
 describe('a2a-net CLI: exit codes and help', () => {
+  it('version and --version print the package version, also through a symlinked bin as npm -g and pnpm add -g install it', async () => {
+    const pkg = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8')) as { version: string; bin: Record<string, string> }
+    expect(pkg.bin['a2a-net']).toBe('cli/a2a.mjs')
+    const HOME = tmpHomeDir(), env = { HOME, A2A_CLI_HOME: HOME }
+    const link = join(mkdtempSync(join(tmpdir(), 'a2a-cli-bin-')), 'a2a-net')
+    symlinkSync(CLI, link)
+    for (const [args, cli] of [[['--version'], CLI], [['version'], CLI], [['--version'], link]] as const) {
+      const out = await runCli([...args], env, cli)
+      expect(out.code, out.stderr).toBe(0)
+      expect(out.stdout.trim()).toBe(pkg.version)
+    }
+    expect(existsSync(join(HOME, '.a2a'))).toBe(false)
+    expect((await runCli(['help'], env)).stdout).toContain('version (also --version)')
+  })
+
   it('accepted receiver bookkeeping failure is a reconciliation warning, never a redispatch instruction',async()=>{
     const host=await stubHost(()=>({status:200,body:{routed:true,delivered:true,team:'beta/aaaaaaaa',task_id:'accepted-work',task_status:'TASK_STATE_DELIVERED',receiverBookkeeping:'failed',note:'reconcile'}}));servers.push(host.server)
     const HOME=tmpHomeDir(),env={HOME,A2A_CLI_HOME:HOME};await runCli(['init','accepted-cli'],env)

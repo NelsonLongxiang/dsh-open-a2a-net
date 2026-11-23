@@ -131,12 +131,21 @@ export function grantableTool(role: Role, name: string): boolean {
 /** The role class a granted tool is kept under: an observer shares the members' grants (design tool-requests T1). */
 export const grantClass = (role: Role): 'router' | 'member' => role === 'router' ? 'router' : 'member'
 
+/**
+ * #825 review: what the owner's blockedTools can take from a member or an observer: a tool beyond its role's list, or one of
+ * its work tools (bash, edit, read…). Never its team tools (reporting, tickets, schedules, its own ygl), which it needs to
+ * report and be stopped, and never the run_code transport.
+ */
+export function blockableTool(role: Role, name: string): boolean {
+  return !TRANSPORT.has(name) && (!roleTools(role).includes(name) || MEMBER_WORK_TOOLS.includes(name))
+}
+
 export function roleToolRefusal(role: Role, name: string, args?: unknown, granted: readonly string[] = [], blocked: readonly string[] = []): string | undefined {
   if (TRANSPORT.has(name)) return undefined
   if (role === 'builder') return roleTools(role).includes(name) ? scheduleTargetRefusal(name, args) : `[superagent-role-tools] the team builder only reads and proposes, through ${BUILDER_TOOLS.join(', ')}; ${name} is not one of them`
   if (role !== 'router') {
     // T6: a member or an observer has everything but the boundary and what the owner blocked.
-    if (blocked.includes(name) && !roleTools(role).includes(name)) return `[superagent-role-tools] the owner has blocked ${name} for this team's members`
+    if (blocked.includes(name) && blockableTool(role, name)) return `[superagent-role-tools] the owner has blocked ${name} for this team's members`
     if (memberBoundary(role, name)) return `[superagent-role-tools] a team member works with its host's tools and reports with a2a_ticket_report; ${name} leaves the team (other sessions, subagents, A2A sending or another role's tools)`
     return scheduleTargetRefusal(name, args)
   }
@@ -250,7 +259,7 @@ export class RoleTools {
     const has = (name: string): boolean => { try { return tools.get(name, scope) !== undefined } catch { return false } }
     if (role === 'member' || role === 'observer') {
       // T6: a member or an observer sees everything its scope has but the boundary and the owner's blocks.
-      const deny = [...new Set([...MEMBER_DENY, ...TEAM_TOOLS, ...YGL_WORK_TOOLS, ...blocked])].filter(name => (memberBoundary(role, name) || (blocked.includes(name) && !roleTools(role).includes(name))) && has(name))
+      const deny = [...new Set([...MEMBER_DENY, ...TEAM_TOOLS, ...YGL_WORK_TOOLS, ...blocked])].filter(name => (memberBoundary(role, name) || (blocked.includes(name) && blockableTool(role, name))) && has(name))
       try { this.applied.set(id, { role, key, dispose: deny.length === 0 ? () => {} : tools.restrict({ deny }) }) } catch (error) { this.d.logger.warn('superagent: tools of %s not restricted: %s', id, String(error)) }
       return
     }
