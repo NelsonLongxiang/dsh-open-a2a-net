@@ -61,6 +61,23 @@ describe('observer ruling 2026-11-23 (c981a2f2): the receipt of an admitted task
     expect(receiptOfAdmitted(ledger, request.caller, request.team, '[A2A receipt] task job-8 done', 'receipt-job-8')).toBeUndefined()
   })
 
+  it('#853 re-review gaps: the audit names the exact (owner-qualified) address; case and surrounding whitespace never match', async () => {
+    const qualified = request.team + '@deadbeef'
+    const x = fixture(), audited: string[][] = []
+    owe(x.ledger, 'job-qa', request.caller, qualified)
+    const out = await createDirectForward({ ...x.deps, ...refused, audit: (via, taskId, team, kind) => { audited.push([via, taskId, team, kind]) } })({ ...receipt('job-qa'), team: qualified })
+    expect(out.ok).toBe(true)
+    expect(audited).toEqual([['receipt-of-admitted', 'job-qa', qualified, 'result']])
+    for (const [label, team] of [['upper case', request.team.toUpperCase()], ['surrounding whitespace', ' ' + request.team + ' ']] as const) {
+      const y = fixture(), seen: string[] = []
+      owe(y.ledger, 'job-ws')
+      const refusedOut = await createDirectForward({ ...y.deps, ...refused, audit: via => { seen.push(via) } })({ ...receipt('job-ws'), team })
+      expect(refusedOut, label).toMatchObject({ ok: false, delivery: 'not-sent' })
+      expect(y.sent, label).toHaveLength(0)
+      expect(seen, label).toEqual([])
+    }
+  })
+
   it('a settled task passes no second time', async () => {
     const x = fixture()
     owe(x.ledger, 'job-7')
