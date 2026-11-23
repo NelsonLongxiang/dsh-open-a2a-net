@@ -50,7 +50,7 @@ import { applyOwnerSettings, loadSeatNames, writeHomeA2a, type OwnerSettings } f
 import { CLI_HANDLE_RE, CliDepositStore, remoteCliTarget } from './cli-deposit.ts'
 import { cliHomeChoices, decideCliHome } from './cli-home.ts'
 import { forwardScope, outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
-import { createDirectForward, ForwardBirths } from './direct-forward.ts'
+import { createDirectForward, ForwardBirths, receiptBypassLimitsFrom } from './direct-forward.ts'
 import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
@@ -262,8 +262,29 @@ export function directDeliveryExposure(
   return { nonLoopbackPeers, warning }
 }
 
+/** The shortest node-card lifetime `apply()` accepts: the card is re-signed every TTL/4, so this keeps that at 25ms or more. */
+export const CARD_TTL_MIN_MS = 100
+/** The longest delay a Node timer keeps: 2^31 - 1 ms. A longer one is cut to 1 ms (TimeoutOverflowWarning). */
+export const TIMER_MAX_DELAY_MS = 2_147_483_647
+/**
+ * The longest node-card lifetime `apply()` accepts. The card is re-signed every Math.floor(TTL / 4) ms, which must stay
+ * within TIMER_MAX_DELAY_MS: floor(TTL / 4) <= 2^31 - 1 exactly when TTL <= 4 * (2^31 - 1) + 3 = 8_589_934_591 ms
+ * (about 99.4 days). One millisecond more and the re-sign timer runs every millisecond.
+ */
+export const CARD_TTL_MAX_MS = 4 * TIMER_MAX_DELAY_MS + 3
+
 export function apply(ctx: Context, config: Config): void {
   const logger = ctx.logger('a2a')
+  // The node card's lifetime (#835 review): it sets the signed card's expiresAt and the TTL/4 re-sign timer. A missing,
+  // non-finite, zero or tiny value would sign a NaN or already-expired card and re-sign every millisecond, so refuse to
+  // start instead of guessing a lifetime for a signed card.
+  if (!Number.isSafeInteger(config.cardTtlMs) || config.cardTtlMs < CARD_TTL_MIN_MS) {
+    throw new Error(`a2a: cardTtlMs must be a whole number of milliseconds, at least ${String(CARD_TTL_MIN_MS)} (got ${String(config.cardTtlMs)}); refusing to sign node cards with an invalid lifetime`)
+  }
+  // Owner decision card 2026-11-23 (#839 review, note 2): too long a lifetime is refused at the same place, never shortened.
+  if (config.cardTtlMs > CARD_TTL_MAX_MS) {
+    throw new Error(`a2a: cardTtlMs must be a whole number of milliseconds, at most ${String(CARD_TTL_MAX_MS)} (got ${String(config.cardTtlMs)}): the card is re-signed every TTL/4, and a longer interval overflows the timer into a re-sign every millisecond; refusing to sign node cards with an invalid lifetime`)
+  }
   // Plugin-owned agent skill (obelisk pattern): the packaged SKILL.md rides
   // the standard DSH skill catalog through ctx.skills; uninstall is implicit
   // — the registration disposer unwinds with the fiber, so the skill lives
@@ -4402,6 +4423,9 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     candidates: async (team, failures, caller) => { const fetch = memoizedCardFetch(); return { urls: await directoryPeerCandidates(fetch, team, failures, { id: caller, handle: caller }), card: fetch } },
     dispatch: (url, request, guard) => dispatchPeerCandidate(url, request.team, request.message, request.contextId, new AbortController().signal, request.caller, request.noWait, request.taskId, request.caller, guard),
     ledger: taskLedger, activity: (team, peer, ok) => recordActivity('fwd', team, peer, ok),
+    audit: (via, taskId, team, kind) => { logger.info(`a2a: allowed the ${kind} receipt of admitted task ${taskId.slice(0, 80)} to ${team} to skip team-scope (via=${via})`); recordActivity('fwd', team, `via=${via}:${kind}`, true) },
+    bypassRefused: (taskId, team, kind, reason) => { logger.warn(`a2a: the ${kind} receipt of admitted task ${taskId.slice(0, 80)} to ${team} is judged by team-scope: ${reason}`); recordActivity('fwd', team, `via=receipt-of-admitted:${kind}:over-limit`, false) },
+    receiptBypassLimits: () => receiptBypassLimitsFrom(config.receiptBypassProgressMax, config.receiptBypassProgressIntervalMs, config.receiptBypassAttentionMax),
   })
 
   /**

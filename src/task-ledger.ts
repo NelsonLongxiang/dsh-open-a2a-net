@@ -93,7 +93,7 @@ export class TaskLedger {
     const row=this.deliveries.find(r=>r.sessionId===sessionId&&r.messageId===messageId);return row?{...row}:undefined
   }
   reserveDelivery(record: TaskDelivery): TaskDelivery {
-    const parsed=parseTaskDelivery(record);if(!parsed)throw Error('invalid task delivery correspondence')
+    const parsed=parseTaskDelivery(record);if(!parsed||parsed.terminalRecorded!==undefined)throw Error('invalid task delivery correspondence')
     const old=this.deliveryFor(record.taskId)
     if(old) {
       if(old.sessionId!==record.sessionId||old.fingerprint!==record.fingerprint)throw Error('task delivery identity conflict')
@@ -347,6 +347,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    if (this.deliveries.some(row => row.taskId === taskId && row.terminalRecorded === true)) return
     this.protectReceiptCapacity(taskId)
     this.counters.trackedTotal += 1
     this.tasks = [{
@@ -371,6 +372,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    if (this.deliveries.some(row => row.taskId === taskId && row.terminalRecorded === true)) return
     this.protectReceiptCapacity(taskId)
     this.counters.trackedTotal += 1
     this.tasks = [{
@@ -407,6 +409,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    if (this.deliveries.some(row => row.taskId === taskId && row.terminalRecorded === true)) return
     this.protectReceiptCapacity(taskId)
     this.counters.trackedTotal += 1
     this.tasks = [{
@@ -823,7 +826,15 @@ export class TaskLedger {
    * gh#154: every arrival and every cap-trimmed row is counted — the trim
    * itself stays exactly as it was, only visible now.
    */
+  private recordTerminalDelivery(record: ArchivedRecord): void {
+    // Eviction is not proof that owed work completed. Unknown legacy records stay conservative.
+    if (!['receipt', 'echo', 'cancelled', 'abandoned'].includes(record.endedBy ?? '') || this.tasks.some(row => row.taskId === record.taskId)) return
+    const delivery = this.deliveries.find(row => row.taskId === record.taskId && row.taskExpected === true)
+    if (delivery) delivery.terminalRecorded = true
+  }
+
   private archiveSettled(record: ArchivedRecord): void {
+    this.recordTerminalDelivery(record)
     const next = [record, ...this.archived]
     const kept = next.slice(0, this.archiveCap)
     this.counters.archiveTrimmed += next.length - kept.length
@@ -1067,6 +1078,9 @@ export class TaskLedger {
       }
       this.counters.restoreTrimmed += Math.max(0, restored.length - this.tasks.length)
       this.counters.restoreTrimmed += Math.max(0, this.archived.length - this.archiveCap)
+      // Only terminal evidence actually present in this snapshot can migrate old occurrences; it runs before #824's
+      // release below, which drops taskExpected from rows past the cap (recordTerminalDelivery needs it).
+      for (const row of this.archived) this.recordTerminalDelivery(row)
       this.releaseSettledDeliveries(new Set(this.archived.slice(this.archiveCap).map(row=>row.taskId)))
       this.archived = this.archived.slice(0, this.archiveCap)
       // gh#154: restore the lifetime counters through the conservation
