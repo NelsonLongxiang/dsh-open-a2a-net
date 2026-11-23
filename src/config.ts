@@ -52,6 +52,8 @@ export interface Config {
   readonly receiptBypassProgressMax: number
   /** Observer ruling 2026-11-23: the shortest gap between two such progress receipts. */
   readonly receiptBypassProgressIntervalMs: number
+  /** #853 re-review: at most this many distinct attention questions per owed task skip team-scope as receipts of an admitted task. */
+  readonly receiptBypassAttentionMax: number
   /**
    * superagent design v4: run superagent's domain engine in this host (router, Sources, tickets). On by default and idle
    * until the owner binds a canvas team and names its router in the workbench; `false` turns it off.
@@ -304,6 +306,7 @@ export const Config: s<Config> = s.object({
   forwardDirect: s.boolean().default(true),
   receiptBypassProgressMax: s.number().default(20),
   receiptBypassProgressIntervalMs: s.number().default(60_000),
+  receiptBypassAttentionMax: s.number().default(20),
   superagent: s.boolean().default(true),
   agentName: s.string().default('DeepSeek Harness A2A node'),
   peers: s.array(s.string()).default([]),
