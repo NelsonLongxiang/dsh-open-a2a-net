@@ -144,12 +144,21 @@ export function probePath(root, probe) {
   return join(dirname(from), `zz-probe-${probe.id}${dot === -1 ? '' : name.slice(dot)}`)
 }
 
-/** Stop a test run and everything it started: its process group gets SIGTERM, then SIGKILL after 5 s. */
-export function stopChild(child) {
+/** How long a stopped test run's process group gets after SIGTERM before SIGKILL. */
+export const KILL_GRACE_MS = 5000
+
+/**
+ * Stop a test run and everything it started: its process group gets SIGTERM, then SIGKILL after KILL_GRACE_MS whether or
+ * not the direct child is still there (a wrapper exits on SIGTERM while a test process under it may ignore SIGTERM).
+ * pending holds the timers still to fire, so run() can send their SIGKILL at once when it finishes earlier.
+ */
+export function stopChild(child, pending) {
   if (!child?.pid) return
   const send = signal => { try { if (process.platform !== 'win32') { process.kill(-child.pid, signal); return } } catch { /* group gone */ } try { child.kill(signal) } catch { /* gone */ } }
   send('SIGTERM')
-  setTimeout(() => { if (child.exitCode === null && child.signalCode === null) send('SIGKILL') }, 5000).unref()
+  const timer = setTimeout(() => { pending?.delete(timer); send('SIGKILL') }, KILL_GRACE_MS)
+  timer.unref()
+  pending?.set(timer, send)
 }
 
 function runCommand(state, root, spec, files, logPath) {
@@ -162,7 +171,7 @@ function runCommand(state, root, spec, files, logPath) {
     // Its own process group, so a stop also reaches what the command starts (pnpm or npx wrappers, test workers).
     const child = spawn(exe, [...command.slice(1), ...files], { cwd: root, stdio: ['ignore', fd, fd], detached: process.platform !== 'win32' })
     state.child = child
-    if (spec.timeoutMs) timer = setTimeout(() => { timedOut = true; stopChild(child) }, spec.timeoutMs)
+    if (spec.timeoutMs) timer = setTimeout(() => { timedOut = true; stopChild(child, state.pending) }, spec.timeoutMs)
     child.on('error', error => finish({ code: -1, error: String(error) }))
     child.on('close', (code, signal) => finish({ code: code ?? -1, signal: signal ?? undefined }))
   })
@@ -224,8 +233,8 @@ async function runProbe(state, root, spec, p, out) {
  */
 export async function run({ root, spec, out, signals = true }) {
   preflight(root, spec, out)
-  const state = { touched: new Map(), child: undefined, interrupted: false }
-  const onSignal = () => { state.interrupted = true; stopChild(state.child) }
+  const state = { touched: new Map(), child: undefined, interrupted: false, pending: new Map() }
+  const onSignal = () => { state.interrupted = true; stopChild(state.child, state.pending) }
   const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP']
   if (signals) for (const s of SIGNALS) process.on(s, onSignal)
   const results = [], probes = []
@@ -253,6 +262,9 @@ export async function run({ root, spec, out, signals = true }) {
   } catch (error) {
     failure = error
   } finally {
+    // Whatever was stopped and is still waiting for its SIGKILL gets it now: nothing a test run started outlives the runner.
+    for (const [timer, send] of state.pending) { clearTimeout(timer); send('SIGKILL') }
+    state.pending.clear()
     restore(root, state.touched)
     if (signals) for (const s of SIGNALS) process.off(s, onSignal)
   }

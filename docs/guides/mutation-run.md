@@ -62,7 +62,7 @@ node scripts/mutation-run.mjs <spec.json> [--root DIR] [--out DIR] [--json]
 | 3 | 还原或计数失败（某次测试弄脏了工作树、跑完个数不对）；请人工查看工作树 |
 | 130 | 被 SIGINT/SIGTERM 中断；先停掉测试、还原文件再退出 |
 
-每次测试运行在独立的进程组里；SIGINT、SIGTERM、SIGHUP 和超时都会把 SIGTERM 发给整个进程组（5 秒后仍在就发 SIGKILL），所以经 `pnpm`、`npx` 包装的测试进程也会被停掉，不会在已还原的文件上继续跑。
+每次测试运行在独立的进程组里；SIGINT、SIGTERM、SIGHUP 和超时都会把 SIGTERM 发给整个进程组（5 秒后不论直接子进程是否已退出，都对整组发 SIGKILL；运行器先结束的，结束时立即发），所以经 `pnpm`、`npx` 包装的测试进程也会被停掉，不会在已还原的文件上继续跑。
 
 SIGKILL 无法拦截：留下的改动会让下一次运行在第 1 步拒绝，并列出要 `git checkout --` 的文件；`--out` 下的 `current.json` 记着当时正在改的文件。
 
