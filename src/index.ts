@@ -50,7 +50,7 @@ import { applyOwnerSettings, loadSeatNames, writeHomeA2a, type OwnerSettings } f
 import { CLI_HANDLE_RE, CliDepositStore, remoteCliTarget } from './cli-deposit.ts'
 import { cliHomeChoices, decideCliHome } from './cli-home.ts'
 import { forwardScope, outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
-import { createDirectForward, ForwardBirths } from './direct-forward.ts'
+import { createDirectForward, ForwardBirths, receiptBypassLimitsFrom } from './direct-forward.ts'
 import { TeamMembershipStore } from './team-store.ts'
 import { PeerStore } from './peer-store.ts'
 import { SelfReferralFilter } from './self-suppress.ts'
@@ -4423,6 +4423,9 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     candidates: async (team, failures, caller) => { const fetch = memoizedCardFetch(); return { urls: await directoryPeerCandidates(fetch, team, failures, { id: caller, handle: caller }), card: fetch } },
     dispatch: (url, request, guard) => dispatchPeerCandidate(url, request.team, request.message, request.contextId, new AbortController().signal, request.caller, request.noWait, request.taskId, request.caller, guard),
     ledger: taskLedger, activity: (team, peer, ok) => recordActivity('fwd', team, peer, ok),
+    audit: (via, taskId, team, kind) => { logger.info(`a2a: allowed the ${kind} receipt of admitted task ${taskId.slice(0, 80)} to ${team} to skip team-scope (via=${via})`); recordActivity('fwd', team, `via=${via}:${kind}`, true) },
+    bypassRefused: (taskId, team, kind, reason) => { logger.warn(`a2a: the ${kind} receipt of admitted task ${taskId.slice(0, 80)} to ${team} is judged by team-scope: ${reason}`); recordActivity('fwd', team, `via=receipt-of-admitted:${kind}:over-limit`, false) },
+    receiptBypassLimits: () => receiptBypassLimitsFrom(config.receiptBypassProgressMax, config.receiptBypassProgressIntervalMs, config.receiptBypassAttentionMax),
   })
 
   /**
