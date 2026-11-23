@@ -171,6 +171,29 @@ describe('observer ruling 2026-11-23, bounds: settled ends it, each kind counted
     passes(await b.send(kinds.ack('job-z')))
   })
 
+  it('#853 re-review M2–M4: the interval is inclusive and runs from the last passed step; the first step is not held by it', async () => {
+    const first = bench({ progressMax: 20, progressIntervalMs: 1e15 })
+    owe(first.x.ledger, 'job-f')
+    passes(await first.send(kinds.step('job-f', 1))) // M4: no earlier step, so the interval does not apply
+    const b = bench({ progressMax: 20, progressIntervalMs: 1000 })
+    owe(b.x.ledger, 'job-i')
+    passes(await b.send(kinds.step('job-i', 1)))
+    b.tick(999)
+    judged(await b.send(kinds.step('job-i', 2)))
+    b.tick(1) // exactly the interval after the last PASSED step (M2: inclusive; M3: a refused attempt does not move the clock)
+    passes(await b.send(kinds.step('job-i', 2)))
+    expect(b.audited.filter(a => a[1] === 'progress')).toHaveLength(2)
+  })
+
+  it('#853 re-review B9: a receipt header that is not at the start of the message is judged by team-scope', async () => {
+    const b = bench()
+    owe(b.x.ledger, 'job-h')
+    const header = kinds.result('job-h').message
+    for (const message of ['note first\n' + header, 'x ' + header, ' ' + header, '\n' + header]) judged(await b.send({ transport: 'receipt-job-h', message }))
+    expect(b.audited).toEqual([])
+    passes(await b.send(kinds.result('job-h')))
+  })
+
   it('bound 3: only the receipt itself — no extra text, no artifacts, no other transport id', async () => {
     const b = bench()
     owe(b.x.ledger, 'job-c')
