@@ -151,6 +151,21 @@ describe('mutation-run: refusals change nothing', () => {
     expect(clean(repo)).toBe('')
   }, T)
 
+  it('refuses oldTests whose tests are not green on the unmutated tree, and runs no mutation', () => {
+    // The old weak.t asks for a value the current source no longer has: it fails before anything is mutated.
+    const repo = fixture({ 'tests/weak.t': 'contains src/lib.js LIMIT = 9\n' })
+    const old = g(repo, 'rev-parse', 'HEAD').trim()
+    writeFileSync(join(repo, 'tests/weak.t'), 'contains src/lib.js LIMIT = 3\n')
+    g(repo, 'commit', '-q', '-am', 'new tests')
+    const r = cli(repo, { ...base, narrow: ['tests/weak.t'], oldTests: { rev: old, files: ['tests/weak.t'] }, mutations: [{ id: 'K', file: 'src/lib.js', find: 'LIMIT = 3', replace: 'LIMIT = 4' }] })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('the old tests (tests/weak.t at ' + old + ') are not green')
+    expect(existsSync(join(r.out, 'baseline.old.log'))).toBe(true)
+    expect(existsSync(join(r.out, 'K.narrow.log'))).toBe(false)
+    expect(readFileSync(join(repo, 'tests/weak.t'), 'utf8')).toBe('contains src/lib.js LIMIT = 3\n')
+    expect(clean(repo)).toBe('')
+  }, T)
+
   it('refuses a spec it cannot read as written', () => {
     expect(() => parseSpec('{')).toThrow(UsageError)
     expect(() => parseSpec({ ...base, narrow: ['t'], mutations: [{ id: 'a', file: 'f', find: 'x', replace: 'x' }] })).toThrow(/nothing would change/)
