@@ -96,7 +96,7 @@ describe('observer ruling 2026-11-23, bounds: settled ends it, each kind counted
     ask: (task: string, q: string) => ({ transport: 'attention-' + task + '-' + q, message: formatReceipt(task, 'which branch?', { idempotencyKey: task, disposition: 'attention', question: { id: q, text: 'which branch?' } }) }),
     step: (task: string, n: number) => ({ transport: 'progress-' + task + '-' + String(n), message: formatReceipt(task, 'step ' + String(n), { idempotencyKey: task, disposition: 'progress', progress: { n, state: 'working', at: '2026-11-23T07:00:00.000Z' } } as never) }),
   }
-  function bench(limits: ReceiptBypassLimits = { progressMax: 20, progressIntervalMs: 0 }) {
+  function bench(limits: ReceiptBypassLimits = { progressMax: 20, progressIntervalMs: 0, attentionMax: 20 }) {
     const x = fixture(Array.from({ length: 12 }, () => ok)), audited: string[][] = [], warned: string[][] = []
     let now = 1_700_000_000_000
     const forward = createDirectForward({ ...x.deps, ...refused, audit: (via, task, team, kind) => { audited.push([task, kind]) }, bypassRefused: (task, team, kind, reason) => { warned.push([task, kind, reason]) }, receiptBypassLimits: () => limits, now: () => now })
@@ -130,7 +130,7 @@ describe('observer ruling 2026-11-23, bounds: settled ends it, each kind counted
   })
 
   it('bound 2: progress passes up to the count and no faster than the interval; over it, team-scope judges and a warning is raised', async () => {
-    const b = bench({ progressMax: 2, progressIntervalMs: 1000 })
+    const b = bench({ progressMax: 2, progressIntervalMs: 1000, attentionMax: 20 })
     owe(b.x.ledger, 'job-p')
     passes(await b.send(kinds.step('job-p', 1)))
     b.tick(10)
@@ -146,10 +146,29 @@ describe('observer ruling 2026-11-23, bounds: settled ends it, each kind counted
   })
 
   it('bound 2: the progress bounds from config never fall open; the defaults are 20 per task and 60 s apart', () => {
-    expect(RECEIPT_BYPASS_DEFAULTS).toEqual({ progressMax: 20, progressIntervalMs: 60_000 })
-    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1]) expect(receiptBypassLimitsFrom(bad, bad)).toEqual(RECEIPT_BYPASS_DEFAULTS)
-    expect(receiptBypassLimitsFrom(3.7, 500)).toEqual({ progressMax: 3, progressIntervalMs: 500 })
-    expect(receiptBypassLimitsFrom(0, 0)).toEqual({ progressMax: 0, progressIntervalMs: 0 })
+    expect(RECEIPT_BYPASS_DEFAULTS).toEqual({ progressMax: 20, progressIntervalMs: 60_000, attentionMax: 20 })
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1]) expect(receiptBypassLimitsFrom(bad, bad, bad)).toEqual(RECEIPT_BYPASS_DEFAULTS)
+    expect(receiptBypassLimitsFrom(3.7, 500, 4.9)).toEqual({ progressMax: 3, progressIntervalMs: 500, attentionMax: 4 })
+    expect(receiptBypassLimitsFrom(0, 0, 0)).toEqual({ progressMax: 0, progressIntervalMs: 0, attentionMax: 0 })
+  })
+
+  it('#853 re-review: distinct attention questions are capped per task; over it team-scope judges and warns; a passed one resends', async () => {
+    const b = bench({ progressMax: 20, progressIntervalMs: 0, attentionMax: 3 })
+    owe(b.x.ledger, 'job-q')
+    for (const q of ['q1', 'q2', 'q3']) passes(await b.send(kinds.ask('job-q', q)))
+    judged(await b.send(kinds.ask('job-q', 'q4')))
+    expect(b.warned.at(-1)).toEqual(['job-q', 'attention', expect.stringContaining('more than 3 attention')])
+    passes(await b.send(kinds.ask('job-q', 'q1')))
+    owe(b.x.ledger, 'job-r') // counted per task
+    passes(await b.send(kinds.ask('job-r', 'q4')))
+    expect(b.audited.filter(a => a[1] === 'attention')).toHaveLength(5)
+  })
+
+  it('#853 re-review: an attention cap of 0 lets no attention receipt skip team-scope', async () => {
+    const b = bench({ progressMax: 20, progressIntervalMs: 0, attentionMax: 0 })
+    owe(b.x.ledger, 'job-z')
+    judged(await b.send(kinds.ask('job-z', 'q1')))
+    passes(await b.send(kinds.ack('job-z')))
   })
 
   it('#853 re-review M2–M4: the interval is inclusive and runs from the last passed step; the first step is not held by it', async () => {

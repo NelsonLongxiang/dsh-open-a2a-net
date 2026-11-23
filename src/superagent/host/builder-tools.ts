@@ -12,6 +12,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { randomBytes } from 'node:crypto'
 import { RULE_TEMPLATES } from './rule-templates.ts'
+import { cleanName } from './health-reminders.ts'
 import type { StaffingChange, StaffingEntry, StaffingExecutor } from './staffing.ts'
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
@@ -48,6 +49,8 @@ const rulesOf = (rules: ReadonlyArray<{ name: string; text: string; enabled?: bo
 
 /** The builder's inventory (TB2): named fields only, nothing from W3. */
 export function orgInventory(input: InventoryInput): { [key: string]: JsonValue } {
+  // #861 review: names are shown to the builder; cleaned like every other shown member name, the session id when nothing is left.
+  const nameOf = (session: string): string => cleanName(input.nameOf(session)) ?? session
   const placed = new Set<string>()
   const teams = input.teams.filter(t => t.settings.canvas !== undefined).map(t => {
     const s = t.settings
@@ -56,7 +59,7 @@ export function orgInventory(input: InventoryInput): { [key: string]: JsonValue 
       const profile = s.profiles[session]
       const seat = t.seatOf(session)
       return {
-        ...(seat !== undefined ? { seatId: seat } : {}), session, name: input.nameOf(session), preset: input.presetOf(session) ?? null,
+        ...(seat !== undefined ? { seatId: seat } : {}), session, name: nameOf(session), preset: input.presetOf(session) ?? null,
         kind: s.observers.includes(session) ? 'observer' : 'member',
         ...(typeof profile?.role === 'string' ? { role: profile.role } : {}),
         rules: rulesOf(profile?.rules), revision: t.revisions[`member:${session}`] ?? 0,
@@ -66,14 +69,14 @@ export function orgInventory(input: InventoryInput): { [key: string]: JsonValue 
     if (s.router !== undefined) placed.add(s.router)
     return {
       team: t.ref, canvas: s.canvas!,
-      router: s.router === undefined ? null : { session: s.router, name: input.nameOf(s.router), preset: input.presetOf(s.router) ?? null },
+      router: s.router === undefined ? null : { session: s.router, name: nameOf(s.router), preset: input.presetOf(s.router) ?? null },
       members: s.members.map(member),
       rules: { team: rulesOf(s.rules), teamRevision: t.revisions.team ?? 0, dispatch: s.dispatch, dispatchRevision: t.revisions.dispatch ?? 0 },
       acceptMode: s.acceptMode,
       ...(t.children.length > 0 ? { root: { children: t.children.map(c => ({ ref: c.ref, slots: c.slots })) } } : {}),
     } satisfies JsonValue
   })
-  const candidates = input.sessions.filter(id => !placed.has(id)).map(id => ({ session: id, name: input.nameOf(id), preset: input.presetOf(id) ?? null }))
+  const candidates = input.sessions.filter(id => !placed.has(id)).map(id => ({ session: id, name: nameOf(id), preset: input.presetOf(id) ?? null }))
   const staffing = input.staffing.slice(-20).map(e => ({ id: e.id, state: e.state, source: e.source, at: e.at, ...(e.summary !== undefined ? { summary: e.summary } : {}), ops: e.ops.map(o => o.op) }))
   return { teams, candidates, staffing, note: 'Teams by id (primary for the primary team); members by seatId. Credentials, MCP servers, tool grants, bots, allow-lists, GitHub settings and file paths are never shown.' }
 }

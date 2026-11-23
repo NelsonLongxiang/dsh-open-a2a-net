@@ -4425,7 +4425,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     ledger: taskLedger, activity: (team, peer, ok) => recordActivity('fwd', team, peer, ok),
     audit: (via, taskId, team, kind) => { logger.info(`a2a: allowed the ${kind} receipt of admitted task ${taskId.slice(0, 80)} to ${team} to skip team-scope (via=${via})`); recordActivity('fwd', team, `via=${via}:${kind}`, true) },
     bypassRefused: (taskId, team, kind, reason) => { logger.warn(`a2a: the ${kind} receipt of admitted task ${taskId.slice(0, 80)} to ${team} is judged by team-scope: ${reason}`); recordActivity('fwd', team, `via=receipt-of-admitted:${kind}:over-limit`, false) },
-    receiptBypassLimits: () => receiptBypassLimitsFrom(config.receiptBypassProgressMax, config.receiptBypassProgressIntervalMs),
+    receiptBypassLimits: () => receiptBypassLimitsFrom(config.receiptBypassProgressMax, config.receiptBypassProgressIntervalMs, config.receiptBypassAttentionMax),
   })
 
   /**
