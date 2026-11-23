@@ -58,8 +58,8 @@ export interface DirectForwardDeps {
 }
 
 /** The bypass's bounds on non-settling receipts (observer ruling 2026-11-23, bound 2); from config, with defaults. */
-export interface ReceiptBypassLimits { progressMax: number; progressIntervalMs: number }
-export const RECEIPT_BYPASS_DEFAULTS: ReceiptBypassLimits = { progressMax: 20, progressIntervalMs: 60_000 }
+export interface ReceiptBypassLimits { progressMax: number; progressIntervalMs: number; attentionMax: number }
+export const RECEIPT_BYPASS_DEFAULTS: ReceiptBypassLimits = { progressMax: 20, progressIntervalMs: 60_000, attentionMax: 20 }
 /** A receipt the bypass may carry: its task, its kind and, for an attention, its question id. */
 export interface AdmittedReceipt { taskId: string; kind: 'result' | 'attention' | 'acknowledged' | 'progress'; questionId?: string }
 
@@ -96,27 +96,33 @@ export function receiptOfAdmitted(ledger: TaskLedger, caller: string, target: st
 }
 
 /** The bounds from config: a non-finite or negative value falls back to the default, never to no limit (NaN compares false). */
-export function receiptBypassLimitsFrom(progressMax: number, progressIntervalMs: number): ReceiptBypassLimits {
+export function receiptBypassLimitsFrom(progressMax: number, progressIntervalMs: number, attentionMax: number = RECEIPT_BYPASS_DEFAULTS.attentionMax): ReceiptBypassLimits {
   return {
+    attentionMax: Number.isFinite(attentionMax) && attentionMax >= 0 ? Math.floor(attentionMax) : RECEIPT_BYPASS_DEFAULTS.attentionMax,
     progressMax: Number.isFinite(progressMax) && progressMax >= 0 ? Math.floor(progressMax) : RECEIPT_BYPASS_DEFAULTS.progressMax,
     progressIntervalMs: Number.isFinite(progressIntervalMs) && progressIntervalMs >= 0 ? progressIntervalMs : RECEIPT_BYPASS_DEFAULTS.progressIntervalMs,
   }
 }
 
 /**
- * Bound 2. The acknowledgement and each attention question pass once because admittedReceipt binds each to its one fixed
- * transport id (ack-<task>, attention-<task>-<question id>): sending it again is the same receipt, idempotent at the
- * receiver. Progress carries a step number in its id, so it is counted here: up to progressMax per task, no closer than
- * progressIntervalMs; a resend of a step that already passed is idempotent and passes again. A formal result settles the
+ * Bound 2. The acknowledgement passes once because admittedReceipt binds it to its one fixed transport id (ack-<task>):
+ * sending it again is the same receipt, idempotent at the receiver. Each attention question is bound the same way
+ * (attention-<task>-<question id>), but the sender picks the question id, so distinct questions are counted here: up to
+ * attentionMax per task (#853 re-review: 40 distinct ids all passed). Progress carries a step number in its id and is
+ * counted: up to progressMax per task, no closer than progressIntervalMs. A resend of a question or step that already
+ * passed is idempotent and passes again. A formal result settles the
  * row, which ends the bypass. Kept in memory: a restart starts the counts again.
  */
 class ReceiptBypassCounts {
-  private readonly tasks = new Map<string, { passed: Set<string>; progress: number; lastProgressAt: number }>()
+  private readonly tasks = new Map<string, { passed: Set<string>; progress: number; lastProgressAt: number; attention: number }>()
   check(receipt: AdmittedReceipt, transportId: string, limits: ReceiptBypassLimits, now: number, owed: (taskId: string) => boolean): string | undefined {
     for (const id of this.tasks.keys()) if (!owed(id)) this.tasks.delete(id)
-    const t = this.tasks.get(receipt.taskId) ?? { passed: new Set<string>(), progress: 0, lastProgressAt: 0 }
-    if (receipt.kind !== 'progress' || t.passed.has(transportId)) return undefined
-    {
+    const t = this.tasks.get(receipt.taskId) ?? { passed: new Set<string>(), progress: 0, lastProgressAt: 0, attention: 0 }
+    if ((receipt.kind !== 'progress' && receipt.kind !== 'attention') || t.passed.has(transportId)) return undefined
+    if (receipt.kind === 'attention') {
+      if (t.attention >= limits.attentionMax) return `more than ${String(limits.attentionMax)} attention questions for this task`
+      t.attention += 1
+    } else {
       if (t.progress >= limits.progressMax) return `more than ${String(limits.progressMax)} progress receipts for this task`
       if (t.progress > 0 && now - t.lastProgressAt < limits.progressIntervalMs) return `progress receipts less than ${String(limits.progressIntervalMs)} ms apart`
       t.progress += 1; t.lastProgressAt = now
