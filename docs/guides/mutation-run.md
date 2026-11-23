@@ -46,7 +46,7 @@ node scripts/mutation-run.mjs <spec.json> [--root DIR] [--out DIR] [--json]
 
 1. 工作树（含未跟踪文件）必须干净，否则列出文件并拒绝。
 2. 先检查全部锚点、路径（不得离开仓库）、被改文件已被 git 跟踪、`oldTests.rev` 与文件存在、探针文件不存在；任何一条不过就整体拒绝，什么都不改。
-3. `narrow` 基线必须全绿。
+3. `narrow` 基线必须全绿；给了 `oldTests` 时，还要把旧测试换上、在未变异的代码上跑一次 `narrow` 也全绿，否则拒绝（退出 2，点名旧测试文件，日志 `baseline.old.log`）——旧测试本来就红，「只有新用例能抓住」就无从判断。
 4. 逐条变异：保存原字节，替换并读回确认确实改了；跑测试；在 `finally` 里写回原字节、再 `git checkout -- <文件>`，然后确认工作树干净，才进入下一条。
 5. 收尾断言「已跑个数 = 定义个数」且工作树干净。
 
@@ -62,7 +62,7 @@ node scripts/mutation-run.mjs <spec.json> [--root DIR] [--out DIR] [--json]
 | 3 | 还原或计数失败（某次测试弄脏了工作树、跑完个数不对）；请人工查看工作树 |
 | 130 | 被 SIGINT/SIGTERM 中断；先停掉测试、还原文件再退出 |
 
-每次测试运行在独立的进程组里；SIGINT、SIGTERM、SIGHUP 和超时都会把 SIGTERM 发给整个进程组（5 秒后仍在就发 SIGKILL），所以经 `pnpm`、`npx` 包装的测试进程也会被停掉，不会在已还原的文件上继续跑。
+每次测试运行在独立的进程组里；SIGINT、SIGTERM、SIGHUP 和超时都会把 SIGTERM 发给整个进程组（5 秒后不论直接子进程是否已退出，都对整组发 SIGKILL；运行器先结束的，结束时立即发），所以经 `pnpm`、`npx` 包装的测试进程也会被停掉，不会在已还原的文件上继续跑。
 
 SIGKILL 无法拦截：留下的改动会让下一次运行在第 1 步拒绝，并列出要 `git checkout --` 的文件；`--out` 下的 `current.json` 记着当时正在改的文件。
 
