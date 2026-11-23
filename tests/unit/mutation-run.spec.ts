@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
@@ -14,6 +14,7 @@ const RUNNER = fileURLToPath(new URL('../../scripts/mutation-run.mjs', import.me
 //   endswith <file> <text>          fail unless <file> ends with <text>
 //   sleepif <file> <text> <ms>      sleep when <file> contains <text>
 //   touchif <file> <text> <target>  overwrite <target> when <file> contains <text>
+//   pidfileif <file> <text> <path>  write this process's pid to <path> (outside the repository) when <file> contains <text>
 const CHECK = `import { readFileSync, writeFileSync } from 'node:fs'
 let bad = 0
 for (const f of process.argv.slice(2)) for (const l of readFileSync(f, 'utf8').split('\\n')) {
@@ -21,9 +22,12 @@ for (const f of process.argv.slice(2)) for (const l of readFileSync(f, 'utf8').s
   const e = l.match(/^endswith (\\S+) (.*)$/); if (e && !readFileSync(e[1], 'utf8').trimEnd().endsWith(e[2])) bad++
   const s = l.match(/^sleepif (\\S+) (\\S+) (\\d+)$/); if (s && readFileSync(s[1], 'utf8').includes(s[2])) await new Promise(r => setTimeout(r, Number(s[3])))
   const t = l.match(/^touchif (\\S+) (\\S+) (\\S+)$/); if (t && readFileSync(t[1], 'utf8').includes(t[2])) writeFileSync(t[3], 'touched\\n')
+  const p = l.match(/^pidfileif (\\S+) (\\S+) (\\S+)$/); if (p && readFileSync(p[1], 'utf8').includes(p[2])) writeFileSync(p[3], String(process.pid))
 }
 process.exit(bad ? 1 : 0)
 `
+// A wrapper like pnpm or npx: the real test process is its child, the runner's grandchild.
+const WRAP = "import { spawnSync } from 'node:child_process'\nconst r = spawnSync(process.execPath, ['check.mjs', ...process.argv.slice(2)], { stdio: 'inherit' })\nprocess.exit(r.status ?? 1)\n"
 const LIB = 'export const LIMIT = 3\nexport const NAME = \'alpha\'\nexport const TWIN = 1\nexport const TWIN = 1\n'
 
 const g = (repo: string, ...args: string[]) => {
@@ -33,7 +37,7 @@ const g = (repo: string, ...args: string[]) => {
 }
 function fixture(files: Record<string, string> = {}) {
   const repo = mkdtempSync('mutation-run-repo-')
-  const all: Record<string, string> = { 'check.mjs': CHECK, 'src/lib.js': LIB, '.gitignore': 'logs/\n', 'tests/strong.t': 'contains src/lib.js LIMIT = 3\ncontains src/lib.js NAME = \'alpha\'\n', 'tests/weak.t': 'contains src/lib.js NAME\n', ...files }
+  const all: Record<string, string> = { 'check.mjs': CHECK, 'wrap.mjs': WRAP, 'src/lib.js': LIB, '.gitignore': 'logs/\n', 'tests/strong.t': 'contains src/lib.js LIMIT = 3\ncontains src/lib.js NAME = \'alpha\'\n', 'tests/weak.t': 'contains src/lib.js NAME\n', ...files }
   g(repo, 'init', '-q')
   for (const [p, text] of Object.entries(all)) { mkdirSync(join(repo, p, '..'), { recursive: true }); writeFileSync(join(repo, p), text) }
   g(repo, 'add', '-A'); g(repo, 'commit', '-q', '-m', 'fixture')
@@ -45,11 +49,13 @@ function cli(repo: string, s: unknown, extra: string[] = []) {
   writeFileSync(specPath, JSON.stringify(s))
   const r = spawnSync(process.execPath, [RUNNER, specPath, '--root', repo, '--out', out, '--json', ...extra], { encoding: 'utf8' })
   const last = r.stdout.trim().split('\n').pop() ?? ''
-  return { code: r.status, stdout: r.stdout, stderr: r.stderr, json: last.startsWith('{') ? JSON.parse(last) : undefined }
+  return { code: r.status, stdout: r.stdout, stderr: r.stderr, out, json: last.startsWith('{') ? JSON.parse(last) : undefined }
 }
 const clean = (repo: string) => g(repo, 'status', '--porcelain', '--untracked-files=all')
 const lib = (repo: string) => readFileSync(join(repo, 'src/lib.js'), 'utf8')
 const T = 30_000
+const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
+const gone = async (pid: number) => { const until = Date.now() + 5000; while (alive(pid) && Date.now() < until) await new Promise(r => setTimeout(r, 50)); return !alive(pid) }
 
 describe('mutation-run: results', () => {
   it('reports a killed mutation and an expected survivor, runs every one, and leaves the tree clean', () => {
@@ -81,6 +87,18 @@ describe('mutation-run: results', () => {
     ] })
     expect(r.code, r.stderr).toBe(0)
     expect(r.json.results.map((x: { narrow: string; wide: string | null }) => [x.narrow, x.wide])).toEqual([['GREEN', 'RED'], ['RED', null]])
+  }, T)
+
+  it('calls a mutation only the wide tests catch killed-by-wide, and does not ask the old tests about it', () => {
+    const repo = fixture()
+    const old = g(repo, 'rev-parse', 'HEAD').trim()
+    writeFileSync(join(repo, 'tests/weak.t'), 'contains src/lib.js NAME\n# new comment\n')
+    g(repo, 'commit', '-q', '-am', 'new tests')
+    const r = cli(repo, { ...base, narrow: ['tests/weak.t'], wide: ['tests/strong.t'], oldTests: { rev: old, files: ['tests/weak.t'] }, mutations: [{ id: 'W1', file: 'src/lib.js', find: 'LIMIT = 3', replace: 'LIMIT = 4' }] })
+    expect(r.code, r.stderr).toBe(0)
+    expect(r.json.results[0]).toMatchObject({ narrow: 'GREEN', wide: 'RED', old: null, verdict: 'killed-by-wide', asExpected: true })
+    expect(r.stdout).toContain('killed, only by the wide tests')
+    expect(existsSync(join(r.out, 'W1.old.log'))).toBe(false)
   }, T)
 
   it('tells a mutation only the new tests catch from one the old tests catch too, and restores the test files', () => {
@@ -158,28 +176,63 @@ describe('mutation-run: occurrence', () => {
 describe('mutation-run: restore and accounting', () => {
   it('exits 3 when a test run dirties a tracked file, and still restores what it changed', () => {
     const repo = fixture({ 'tests/toucher.t': 'touchif src/lib.js LIMIT_X tests/weak.t\ncontains src/lib.js NAME\n' })
-    const r = cli(repo, { ...base, narrow: ['tests/toucher.t'], mutations: [{ id: 'T', file: 'src/lib.js', find: 'LIMIT = 3', replace: 'LIMIT_X = 3' }] })
+    const r = cli(repo, { ...base, narrow: ['tests/toucher.t'], mutations: [{ id: 'T', file: 'src/lib.js', find: 'LIMIT = 3', replace: 'LIMIT_X = 3' }, { id: 'next', file: 'src/lib.js', find: 'NAME', replace: 'NOM' }] })
     expect(r.code).toBe(3)
+    expect(r.stderr).toContain('after T the tree is not clean')
     expect(r.stderr).toContain('tests/weak.t')
+    // The next mutation never ran on the dirty tree.
+    expect(existsSync(join(r.out, 'next.narrow.log'))).toBe(false)
     expect(lib(repo)).toBe(LIB)
   }, T)
 
-  it('on SIGTERM mid-run stops the test, restores the file and exits 130', async () => {
-    const repo = fixture({ 'tests/slow.t': 'sleepif src/lib.js SLOW 20000\ncontains src/lib.js NAME\n' })
+  it.each(['SIGTERM', 'SIGHUP'] as const)('on %s mid-run stops the test and what it started, restores the file and exits 130', async (signal) => {
+    const pidDir = mkdtempSync('mutation-run-pid-'), pidFile = join(pidDir, 'pid')
+    const repo = fixture({ 'tests/slow.t': `pidfileif src/lib.js SLOW ${pidFile}\nsleepif src/lib.js SLOW 20000\ncontains src/lib.js NAME\n` })
     const dir = mkdtempSync('mutation-run-spec-'), out = mkdtempSync('mutation-run-out-')
-    writeFileSync(join(dir, 'spec.json'), JSON.stringify({ ...base, narrow: ['tests/slow.t'], mutations: [{ id: 'slow', file: 'src/lib.js', find: 'LIMIT = 3', replace: 'SLOW = 3' }, { id: 'never', file: 'src/lib.js', find: 'NAME', replace: 'NOM' }] }))
+    writeFileSync(join(dir, 'spec.json'), JSON.stringify({ ...base, command: [process.execPath, 'wrap.mjs'], narrow: ['tests/slow.t'], mutations: [{ id: 'slow', file: 'src/lib.js', find: 'LIMIT = 3', replace: 'SLOW = 3' }, { id: 'never', file: 'src/lib.js', find: 'NAME', replace: 'NOM' }] }))
     const child = spawn(process.execPath, [RUNNER, join(dir, 'spec.json'), '--root', repo, '--out', out, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''
     child.stdout.on('data', (b: Buffer) => { stdout += String(b) })
     const exited = new Promise<number | null>(done => child.on('close', code => done(code)))
     const until = Date.now() + 15_000
-    while (!(existsSync(join(out, 'current.json')) && lib(repo).includes('SLOW')) && Date.now() < until) await new Promise(r => setTimeout(r, 50))
+    // Wait until the mutated run's test process (the runner's grandchild, under wrap.mjs) has written its pid.
+    while (!(existsSync(pidFile) && readFileSync(pidFile, 'utf8') !== '') && Date.now() < until) await new Promise(r => setTimeout(r, 50))
     expect(lib(repo)).toContain('SLOW')
-    child.kill('SIGTERM')
+    const grandchild = Number(readFileSync(pidFile, 'utf8'))
+    expect(alive(grandchild)).toBe(true)
+    const sent = Date.now()
+    child.kill(signal)
     expect(await exited).toBe(130)
+    // Stopped promptly, not after the 20 s sleep, and the wrapped test process is gone too.
+    expect(Date.now() - sent).toBeLessThan(5000)
+    expect(await gone(grandchild)).toBe(true)
     expect(lib(repo)).toBe(LIB)
     expect(clean(repo)).toBe('')
     expect(JSON.parse(stdout.trim().split('\n').pop()!).ran).toBe(0)
+  }, T)
+
+  it('with timeoutMs, a test run that hangs is stopped and the mutation counts as killed, marked timeout', () => {
+    const repo = fixture({ 'tests/slow.t': 'sleepif src/lib.js SLOW 20000\ncontains src/lib.js NAME\n' })
+    const started = Date.now()
+    const r = cli(repo, { ...base, timeoutMs: 1500, narrow: ['tests/slow.t'], mutations: [{ id: 'hang', file: 'src/lib.js', find: 'LIMIT = 3', replace: 'SLOW = 3' }] })
+    expect(r.code, r.stderr).toBe(0)
+    expect(r.json.results[0]).toMatchObject({ narrow: 'RED', verdict: 'killed', timedOut: true })
+    expect(r.stdout).toContain('(timeout)')
+    expect(Date.now() - started).toBeLessThan(15_000)
+    expect(lib(repo)).toBe(LIB)
+    expect(() => parseSpec({ ...base, timeoutMs: 0, narrow: ['t'], mutations: [{ id: 'a', file: 'f', find: 'x', replace: 'y' }] })).toThrow(/timeoutMs/)
+  }, T)
+
+  it('refuses a tracked symbolic link as a mutation target, so a change can never be left outside the repository', () => {
+    const outside = join(mkdtempSync('mutation-run-outside-'), 'lib.js')
+    writeFileSync(outside, LIB)
+    const repo = fixture()
+    symlinkSync(outside, join(repo, 'src/link.js'))
+    g(repo, 'add', 'src/link.js'); g(repo, 'commit', '-q', '-m', 'link')
+    const r = cli(repo, { ...base, narrow: ['tests/strong.t'], mutations: [{ id: 'L', file: 'src/link.js', find: 'LIMIT = 3', replace: 'LIMIT = 4' }] })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('symbolic link')
+    expect(readFileSync(outside, 'utf8')).toBe(LIB)
   }, T)
 
   it('account() throws unless the counts match', () => {

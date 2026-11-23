@@ -11,6 +11,8 @@
  *   - restores the file after each mutation (original bytes, then git checkout) and checks the tree is clean again;
  *   - can run probes: a copy of a test file with a case appended, run once on the unmutated tree, then deleted;
  *   - ends by asserting it ran as many mutations as the spec defines and the tree is clean.
+ * A mutation the narrow tests miss and the wide tests catch is "killed-by-wide"; the old tests are not run for it. Each
+ * test run has its own process group, so a stop (SIGINT, SIGTERM, SIGHUP, or spec.timeoutMs) reaches its children too.
  * It reads no environment switches, writes only the files the spec names (plus its logs in --out), never touches the
  * git index, and never commits or pushes. Exit: 0 every result as expected; 1 a mutation survived (or a probe or
  * mutation did not do what its "expect" says); 2 usage or preflight error, nothing changed; 3 restore or accounting
@@ -19,7 +21,7 @@
  * Usage: node scripts/mutation-run.mjs <spec.json> [--root DIR] [--out DIR] [--json]
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -51,6 +53,7 @@ export function parseSpec(raw) {
   if (!strs(s.narrow)) throw new UsageError('spec.narrow must name at least one test path')
   if (s.wide !== undefined && !strs(s.wide)) throw new UsageError('spec.wide, when given, must name at least one test path')
   if (s.oldTests !== undefined && (!s.oldTests || !str(s.oldTests.rev) || !strs(s.oldTests.files))) throw new UsageError('spec.oldTests needs rev and files')
+  if (s.timeoutMs !== undefined && !(Number.isSafeInteger(s.timeoutMs) && s.timeoutMs > 0)) throw new UsageError('spec.timeoutMs, when given, must be a whole number of milliseconds above 0')
   const mutations = s.mutations ?? [], probes = s.probes ?? []
   if (!Array.isArray(mutations) || !Array.isArray(probes)) throw new UsageError('spec.mutations and spec.probes must be arrays')
   if (mutations.length + probes.length === 0) throw new UsageError('spec defines no mutations and no probes')
@@ -117,6 +120,10 @@ function preflight(root, spec, out) {
   for (const p of [...spec.narrow, ...(spec.wide ?? [])]) inside(root, p)
   const problems = checkAnchors(root, spec.mutations)
   for (const m of spec.mutations) if (existsSync(inside(root, m.file)) && !gitOk(root, ['ls-files', '--error-unmatch', '--', m.file])) problems.push(`${m.id}: ${m.file} is not tracked by git, so it could not be restored`)
+  for (const f of [...spec.mutations.map(m => m.file), ...(spec.oldTests?.files ?? [])]) {
+    const full = inside(root, f)
+    if (existsSync(full) && lstatSync(full).isSymbolicLink()) problems.push(`${f} is a symbolic link; the runner only writes regular files (a link can point outside the repository, where git would not see a change left behind)`)
+  }
   if (spec.oldTests) {
     if (!gitOk(root, ['rev-parse', '--verify', '--quiet', spec.oldTests.rev + '^{commit}'])) problems.push(`oldTests: ${spec.oldTests.rev} is not a commit here`)
     else for (const f of spec.oldTests.files) { inside(root, f); if (!gitOk(root, ['cat-file', '-e', `${spec.oldTests.rev}:${f}`])) problems.push(`oldTests: ${f} does not exist at ${spec.oldTests.rev}`) }
@@ -137,14 +144,25 @@ export function probePath(root, probe) {
   return join(dirname(from), `zz-probe-${probe.id}${dot === -1 ? '' : name.slice(dot)}`)
 }
 
-function runCommand(state, root, command, files, logPath) {
+/** Stop a test run and everything it started: its process group gets SIGTERM, then SIGKILL after 5 s. */
+export function stopChild(child) {
+  if (!child?.pid) return
+  const send = signal => { try { if (process.platform !== 'win32') { process.kill(-child.pid, signal); return } } catch { /* group gone */ } try { child.kill(signal) } catch { /* gone */ } }
+  send('SIGTERM')
+  setTimeout(() => { if (child.exitCode === null && child.signalCode === null) send('SIGKILL') }, 5000).unref()
+}
+
+function runCommand(state, root, spec, files, logPath) {
   return new Promise(done => {
     const fd = openSync(logPath, 'w')
-    let settled = false
-    const finish = result => { if (settled) return; settled = true; state.child = undefined; closeSync(fd); done(result) }
+    let settled = false, timedOut = false, timer
+    const finish = result => { if (settled) return; settled = true; clearTimeout(timer); state.child = undefined; closeSync(fd); done(timedOut ? { ...result, timedOut: true } : result) }
+    const command = spec.command
     const exe = command[0].includes('/') && !isAbsolute(command[0]) ? resolve(root, command[0]) : command[0]
-    const child = spawn(exe, [...command.slice(1), ...files], { cwd: root, stdio: ['ignore', fd, fd] })
+    // Its own process group, so a stop also reaches what the command starts (pnpm or npx wrappers, test workers).
+    const child = spawn(exe, [...command.slice(1), ...files], { cwd: root, stdio: ['ignore', fd, fd], detached: process.platform !== 'win32' })
     state.child = child
+    if (spec.timeoutMs) timer = setTimeout(() => { timedOut = true; stopChild(child) }, spec.timeoutMs)
     child.on('error', error => finish({ code: -1, error: String(error) }))
     child.on('close', (code, signal) => finish({ code: code ?? -1, signal: signal ?? undefined }))
   })
@@ -173,28 +191,29 @@ async function runMutation(state, root, spec, m, out) {
   state.touched.set(m.file, original)
   writeFileSync(full, next)
   if (readFileSync(full, 'utf8') !== next) throw new IntegrityError(`${m.id}: ${m.file} does not read back as written`)
-  const narrow = await runCommand(state, root, spec.command, spec.narrow, join(out, `${m.id}.narrow.log`))
+  const narrow = await runCommand(state, root, spec, spec.narrow, join(out, `${m.id}.narrow.log`))
   let wide, old
-  if (!state.interrupted && narrow.code === 0 && spec.wide) wide = await runCommand(state, root, spec.command, spec.wide, join(out, `${m.id}.wide.log`))
+  if (!state.interrupted && narrow.code === 0 && spec.wide) wide = await runCommand(state, root, spec, spec.wide, join(out, `${m.id}.wide.log`))
   const killed = narrow.code !== 0 || (wide !== undefined && wide.code !== 0)
-  if (!state.interrupted && killed && spec.oldTests) {
+  // The old tests only answer "would the tests before this pull request catch it" for a mutation the narrow tests caught.
+  if (!state.interrupted && narrow.code !== 0 && spec.oldTests) {
     for (const f of spec.oldTests.files) {
       const path = inside(root, f)
       if (!state.touched.has(f)) state.touched.set(f, readFileSync(path))
       writeFileSync(path, git(root, ['show', `${spec.oldTests.rev}:${f}`]))
     }
-    old = await runCommand(state, root, spec.command, spec.narrow, join(out, `${m.id}.old.log`))
+    old = await runCommand(state, root, spec, spec.narrow, join(out, `${m.id}.old.log`))
   }
-  const verdict = !killed ? 'survived' : old === undefined ? 'killed' : old.code === 0 ? 'only-new-kills' : 'old-also-kills'
+  const verdict = !killed ? 'survived' : narrow.code !== 0 ? (old === undefined ? 'killed' : old.code === 0 ? 'only-new-kills' : 'old-also-kills') : 'killed-by-wide'
   const expected = m.expect ?? 'killed'
-  return { id: m.id, narrow: colour(narrow), wide: colour(wide), old: colour(old), verdict, expected, asExpected: (verdict === 'survived') === (expected === 'survived') }
+  return { id: m.id, narrow: colour(narrow), wide: colour(wide), old: colour(old), verdict, expected, asExpected: (verdict === 'survived') === (expected === 'survived'), timedOut: [narrow, wide, old].some(r => r?.timedOut === true) }
 }
 
 async function runProbe(state, root, spec, p, out) {
   const from = inside(root, p.from), path = probePath(root, p), rel = relative(root, path)
   state.touched.set(rel, null)
   writeFileSync(path, readFileSync(from, 'utf8') + '\n' + p.append + '\n')
-  const r = await runCommand(state, root, spec.command, [rel], join(out, `probe-${p.id}.log`))
+  const r = await runCommand(state, root, spec, [rel], join(out, `probe-${p.id}.log`))
   const result = r.code === 0 ? 'pass' : 'fail'
   return { id: p.id, result, expected: p.expect ?? null, asExpected: p.expect === undefined || p.expect === result }
 }
@@ -206,12 +225,13 @@ async function runProbe(state, root, spec, p, out) {
 export async function run({ root, spec, out, signals = true }) {
   preflight(root, spec, out)
   const state = { touched: new Map(), child: undefined, interrupted: false }
-  const onSignal = () => { state.interrupted = true; state.child?.kill('SIGTERM') }
-  if (signals) { process.on('SIGINT', onSignal); process.on('SIGTERM', onSignal) }
+  const onSignal = () => { state.interrupted = true; stopChild(state.child) }
+  const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP']
+  if (signals) for (const s of SIGNALS) process.on(s, onSignal)
   const results = [], probes = []
   let failure
   try {
-    const base = await runCommand(state, root, spec.command, spec.narrow, join(out, 'baseline.log'))
+    const base = await runCommand(state, root, spec, spec.narrow, join(out, 'baseline.log'))
     if (!state.interrupted && base.code !== 0) throw new UsageError(`baseline: the narrow tests are not green before any change (exit ${base.code}); see ${join(out, 'baseline.log')}`)
     for (const m of spec.mutations) {
       if (state.interrupted) break
@@ -234,19 +254,20 @@ export async function run({ root, spec, out, signals = true }) {
     failure = error
   } finally {
     restore(root, state.touched)
-    if (signals) { process.off('SIGINT', onSignal); process.off('SIGTERM', onSignal) }
+    if (signals) for (const s of SIGNALS) process.off(s, onSignal)
   }
   const dirty = dirtyLines(root)
-  if (dirty.length) throw new IntegrityError(`the tree is not clean at the end:\n${dirty.join('\n')}`)
-  if (failure) throw failure
+  // The first failure is the one to report; a dirty tree always makes it an integrity failure (exit 3).
+  if (failure && (failure instanceof IntegrityError || dirty.length === 0)) throw failure
+  if (dirty.length) throw new IntegrityError(`${failure ? failure.message + '\n' : ''}the tree is not clean at the end:\n${dirty.join('\n')}`)
   const summary = { ran: results.length, defined: spec.mutations.length, probesRan: probes.length, probesDefined: spec.probes.length, results, probes, out }
   if (state.interrupted) return { code: EXIT.interrupted, ...summary }
   return { code: results.every(r => r.asExpected) && probes.every(p => p.asExpected) ? EXIT.ok : EXIT.survived, ...summary }
 }
 
 function line(r) {
-  const why = r.verdict === 'only-new-kills' ? 'killed, only by the new tests' : r.verdict === 'old-also-kills' ? 'killed, the old tests too' : r.verdict
-  return `${r.id}\tnarrow=${r.narrow}\twide=${r.wide ?? '-'}\told=${r.old ?? '-'}\t${why}${r.asExpected ? '' : `\t(expected ${r.expected})`}`
+  const why = r.verdict === 'only-new-kills' ? 'killed, only by the new tests' : r.verdict === 'old-also-kills' ? 'killed, the old tests too' : r.verdict === 'killed-by-wide' ? 'killed, only by the wide tests' : r.verdict
+  return `${r.id}\tnarrow=${r.narrow}\twide=${r.wide ?? '-'}\told=${r.old ?? '-'}\t${why}${r.timedOut ? '\t(timeout)' : ''}${r.asExpected ? '' : `\t(expected ${r.expected})`}`
 }
 
 export async function main(argv, io = { out: s => process.stdout.write(s), err: s => process.stderr.write(s) }) {

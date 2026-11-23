@@ -38,7 +38,8 @@ node scripts/mutation-run.mjs <spec.json> [--root DIR] [--out DIR] [--json]
 - `find`：字面原文，不是正则。没写 `occurrence` 时必须恰好命中 1 次；写了 `occurrence: n` 时至少命中 n 次，只换第 n 处。
 - `expect`：变异为 `killed`（默认）或 `survived`（已知等价、记录在案的存活）；探针为 `pass` 或 `fail`。
 - `wide`：只对在 `narrow` 下存活的变异再跑。
-- `oldTests`：对被打红的变异，把这些测试文件临时换成 `rev` 时的版本再跑一次 `narrow`：仍红记 `old-also-kills`，变绿记 `only-new-kills`（只有新用例能抓住）。
+- `oldTests`：只对被 `narrow` 打红的变异，把这些测试文件临时换成 `rev` 时的版本再跑一次 `narrow`：仍红记 `old-also-kills`，变绿记 `only-new-kills`（只有新用例能抓住）。只被 `wide` 打红的变异记 `killed-by-wide`，不跑旧测试（新的 `narrow` 都没抓住它，谈不上「只有新用例能抓住」）。
+- `timeoutMs`（可选）：每次测试运行的时限。超时就停掉这次运行（连同它启动的进程），记为打红并在结果里标 `timeout`；看日志确认是不是变异造成的死循环。
 - `probes`：在未变异的代码上，复制 `from` 为同目录的 `zz-probe-<id>.<原后缀>`，末尾追加 `append`，单跑一次后删除。
 
 ## 运行顺序与保证
@@ -61,8 +62,18 @@ node scripts/mutation-run.mjs <spec.json> [--root DIR] [--out DIR] [--json]
 | 3 | 还原或计数失败（某次测试弄脏了工作树、跑完个数不对）；请人工查看工作树 |
 | 130 | 被 SIGINT/SIGTERM 中断；先停掉测试、还原文件再退出 |
 
+每次测试运行在独立的进程组里；SIGINT、SIGTERM、SIGHUP 和超时都会把 SIGTERM 发给整个进程组（5 秒后仍在就发 SIGKILL），所以经 `pnpm`、`npx` 包装的测试进程也会被停掉，不会在已还原的文件上继续跑。
+
 SIGKILL 无法拦截：留下的改动会让下一次运行在第 1 步拒绝，并列出要 `git checkout --` 的文件；`--out` 下的 `current.json` 记着当时正在改的文件。
 
 ## 输出
 
-每条变异一行：`id  narrow=RED|GREEN  wide=…  old=…  结论`，结论为 `killed`、`survived`、`killed, only by the new tests` 或 `killed, the old tests too`；不符合 `expect` 时末尾标 `(expected …)`。每次测试的完整日志在 `--out` 里（`baseline.log`、`<id>.narrow.log`、`<id>.wide.log`、`<id>.old.log`、`probe-<id>.log`）。
+每条变异一行：`id  narrow=RED|GREEN  wide=…  old=…  结论`，结论为 `killed`、`survived`、`killed, only by the new tests`、`killed, the old tests too` 或 `killed, only by the wide tests`；超时的标 `(timeout)`，不符合 `expect` 时末尾标 `(expected …)`。每次测试的完整日志在 `--out` 里（`baseline.log`、`<id>.narrow.log`、`<id>.wide.log`、`<id>.old.log`、`probe-<id>.log`）。
+
+## 局限与注意
+
+- **规格等同于代码。** `command` 会运行任意程序，规格里的变异会改写任意已跟踪文件；只运行自己写的或审过的规格，不运行来路不明的规格。
+- **只看退出码。** 测试命令非 0 就算打红，不区分断言失败和编译失败。只造成语法错误的变异也会记成 killed；评审时打开 `<id>.narrow.log` 确认是断言失败。
+- **符号链接一律拒绝。** 被改文件或 `oldTests` 文件是已跟踪的符号链接时预检拒绝：链接可能指向仓库外，运行器被 SIGKILL 时那边留下的改动 git 看不到。
+- **没有默认时限。** 不写 `timeoutMs` 时测试运行不限时，变异造成死循环会一直等，只能中断。
+- **Windows 未实测。** 进程组只在 macOS/Linux 上使用；Windows 上只停直接子进程。
