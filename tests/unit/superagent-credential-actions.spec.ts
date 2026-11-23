@@ -173,6 +173,78 @@ describe('credential-access card: the owner\'s own choice acts (4351d67f)', () =
     await m.h.stop()
   })
 
+  it('ticket eabe1586: a split part named to the excluded session records no member and is reported, like accept', async () => {
+    const m = await team()
+    const { splitRequest } = await import('../../src/superagent/host/tools.ts')
+    const out = m.h.decide(m.card()!.id, 'choose', m.CREDENTIAL_STOP) as { refiled: string[] }
+    m.h.pass()
+    const other = ['session-a', 'session-b'].find(s => s !== m.holder)!
+    const split = splitRequest(m.h, { trigger_id: out.refiled[0]!, title: '写文档（两项）', scope: 's', reason: 'r', asked: '请交给别的成员重做',
+      parts: [{ title: '一', scope: 's1', member: m.holder }, { title: '二', scope: 's2', member: other }] }) as { ok: boolean; parts: string[]; member_refused?: Array<{ part: number; code: string }> }
+    expect(split).toMatchObject({ ok: true, member_refused: [{ part: 1, code: 'excluded' }] })
+    expect(split.member_refused).toHaveLength(1)
+    expect(m.h.executor.memberOfTicket(split.parts[0]!)?.member).not.toBe(m.holder)
+    expect(m.h.executor.memberOfTicket(split.parts[1]!)?.member).toBe(other)
+    await m.h.stop()
+  })
+
+  it('#870 review E2: with a named seat and no binding on the parent, a part naming the excluded session does not inherit the seat; a part naming no one does', async () => {
+    const m = await team()
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const out = m.h.decide(m.card()!.id, 'choose', m.CREDENTIAL_STOP) as { refiled: string[] }
+    m.h.pass()
+    const other = ['session-a', 'session-b'].find(s => s !== m.holder)!
+    // The refiled ticket gets the other member as its named seat (as a named dispatch records it) and, split right away,
+    // has no binding yet.
+    const again = (routeItem(m.h, { trigger_id: out.refiled[0]!, kind: 'accept', title: '写文档（重派）', scope: 's', reason: 'r' } as never) as { ticket_id: string }).ticket_id
+    m.h.named.accepted(again, other)
+    expect(m.h.named.namedOf(again)).toBe(other)
+    expect(m.h.executor.list().some(b => b.ticketId === again)).toBe(false)
+    const split = m.h.splitParent(again, 'two parts', [{ title: '前半', scope: 'a', member: m.holder }, { title: '后半', scope: 'b' }], 'r') as { ok: boolean; children: string[]; refused: Array<{ part: number; member: string }> }
+    expect(split).toMatchObject({ ok: true, refused: [{ part: 1, member: m.holder }] })
+    // The refused part takes neither the excluded session nor the parent's seat.
+    expect(m.h.named.namedOf(split.children[0]!)).toBeUndefined()
+    expect(m.h.executor.memberOfTicket(split.children[0]!)).toBeUndefined()
+    // Positive control: the part that names no one inherits the parent's seat as before.
+    expect(m.h.named.namedOf(split.children[1]!)).toBe(other)
+    await m.h.stop()
+  })
+
+  it.each([
+    ['short id', (s: string) => s.replace(/^session-/, '')],
+    ['upper case', (s: string) => s.toUpperCase()],
+    ['padded name', (s: string) => `  ${s}  `],
+    ['short id, upper case and padded', (s: string) => `  ${s.replace(/^session-/, '').toUpperCase()}  `],
+  ] as const)('#870 review E5: a split part naming the excluded session by its %s is refused and records no member', async (_how, spell) => {
+    const m = await team()
+    const { splitRequest } = await import('../../src/superagent/host/tools.ts')
+    const out = m.h.decide(m.card()!.id, 'choose', m.CREDENTIAL_STOP) as { refiled: string[] }
+    m.h.pass()
+    const other = ['session-a', 'session-b'].find(s => s !== m.holder)!
+    const split = splitRequest(m.h, { trigger_id: out.refiled[0]!, title: '写文档（两项）', scope: 's', reason: 'r', asked: '请交给别的成员重做',
+      parts: [{ title: '一', scope: 's1', member: spell(m.holder) }, { title: '二', scope: 's2', member: other }] }) as { ok: boolean; parts: string[]; member_refused?: Array<{ part: number; code: string }> }
+    expect(split).toMatchObject({ ok: true, member_refused: [{ part: 1, code: 'excluded' }] })
+    expect(split.member_refused).toHaveLength(1)
+    expect(m.h.executor.memberOfTicket(split.parts[0]!)).toBeUndefined()
+    expect(m.h.executor.memberOfTicket(split.parts[1]!)?.member).toBe(other)
+    await m.h.stop()
+  })
+
+  it.each([
+    ['short id', (s: string) => s.replace(/^session-/, '')],
+    ['upper case', (s: string) => s.toUpperCase()],
+    ['padded name', (s: string) => `  ${s}  `],
+  ] as const)('ticket eabe1586 (#865 review B2): accept naming the excluded session by its %s is refused the same way', async (_how, spell) => {
+    const m = await team()
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const out = m.h.decide(m.card()!.id, 'choose', m.CREDENTIAL_STOP) as { refiled: string[] }
+    m.h.pass()
+    const accepted = routeItem(m.h, { trigger_id: out.refiled[0]!, kind: 'accept', title: '写文档（重派）', scope: 's', reason: 'r', member: spell(m.holder) } as never) as { ok: boolean; ticket_id: string }
+    expect(accepted).toMatchObject({ ok: true, member_refused: { code: 'excluded' } })
+    expect(m.h.executor.memberOfTicket(accepted.ticket_id)?.member).not.toBe(m.holder)
+    await m.h.stop()
+  })
+
   it('#825 review W6: only the session on the card loses its tickets', async () => {
     const m = await team(2)
     const asked = m.h.request('另一件事') as { triggerId: string }
