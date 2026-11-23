@@ -4423,7 +4423,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     candidates: async (team, failures, caller) => { const fetch = memoizedCardFetch(); return { urls: await directoryPeerCandidates(fetch, team, failures, { id: caller, handle: caller }), card: fetch } },
     dispatch: (url, request, guard) => dispatchPeerCandidate(url, request.team, request.message, request.contextId, new AbortController().signal, request.caller, request.noWait, request.taskId, request.caller, guard),
     ledger: taskLedger, activity: (team, peer, ok) => recordActivity('fwd', team, peer, ok),
-    audit: (via, taskId, team) => { logger.info(`a2a: forwarded the receipt of admitted task ${taskId.slice(0, 80)} to ${team} without team-scope (via=${via})`); recordActivity('fwd', team, `via=${via}`, true) },
+    audit: (via, taskId, team) => { logger.info(`a2a: allowed the receipt of admitted task ${taskId.slice(0, 80)} to ${team} to skip team-scope (via=${via})`); recordActivity('fwd', team, `via=${via}`, true) },
   })
 
   /**

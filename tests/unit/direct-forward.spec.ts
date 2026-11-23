@@ -36,6 +36,9 @@ describe('observer ruling 2026-11-23 (c981a2f2): the receipt of an admitted task
       ['owed by another identity', l => owe(l, 'job-4', 'other-cli/a1b2c3d4e5f60719'), receipt('job-4')],
       ['not a receipt', l => owe(l, 'job-5'), { ...receipt('job-5'), message: 'free text about job-5' }],
       ['receipt target recorded differently', l => owe(l, 'job-6', request.caller, 'beta/99999999'), receipt('job-6')],
+      // #853 review B8: an owner qualifier picks another owner's same-named member; the recorded target is unqualified.
+      ['owner-qualified member address', l => owe(l, 'job-q'), { ...receipt('job-q'), team: request.team + '@deadbeef' }],
+      ['owner-qualified canvas address', l => owe(l, 'job-c', request.caller, 'zone/canvas/ops'), { ...receipt('job-c'), team: 'zone/canvas/ops@deadbeef' }],
     ]
     for (const [label, seed, req] of cases) {
       const x = fixture(), audited: string[] = []

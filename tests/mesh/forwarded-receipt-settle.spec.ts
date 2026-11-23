@@ -84,6 +84,34 @@ describe('3.65: a forwarded CLI receipt settles the owed row only once it went o
     } finally { await a.dispose(); await b.dispose() }
   }, 40000)
 
+  it('#853 review F2b: a receipt whose forward was dispatched and failed keeps its id failed; the resend is a replay, never a second dispatch', async () => {
+    const { a, b, home } = await setup()
+    const task = 'owed-dispatched-1'
+    try {
+      await owe(a, b, task)
+      await b.dispose() // the forward dispatches to B and fails there: something may have left this host
+      const first = await cli(home, ['receipt', task, '--to', targetHandle, '--json', '--exit-class', 'done'])
+      expect(first.code, first.stdout).toBe(1)
+      expect(JSON.parse(first.stdout)).not.toHaveProperty('delivery')
+      expect((await state(a)).tasks.find((r: any) => r.taskId === task)).toMatchObject({ status: 'pending' })
+      const again = await cli(home, ['receipt', task, '--to', targetHandle, '--json', '--exit-class', 'done'])
+      expect(again.code, again.stdout).toBe(4)
+      expect(JSON.parse(again.stdout)).toMatchObject({ replay: true, class: 'gone' })
+    } finally { await a.dispose(); await b.dispose().catch(() => undefined) }
+  }, 40000)
+
+  it('#853 review F2c: a plain route refused not-sent keeps its id failed (only a receipt is freed for a resend)', async () => {
+    const { a, b, home } = await setup(false)
+    try {
+      const first = await cli(home, ['route', targetHandle, 'hello', '--task', 'plain-refused-1', '--json', '--exit-class'])
+      expect(first.code, first.stdout).toBe(1)
+      expect(JSON.parse(first.stdout)).toMatchObject({ delivery: 'not-sent' })
+      const again = await cli(home, ['route', targetHandle, 'hello', '--task', 'plain-refused-1', '--json', '--exit-class'])
+      expect(again.code, again.stdout).toBe(4)
+      expect(JSON.parse(again.stdout)).toMatchObject({ replay: true, class: 'gone' })
+    } finally { await a.dispose(); await b.dispose() }
+  }, 40000)
+
   it('control: a receipt the forward delivered settles the owed row (endedBy receipt)', async () => {
     const { a, b, home } = await setup()
     const task = 'owed-delivered-1'

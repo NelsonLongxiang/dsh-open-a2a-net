@@ -82,8 +82,10 @@ export function createDirectForward(d: DirectForwardDeps) {
     // #282 S2: candidates honour an owner-qualified id; scope, the peer, the receivers and the ledger see the plain team.
     const qualifiedMember = splitQualifiedMember(request.team)
     const plainTeam = qualifiedMember?.handle ?? splitCanvasOwner(request.team).team
-    const admitted = receiptOfAdmitted(d.ledger, request.caller, plainTeam, request.message)
-    if (admitted !== undefined) d.audit?.('receipt-of-admitted', admitted, plainTeam)
+    // #853 review (blocking): compare the address the forward resolves, owner qualifier included — an @<fp8> picks another
+    // owner's same-named member, so the stripped form would let a receipt reach someone other than the recorded target.
+    const admitted = receiptOfAdmitted(d.ledger, request.caller, request.team, request.message)
+    if (admitted !== undefined) d.audit?.('receipt-of-admitted', admitted, request.team)
     const scope = admitted !== undefined ? { ok: true as const } : await d.scope(request.caller, qualifiedMember ? request.team : plainTeam)
     if (!scope.ok) return refuse('target is outside sender scope: ' + scope.error, `ask this host's operator to link ${request.team} here: drag it (or one of its members) into a canvas team on this host`)
     const failures: string[] = []

@@ -463,7 +463,9 @@ export function questionIdFor(task: string, attentionId: string): string | undef
 function sendFailureReason(error: unknown): string {
   const stdout = (error as { stdout?: unknown } | null)?.stdout
   try { const out = JSON.parse(typeof stdout === 'string' ? stdout : '') as { error?: unknown }; if (typeof out.error === 'string' && out.error !== '') return out.error.slice(0, 300) } catch { /* not JSON */ }
-  return String(error instanceof Error ? error.message : error).slice(0, 300)
+  // #853 review: never the error's own message — a command runner may put the command line (the reply text) in it.
+  const code = exitCodeOf(error)
+  return `the a2a-net command failed${code !== undefined ? ` (exit ${String(code)})` : ''} without a reason on stdout`
 }
 
 export async function sendReply(ctx: SourceContext, commands: Commands, message: OutboundMessage, now: () => Date = () => new Date(), options: SendOptions = {}): Promise<'sent' | 'gone'> {

@@ -217,6 +217,14 @@ describe('P3-8 · failures retry until 24 hours, then the message is gone with a
     expect(f.state.get(KV.sendFailed)).toEqual({})
   })
 
+  it('#853 review: without a CLI reason the warning uses fixed wording, never the error message (it may hold the command line)', async () => {
+    const f = fake(cli({ receipt: () => { throw Object.assign(new CliExit(1), { message: 'a2a-net receipt task-1 --to dsh/aaaa1111 -- the PR is ready' }) } }))
+    await expect(sendReply(f.ctx, f.commands, message(), at(T0))).rejects.toThrow()
+    const detail = (f.reports[0]![1] as Health).detail
+    expect(detail).toContain('the a2a-net command failed (exit 1)')
+    expect(detail).not.toContain('the PR is ready')
+  })
+
   it('a failed recheck counts as a failure too, and a later success clears the record', async () => {
     let down = true
     const f = fake(args => { if (args[0] === 'admission' && down) throw new CliExit(1); return cli()(args) })
