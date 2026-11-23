@@ -45,6 +45,15 @@ export const SCHEDULE_TOOLS: readonly string[] = ['schedule_create', 'schedule_e
 export const SELF_TOOLS: readonly string[] = ['a2a_whoami']
 
 /**
+ * The session's own lessons and wrap-up self-check (dsh-prompt-templates, its LESSON_SELF_TOOLS): each takes its session from
+ * the calling agent (exec.agent.session.header.id), never from a parameter, and reads or writes only that session's own rows
+ * and session-scoped templates; no other session, file, shell or credential, and a proposed lesson type stays pending until
+ * the owner approves it. The allowlisted roles (router, builder) need them to close a workshop card round; members and
+ * observers have them already (they are not on MEMBER_DENY). Not team tools: a session outside a team keeps them too.
+ */
+export const SELF_REFLECT_TOOLS: readonly string[] = ['lesson_write', 'lesson_none', 'lesson_keep', 'lesson_timeline', 'lesson_type_propose', 'selfcheck_write', 'selfcheck_conclude']
+
+/**
  * ygl-trees, the team's memory, through its MCP server (the presets mount it as `ygl`; the server runs outside the session's
  * sandbox, which keeps the CLI from opening the shared workspace). Its MCP face has no delete or admin action. The router
  * only reads; members and observers read, write, verify and check health (owner 2026-11-10).
@@ -55,7 +64,7 @@ export const YGL_WORK_TOOLS: readonly string[] = [...YGL_READ_TOOLS, 'mcp__ygl__
 /** The router's reads (owner 2026-11-18): files, search and skills, to see which member and repository a request fits. */
 export const ROUTER_READ_TOOLS: readonly string[] = ['read', 'glob', 'grep', 'skill']
 
-export const ROUTER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, ...SELF_TOOLS, ...YGL_READ_TOOLS, ...ROUTER_READ_TOOLS, 'a2a_tool_request', 'a2a_outbound_request', 'superagent_route', 'superagent_split', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose']
+export const ROUTER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, ...SELF_TOOLS, ...SELF_REFLECT_TOOLS, ...YGL_READ_TOOLS, ...ROUTER_READ_TOOLS, 'a2a_tool_request', 'a2a_outbound_request', 'superagent_route', 'superagent_split', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose']
 
 /** Upstream `WORK_TOOLS` (src/app/sessions.ts) without the tools that start, list, message or interrupt other sessions. */
 export const MEMBER_WORK_TOOLS: readonly string[] = ['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list',
@@ -78,10 +87,10 @@ export const BUILDER_ISSUE_TOOLS: readonly string[] = ['superagent_issue_propose
  * A2A sending, no canvas or team route. Blueprints (BS2) go to the host's staffing executor, never straight to a route.
  * #791: it also reads the network to check itself, and drafts issues the host files after the owner agrees.
  */
-export const BUILDER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, ...SELF_TOOLS, ...BUILDER_CHECK_TOOLS, 'read', 'glob', 'grep', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', ...BUILDER_ISSUE_TOOLS]
+export const BUILDER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, ...SELF_TOOLS, ...SELF_REFLECT_TOOLS, ...BUILDER_CHECK_TOOLS, 'read', 'glob', 'grep', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', ...BUILDER_ISSUE_TOOLS]
 
 /** The tools only a team's sessions have: a session with no role is not offered them. */
-export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS.filter(name => !SCHEDULE_TOOLS.includes(name) && !SELF_TOOLS.includes(name) && !YGL_READ_TOOLS.includes(name) && !ROUTER_READ_TOOLS.includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_ticket_note', 'a2a_card_cast', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', ...BUILDER_ISSUE_TOOLS]
+export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS.filter(name => !SCHEDULE_TOOLS.includes(name) && !SELF_TOOLS.includes(name) && !SELF_REFLECT_TOOLS.includes(name) && !YGL_READ_TOOLS.includes(name) && !ROUTER_READ_TOOLS.includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_ticket_note', 'a2a_card_cast', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', ...BUILDER_ISSUE_TOOLS]
 
 /**
  * Design tool-requests T6 (owner 2026-11-11: granting tools one by one was too much to operate). A member or an observer may
@@ -131,12 +140,21 @@ export function grantableTool(role: Role, name: string): boolean {
 /** The role class a granted tool is kept under: an observer shares the members' grants (design tool-requests T1). */
 export const grantClass = (role: Role): 'router' | 'member' => role === 'router' ? 'router' : 'member'
 
+/**
+ * #825 review: what the owner's blockedTools can take from a member or an observer: a tool beyond its role's list, or one of
+ * its work tools (bash, edit, read…). Never its team tools (reporting, tickets, schedules, its own ygl), which it needs to
+ * report and be stopped, and never the run_code transport.
+ */
+export function blockableTool(role: Role, name: string): boolean {
+  return !TRANSPORT.has(name) && (!roleTools(role).includes(name) || MEMBER_WORK_TOOLS.includes(name))
+}
+
 export function roleToolRefusal(role: Role, name: string, args?: unknown, granted: readonly string[] = [], blocked: readonly string[] = []): string | undefined {
   if (TRANSPORT.has(name)) return undefined
   if (role === 'builder') return roleTools(role).includes(name) ? scheduleTargetRefusal(name, args) : `[superagent-role-tools] the team builder only reads and proposes, through ${BUILDER_TOOLS.join(', ')}; ${name} is not one of them`
   if (role !== 'router') {
     // T6: a member or an observer has everything but the boundary and what the owner blocked.
-    if (blocked.includes(name) && !roleTools(role).includes(name)) return `[superagent-role-tools] the owner has blocked ${name} for this team's members`
+    if (blocked.includes(name) && blockableTool(role, name)) return `[superagent-role-tools] the owner has blocked ${name} for this team's members`
     if (memberBoundary(role, name)) return `[superagent-role-tools] a team member works with its host's tools and reports with a2a_ticket_report; ${name} leaves the team (other sessions, subagents, A2A sending or another role's tools)`
     return scheduleTargetRefusal(name, args)
   }
@@ -250,7 +268,7 @@ export class RoleTools {
     const has = (name: string): boolean => { try { return tools.get(name, scope) !== undefined } catch { return false } }
     if (role === 'member' || role === 'observer') {
       // T6: a member or an observer sees everything its scope has but the boundary and the owner's blocks.
-      const deny = [...new Set([...MEMBER_DENY, ...TEAM_TOOLS, ...YGL_WORK_TOOLS, ...blocked])].filter(name => (memberBoundary(role, name) || (blocked.includes(name) && !roleTools(role).includes(name))) && has(name))
+      const deny = [...new Set([...MEMBER_DENY, ...TEAM_TOOLS, ...YGL_WORK_TOOLS, ...blocked])].filter(name => (memberBoundary(role, name) || (blocked.includes(name) && blockableTool(role, name))) && has(name))
       try { this.applied.set(id, { role, key, dispose: deny.length === 0 ? () => {} : tools.restrict({ deny }) }) } catch (error) { this.d.logger.warn('superagent: tools of %s not restricted: %s', id, String(error)) }
       return
     }

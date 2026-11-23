@@ -37,7 +37,12 @@ export interface StoredCard extends DecisionSpec {
   /** Files the proposer put on the card (C8). */
   readonly files?: readonly DecisionFile[]
   readonly decided?: { readonly at: string; readonly text: string; readonly triggerId?: string; readonly files?: readonly DecisionFile[] }
+  /** The host closed this card as 「知道了」 on a timeout (owner 2026-11-23): the audit record; it stays when the owner decides again. */
+  readonly autoAck?: { readonly at: string; readonly by: 'host'; readonly rule: 'credential-ack-timeout'; readonly minutes: number }
 }
+
+/** The decision text of a credential-access card the host closed on its timeout. */
+export const AUTO_ACK_TEXT = '决定：知道了（超时自动）'
 
 /** Whether a level may be approved with one click. Absent a level the card is treated as P1, which may not. */
 export const oneClick = (level: DecisionLevel): boolean => level === 'P2' || level === 'P3'
@@ -126,6 +131,21 @@ export class DecisionBook {
     return [...(card?.files ?? []), ...(card?.decided?.files ?? [])].find(file => file.sha256 === sha256)
   }
   open(): StoredCard[] { return this.cards.filter(card => card.decided === undefined) }
+
+  /** Cards the host closed on a timeout since \`sinceMs\` that the owner has not decided since (they may still decide). */
+  autoAcked(sinceMs: number): StoredCard[] {
+    return this.cards.filter(card => card.autoAck !== undefined && card.decided?.text === AUTO_ACK_TEXT && Date.parse(card.autoAck.at) >= sinceMs)
+  }
+
+  /** Close an undecided card as 「知道了」 on a timeout, with the audit record (who, which rule, when, after how long). */
+  autoAcknowledge(id: string, at: string, minutes: number): boolean {
+    const card = this.cards.find(c => c.id === id && c.decided === undefined)
+    if (card === undefined) return false
+    this.cards = this.cards.map(c => c.id === id ? { ...c, decided: { at, text: AUTO_ACK_TEXT }, autoAck: { at, by: 'host', rule: 'credential-ack-timeout', minutes } } : c)
+    this.save()
+    this.changed('decided', this.get(id))
+    return true
+  }
 
   /** The newest decided card of one proposer, if any (a declined tool request is not raised again for a while). */
   lastDecided(source: StoredCard['source'], by: string): StoredCard | undefined {

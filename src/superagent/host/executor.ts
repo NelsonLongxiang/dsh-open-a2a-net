@@ -31,6 +31,8 @@ export interface MemberExecutorDeps {
   readonly members: () => readonly string[]
   /** The repository a member works in (`owner/name`), if the owner named one. */
   readonly repoOf: (member: string) => string | undefined
+  /** #825 review: sessions a ticket must not go to (a ticket the owner took off a session on a credential card), even if named. */
+  readonly excluded?: (ticketId: string) => readonly string[]
   /** What a member is told of its own rules and the rules its ticket was accepted on (design D6). */
   readonly memberNotes?: (member: string, ticket: Ticket) => readonly string[]
   /**
@@ -232,10 +234,12 @@ export class MemberExecutor implements Executor {
   }
   /** Members with no ticket bound — for a ticket of a repository, only that repository's members. */
   private free(ticketId?: string): string[] {
+    const out = ticketId !== undefined ? this.d.excluded?.(ticketId) ?? [] : []
     const held = ticketId !== undefined ? this.ticketMembers[ticketId] : undefined
-    if (held !== undefined) return this.d.members().filter(m => m === held.member && this.available(m))
+    // A session the owner took this work off is never offered it again, even when the router names it.
+    if (held !== undefined && !out.includes(held.member)) return this.d.members().filter(m => m === held.member && this.available(m))
     const repo = ticketId !== undefined ? this.ticketRepos[ticketId] : undefined
-    return this.d.members().filter(m => this.available(m) && (repo === undefined || this.d.repoOf(m) === repo))
+    return this.d.members().filter(m => this.available(m) && !out.includes(m) && (repo === undefined || this.d.repoOf(m) === repo))
   }
 
   private available(member: string): boolean {
@@ -298,8 +302,11 @@ export class MemberExecutor implements Executor {
       // Paused, nothing launches: the team page says so already, and it is no stalled launch.
       if (this.d.paused?.() === true) return { ...base, reason: 'paused' }
       if (cap > 0 && this.bindings.length >= cap) return { ...base, reason: 'at-cap' }
+      // Ticket 877ca64f: the same exclusion free() applies, so a ticket nobody may take says so instead of "launching".
+      const out = this.d.excluded?.(ticketId) ?? []
+      const excluded = (): QueuedAssignment => ({ ...base, reason: 'all-excluded', member: out[0]! })
       const held = this.ticketMembers[ticketId]
-      if (held !== undefined) {
+      if (held !== undefined && !out.includes(held.member)) {
         if (!members.includes(held.member)) return { ...base, reason: 'member-absent', member: held.member }
         return this.available(held.member) ? free({ ...base, reason: 'launching', member: held.member }) : { ...base, reason: 'member-busy', member: held.member }
       }
@@ -307,9 +314,13 @@ export class MemberExecutor implements Executor {
       if (repo !== undefined) {
         const workers = members.filter(m => this.d.repoOf(m) === repo)
         if (workers.length === 0) return { ...base, reason: 'no-repo-member', repo }
-        return workers.some(m => this.available(m)) ? free({ ...base, reason: 'launching', repo }) : { ...base, reason: 'repo-busy', repo }
+        const allowed = workers.filter(m => !out.includes(m))
+        if (allowed.length === 0) return { ...excluded(), repo }
+        return allowed.some(m => this.available(m)) ? free({ ...base, reason: 'launching', repo }) : { ...base, reason: 'repo-busy', repo }
       }
-      return members.some(m => this.available(m)) ? free({ ...base, reason: 'launching' }) : { ...base, reason: 'all-busy' }
+      const allowed = members.filter(m => !out.includes(m))
+      if (out.length > 0 && allowed.length === 0) return excluded()
+      return allowed.some(m => this.available(m)) ? free({ ...base, reason: 'launching' }) : { ...base, reason: 'all-busy' }
     })
   }
   /**
@@ -776,7 +787,8 @@ export class MemberExecutor implements Executor {
 export interface QueuedAssignment {
   readonly ticketId: string
   readonly assignmentId: string
-  readonly reason: 'launching' | 'paused' | 'delivery-refused' | 'member-busy' | 'member-absent' | 'no-repo-member' | 'repo-busy' | 'all-busy' | 'at-cap'
+  /** `all-excluded` (ticket 877ca64f): every member who could take it is one the owner took this work off; `member` names one. */
+  readonly reason: 'launching' | 'paused' | 'delivery-refused' | 'member-busy' | 'member-absent' | 'no-repo-member' | 'repo-busy' | 'all-busy' | 'at-cap' | 'all-excluded'
   readonly member?: string
   readonly repo?: string
   /** For `delivery-refused`: when the last delivery was refused. */

@@ -33,16 +33,16 @@ import {legacyOutboundApproval} from './legacy-outbound-approval.ts'
 import {NarrowOutboundRecovery} from './narrow-outbound.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { SettingsHistory } from './settings-history.ts'
-import { HealthReminders, HEALTH_TICK_MS, type HealthProblem } from './health-reminders.ts'
+import { HealthReminders, HEALTH_TICK_MS, cleanName, type HealthProblem } from './health-reminders.ts'
 import { DecisionPush, PUSH_TICK_MS } from './decision-push.ts'
 import { QuestionGate, questionToken } from './question-gate.ts'
 import { DECISION_FILES_MAX, DecisionBook, decisionFiles, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
-import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, grantClass, type Role } from './role-tools.ts'
+import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, blockableTool, grantClass, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
-import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
+import { CREDENTIAL_ACK_MINUTES_DEFAULT, DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 import { searchTeam } from './search.ts'
 import { A2aReceipts, END_RECEIPT_GRACE_MS } from './receipts.ts'
 export { END_RECEIPT_GRACE_MS } from './receipts.ts'
@@ -115,6 +115,10 @@ export function workerRemotes(settings: Pick<TeamSettings, 'remoteMembers' | 'bo
 
 /** The credential-access audit: at most one owner card per session and kind in this long, and how many hits are kept. */
 export const CREDENTIAL_CARD_GAP_MS = 10 * 60_000
+/** The credential-access card's two options that act (ticket 4351d67f), only on the owner's own choice. */
+export const CREDENTIAL_STOP = '停掉这个会话的工单', CREDENTIAL_BLOCK = '在团队设置里禁用这个工具'
+/** How long a credential card the host closed on a timeout stays on the panel, open to the owner's decision. */
+export const AUTO_ACK_SHOWN_MS = 24 * 60 * 60_000
 const CREDENTIAL_HITS_KEPT = 100
 const CREDENTIAL_KIND_TEXT: Record<CredentialKind, string> = { 'credential-file': '凭据类文件或目录', 'authorization-header': '带 Authorization 的请求', 'other-session': '别的会话的文件' }
 
@@ -182,6 +186,9 @@ export class SuperagentHost {
   private readonly refusalCounts = new Map<string, number>()
   private readonly refusalRecent: Array<{ at: string; rule: string; caller?: string; target?: string }> = []
   /** The credential-access audit's recent hits (kinds and a redacted preview, never what was read) and when each session last raised a card. */
+  /** #825 review: the request a credential card filed back, by trigger id, and the session its ticket must not go to. */
+  private readonly credentialExclusions = new Map<string, string>()
+  private readonly exclusionsPath: string
   private readonly credentialHits: Array<{ at: string; session: string; role: string; tool: string; kinds: readonly CredentialKind[]; preview: string; card?: string }> = []
   private readonly credentialCardAt = new Map<string, number>()
   /** docs/design/superagent-team-mcp.md M1–M3: the team's MCP servers, their tokens in this process's memory only. */
@@ -192,6 +199,8 @@ export class SuperagentHost {
     this.settingsPath = join(dir, 'settings.json')
     this.settingsValue = this.loadSettings()
     this.store = new JsonRepositories(join(dir, 'state.json'))
+    this.exclusionsPath = join(dir, 'credential-exclusions.json')
+    try { const raw = JSON.parse(readFileSync(this.exclusionsPath, 'utf8')) as unknown; if (raw !== null && typeof raw === 'object' && !Array.isArray(raw)) for (const [trigger, session] of Object.entries(raw as Record<string, unknown>)) if (typeof session === 'string') this.credentialExclusions.set(trigger, session) } catch { /* none yet */ }
     const assessor: Assessor = {
       request: candidate => { this.candidates.set(candidate.evalId, { candidate, delivered: false }); queueMicrotask(() => this.flushCandidates()) },
       release: evalId => { this.candidates.delete(evalId) },
@@ -201,6 +210,7 @@ export class SuperagentHost {
       path: join(dir, 'executor.json'), members: () => this.pool(),
       held: ticketId => this.splitHeld(ticketId) || this.named.held(ticketId),
       repoOf: member => this.settingsValue.repos[member],
+      excluded: ticketId => this.credentialExcluded(ticketId),
       memberNotes: (member, ticket) => this.memberNotes(member, ticket),
       deliver: (member, text, kind, ticketId, run) => this.deliverToMember(member, text, kind, ticketId, run), engine: () => this.engine,
       paused: () => this.settingsValue.paused,
@@ -239,7 +249,7 @@ export class SuperagentHost {
       remotes: canvas => (d.canvasTeam?.(canvas)?.remote ?? []).map(r => r.ref),
       declares: (ref, capability) => d.memberDeclares?.(ref, capability) === true,
       send: async (ref, text, taskId) => { if (d.rosterSend === undefined) throw new Error('no roster send on this host'); await d.rosterSend(ref, text, taskId) },
-      handleOf: id => d.handleOf?.(id) ?? id, nameOf: id => plainName(d.sessionName?.(id)), online: id => d.sessionLoaded?.(id) ?? false, seatIdOf: id => this.named.seatIdOf(id),
+      handleOf: id => d.handleOf?.(id) ?? id, nameOf: id => cleanName(plainName(d.sessionName?.(id))), online: id => d.sessionLoaded?.(id) ?? false, seatIdOf: id => this.named.seatIdOf(id),
       loadOf: id => this.executor.loadOf(id), hostFingerprint: () => d.hostFingerprint?.(), warm: () => d.warmPeerCards?.(), nowMs: () => Date.parse(this.now()), logger: d.logger,
     })
     // T8 step 1: the roster's recipients, transport and canvas address; the outbox is kept across restarts.
@@ -352,7 +362,7 @@ export class SuperagentHost {
       path: join(dir, 'seats.json'), engine: this.engine, ticket: id => this.store.tickets.get(id), tickets: () => this.store.tickets.list(),
       trigger: id => this.store.triggers.get(id), pool: () => this.pool(), router: () => this.settingsValue.router,
       loaded: member => member.includes('@') || (d.sessionLoaded?.(member) ?? true),
-      resolveMember: value => this.resolveMember(value), memberName: member => this.memberName(member),
+      resolveMember: value => this.resolveMember(value), memberName: member => this.displayName(member),
       declares: (caller, capability) => d.callerDeclares?.(caller, capability) === true,
       setMember: (ticketId, member) => this.executor.setMember(ticketId, member), clearMember: ticketId => this.executor.clearMember(ticketId),
       lastMemberOf: ticketId => this.executor.lastMemberOf(ticketId),
@@ -696,6 +706,8 @@ export class SuperagentHost {
   }
   private childSlots(member: string): number | undefined { return isChildTeam(member) ? this.childTeams().find(c => c.ref === member)?.slots : undefined }
   private memberName(id: string): string { return isChildTeam(id) ? childLabel(id) : this.d.sessionName?.(id) ?? id }
+  /** A member's name as it is shown anywhere (#851 review, non-blocking 3): the same cleaning as the health problems; the id when nothing is left. */
+  private displayName(id: string): string { return cleanName(this.memberName(id)) ?? id }
 
   /** A split that failed after its parent was accepted: the parent runs as an ordinary ticket after all. */
   releaseSplit(parentId: string): void {
@@ -851,21 +863,30 @@ export class SuperagentHost {
     // ticket), before the a2a plugin's card cache exists, and reading the canvas there failed the plugin's start.
     const role = worker === undefined ? 'router' as const : this.d.presetOf?.(worker) === OBSERVER_PRESET ? 'observer' as const : 'member' as const
     const seat = this.d.handleOf?.(session) ?? session
-    const name = plainName(this.d.sessionName?.(session))
+    // #861 review: the seat's name is shown (receipts, the market's 承接), so it is cleaned like every other shown name.
+    const name = cleanName(plainName(this.d.sessionName?.(session)))
     // The seat's stable id (named dispatch N2), as the roster gives it: the market keys its records on it, not the handle.
     const seatId = this.named.seatIdOf(session)
     return { seat, ...(seatId !== undefined ? { seatId } : {}), ...(name !== undefined && name !== '' && name !== seat ? { name } : {}), role }
   }
   /** The stable seat id a member's team MCP calls are made as (#690 F1): the member's own, from the roster. */
   mcpSeatOf(member: string): string | undefined { return this.named.seatIdOf(member) }
-  memberListLine(): string { return `The team's members: ${this.pool().map(id => this.memberName(id)).join('; ') || '(none)'}.` }
+  memberListLine(): string {
+    // Names that read the same once cleaned also show their id, so the router can still name the one it means.
+    const pool = this.pool(), shown = pool.map(id => this.displayName(id))
+    const twice = new Set(shown.filter((name, i) => shown.indexOf(name) !== i))
+    return `The team's members: ${pool.map((id, i) => twice.has(shown[i]!) ? `${shown[i]} (${id})` : shown[i]).join('; ') || '(none)'}.`
+  }
 
   /** A member by its session id, the first eight of it, or its name; undefined when none matches, or more than one. */
   resolveMember(value: string): string | undefined {
     const wanted = value.trim().toLowerCase()
     const matches = this.pool().filter(id => {
       const short = id.replace(/^session-/, '')
-      return id.toLowerCase() === wanted || short.toLowerCase() === wanted || short.slice(0, 8).toLowerCase() === wanted || this.memberName(id).toLowerCase() === wanted
+      // The raw name still matches, and so does the name as shown (the router only ever sees that one); two members that
+      // read the same either way match together, so neither is picked. A name cleaned to nothing is reached by its id.
+      const raw = this.memberName(id), shown = cleanName(raw)
+      return id.toLowerCase() === wanted || short.toLowerCase() === wanted || short.slice(0, 8).toLowerCase() === wanted || raw.toLowerCase() === wanted || (shown !== undefined && shown.toLowerCase() === wanted)
     })
     return matches.length === 1 ? matches[0] : undefined
   }
@@ -904,7 +925,7 @@ export class SuperagentHost {
       const profile = this.settingsValue.profiles[id]
       const held = this.executor.bindingOf(id)
       const repo = this.settingsValue.repos[id]
-      lines.push(`- ${this.memberName(id)} · ${held === undefined ? 'free' : `working on ${held.ticketId}`}${repo !== undefined ? ` · repository ${repo}` : ''}${profile?.role !== undefined ? ` · role: ${clip(profile.role, 200)}` : ''}`)
+      lines.push(`- ${this.displayName(id)} · ${held === undefined ? 'free' : `working on ${held.ticketId}`}${repo !== undefined ? ` · repository ${repo}` : ''}${profile?.role !== undefined ? ` · role: ${clip(profile.role, 200)}` : ''}`)
       for (const rule of (profile?.rules ?? []).filter(r => r.enabled)) lines.push(`  - takes (${rule.name}): ${clip(rule.text, 400)}`)
     }
     if (dispatch !== '') lines.push('Dispatch rules:', clip(dispatch, 2_000))
@@ -946,10 +967,12 @@ export class SuperagentHost {
     if (ticket === undefined || ticket.ended !== undefined) return { ok: false, code: 'unknownTicket', error: this.wrongId('ticket', ticketId) }
     const member = this.resolveMember(value)
     if (member === undefined) return { ok: false, code: 'member', error: `no such member: ${value}. ${this.memberListLine()}` }
+    // Ticket 877ca64f: say so instead of ok:true for a member this ticket will never run on.
+    if (this.credentialExcluded(ticketId).includes(member)) return { ok: false, code: 'excluded', error: `${this.displayName(member)} is excluded from this ticket: the owner took this work off it on a credential-access card; give it to another member` }
     const latest = ticket.assignments.at(-1)
     const card = this.executor.list().find(b => b.assignmentId === latest?.id)?.card
     if (card === 'sending') return { ok: false, code: 'assignment-in-flight', error: 'the original assignment card is still in flight; wait for its result or stop that ticket, do not send another card' }
-    if (latest?.state === 'pending' && card === undefined) { this.named.assigned(ticketId); this.executor.setMember(ticketId, member); return { ok: true, ticket_id: ticketId, member: this.memberName(member) } }
+    if (latest?.state === 'pending' && card === undefined) { this.named.assigned(ticketId); this.executor.setMember(ticketId, member); return { ok: true, ticket_id: ticketId, member: this.displayName(member) } }
     // A restored unknown card has a failed report: only this explicit retry action (after reconciliation) creates a new run.
     // A refused reassignment leaves nothing changed (#690 F1): the running member keeps the ticket, its name and its hold.
     const before = this.executor.memberOfTicket(ticketId)
@@ -960,7 +983,7 @@ export class SuperagentHost {
     }
     this.named.assigned(ticketId)
     this.pass()
-    return { ok: true, ticket_id: ticketId, member: this.memberName(member) }
+    return { ok: true, ticket_id: ticketId, member: this.displayName(member) }
   }
 
   /** What a rule set holds now, in the shape a proposal for it takes. */
@@ -1272,7 +1295,7 @@ export class SuperagentHost {
     const checked = this.outbound.check(session, ask, { role: this.toolRoleOf(session), a2aOn: this.settingsValue.sources.a2a, own: ownAddresses(this.d.handleOf, this.settingsValue.canvas, [this.settingsValue.router, ...this.pool(), ...this.settings.observers]),
       ticket: ticket === undefined ? undefined : { open: !ticket.ended, title: ticket.title, holder: this.executor.list().find(b => b.ticketId === ticket.id)?.member } })
     if (!checked.ok) return checked
-    const out = this.decisions.propose({ source: 'outbound', by: session, at: this.now(), question: `${this.memberName(session)} ${checked.question}`, ...(checked.reason !== undefined ? { reason: checked.reason } : {}), spec: { level: 'P0', options: [OUTBOUND_APPROVE, OUTBOUND_DECLINE], recommended: OUTBOUND_APPROVE }, outbound: { ticketId: checked.ticketId, address: checked.address, text: checked.text, team: this.settingsValue.canvas ?? '', title: ticket!.title } })
+    const out = this.decisions.propose({ source: 'outbound', by: session, at: this.now(), question: `${this.displayName(session)} ${checked.question}`, ...(checked.reason !== undefined ? { reason: checked.reason } : {}), spec: { level: 'P0', options: [OUTBOUND_APPROVE, OUTBOUND_DECLINE], recommended: OUTBOUND_APPROVE }, outbound: { ticketId: checked.ticketId, address: checked.address, text: checked.text, team: this.settingsValue.canvas ?? '', title: ticket!.title } })
     if (out.ok && out.reused !== true) this.outbound.waiting(out.id, checked.ticketId, checked.address, checked.text, session)
     return out.ok ? { ok: true, card_id: out.id } : out
   }
@@ -1307,7 +1330,7 @@ export class SuperagentHost {
   /** Design outbound-requests O3: an approver the owner named decides an outbound card it did not raise, with a reason. */
   approverDecide(session: string, id: string, option: unknown, reason: unknown): Record<string, unknown> {
     const checked = approverCheck({ approvers: this.settingsValue.approvers ?? [], role: this.toolRoleOf(session), card: this.decisionCards().find(row => row.id === id), session, reason })
-    return checked.ok ? this.decide(id, 'choose', option, `审批人 ${this.memberName(session)}：${checked.reason}`) : checked
+    return checked.ok ? this.decide(id, 'choose', option, `审批人 ${this.displayName(session)}：${checked.reason}`) : checked
   }
 
   requestTool(session: string, role: Role, name: string, why?: string): string {
@@ -1316,7 +1339,7 @@ export class SuperagentHost {
     const last = this.decisions.lastDecided('tool', by)
     if (last !== undefined && !last.decided!.text.includes('批准') && Date.parse(this.now()) - Date.parse(last.decided!.at) < TOOL_ASK_AGAIN_MS) return `The owner declined ${name} for this team at ${last.decided!.at}; it is not asked about again for a day.`
     const who = cls === 'router' ? '总工' : '成员和观察者'
-    const out = this.decisions.propose({ source: 'tool', by, at: this.now(), question: `${this.memberName(session)} 申请使用工具 ${name}（不在这个角色的工具列表里），要放行给本团队的${who}吗？`,
+    const out = this.decisions.propose({ source: 'tool', by, at: this.now(), question: `${this.displayName(session)} 申请使用工具 ${name}（不在这个角色的工具列表里），要放行给本团队的${who}吗？`,
       reason: `${why !== undefined && why.trim() !== '' ? `申请理由：${why.trim().slice(0, 300)}。` : ''}这个工具不在团队预设里，宿主确认不了它来自哪个插件、有没有沙箱。信得过提供它的插件再批准；批准后本团队的${who}都能用，可以在设置里收回。`,
       spec: { level: 'P0', options: [`批准：本团队的${who}可用 ${name}`, '拒绝'], recommended: '拒绝' } })
     return out.ok ? `A P0 decision card asks the owner whether this team's ${cls === 'router' ? 'router' : 'members'} may use ${name}; try again after it is approved.` : `The request could not be raised: ${out.error}`
@@ -1351,7 +1374,9 @@ export class SuperagentHost {
       // A question asked before cards, or by an older member: it has no recommendation, so it is the strictest kind.
       return [{ ...(card ?? { id, question: ticket.attention.question, source: 'ticket' as const, by: '', ticketId: ticket.id, at: ticket.updatedAt, level: 'P1' as const, options: [], recommended: '' }), ...since, title: ticket.title }]
     })
-    return [...this.decisions.open().filter(card => card.source !== 'ticket'), ...onTickets]
+    // Owner 2026-11-23: credential cards the host closed on a timeout stay a day, so the owner sees them and may decide again.
+    const autoAcked = this.decisions.autoAcked(Date.parse(this.now()) - AUTO_ACK_SHOWN_MS)
+    return [...this.decisions.open().filter(card => card.source !== 'ticket'), ...autoAcked, ...onTickets]
   }
 
   /**
@@ -1387,6 +1412,9 @@ export class SuperagentHost {
     if (card.source === 'health') {
       this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
       this.healthReminders.decided(card.id, chosen, Date.parse(at))
+      // Owner ruling 2026-11-23 (ticket 4351d67f): on a credential-access card the owner's own choice acts. Only this
+      // owner route reaches here; the timeout writes 「知道了」 without it, and an approver may decide outbound cards only.
+      if (card.by.startsWith('credential:') && (chosen === CREDENTIAL_STOP || chosen === CREDENTIAL_BLOCK)) return { ok: true, ...this.credentialAction(card.id, card.by.slice('credential:'.length), card.question, chosen) }
       return { ok: true }
     }
     // Staffing changes (S1a): the team's confirmation of a change; the host's executor carries it out once all agree.
@@ -1760,6 +1788,7 @@ export class SuperagentHost {
     try { this.admitChildren() } catch (error) { this.d.logger.warn('superagent: child teams not checked yet: %s', String(error)) }
     try { this.a2a.syncDeclarations() } catch (error) { this.d.logger.warn('superagent: declarations not synced yet: %s', String(error)) }
     try { this.named.tick() } catch (error) { this.d.logger.warn('superagent: named dispatch pass failed: %s', String(error)) }
+    try { this.ackCredentialCards() } catch (error) { this.d.logger.warn('superagent: credential card timeout pass failed: %s', String(error)) }
     // Upstream: evaluation, dispatch and outbound delivery hold while paused.
     if (this.settingsValue.paused) return
     this.executor.tick()
@@ -1836,16 +1865,102 @@ export class SuperagentHost {
     let card: string | undefined
     if (last === undefined || nowMs - last >= CREDENTIAL_CARD_GAP_MS) {
       this.credentialCardAt.set(key, nowMs)
-      const who = this.memberName(session)
+      const who = this.displayName(session)
       const what = kinds.map(kind => CREDENTIAL_KIND_TEXT[kind]).join('、')
       const out = this.decisions.propose({ source: 'health', by: `credential:${session}`, question: `${who} 的 ${tool} 调用触及${what}（${at}）`, reason: `宿主只记录不拦截；命令预览（已遮蔽）：${preview}`, at,
-        spec: { level: 'P1', options: ['知道了', '停掉这个会话的工单', '在团队设置里禁用这个工具'], recommended: '知道了' } })
+        spec: { level: 'P1', options: ['知道了', CREDENTIAL_STOP, CREDENTIAL_BLOCK], recommended: '知道了' } })
       if (out.ok) card = out.id
     }
     this.credentialHits.push({ at, session, role, tool, kinds, preview, ...(card !== undefined ? { card } : {}) })
     if (this.credentialHits.length > CREDENTIAL_HITS_KEPT) this.credentialHits.splice(0, this.credentialHits.length - CREDENTIAL_HITS_KEPT)
     this.d.logger.warn('superagent: credential-access audit: %s (%s) %s touched %s', session, role, tool, kinds.join(','))
     return kinds
+  }
+
+  /**
+   * Ticket 4351d67f: what the owner's own choice on a credential-access card does. 「停掉这个会话的工单」 stops each open
+   * ticket that session holds and files it back to the router to give to another member; 「在团队设置里禁用这个工具」
+   * adds the tool that touched the credentials to the team's blockedTools. Nothing here runs on a timeout or for an agent.
+   */
+  /** Ticket 269f287e: whether the owner took this ticket's work off this member on a credential-access card. */
+  excludedFrom(ticketId: string, member: string): boolean { return this.credentialExcluded(ticketId).includes(member) }
+
+  /**
+   * Ticket 269f287e: whether a ticket is this session's to stop. Its binding decides when it has one (the named record can
+   * still name a session the work never went to); a ticket not bound yet is the session's when it is named to it.
+   */
+  private heldBy(ticketId: string, session: string): boolean {
+    const bound = this.executor.list().filter(b => b.ticketId === ticketId)
+    return bound.length > 0 ? bound.some(b => b.member === session) : this.executor.memberOfTicket(ticketId)?.member === session
+  }
+
+  /** #825 review: the sessions a ticket must not go to: those a credential card took the same work off. */
+  private credentialExcluded(ticketId: string): string[] {
+    // #825 re-review: a split child is accepted from a new trigger, so walk up to every parent it was split from.
+    const out = new Set<string>()
+    for (let id: string | undefined = ticketId, depth = 0; id !== undefined && depth < 16; id = this.splits.parentOf(id), depth++) {
+      const ticket = this.store.tickets.get(id)
+      const decision = ticket === undefined ? undefined : this.store.decisions.get(ticket.decisionId) as { triggerIds?: readonly string[] } | undefined
+      for (const trigger of decision?.triggerIds ?? []) { const session = this.credentialExclusions.get(trigger); if (session !== undefined) out.add(session) }
+    }
+    return [...out]
+  }
+
+  private credentialAction(cardId: string, session: string, question: string, chosen: string): Record<string, unknown> {
+    const who = this.displayName(session)
+    if (chosen === CREDENTIAL_STOP) {
+      const stopped: string[] = [], refiled: string[] = [], failed: string[] = []
+      for (const ticket of this.store.tickets.list()) {
+        if (ticket.ended !== undefined || !this.heldBy(ticket.id, session)) continue
+        try { this.engine.stopTicket(ticket.id, `属主在凭据访问审计卡上停掉了 ${who} 的工单`) } catch (error) { failed.push(ticket.id); this.d.logger.warn('superagent: credential card %s: ticket %s not stopped: %s', cardId, ticket.id, String(error)); continue }
+        stopped.push(ticket.id)
+        const scope = ticket.mandate.scope
+        // #825 review: the host files this on the owner's card decision; the original scope is quoted with its source, never
+        // restated as the owner's own words (it may come from GitHub or a member).
+        const origin = `${ticket.mandate.actor.source}/${ticket.mandate.actor.id}`
+        const quoted = scope.split('\n').map(line => `> ${line}`).join('\n')
+        const filed = this.request(clip(`[凭据访问审计] 宿主按属主在凭据访问审计卡上的决定，把 ${who} 手上的工单「${ticket.title}」交还总工，请交给别的成员重做（宿主不会再派给 ${who}）。${scope !== '' ? `\n下面是原工单的范围，原样引自其原授权来源 ${origin}，不是属主的新指示：\n${quoted}` : ''}`, 4_000))
+        if (filed.ok) {
+          refiled.push(filed.triggerId)
+          this.credentialExclusions.set(filed.triggerId, session)
+          for (const old of [...this.credentialExclusions.keys()].slice(0, Math.max(0, this.credentialExclusions.size - 500))) this.credentialExclusions.delete(old)
+          const temporary = `${this.exclusionsPath}.tmp-${randomUUID()}`
+          try { writeFileSync(temporary, JSON.stringify(Object.fromEntries(this.credentialExclusions)), { mode: 0o600 }); renameSync(temporary, this.exclusionsPath) } catch (error) { rmSync(temporary, { force: true }); this.d.logger.warn('superagent: credential exclusions not saved: %s', String(error)) }
+        }
+        else this.d.logger.warn('superagent: credential card %s: ticket %s stopped but not filed back: %s', cardId, ticket.id, filed.error)
+      }
+      this.d.logger.info('superagent: credential card %s: owner stopped %d ticket(s) of %s', cardId, stopped.length, session)
+      return { action: 'stop-tickets', session, stopped, refiled, ...(failed.length > 0 ? { failed } : {}) }
+    }
+    const tool = this.credentialHits.find(hit => hit.card === cardId)?.tool ?? /的 (\S+) 调用触及/.exec(question)?.[1]
+    if (tool === undefined || !/^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(tool)) return { action: 'block-tool', blocked: false, note: 'the tool behind this card is not known any more (the host restarted); block it in the team settings' }
+    if (!blockableTool('member', tool)) return { action: 'block-tool', tool, blocked: false, note: `${tool} is a team tool a member needs to report and be stopped (or the run_code transport); it cannot be blocked` }
+    const current = this.settingsValue.blockedTools ?? []
+    if (current.includes(tool)) return { action: 'block-tool', tool, blocked: true, already: true }
+    const saved = this.saveSettings({ blockedTools: [...current, tool] }, () => true, this.d.presetOf ?? (() => undefined))
+    if (!saved.ok) return { action: 'block-tool', tool, blocked: false, note: saved.error }
+    this.d.logger.info('superagent: credential card %s: owner blocked tool %s for the team', cardId, tool)
+    return { action: 'block-tool', tool, blocked: true }
+  }
+
+  /**
+   * Owner 2026-11-23: a credential-access audit card nobody decided within the team's credentialAckMinutes (default 15,
+   * 0 off) is closed as 「知道了」, its only option without a side effect. No other card kind, no other option. The card
+   * keeps an audit record and stays on the panel for a day, marked as closed on a timeout, so the owner may decide again.
+   */
+  ackCredentialCards(): number {
+    const minutes = this.settingsValue.credentialAckMinutes ?? CREDENTIAL_ACK_MINUTES_DEFAULT
+    if (minutes === 0) return 0
+    const at = this.now(), nowMs = Date.parse(at)
+    let closed = 0
+    for (const card of this.decisions.open()) {
+      if (card.source !== 'health' || !card.by.startsWith('credential:') || nowMs - Date.parse(card.at) < minutes * 60_000) continue
+      if (!this.decisions.autoAcknowledge(card.id, at, minutes)) continue
+      this.healthReminders.decided(card.id, '知道了', nowMs)
+      this.d.logger.info('superagent: credential card %s closed as 知道了 after %d minutes (credential-ack-timeout)', card.id, minutes)
+      closed += 1
+    }
+    return closed
   }
 
   noteRefusal(rule: string, detail: { caller?: string; target?: string } = {}): void {
@@ -2011,7 +2126,7 @@ export class SuperagentHost {
    */
   // #722: default to the host's clock, the one routerFailure.at and the engine's updatedAt are stamped with (as #721 did for the
   // decision book); the real clock here misreported a ticket quiet for days whenever the host's clock was injected.
-  health(now = Date.parse(this.now())): Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string; reason?: string; repo?: string; count?: number }> {
+  health(now = Date.parse(this.now())): Array<{ code: string; session?: string; name?: string; ticketId?: string; title?: string; minutes?: number; detail?: string; reason?: string; repo?: string; count?: number }> {
     const out: Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string; reason?: string; repo?: string; count?: number }> = []
     const loaded = this.d.sessionLoaded
     if (loaded === undefined || !this.teamBound()) return out
@@ -2033,7 +2148,14 @@ export class SuperagentHost {
     // T8: a decision card the market refused (or this host could not shape for it) stays visible: one problem per team and card.
     for (const refused of this.decisionPush.problems()) out.push({ code: 'decision-push-refused', title: `${this.settings.canvas ?? ''}/${refused.cardId}`, detail: refused.why })
     if (this.settingsValue.idleSweep === true) out.push(...this.idleSweep(now))
-    return out
+    // A short id says nothing to the owner: a problem about a session carries its seat name or title when there is one
+    // (owner decision card 2026-11-23). The key stays the session id, so a rename never raises a problem anew.
+    return out.map(problem => {
+      const raw = problem.session !== undefined ? this.memberName(problem.session) : undefined
+      // Shown text only: control characters and bidirectional controls are dropped and the length is capped; the key stays the id.
+      const name = cleanName(raw)
+      return name !== undefined && name !== problem.session ? { ...problem, name } : problem
+    })
   }
 
   /**
@@ -2092,7 +2214,7 @@ export class SuperagentHost {
     if (q === undefined) return undefined
     const since = this.queuedSince(q)
     const minutes = since === undefined ? undefined : Math.floor((Date.parse(this.now()) - Date.parse(since)) / 60_000)
-    return { reason: queueReason(q.reason, minutes), ...(q.member !== undefined ? { member: this.memberName(q.member) } : {}), ...(q.repo !== undefined ? { repo: q.repo } : {}), ...(since !== undefined ? { since } : {}), ...(q.refusedAt !== undefined ? { refusedAt: q.refusedAt } : {}) }
+    return { reason: queueReason(q.reason, minutes), ...(q.member !== undefined ? { member: this.displayName(q.member) } : {}), ...(q.repo !== undefined ? { repo: q.repo } : {}), ...(since !== undefined ? { since } : {}), ...(q.refusedAt !== undefined ? { refusedAt: q.refusedAt } : {}) }
   }
 
   state(): Record<string, unknown> {

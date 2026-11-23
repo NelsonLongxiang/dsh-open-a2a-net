@@ -62,6 +62,8 @@ export class TaskLedger {
   private deliveries: TaskDelivery[] = []
   private deliveryRestoreError = false
   private dispatchReservations:Array<{taskId:string;fingerprint:string;createdAt:number}>=[]
+  /** #eb6d20df: the owner's voids of orphan deliveries, the audit record (bounded). */
+  private deliveryVoids:Array<{taskId:string;sessionId:string;at:number;reason:string;by:'owner-browser'}>=[]
   /** Reserve the caller's eventual owed slot before an asynchronous local or remote effect. Never replays a request. */
   reserveDispatch(taskId:string,fingerprint:string):void {
     if(this.deliveryRestoreError||this.counters.damaged)throw Error('damaged delivery ledger cannot reserve dispatch')
@@ -91,7 +93,7 @@ export class TaskLedger {
     const row=this.deliveries.find(r=>r.sessionId===sessionId&&r.messageId===messageId);return row?{...row}:undefined
   }
   reserveDelivery(record: TaskDelivery): TaskDelivery {
-    const parsed=parseTaskDelivery(record);if(!parsed)throw Error('invalid task delivery correspondence')
+    const parsed=parseTaskDelivery(record);if(!parsed||parsed.terminalRecorded!==undefined)throw Error('invalid task delivery correspondence')
     const old=this.deliveryFor(record.taskId)
     if(old) {
       if(old.sessionId!==record.sessionId||old.fingerprint!==record.fingerprint)throw Error('task delivery identity conflict')
@@ -271,8 +273,56 @@ export class TaskLedger {
     if(taskId!==undefined&&reserved.has(taskId))return true
     return this.tasks.filter(t=>this.receiptRecords.some(r=>r.taskId===t.taskId)).length+reserved.size<TASK_CAP
   }
+  /**
+   * #eb6d20df: the receipt-protected gate on its own, apart from deliveryCapacity (512): owed receipts plus retained
+   * deliveries and reservations must stay under TASK_CAP. What holds each slot is listed (ids, target session, state,
+   * times; never content), oldest first, at most `limit` rows; a delivery with no ledger row is marked orphaned.
+   */
+  receiptCapacityState(limit=200):{cap:number;owed:number;retained:number;available:boolean;holders:Array<{taskId:string;kind:'owed'|'delivery'|'dispatch';sessionId?:string;state?:string;createdAt:number;releasesAt?:number;orphaned?:true}>;truncated:number;voids:{taskId:string;sessionId:string;at:number;reason:string;by:'owner-browser'}[]} {
+    const now=this.now(),reserved=this.pendingDeliveryBirths()
+    const owedRows=this.tasks.filter(t=>this.receiptRecords.some(r=>r.taskId===t.taskId))
+    const holders:Array<{taskId:string;kind:'owed'|'delivery'|'dispatch';sessionId?:string;state?:string;createdAt:number;releasesAt?:number;orphaned?:true}>=[
+      ...owedRows.map(t=>({taskId:t.taskId,kind:'owed' as const,createdAt:t.startedAt})),
+      ...this.deliveries.filter(d=>reserved.has(d.taskId)&&d.taskExpected===true&&!['cancelled','failed'].includes(d.state)&&now-d.createdAt<=TASK_DELIVERY_RETENTION_MS).map(d=>({taskId:d.taskId,kind:'delivery' as const,sessionId:d.sessionId,state:d.state,createdAt:d.createdAt,releasesAt:d.createdAt+TASK_DELIVERY_RETENTION_MS,...(d.state==='enqueued'||d.state==='claimed'?{orphaned:true as const}:{})})),
+      ...this.dispatchReservations.filter(d=>reserved.has(d.taskId)&&now-d.createdAt<=TASK_DELIVERY_RETENTION_MS).map(d=>({taskId:d.taskId,kind:'dispatch' as const,createdAt:d.createdAt,releasesAt:d.createdAt+TASK_DELIVERY_RETENTION_MS})),
+    ].sort((a,b)=>a.createdAt-b.createdAt)
+    return {cap:TASK_CAP,owed:owedRows.length,retained:reserved.size,available:owedRows.length+reserved.size<TASK_CAP,holders:holders.slice(0,limit),truncated:Math.max(0,holders.length-limit),voids:this.deliveryVoids.slice(-20).map(v=>({...v}))}
+  }
+  /**
+   * #eb6d20df root cause: the archive keeps ARCHIVE_CAP settled rows while a task delivery is kept 24 h. A settled task
+   * pushed out of the archive is not an undelivered result, so its delivery stops counting as a task birth (the mapping
+   * itself stays, for de-duplication and withdrawal). Before this, 128 settled tasks in a day refused all new work.
+   */
+  private releaseSettledDeliveries(taskIds:ReadonlySet<string>):void {
+    if(taskIds.size===0)return
+    this.deliveries=this.deliveries.map(d=>{if(d.taskExpected!==true||!taskIds.has(d.taskId))return d;const {taskExpected:_settled,...rest}=d;return rest})
+  }
+  /**
+   * #eb6d20df: the owner voids orphan task deliveries from the browser (a mapping claimed or enqueued with no ledger or
+   * archive row). Only ids that are orphans now are voided (state failed, so they stop holding the receipt-protected
+   * gate); anything else is refused and left as it is. Each void is kept as an audit record.
+   */
+  voidOrphanDeliveries(taskIds:readonly string[],reason:string):{voided:string[];refused:Array<{taskId:string;why:string}>} {
+    const voided:string[]=[],refused:Array<{taskId:string;why:string}>=[]
+    const at=this.now()
+    for(const taskId of new Set(taskIds)){
+      const row=this.deliveryFor(taskId)
+      if(row===undefined){refused.push({taskId,why:'no such delivery'});continue}
+      if(!this.orphanDelivery(taskId)){refused.push({taskId,why:'not an orphan (it has a ledger or archive row, or is not a claimed/enqueued task delivery)'});continue}
+      this.deliveries=this.deliveries.map(d=>d.taskId===taskId?{...d,state:'failed'}:d)
+      this.deliveryVoids=[...this.deliveryVoids,{taskId,sessionId:row.sessionId,at,reason,by:'owner-browser' as const}].slice(-200)
+      voided.push(taskId)
+    }
+    if(voided.length>0)this.persist()
+    return {voided,refused}
+  }
+  /** #eb6d20df: a refusal that names this gate and its numbers, so nobody reads deliveryCapacity for it. */
+  receiptCapacityRefusal(tail:string):string {
+    const s=this.receiptCapacityState(0)
+    return `receipt-protected capacity is full (owed receipts ${s.owed} + retained deliveries ${s.retained} >= TASK_CAP ${s.cap}; this is not deliveryCapacity, see receiptCapacity on the state route); ${tail}`
+  }
   private protectReceiptCapacity(taskId?:string):void {
-    if(!this.receiptCapacityAvailable(taskId))throw Error('receipt-protected task capacity full; no new work admitted')
+    if(!this.receiptCapacityAvailable(taskId))throw Error(this.receiptCapacityRefusal('no new work admitted'))
   }
   /**
    * Remember one outbound task owed a receipt, most-recent first, bounded by
@@ -297,6 +347,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    if (this.deliveries.some(row => row.taskId === taskId && row.terminalRecorded === true)) return
     this.protectReceiptCapacity(taskId)
     this.counters.trackedTotal += 1
     this.tasks = [{
@@ -321,6 +372,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    if (this.deliveries.some(row => row.taskId === taskId && row.terminalRecorded === true)) return
     this.protectReceiptCapacity(taskId)
     this.counters.trackedTotal += 1
     this.tasks = [{
@@ -357,6 +409,7 @@ export class TaskLedger {
     this.sweep(this.now())
     if (this.tasks.some(entry => entry.taskId === taskId)) return
     if (this.archived.some(entry => entry.taskId === taskId)) return
+    if (this.deliveries.some(row => row.taskId === taskId && row.terminalRecorded === true)) return
     this.protectReceiptCapacity(taskId)
     this.counters.trackedTotal += 1
     this.tasks = [{
@@ -773,10 +826,19 @@ export class TaskLedger {
    * gh#154: every arrival and every cap-trimmed row is counted — the trim
    * itself stays exactly as it was, only visible now.
    */
+  private recordTerminalDelivery(record: ArchivedRecord): void {
+    // Eviction is not proof that owed work completed. Unknown legacy records stay conservative.
+    if (!['receipt', 'echo', 'cancelled', 'abandoned'].includes(record.endedBy ?? '') || this.tasks.some(row => row.taskId === record.taskId)) return
+    const delivery = this.deliveries.find(row => row.taskId === record.taskId && row.taskExpected === true)
+    if (delivery) delivery.terminalRecorded = true
+  }
+
   private archiveSettled(record: ArchivedRecord): void {
+    this.recordTerminalDelivery(record)
     const next = [record, ...this.archived]
     const kept = next.slice(0, this.archiveCap)
     this.counters.archiveTrimmed += next.length - kept.length
+    this.releaseSettledDeliveries(new Set(next.slice(this.archiveCap).map(row=>row.taskId)))
     if (record.endedBy !== undefined) this.counters.archivedByEnd[record.endedBy] += 1
     this.archived = kept
   }
@@ -885,6 +947,7 @@ export class TaskLedger {
         if(!Array.isArray(snapshot.dispatchReservations)||snapshot.dispatchReservations.length>TASK_CAP)this.deliveryRestoreError=true
         else for(const raw of snapshot.dispatchReservations){if(!raw||typeof raw.taskId!=='string'||raw.taskId.length===0||raw.taskId.length>80||typeof raw.fingerprint!=='string'||!/^[0-9a-f]{64}$/.test(raw.fingerprint)||!Number.isSafeInteger(raw.createdAt)||raw.createdAt<0||this.dispatchReservations.some(r=>r.taskId===raw.taskId)){this.deliveryRestoreError=true;break}this.dispatchReservations.push({taskId:raw.taskId,fingerprint:raw.fingerprint,createdAt:raw.createdAt})}
       }
+      if(Array.isArray(snapshot.deliveryVoids))this.deliveryVoids=snapshot.deliveryVoids.filter(v=>v&&typeof v.taskId==='string'&&v.taskId.length>0&&v.taskId.length<=80&&typeof v.sessionId==='string'&&v.sessionId.length<=256&&Number.isSafeInteger(v.at)&&typeof v.reason==='string'&&v.reason.length<=200&&v.by==='owner-browser').slice(-200).map(v=>({...v}))
       if(snapshot.taskDeliveries!==undefined) {
         if(!Array.isArray(snapshot.taskDeliveries)||snapshot.taskDeliveries.length>TASK_DELIVERY_CAP)this.deliveryRestoreError=true
         else {
@@ -1015,6 +1078,10 @@ export class TaskLedger {
       }
       this.counters.restoreTrimmed += Math.max(0, restored.length - this.tasks.length)
       this.counters.restoreTrimmed += Math.max(0, this.archived.length - this.archiveCap)
+      // Only terminal evidence actually present in this snapshot can migrate old occurrences; it runs before #824's
+      // release below, which drops taskExpected from rows past the cap (recordTerminalDelivery needs it).
+      for (const row of this.archived) this.recordTerminalDelivery(row)
+      this.releaseSettledDeliveries(new Set(this.archived.slice(this.archiveCap).map(row=>row.taskId)))
       this.archived = this.archived.slice(0, this.archiveCap)
       // gh#154: restore the lifetime counters through the conservation
       // module's classifier - absent block = pre-#154 legacy bootstrap
@@ -1060,6 +1127,7 @@ export class TaskLedger {
       this.reminders = Object.assign(Object.create(null), previous.reconciliationReminders ?? {})
       this.reminderSessions = previous.reconciliationSessions ?? Object.create(null)
       this.dispatchReservations=(previous.dispatchReservations??[]).map(r=>({...r}))
+      this.deliveryVoids=(previous.deliveryVoids??[]).map(v=>({...v}))
       this.deliveryRestoreError = previous.taskDeliveryRestoreError===true
       this.deliveries = previous.taskDeliveries ? previous.taskDeliveries.map(r=>({...r})) : []
       this.tasks = [...previous.tasks]
@@ -1079,6 +1147,7 @@ export class TaskLedger {
         ...(this.receiptRecords.length?{receiptOutbox:this.receiptRecords.filter(r=>this.tasks.some(t=>t.taskId===r.taskId)).map(r=>structuredClone(r))}:{}),
         ...(this.deliveryRestoreError?{taskDeliveryRestoreError:true as const}:{}),
         ...(this.dispatchReservations.length?{dispatchReservations:this.dispatchReservations.map(r=>({...r}))}:{}),
+        ...(this.deliveryVoids.length?{deliveryVoids:this.deliveryVoids.map(v=>({...v}))}:{}),
         ...(this.deliveries.length ? {taskDeliveries:this.deliveries.map(row=>({...row}))} : {}),
         ...(Object.keys(this.reminderSessions).length ? { reconciliationSessions: {...this.reminderSessions} } : {}),
         ...(Object.keys(this.reminders).length ? { reconciliationReminders: Object.fromEntries(Object.entries(this.reminders).filter(([id])=>this.tasks.some(row=>row.taskId===id&&row.status==='pending'))) } : {}),

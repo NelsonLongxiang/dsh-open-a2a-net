@@ -1073,13 +1073,20 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // quiet window around it.
           d.touchWakeDemand()
           const forwardMiss = async (original: string): Promise<void> => {
-            if (!settleDeferred(false)) return
+            // A receipt forwarded from here settles this host's owed row only once the forward went out (3.65, 2026-11-23:
+            // settling first archived the row as completed while the forward was refused not-sent, and the reply was lost).
             // #282 S2 review P1: forward with the id the caller sent — our own `@fp8` must find no other owner.
             const result = await d.forwardDirect({ team: typeof body.team === 'string' ? body.team : team, message, caller, taskId, contextId, noWait,
               auth: buildAuthorization(admission, { caller, proof: callerProof, ...(claim.ok ? { claim: { caller: claim.caller, origin: originOf(claim.callerUrl) } } : {}), ingress: 'wire', allowlistVersion: admittedAt.version, target: team, receiptTarget: caller, receivedAt: admittedAt.at }),
               localCliProof: claim.ok && claim.cli === true && claim.bound && claim.caller === caller, guarded: req.headers['x-a2a-guard'] !== undefined }).catch((error: unknown): A2aRouteResult => ({ ok: false, error: `forwarding unavailable: ${String(error)}`, code: -32000, task_id: taskId }))
             const failure = result.ok ? '' : result.acceptance==='unknown'?ACCEPTANCE_UNKNOWN_NOTE:await d.diagnoseCanvas(team, original + ' — ' + result.error, claim.ok && claim.cli === true && claim.bound && claim.caller === caller ? caller : undefined)
-            if (!result.ok && result.code !== -32005 && result.acceptance!=='unknown') idempotencyStore.recordOutcome(taskId, { status: 'failed', error: failure, ...(result.delivery === 'not-sent' ? { delivery: 'not-sent' as const } : {}) })
+            if (result.ok && result.settlementRefused !== true) { if (!settleDeferred(true)) return }
+            // Not settled: the deferred receipt's journal slot is not needed (release is idempotent).
+            else journalSlot?.()
+            // A forward refused before anything left this host (not-sent) frees the receipt's own transport id, so the same
+            // receipt can be sent again once the cause is fixed; recording it failed made every resend a replay the CLI reads as gone.
+            if (!result.ok && result.code !== -32005 && result.acceptance!=='unknown' && result.delivery === 'not-sent' && parseReceipt(message) !== null) idempotencyStore.releaseUncompleted(taskId, idemFingerprint)
+            else if (!result.ok && result.code !== -32005 && result.acceptance!=='unknown') idempotencyStore.recordOutcome(taskId, { status: 'failed', error: failure, ...(result.delivery === 'not-sent' ? { delivery: 'not-sent' as const } : {}) })
             else if (result.ok && result.task_status === 'TASK_STATE_COMPLETED') idempotencyStore.recordOutcome(taskId, { status: 'completed', reply: result.reply })
             const payload = JSON.stringify(result.ok ? { routed: true, ...(result.task_status === 'TASK_STATE_DELIVERED' ? { delivered: true } : { result: { text: result.reply } }), team, task_id: taskId, context_id: contextId, task_status: result.task_status, acceptance:result.acceptance,consumed: result.consumed, bridge: result.bridge, receipt: result.receipt, ...(result.receiverBookkeeping==='failed'?{receiverBookkeeping:'failed',note:ADMITTED_BOOKKEEPING_NOTE}:{}), forwarded: true } : { acceptance:result.acceptance,...(result.delivery === 'not-sent' ? { delivery: 'not-sent' } : {}),error: failure, code: result.code ?? -32000, receipt: result.receipt, task_id: taskId, team, task_status: result.code === -32005 ? 'TASK_STATE_DELIVERED' : 'TASK_STATE_FAILED', ...(result.next !== undefined ? { next: result.next } : {}), ...(!result.ok && result.acceptance !== 'unknown' && result.refusal !== undefined ? { refusal: result.refusal } : {}), ...(!result.ok && result.acceptance !== 'unknown' && result.capacityRefusals !== undefined ? { capacityRefusals: result.capacityRefusals } : {}) })
             // #298: only a reply the peer itself declares final (`reply_final`; never a host placeholder, review of

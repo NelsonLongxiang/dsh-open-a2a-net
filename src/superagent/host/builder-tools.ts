@@ -12,6 +12,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { randomBytes } from 'node:crypto'
 import { RULE_TEMPLATES } from './rule-templates.ts'
+import { cleanName } from './health-reminders.ts'
 import type { StaffingChange, StaffingEntry, StaffingExecutor } from './staffing.ts'
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
@@ -48,6 +49,8 @@ const rulesOf = (rules: ReadonlyArray<{ name: string; text: string; enabled?: bo
 
 /** The builder's inventory (TB2): named fields only, nothing from W3. */
 export function orgInventory(input: InventoryInput): { [key: string]: JsonValue } {
+  // #861 review: names are shown to the builder; cleaned like every other shown member name, the session id when nothing is left.
+  const nameOf = (session: string): string => cleanName(input.nameOf(session)) ?? session
   const placed = new Set<string>()
   const teams = input.teams.filter(t => t.settings.canvas !== undefined).map(t => {
     const s = t.settings
@@ -56,7 +59,7 @@ export function orgInventory(input: InventoryInput): { [key: string]: JsonValue 
       const profile = s.profiles[session]
       const seat = t.seatOf(session)
       return {
-        ...(seat !== undefined ? { seatId: seat } : {}), session, name: input.nameOf(session), preset: input.presetOf(session) ?? null,
+        ...(seat !== undefined ? { seatId: seat } : {}), session, name: nameOf(session), preset: input.presetOf(session) ?? null,
         kind: s.observers.includes(session) ? 'observer' : 'member',
         ...(typeof profile?.role === 'string' ? { role: profile.role } : {}),
         rules: rulesOf(profile?.rules), revision: t.revisions[`member:${session}`] ?? 0,
@@ -66,14 +69,14 @@ export function orgInventory(input: InventoryInput): { [key: string]: JsonValue 
     if (s.router !== undefined) placed.add(s.router)
     return {
       team: t.ref, canvas: s.canvas!,
-      router: s.router === undefined ? null : { session: s.router, name: input.nameOf(s.router), preset: input.presetOf(s.router) ?? null },
+      router: s.router === undefined ? null : { session: s.router, name: nameOf(s.router), preset: input.presetOf(s.router) ?? null },
       members: s.members.map(member),
       rules: { team: rulesOf(s.rules), teamRevision: t.revisions.team ?? 0, dispatch: s.dispatch, dispatchRevision: t.revisions.dispatch ?? 0 },
       acceptMode: s.acceptMode,
       ...(t.children.length > 0 ? { root: { children: t.children.map(c => ({ ref: c.ref, slots: c.slots })) } } : {}),
     } satisfies JsonValue
   })
-  const candidates = input.sessions.filter(id => !placed.has(id)).map(id => ({ session: id, name: input.nameOf(id), preset: input.presetOf(id) ?? null }))
+  const candidates = input.sessions.filter(id => !placed.has(id)).map(id => ({ session: id, name: nameOf(id), preset: input.presetOf(id) ?? null }))
   const staffing = input.staffing.slice(-20).map(e => ({ id: e.id, state: e.state, source: e.source, at: e.at, ...(e.summary !== undefined ? { summary: e.summary } : {}), ops: e.ops.map(o => o.op) }))
   return { teams, candidates, staffing, note: 'Teams by id (primary for the primary team); members by seatId. Credentials, MCP servers, tool grants, bots, allow-lists, GitHub settings and file paths are never shown.' }
 }
@@ -96,6 +99,19 @@ export function blueprintDiff(ops: StaffingChange['ops'], current: (team: string
     if (input.op === 'team.create') return `${n} 新建团队，画布 ${String(p.canvas)}，总工会话 ${String(p.router)}`
     if (input.op === 'member.add') return `${n} 团队 ${String(p.team)} 加成员 ${String(p.session)}${p.profile !== undefined ? `，档案：${JSON.stringify(p.profile)}` : ''}`
     if (input.op === 'member.retire') return `${n} 团队 ${String(p.team)} 请席位 ${String(p.seatId)} 离开`
+    // #808 P2: the change only; this host's network settings stay out of what the builder sees. All take effect on restart.
+    if (input.op === 'team.settings.set') return `${n} 团队 ${String(p.team)} 的设置改为：${Object.entries(p).filter(([k]) => k !== 'team').map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join('；')}`
+    // #808 P3
+    if (input.op === 'team.approvers.set') return Array.isArray(p.approvers) && p.approvers.length > 0 ? `${n} 把团队 ${String(p.team)} 的出站审批权交给：${(p.approvers as string[]).join('、')}（他们可代你批准对外请求卡，不能批自己提的）` : `${n} 收回团队 ${String(p.team)} 的全部出站审批人`
+    if (input.op === 'session.join') return `${n} 让本机会话 ${String(p.session)} 入网`
+    if (input.op === 'session.seatName.set') return p.name === '' ? `${n} 清除会话 ${String(p.session)} 的席位名` : `${n} 把会话 ${String(p.session)} 的席位名设为「${String(p.name)}」（只是展示名）`
+    if (input.op === 'network.set') return `${n} 本机网络设置改为：${Object.entries(p).map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join('；')}（重启后生效，重启由你做）`
+    if (input.op === 'network.peer.add') return `${n} 本机对等方加 ${String(p.url)}（重启后生效）`
+    if (input.op === 'network.peer.remove') return `${n} 本机对等方去掉 ${String(p.url)}（重启后生效）`
+    if (input.op === 'network.originClaimByPeer.set') return p.url === '' ? `${n} 去掉对 ${String(p.peer)} 的单独回拨地址（重启后生效）` : `${n} 对 ${String(p.peer)} 单独声明回拨地址 ${String(p.url)}（重启后生效；键须与 peers 写法一致）`
+    if (input.op === 'canvas.create') return `${n} 新建普通画布 ${String(p.canvas)}`
+    if (input.op === 'canvas.member.add') return `${n} 画布 ${String(p.canvas)} 加成员 ${String(p.member)}${String(p.member).includes('/') ? '（远端：此后它可经这个画布跨主机进门）' : ''}`
+    if (input.op === 'canvas.member.remove') return `${n} 画布 ${String(p.canvas)} 去掉成员 ${String(p.member)}`
     if (input.op === 'team.github.set') {
       // The builder's inventory leaves GitHub settings out (allow-lists are the owner's): the diff names the change only.
       return `${n} 团队 ${String(p.team)} 的 GitHub 来源改为：${githubLine(p)}（未提到的不变；现在的设置请在团队页查看）`
@@ -148,7 +164,7 @@ export function registerBuilderTools(ctx: Context, isBuilder: (sessionId: string
   const noExecutor = { ok: false, code: 'no-staffing', error: 'this host has no staffing executor' }
   ctx.tools.register(defineTool({
     name: 'superagent_blueprint_propose',
-    description: 'Team builder only: record a blueprint — one batch of staffing changes — as pending. Nothing changes yet. ops: team.create {canvas, router}, member.add {team, session, profile?: {role, rules[], repo}}, member.retire {team, seatId} (a local member leaves the team; not the router, not one working on a ticket), team.rules.set {team, scope: team | dispatch | member:<seatId>, value}, team.github.set {team, enabled?, allowed?: GitHub logins of people whose comments count, repos?: owner/name[], intake?: mention | all} (the GitHub Source of the team; keys left out stay). An observer is a member: member.add a session created under the superagent-observer preset. A new team is named by its canvas; an existing team by its id from superagent_org_read. Only existing sessions. Show the owner the returned diff and wait for their own reply; then call superagent_blueprint_apply.',
+    description: 'Team builder only: record a blueprint — one batch of staffing changes — as pending. Nothing changes yet. ops: team.create {canvas, router}, member.add {team, session, profile?: {role, rules[], repo}}, member.retire {team, seatId} (a local member leaves the team; not the router, not one working on a ticket), team.rules.set {team, scope: team | dispatch | member:<seatId>, value}, team.github.set {team, enabled?, allowed?: GitHub logins of people whose comments count, repos?: owner/name[], intake?: mention | all} (the GitHub Source of the team; keys left out stay). An observer is a member: member.add a session created under the superagent-observer preset. Plain canvases (#808, not a superagent team canvas): canvas.create {canvas}, canvas.member.add {canvas, member: a local session id, a zone-qualified remote session or a CLI handle such as superagent-team/<16 hex>, home?}, canvas.member.remove {canvas, member}; a remote member is the explicit record cross-host admission reads. Network settings of this host (#808 P2, take effect on restart): network.set {announce?, teamScope?, originClaimUrl?, originClaimAudiences?}, network.peer.add {url}, network.peer.remove {url}, network.originClaimByPeer.set {peer, url (an empty url removes it)}; an originClaimByPeer key must be written exactly as in peers. Never apiKey, linkKeys or teamJoinAllowlist. Approvers, joins and seat names (#808 P3): team.approvers.set {team, approvers: session ids, [] clears}, session.join {session: a live local session}, session.seatName.set {session, name (an empty name clears it)}. A2A settings of a team (#808 P4; owner 2026-11-23: the A2A ones only): team.settings.set {team, sources?: {a2a}, progressOff?, decisionPush?, reviewer?: an A2A address or null}. Every other team setting (intake, models, prompts, limits, pause, tools, MCP, prepare, repos) stays in the workbench GUI; never allowed or bots. Changes on the other host belong to the blueprint of the builder there: list them for the owner. A new team is named by its canvas; an existing team by its id from superagent_org_read. Only existing sessions. Show the owner the returned diff and wait for their own reply; then call superagent_blueprint_apply.',
     parameters: {
       summary: { type: 'string', required: true, description: 'What the blueprint does, in the owner\'s language.' },
       ops: { type: 'array', required: true, items: { type: 'object', additionalProperties: true }, description: 'The operations, in order: { op, params }.' },
