@@ -183,24 +183,89 @@ describe('asking for review', () => {
     expect(unlinked.r.list()).toHaveLength(0)
   })
 
-  it('a PASS naming the commit passes; anything else does not; only the reviewer on the latest request counts', async () => {
+  it('a structured PASS naming the full head passes; only the reviewer on the latest request counts; a second receipt adds nothing', async () => {
     const m = channel()
     await m.r.opened('o/net#7', head, URL, 't1')
-    m.r.received(receipt('direct-1', 'PASS @ abcdef1', 'someone/else'))
-    m.r.received(receipt('direct-1', 'PASS @ abcdef1', reviewer, 'unbound'))
+    const pass = `评审意见……\nverdict: PASS head: ${head}`
+    m.r.received(receipt('direct-1', pass, 'someone/else'))
+    m.r.received(receipt('direct-1', pass, reviewer, 'unbound'))
     expect(m.notes).toHaveLength(0)
-    m.r.received(receipt('direct-1', 'PASS @ abcdef1'))
+    m.r.received(receipt('direct-1', pass))
     expect(m.notes[0]![1]).toContain('PASS')
+    expect(m.notes[0]![1]).toContain(`已核对完整提交 ${head}`)
+    expect(m.r.list()[0]!.verdict).toMatchObject({ pass: true, checked: 'verified' })
+    m.r.received(receipt('direct-1', pass))
+    m.r.received(receipt('direct-1', `verdict: FAIL head: ${head}`))
+    expect(m.notes).toHaveLength(1)
     expect(m.r.list()[0]!.verdict).toMatchObject({ pass: true })
-    const bare = channel()
-    await bare.r.opened('o/net#7', head, URL, 't1')
-    bare.r.received(receipt('direct-1', 'PASS'))
-    expect(bare.r.list()[0]!.verdict).toMatchObject({ pass: false })
     const stale = channel(async (_a, x) => x.includes(head) ? 'direct-old' : 'direct-new')
     await stale.r.opened('o/net#7', head, URL, 't1')
     await stale.r.opened('o/net#7', next, URL, 't1')
-    stale.r.received(receipt('direct-old', 'PASS @ abcdef1'))
+    stale.r.received(receipt('direct-old', pass))
     expect(stale.notes).toHaveLength(0)
+  })
+
+  it('#874: the old free-text PASS, a bare PASS, a short or other commit, or disagreeing lines are a reference, never a pass', async () => {
+    const cases: Array<[string, string]> = [
+      ['PASS @ abcdef1', 'reference'],
+      ['PASS', 'reference'],
+      ['verdict: PASS head: abcdef1', 'unverified'],
+      ['verdict: PASS head: abcdef1999999999', 'unverified'],
+      [`verdict: PASS head: ${head}\nverdict: FAIL head: ${head}`, 'unverified'],
+    ]
+    for (const [text, checked] of cases) {
+      const m = channel()
+      await m.r.opened('o/net#7', head, URL, 't1')
+      m.r.received(receipt('direct-1', text))
+      expect(m.r.list()[0]!.verdict, text).toMatchObject({ pass: false, checked })
+      expect(m.notes[0]![1], text).toContain('参考，未核验')
+      expect(m.notes[0]![1], text).toContain('不计为通过')
+    }
+  })
+
+  it('#874: a structured FAIL is not a pass, even when the text also says PASS at the full head', async () => {
+    const m = channel()
+    await m.r.opened('o/net#7', head, URL, 't1')
+    m.r.received(receipt('direct-1', `PASS @ ${head}？不，阻断一处。\n\`verdict: FAIL head: ${head}\``))
+    expect(m.r.list()[0]!.verdict).toMatchObject({ pass: false, checked: 'verified' })
+    expect(m.notes[0]![1]).toContain('未通过')
+  })
+
+  it('#874: a restart between the send and its record marks the request unknown, tells the ticket once, and does not ask again', async () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'sa-review-')), 'r.json')
+    const asked: string[] = [], notes: Array<[string, string]> = []
+    const deps = (ask: () => Promise<string | undefined>) => ({ path, reviewer: () => reviewer, logger: { warn: () => {} }, note: (t: string, x: string) => { notes.push([t, x]) }, ask: async (_a: string, x: string) => { asked.push(x); return await ask() } })
+    const first = new ReviewRequests(deps(() => new Promise<string | undefined>(() => {})))
+    void first.opened('o/net#7', head, URL, 't1')
+    await vi.waitFor(() => { expect(asked).toHaveLength(1) })
+    const after = new ReviewRequests(deps(async () => 'direct-2'))
+    expect(notes).toHaveLength(0)
+    await after.opened('o/net#7', head, URL, 't1')
+    expect(asked).toHaveLength(1)
+    expect(after.list()[0]).toMatchObject({ head, state: 'unknown', task: '' })
+    expect(notes).toHaveLength(1)
+    expect(notes[0]![0]).toBe('t1')
+    expect(notes[0]![1]).toContain('未知')
+    after.received(receipt('', `verdict: PASS head: ${head}`))
+    expect(after.list()[0]!.verdict).toBeUndefined()
+    await after.opened('o/net#7', head, URL, 't1')
+    expect(asked).toHaveLength(1)
+    expect(notes).toHaveLength(1)
+    await after.opened('o/net#7', next, URL, 't1')
+    expect(asked).toHaveLength(2)
+    expect(after.list()[0]).toMatchObject({ head: next, task: 'direct-2' })
+    expect(after.list()[0]!.state).toBeUndefined()
+  })
+
+  it('#874: a send that throws leaves the earlier record as it was, and a later read asks again', async () => {
+    let fail = true
+    const m = channel(async () => { if (fail) throw new Error('route failed'); return 'direct-9' })
+    await expect(m.r.opened('o/net#7', head, URL, 't1')).rejects.toThrow('route failed')
+    expect(m.r.list()).toHaveLength(0)
+    fail = false
+    await m.r.opened('o/net#7', head, URL, 't1')
+    expect(m.asked).toHaveLength(2)
+    expect(m.r.list()[0]).toMatchObject({ task: 'direct-9' })
   })
 
   it('settings take one reviewer address and clear it', () => {
