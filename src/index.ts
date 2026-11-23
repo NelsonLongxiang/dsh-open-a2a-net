@@ -262,8 +262,17 @@ export function directDeliveryExposure(
   return { nonLoopbackPeers, warning }
 }
 
+/** The shortest node-card lifetime `apply()` accepts: the card is re-signed every TTL/4, so this keeps that at 25ms or more. */
+export const CARD_TTL_MIN_MS = 100
+
 export function apply(ctx: Context, config: Config): void {
   const logger = ctx.logger('a2a')
+  // The node card's lifetime (#835 review): it sets the signed card's expiresAt and the TTL/4 re-sign timer. A missing,
+  // non-finite, zero or tiny value would sign a NaN or already-expired card and re-sign every millisecond, so refuse to
+  // start instead of guessing a lifetime for a signed card.
+  if (!Number.isSafeInteger(config.cardTtlMs) || config.cardTtlMs < CARD_TTL_MIN_MS) {
+    throw new Error(`a2a: cardTtlMs must be a whole number of milliseconds, at least ${String(CARD_TTL_MIN_MS)} (got ${String(config.cardTtlMs)}); refusing to sign node cards with an invalid lifetime`)
+  }
   // Plugin-owned agent skill (obelisk pattern): the packaged SKILL.md rides
   // the standard DSH skill catalog through ctx.skills; uninstall is implicit
   // — the registration disposer unwinds with the fiber, so the skill lives
