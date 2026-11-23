@@ -149,7 +149,8 @@ describe('credential-access card: the owner\'s own choice acts (4351d67f)', () =
     expect(found).toHaveLength(1)
     const path = join(m.home, found[0]!)
     expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ [out.refiled[0]!]: m.holder })
-    expect(statSync(path).mode & 0o777).toBe(0o600)
+    // Windows cannot carry POSIX permission bits (tests/gates/submission-export-mode.mjs: 'Windows mode preservation is not verifiable'); the private-write check is the content and restart read-back below everywhere, the 0o600 bit only where it can hold.
+    if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600)
     await m.h.stop()
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const again = new SuperagentHost({ canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', 'session-a', 'session-b'], remote: [] } : undefined, home: m.home, logger: { info: () => {}, warn: () => {} },
