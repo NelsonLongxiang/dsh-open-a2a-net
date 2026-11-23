@@ -145,5 +145,5 @@ It cannot read or move credentials, widen tools, or reach the owner's user.
 
 ## Unknowns to check before S2/S3
 
-- Starting a new session for a node identity from the team host, and on a linked member host through `serve`: the session-controller path is there for node identities (`ctx.sessionController.create({ cwd, agentPreset })`, node-identity.md §4.4; the carrier fields exist in `src/node-store.ts`), but superagent does not drive it yet — that wiring belongs to S2 (templates and `member.add`/`member.retemplate` on this instance, see the plan below).
+- Starting a new session for a node identity from the team host, and on a linked member host through `serve`: the session-controller path is there for node identities (`ctx.sessionController.create({ cwd, agentPreset })`, node-identity.md §4.4; the carrier fields exist in `src/node-store.ts`), but superagent does not drive it yet — that wiring belongs to S2 (templates and `member.add`/`member.retemplate` on this instance, see the plan above).
 - ~~`node-identity.md` §8 rulings still pending (#161)~~ — resolved 2026-11-02 (owner ruling, r3 `a390f894`, wording follow-up `24ead2c`: items 1-4 as recommended, 5-10 as proposed); `seatId` naming follows the node name.
