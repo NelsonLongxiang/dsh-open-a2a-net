@@ -72,6 +72,15 @@ describe('#808 P4 team.settings.set (A2A settings only)', () => {
     }
   })
 
+  it('#831 review: owner-local team.retire and member.retemplate are refused as off, not as not-yet', async () => {
+    const w = world()
+    for (const op of ['team.retire', 'member.retemplate'] as const) {
+      expect(DEFAULT_POLICY['owner-local'][op]).toBe('off')
+      expect(await sub(w, 'off-' + op, [{ op, params: {} } as never])).toMatchObject({ ok: false, code: 'off' })
+    }
+    expect(w.x.list()).toHaveLength(0)
+  })
+
   it('#827 review M10: owner-local asks the owner, the market never runs it', () => {
     expect(DEFAULT_POLICY['owner-local']['team.settings.set']).toBe('confirm')
     expect(DEFAULT_POLICY.market['team.settings.set']).toBe('off')
