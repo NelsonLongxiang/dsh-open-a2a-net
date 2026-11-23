@@ -59,6 +59,7 @@ export function queuedText(problem: HealthProblem, name: (session: string) => st
     : problem.reason === 'repo-busy' ? `只能派给负责仓库 ${problem.repo ?? ''} 的成员，他们都在忙`
     : problem.reason === 'delivery-refused' ? `派给成员 ${who} 时被拒绝，还在重试；看看这个成员的会话或它所在主机是否接收，或请总工改派`
     : problem.reason === 'launch-stalled' ? '有空闲成员，但这些工单一直没派出去，原因不明；可请总工改派，或查看主机日志'
+    : problem.reason === 'all-excluded' ? `可派的成员都被排除了：属主在凭据访问审计卡上把这项工作从 ${who} 手上停掉，宿主不会再派给它；请给团队加成员，或手动处理这张工单`
     : problem.reason === 'at-cap' ? '团队已到同时运行的上限'
     : '所有成员都在忙'
   return `${String(problem.count ?? 1)} 张工单排队超过 ${String(problem.minutes ?? 0)} 分钟（最久的是「${problem.title ?? problem.ticketId ?? ''}」）：${waits}`

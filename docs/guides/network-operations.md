@@ -89,7 +89,8 @@
 
 | 形态 | 判读 | 处置 |
 |---|---|---|
-| 卡片 404 / 网上看不到本节点 | `announce` opt-in 未开 | home patch 追加 a2a 行 `announce: true`（热载） |
+| 卡片 404 / 网上看不到本节点 | `announce` opt-in 未开 | 把 `announce: true` 并入**已有的完整** a2a config（#813 之后版本的工作台属主面板会这样写；旧版面板正是这个陷阱的来源）；不要在 home patch 里另起一个只含这一行的 a2a 条目，见下「按段覆盖」 |
+| 全部 peer 报 `bad-sig` / 链接退回 `stranger`，签名回拨地址退回回环 | home 层 a2a `config` 块遮住了 profile 层（按段覆盖，#812/#814） | 见下「按段覆盖：核验与恢复」 |
 | join 后立即 -32004 | 卡片缓存 TTL（60s）时序 | 等过一个 TTL 再路由 |
 | 同机短 id 误投 | `dsh/<id8>` 撞同宿另一会话 | 以 state 复核目标行；关键协调走共享文件兜底 |
 | final 超时 ≠ 未送达 | steering 已注入 | 查活动环/回执，勿重发 |
@@ -100,6 +101,18 @@
 | **禁重启宿主铁律** | worker 会话随宿主死=任务自杀回环 | 确需重启用分离拉起（先派新再杀旧） |
 | untrusted-origin 拒 | 信封缺席（窗口关）或验签败 | 带四头信封或升级节点 |
 | 卡片只有最小面 | 未验签或未链接 | 链接经 canvas/双边互种，非自申报 |
+
+### 按段覆盖：核验与恢复（#812 / #814）
+
+- **机制**：DSH 补丁对同 id 条目按**顶层键**覆盖，`config` 是一个键，后应用的层整段替换前面的层。home 层 `~/.dsh/cordis.patch.yml` 在 profile 层 `profiles/<p>/cordis.patch.yml` 之后应用，所以 home 层一旦有 a2a `config:` 块，它就是 a2a 的**全部**生效配置；profile 层写的 `peers`、`originClaimUrl`、`originClaimAudiences`、`originClaimByPeer` 都不再生效。
+- **现象**：对端报 `bad-sig`、链接退回 `stranger`；签名声明的回拨地址退回 `127.0.0.1:3080` 一类回环地址（对端去那里取到的是它自己的卡片）；状态面 `host.originClaimAudiences` 为空，而 profile 文件里明明写了。
+- **怎么中招**：在 home 层新建了只含少数键的 a2a 条目——例如旧版工作台第一次写属主开关（`teamScope`、`announce`），或照旧文档手工追加了一行 `announce: true`。#813 合入后的下一个版本起，工作台第一次写入会先带上下层已设的键（下层设了 `apiKey`/`linkKeys` 时拒写），但**已经中招的主机不会因升级自愈**。
+- **核验只认装载结果，不看文件**：以状态面（`/__dsh_a2a/state`）为准——`host.originClaimAudiences`、`host.originClaimByPeer`，以及顶层 `peers` 的地址与 `link` 状态。辅助对照可用 DSH 的 `--dump-config`，profile 以该宿主实际启动的为准（a2a 插件通常在 `web`：`dsh web --dump-config`，等价于 `dsh --profile web --dump-config`；`dsh headless --dump-config` 用的是 headless profile，看不到 a2a 条目）。它打印的是配置里的字面值，下层若有 `apiKey`、`linkKeys` 也会在内，贴到 issue 或聊天前先脱敏。文件里写了什么不能证明它生效了。
+- **手工恢复（每台中招主机一次）**：
+  1. 备份 home 层 `cordis.patch.yml`。
+  2. 把 profile 层 a2a `config` 的全部键（`peers`、`originClaimUrl`、`originClaimAudiences`、`originClaimByPeer`、`announce`、`teamScope` 等）**合并**进 home 层已有的 a2a `config:` 块，键名与值原样，不要另起第二个 a2a 条目；home 块里已有的键（例如属主面板写过的 `teamScope`）就是当前生效值，与 profile 层冲突时保留 home 的值。`apiKey`/`linkKeys` 若在下层，一并写进同一块。
+  3. 重启宿主（按本页「禁重启宿主铁律」用分离拉起）。
+  4. 按上一条核验 `host.*` 与 `peers` 的 `link`；两端 `peers` 的 `link` 都是 `linked`、`claimRejectsRecent` 不再出现新行、`boundMissRecent` 不再增长，才算恢复（`boundMissInbound` 是进程内计数，重启后本来就是 0，不能说明恢复）。
 
 ## 七、a2a-net CLI（会话外调用方，0.6.27+）
 

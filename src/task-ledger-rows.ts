@@ -440,6 +440,8 @@ export interface ReceiptResolvedInfo {
 /** The persisted ledger document: the owed book plus its settled archive. */
 export interface TaskLedgerSnapshot {
   readonly dispatchReservations?:readonly {taskId:string;fingerprint:string;createdAt:number}[]
+  /** #eb6d20df: orphan task deliveries the owner voided from the browser (audit, newest last, bounded). */
+  readonly deliveryVoids?:readonly {taskId:string;sessionId:string;at:number;reason:string;by:'owner-browser'}[]
   readonly receiptOutboxRestoreError?: true
   readonly receiptOutbox?: readonly import('./receipt-outbox.ts').ReceiptOutboxRecord[]
   readonly taskDeliveryRestoreError?: true

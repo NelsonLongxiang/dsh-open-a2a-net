@@ -27,6 +27,7 @@ export function healthLine(row: HealthRow, t: PropsLocale<'a2aNet'>['t']): strin
       : row.reason === 'repo-busy' ? t('team.healthQueuedRepoBusy', { repo })
       : row.reason === 'delivery-refused' ? t('team.healthQueuedRefused', { session })
       : row.reason === 'launch-stalled' ? t('team.healthQueuedStalled')
+      : row.reason === 'all-excluded' ? t('team.healthQueuedExcluded', { session })
       : row.reason === 'at-cap' ? t('team.healthQueuedCap')
       : t('team.healthQueuedAllBusy')
     return team + t('team.healthQueued', { count: String(row.count ?? 1), minutes: String(row.minutes ?? 0), title: row.title ?? row.ticketId ?? '', why })

@@ -39,10 +39,11 @@ import type { ExposureStore } from '../exposure-store.ts'
 import type { IdempotencyStore } from '../idempotency-store.ts'
 import type { JoinedSessions } from '../joined-store.ts'
 import type { LayoutStore } from '../layout-store.ts'
-import { applyOwnerSettings, createsConfigBlock, lowerLayerSeed, parseSeatNames, type OwnerSettings } from '../owner-settings.ts'
+import { parseSeatNames, writeHomeA2a, type OwnerSettings } from '../owner-settings.ts'
 import { Config as ConfigSchema } from '../config.ts'
 import { rosterOp } from '../roster-op.ts'
 import type { CliHomeDecision } from '../cli-home.ts'
+import { addCanvasMember } from '../canvas-member-write.ts'
 import type { PeerStore } from '../peer-store.ts'
 import { resolveStageMount } from '../stage-mount.ts'
 import { ARCHIVE_CAP, archivedEndedBy, type TaskLedger } from '../task-ledger.ts'
@@ -388,6 +389,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           filePrivacy: d.a2aDirPrivacy,
           deliveryBookkeeping:taskLedger.deliveryBookkeepingState(),
           deliveryCapacity:taskLedger.deliveryCapacityState(),
+          // #eb6d20df: the receipt-protected gate (TASK_CAP), apart from deliveryCapacity, with what holds each slot.
+          receiptCapacity:taskLedger.receiptCapacityState(),
           nudgeEscalations:d.nudgeEscalations?.()??{queued:0,unavailable:0,failed:0},
           reconciliationReminders: d.reminderDiagnostics?.(),
           tasks: taskLedger.list()
@@ -868,21 +871,14 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
           return
         }
         try {
-          const patchPath = join(home, 'cordis.patch.yml')
-          const current = existsSync(patchPath) ? readFileSync(patchPath, 'utf8') : ''
-          // #812: a first write creates the home a2a config block, which replaces the lower layers' block whole; carry their keys.
-          let seed: Record<string, unknown> = {}
-          if (createsConfigBlock(current)) {
-            const lower = lowerLayerSeed(config as unknown as Record<string, unknown>, ConfigSchema({} as never) as unknown as Record<string, unknown>)
-            if (!lower.ok) {
-              const payload = JSON.stringify({ ok: false, error: `the profile layer sets ${lower.blocked.join(', ')}: a new home-layer a2a config would hide it and credentials are not copied between layers; add the a2a config (with ${lower.blocked.join(', ')}) to ${patchPath} first` })
-              res.writeHead(409, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload); return
-            }
-            seed = lower.seed
+          // #812/#808: one shared home-layer write (src/owner-settings.ts writeHomeA2a), tested with a real file.
+          const written = writeHomeA2a(home, changes, config as unknown as Record<string, unknown>, ConfigSchema({} as never) as unknown as Record<string, unknown>,
+            { exists: existsSync, read: p => readFileSync(p, 'utf8'), write: (p, s) => writeFileSync(p, s, 'utf8'), mkdir: p => { mkdirSync(p, { recursive: true }) } })
+          if (!written.ok) {
+            const payload = JSON.stringify({ ok: false, error: written.error })
+            res.writeHead(409, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload); return
           }
-          const { yaml, restartNeeded } = applyOwnerSettings(current, changes, seed)
-          mkdirSync(home, { recursive: true })
-          writeFileSync(patchPath, yaml, 'utf8')
+          const { restartNeeded } = written
           // Hot-apply the call-time owner keys.
           if (changes.seatNames !== undefined) d.ownerSeatNames = changes.seatNames
           if (changes.teamJoinAllowlist !== undefined) d.ownerAllowlist = [...changes.teamJoinAllowlist]
@@ -955,36 +951,12 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             const name = typeof body.name === 'string' ? body.name : ''
             payload = JSON.stringify({ ok: canvasStore.remove(name), teams: canvasStore.list() })
           } else if (action === 'add-member') {
+            // #808: one shared write, so the team builder's blueprint passes exactly this gate (src/canvas-member-write.ts).
+            const out = await addCanvasMember({ canvasStore, canvasNameReserved, localMember: id => sessionNodes.has(id) || joinedSessions.has(id),
+              memberForWrite: d.canvasMemberForWrite, ...(d.teamCanvasRefusal !== undefined ? { teamCanvasRefusal: d.teamCanvasRefusal } : {}), cliHomeForAdd: d.cliHomeForAdd },
+            typeof body.name === 'string' ? body.name : '', typeof body.id === 'string' ? body.id : '', { peer: (body as { peer?: unknown }).peer, home: (body as { home?: unknown }).home })
             const name = typeof body.name === 'string' ? body.name : ''
-            const id = typeof body.id === 'string' ? body.id : ''
-            // Dual member shape: a local session id must be a joined node;
-            // a remote ref is a zone-qualified team handle whose shape this
-            // gate checks and whose existence the UI picker (directory
-            // rows) vouches for. Humans compose both via the workbench.
-            const memberValid = isRemoteMemberRef(id)
-              ? validRemoteMemberRef(id)
-              : id !== '' && (sessionNodes.has(id) || joinedSessions.has(id))
-            if (!canvasStore.hasTeam(name) && canvasNameReserved(name)) {
-              payload = JSON.stringify({ ok: false, error: 'roster reserves this canvas name' })
-            } else if (name === '' || !memberValid) {
-              payload = JSON.stringify({ ok: false, error: 'name and a member (joined session id, or a zone-qualified remote team handle like zone/a1b2c3d4) are required' })
-            } else if (legacyBareMember(id) && canvasStore.rawMembersOf(name).includes(id)) {
-              // Re-adding a retained legacy slot is a no-op, never provenance confirmation or restore.
-              payload = JSON.stringify({ ok: true, members: canvasStore.membersOf(name), provenance: 'unknown' })
-            } else {
-              const proof = await d.canvasMemberForWrite(id, (body as { peer?: unknown }).peer)
-              if (!proof.ok) { payload = JSON.stringify(proof); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(payload); return }
-              const teamRefusal = d.teamCanvasRefusal?.(name, proof.member)
-              if (teamRefusal !== undefined) { payload = JSON.stringify({ ok: false, error: teamRefusal }); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(payload); return }
-              const pin = await d.cliHomeForAdd(proof.member, (body as { home?: unknown }).home).catch(() => ({ ok: false as const, error: 'linked home card lookup failed' }))
-              if (!pin.ok) payload = JSON.stringify({ ok: false, error: pin.error })
-              else {
-                canvasStore.create(name)
-                const explicitHome = (body as { home?: unknown }).home !== undefined
-                const home = explicitHome ? pin.home : canvasStore.cliHomeOf(id) ?? pin.home
-                payload = JSON.stringify({ ok: canvasStore.addMember(name, proof.member, home, { replaceHome: explicitHome, ownerKey: proof.ownerKey }), teams: canvasStore.list(), members: canvasStore.membersOf(name) })
-              }
-            }
+            payload = JSON.stringify(!out.ok ? (out.stored === false ? { ok: false, teams: canvasStore.list(), members: canvasStore.membersOf(name) } : out) : out.provenance === 'unknown' ? { ok: true, members: canvasStore.membersOf(name), provenance: 'unknown' } : { ok: true, teams: canvasStore.list(), members: canvasStore.membersOf(name) })
           } else if (action === 'remove-member') {
             const name = typeof body.name === 'string' ? body.name : ''
             const id = typeof body.id === 'string' ? body.id : ''

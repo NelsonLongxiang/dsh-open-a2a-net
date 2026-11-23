@@ -65,10 +65,11 @@ export function createQueueGuard(
   recordActivity: (dir: 'in' | 'out', team: string, peer: string, ok: boolean) => void,
   reminder: (taskId:string)=>Record<string,unknown> = () => ({}),
   capacity:()=>boolean=()=>true,
+  capacityRefusal:()=>string=()=>'receipt-protected capacity is full; no new work delivered; retained results require reconciliation',
 ): (caller: string, message: string, team: string, taskId: string, mailbox: boolean, res: ServerResponse) => boolean {
   return (caller, message, team, taskId, mailbox, res) => {
     const receipt=parseReceipt(message)
-    const protectedRefusal=!mailbox&&!ownTask(taskId)&&!(receipt&&ownTask(receipt.taskId))&&!capacity()?'receipt-protected capacity is full; no new work delivered; retained results require reconciliation':undefined
+    const protectedRefusal=!mailbox&&!ownTask(taskId)&&!(receipt&&ownTask(receipt.taskId))&&!capacity()?capacityRefusal():undefined
     const error = protectedRefusal??queueFullRefusal(rows(), team, message, cap(), mailbox, ownTask)
     if (error === undefined) return false
     outcomes.recordOutcome(taskId, { status: 'failed', error })

@@ -245,6 +245,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | `POST /__dsh_a2a/dispatch` | 工作台快速派单到一个团队。 |
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | 从调用方一侧结清一个欠账任务（cancel 还会尽力向目标转达停止通知：本机目标直接 steer，远端目标经 wire 投递，卡片声明 `queuedTaskCancellation` 时另带 `cancel_task_id` 撤回队列中的原任务；回复里带 `steered`、`removed`）；该行落入 `archived[]`。 |
 | `POST /__dsh_a2a/request-recovery` | 仅登录的浏览器属主可为一份已核账的旧请求签发／撤销精确许可；绑定原尝试、原文、发送身份和接收会话，不建立长期成员关系。见[单请求恢复契约](docs/design/superagent-outbound-requests.md#one-request-continuation-for-reconciled-legacy-failures)。 |
+| `POST /__dsh_a2a/receipt-capacity/void` | 仅登录的浏览器属主可作废占着回执保护名额的孤儿任务投递（`{task_ids, reason}`，taskId 取自状态面 `receiptCapacity.holders`）；只作废此刻仍是孤儿的投递，每条作废留审计。这一关（欠回执 + 保留投递，上限 TASK_CAP 64）不是 `deliveryCapacity`。见[路由记账](docs/protocol/route-bookkeeping-observation.md)。 |
 | `GET`/`POST /__dsh_a2a/superagent` | 未配 `superagent: false` 时：引擎状态（线程、决定、回复、带阶段的工单、绑定的画布及绑定问题），以及属主操作 `settings`（绑定 `canvas` 与 `router`） · `sync-github-allowed`（把仓库有推送权限的协作者加入 `allowed.github`，需要界面登录；`settings` 里的 `sources.github` 与 `github: { repos, intake }` 让 GitHub Issue 成为需求来源，同样需要界面登录）· `request`（工作台 Source）· `serve`（按画布 id 为其他主机的团队服务）· `stop` · `retry`。 |
 | `GET`/`POST /__dsh_a2a/superagent/decisions` | 未配 `superagent: false` 时：本实例各团队等属主决定的决策卡；POST `{ id, how: 'approve' \| 'choose', option?, note?, files?, teamId? }` 作出决定；`files` 是为该卡团队暂存好的 `[A2A file] v1` 引用行。主机有登录时需要界面登录。 |
 | `GET /__dsh_a2a/superagent/models` | 未配 `superagent: false` 时：团队设置用的 DSH 模型目录（读不到时页面允许手填） |
@@ -252,7 +253,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | `GET`/`POST /__dsh_a2a/superagent/teams` | 未配 `superagent: false` 时：本实例的团队；POST `{ canvas, router }` 新增一个。列表也含已建链实例公布的团队，POST `{ action: 'send', address, session, text }` 以该会话的身份发需求（设计 M9）。`/__dsh_a2a/superagent` 的 POST 体 `teamId` 或 GET 的 `?teamId=` 按 id 选团队（设计 M3）。 |
 | `GET`/`POST /__dsh_a2a/superagent/staffing` | 编制变更（S1a）：GET 列出账本；POST `{ action: 'submit', change: { id, summary?, ops }, agree?: true }` 或 `{ action: 'agree', id }`，须在已登录的 DSH 界面里操作。操作为 `team.create`、`member.add`（可带 profile）、`team.rules.set`（scope：team / dispatch / member:<seatId>）；只用已有会话，失败时倒序撤销。 |
 | `/__dsh_a2a/session-log` · `/remote-session-log` | 供工作台读取会话日志。 |
-| `/__dsh_a2a/owner-settings` | 属主面板：读取（GET）或写入（POST）`teamJoinAllowlist`、`teamScope`、`seatNames` 与 `announce` 到 home patch 层（`announce` 需重启生效，GET 的 `announceRestartPending` 标出；其余即时生效）。`seatNames` 为完整映射，删去会话 id 即清除。复用属主鉴权，不提供模型命名工具；本机 shell/配置写入者仍处于既有运营者信任边界内。 |
+| `/__dsh_a2a/owner-settings` | 属主面板：读取（GET）或写入（POST）`teamJoinAllowlist`、`teamScope`、`seatNames` 与 `announce` 到 home patch 层（`announce` 需重启生效，GET 的 `announceRestartPending` 标出；其余即时生效）。home 层的 a2a `config` 块会整段替换 profile 层：键要加进那一个完整的 a2a 块，不要另起只含几行的第二个；生效与否看 `/__dsh_a2a/state` 的 `host.*`，不看文件（[network-operations §六](docs/guides/network-operations.md)，#814）。`seatNames` 为完整映射，删去会话 id 即清除。复用属主鉴权，不提供模型命名工具；本机 shell/配置写入者仍处于既有运营者信任边界内。 |
 | `/__dsh_a2a/fleet-canvas-op` | 把画布操作中继到某 peer 的 `/a2a/canvas-op`，盖上本节点的 OriginClaim；由对端的链接门裁决。 |
 | `/__dsh_a2a/cli-deposit` | `a2a-net` CLI 身份的寄存、列表、撤销、信箱读取与准入查询（`admission`，须由该身份自己签名）。 |
 | `GET /__dsh_a2a/nodes` · `POST` | 节点身份（docs/design/node-identity.md）：GET 读名册或单个节点（`?name=`）；POST 是身份写入，即使在 loopback 也要 `X-API-Key`；未配置 `apiKey` 的主机直接拒绝一切身份写入。 |
