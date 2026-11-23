@@ -64,9 +64,29 @@ describe('receipt birth capacity after archive rotation', () => {
     writeFileSync(path, JSON.stringify(legacy)); const bytes = readFileSync(path)
     const restored = new TaskLedger(path, { now: () => now, archiveCap: 1 })
     expect(restored.orphanDelivery('still-visible')).toBe(false)
-    expect(restored.orphanDelivery('old-lost')).toBe(true)
+    // #824 (merged next/0.8): a settled row pushed out of the archive stops counting as a birth, so it is no orphan either;
+    // but with no surviving terminal evidence it is NOT given a terminal proof.
+    expect(restored.orphanDelivery('old-lost')).toBe(false)
     expect(restored.deliveryFor('old-lost')?.terminalRecorded).toBeUndefined()
+    expect(restored.deliveryFor('still-visible')?.terminalRecorded).toBe(true)
     expect(readFileSync(path)).toEqual(bytes)
+  })
+
+  it('merge with #824: on restore, rows trimmed past the cap get their terminal proof before #824 releases them', () => {
+    const path = file(), wide = new TaskLedger(path, { now: () => now, archiveCap: 2 })
+    birth(wide, 'trimmed'); finish(wide, 'trimmed')
+    birth(wide, 'kept'); finish(wide, 'kept')
+    const legacy = JSON.parse(readFileSync(path, 'utf8'))
+    for (const row of legacy.taskDeliveries) delete row.terminalRecorded
+    writeFileSync(path, JSON.stringify(legacy))
+    // A narrower cap on restore trims 'trimmed': its archive row is real terminal evidence, so it keeps replay protection.
+    const narrow = new TaskLedger(path, { now: () => now, archiveCap: 1 })
+    expect(narrow.archive().map(row => row.taskId)).toEqual(['kept'])
+    expect(narrow.deliveryFor('trimmed')).toMatchObject({ terminalRecorded: true })
+    expect(narrow.deliveryFor('trimmed')?.taskExpected).toBeUndefined()
+    expect(narrow.orphanDelivery('trimmed')).toBe(false)
+    narrow.track('trimmed', 'alpha/aaaaaaaa', 'local')
+    expect(narrow.list().some(row => row.taskId === 'trimmed')).toBe(false)
   })
 
   it('never treats cap eviction as terminal result evidence', () => {
@@ -74,7 +94,9 @@ describe('receipt birth capacity after archive rotation', () => {
     birth(ledger, 'owed')
     for (let i = 0; i < TASK_CAP + 2; i++) ledger.track('other-' + i, 'alpha/aaaaaaaa', 'local')
     expect(ledger.deliveryFor('owed')?.terminalRecorded).toBeUndefined()
-    expect(ledger.orphanDelivery('owed')).toBe(true)
+    // #824 (merged next/0.8) releases every archived row once trimmed, an evicted one too, so it no longer holds a birth.
+    // Eviction still never becomes terminal proof: the row gets no terminalRecorded (asserted above).
+    expect(ledger.orphanDelivery('owed')).toBe(false)
   })
 
   it('rejects forged terminal flags at new admission and malformed persisted proofs', () => {
@@ -82,7 +104,9 @@ describe('receipt birth capacity after archive rotation', () => {
     const row = { version: 1 as const, taskId: 'forged', messageId: 'm', sessionId: 's', fingerprint: 'a'.repeat(64), createdAt: now, state: 'claimed' as const, taskExpected: true as const, terminalRecorded: true as const }
     expect(() => ledger.reserveDelivery(row)).toThrow('invalid')
     expect(parseTaskDelivery({ ...row, terminalRecorded: false })).toBeUndefined()
-    expect(parseTaskDelivery({ ...row, taskExpected: undefined })).toBeUndefined()
+    // After #824 a settled row leaves the archive without taskExpected; its terminal proof stays and still parses.
+    expect(parseTaskDelivery({ ...row, taskExpected: undefined })).toMatchObject({ terminalRecorded: true })
+    expect(parseTaskDelivery({ ...row, terminalRecorded: 'yes' })).toBeUndefined()
   })
 
   it('accepts sequential settled work beyond both 64-entry windows while retaining every occurrence identity', () => {

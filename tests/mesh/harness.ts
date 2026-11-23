@@ -374,3 +374,6 @@ export class MockGuiConnection extends Service {
 
 /** The credential sentinel understood only by an explicitly installed MockGuiConnection. Never a real browser cookie. */
 export function mockGuiLogin(): { Cookie: string } { return { Cookie: 'dsh-auth-test=1' } }
+
+/** The API-operator sentinel MockGuiConnection admits as a non-owner Peer (authenticated, but never the browser owner). */
+export function mockApiLogin(): { Cookie: string } { return { Cookie: 'fixture-api-operator=1' } }

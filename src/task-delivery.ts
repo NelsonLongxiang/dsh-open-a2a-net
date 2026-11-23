@@ -26,7 +26,8 @@ export function parseTaskDelivery(raw: unknown): TaskDelivery | undefined {
   for(const k of ['taskId','messageId','sessionId'])if(typeof r[k]!=='string'||r[k].length<1||r[k].length>256)return undefined
   if(r.version!==1||typeof r.fingerprint!=='string'||!/^[0-9a-f]{64}$/.test(r.fingerprint)||!Number.isSafeInteger(r.createdAt)||(r.createdAt as number)<0||!['reserved','enqueued','claimed','cancelled','failed'].includes(String(r.state)))return undefined
   if(r.taskExpected!==undefined&&r.taskExpected!==true)return undefined
-  if(r.terminalRecorded!==undefined&&(r.terminalRecorded!==true||r.taskExpected!==true))return undefined
+  // #824 drops taskExpected once a settled task leaves the archive; the terminal proof stays with the occurrence.
+  if(r.terminalRecorded!==undefined&&r.terminalRecorded!==true)return undefined
   if(r.callerKey!==undefined&&(typeof r.callerKey!=='string'||r.callerKey.length>512))return undefined
   return {...(r.taskExpected===true?{taskExpected:true as const}:{}),...(r.terminalRecorded===true?{terminalRecorded:true as const}:{}),...(typeof r.callerKey==='string'?{callerKey:r.callerKey}:{}),version:1,taskId:r.taskId as string,messageId:r.messageId as string,sessionId:r.sessionId as string,fingerprint:r.fingerprint,createdAt:r.createdAt as number,state:r.state as TaskDelivery['state']}
 }

@@ -47,6 +47,12 @@ state、a2a_status 和 CLI status 可见 deliveryBookkeeping：
 - failures：当前插件实例真实接纳后出生提交写失败的观察次数，重启归零；已有孤儿映射的重放只返回同一观察，不增加 failures，也不覆盖 lastError。
 - lastError（可选）：当前实例最近一次的 at 与 safeObservationCode 允许的 code，无路径、正文或异常原文。诊断不是业务提交，也不据此产生任务。
 
+`receiptCapacity`（#eb6d20df）：回执保护这一关单独显示，**与 `deliveryCapacity`（512 条映射上限）是两个上限**。新活能否进来看的是这一关：`owed`（台账里欠回执的出站行）+ `retained`（24 小时保留期内需要出生行、状态不是 cancelled/failed、既不在台账也不在归档里的投递与派发预留）必须小于 `cap`（TASK_CAP=64），`available` 为 false 时一切非本任务的新活都被拒。state 另列 `holders`：占名额的每一条（taskId、种类 owed/delivery/dispatch、目标 sessionId、状态、createdAt、releasesAt，孤儿映射标 `orphaned`），按创建时间排序，最多 200 条，超出数在 `truncated`；不含正文。a2a_status 只给四个计数。拒收文案写明是这一关满了以及当时的 owed、retained 与上限。
+
+**归档挤出不再算孤儿（#eb6d20df 根因）**：归档只留 `ARCHIVE_CAP`（64）条已结清行，任务投递映射却保留 24 小时。修复前，一天内结清超过 64 个任务后，被挤出归档的已结清任务，其投递既无台账行也无归档行，被算作孤儿并占这一关名额；结清满 128 个即拒收一切新活，与在途任务无关。现在已结清任务被挤出归档（运行中或重启恢复时截断）时，其投递映射去掉 `taskExpected`，不再计入这一关和 `orphaned`；映射本身保留，防重与撤回照旧。
+
+**属主作废真正的孤儿**：`POST /__dsh_a2a/receipt-capacity/void` `{task_ids, reason}`，只认已登录的 DSH 浏览器主人（API 凭据不行），一次 1–64 个 taskId（取自 `receiptCapacity.holders`）。只作废此刻仍是孤儿的投递（置为既有状态 `failed`，不新增状态），其他一律拒绝并原样保留；每条作废写入审计（taskId、目标会话、时间、理由、`owner-browser`），随台账持久化，最近 20 条显示在 `receiptCapacity.voids`。在生产主机上执行属于对生产状态的操作，须先经属主决策卡。
+
 ## 明确限制与非目标
 
 本修订不选择“磁盘恢复后自动补记出生行”的可选方案：不新增持久保存原任务/授权/body 的恢复队列，现有映射不足以无损重建完整任务出生事实。修复磁盘不等于自动恢复债权一致性；接收方孤儿可能仍需基于原 task 的人工对账。调用方债保留，不能以此限制为由伪结清。

@@ -44,8 +44,10 @@ describe('#805 HTTP replay across archive rotation', () => {
       const response = await post(restarted.baseUrl), data = await response.json()
       expect(restarted.steered).toHaveLength(0)
       if (legacyUnknown) {
-        expect(response.status, JSON.stringify(data)).toBe(200)
-        expect(data.receiverBookkeeping).toBe('failed')
+        // #824 (merged next/0.8) released the evicted settled row, so the replay is refused as one (it was accepted with
+        // failed bookkeeping before); either way nothing is steered.
+        expect(response.status, JSON.stringify(data)).toBe(409)
+        expect(data).toMatchObject({ code: -32003, replay: true })
       } else {
         expect(response.status, JSON.stringify(data)).toBe(409)
         expect(data).toMatchObject({ code: -32003, replay: true })
