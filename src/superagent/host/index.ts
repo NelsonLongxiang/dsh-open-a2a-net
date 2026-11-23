@@ -249,7 +249,7 @@ export class SuperagentHost {
       remotes: canvas => (d.canvasTeam?.(canvas)?.remote ?? []).map(r => r.ref),
       declares: (ref, capability) => d.memberDeclares?.(ref, capability) === true,
       send: async (ref, text, taskId) => { if (d.rosterSend === undefined) throw new Error('no roster send on this host'); await d.rosterSend(ref, text, taskId) },
-      handleOf: id => d.handleOf?.(id) ?? id, nameOf: id => plainName(d.sessionName?.(id)), online: id => d.sessionLoaded?.(id) ?? false, seatIdOf: id => this.named.seatIdOf(id),
+      handleOf: id => d.handleOf?.(id) ?? id, nameOf: id => cleanName(plainName(d.sessionName?.(id))), online: id => d.sessionLoaded?.(id) ?? false, seatIdOf: id => this.named.seatIdOf(id),
       loadOf: id => this.executor.loadOf(id), hostFingerprint: () => d.hostFingerprint?.(), warm: () => d.warmPeerCards?.(), nowMs: () => Date.parse(this.now()), logger: d.logger,
     })
     // T8 step 1: the roster's recipients, transport and canvas address; the outbox is kept across restarts.
@@ -863,7 +863,8 @@ export class SuperagentHost {
     // ticket), before the a2a plugin's card cache exists, and reading the canvas there failed the plugin's start.
     const role = worker === undefined ? 'router' as const : this.d.presetOf?.(worker) === OBSERVER_PRESET ? 'observer' as const : 'member' as const
     const seat = this.d.handleOf?.(session) ?? session
-    const name = plainName(this.d.sessionName?.(session))
+    // #861 review: the seat's name is shown (receipts, the market's 承接), so it is cleaned like every other shown name.
+    const name = cleanName(plainName(this.d.sessionName?.(session)))
     // The seat's stable id (named dispatch N2), as the roster gives it: the market keys its records on it, not the handle.
     const seatId = this.named.seatIdOf(session)
     return { seat, ...(seatId !== undefined ? { seatId } : {}), ...(name !== undefined && name !== '' && name !== seat ? { name } : {}), role }
