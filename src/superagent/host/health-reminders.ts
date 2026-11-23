@@ -67,7 +67,24 @@ export function queuedText(problem: HealthProblem, name: (session: string) => st
 
 /** What a problem's card says, in the words the health banner already uses (no internal codes). */
 /** The member a problem is about: its seat name or title when the host has one, else the session id. */
-const whoOf = (problem: HealthProblem): string => problem.name ?? problem.session ?? ''
+/** The longest member name a health problem shows: the banner's `detail` is cut at the same length. */
+export const NAME_MAX = 120
+/**
+ * A member's name as it is shown (follow-up of the #846 review): the name comes from the session's own metadata and was printed
+ * as it is. Only the display changes, never the problem's key (that is the session id). An empty result means "no name".
+ */
+export const cleanName = (name: string | undefined): string | undefined => {
+  if (name === undefined) return undefined
+  // Line breaks and tabs become one space; other control characters, bidirectional controls and invisible marks are dropped.
+  // The joiners U+200C and U+200D stay: composite emoji (a family) and several scripts (Persian) need them. Tag characters
+  // (U+E0000..) stay too: subdivision-flag emoji are made of them, and a name comes from the session's own metadata.
+  // eslint-disable-next-line no-control-regex
+  const clean = name.replace(/[\n\r\t\u2028\u2029]+/g, ' ').replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, '').replace(/ {2,}/g, ' ').trim()
+  if (clean === '') return undefined
+  const chars = Array.from(clean)
+  return chars.length > NAME_MAX ? `${chars.slice(0, NAME_MAX - 1).join('')}…` : clean
+}
+const whoOf = (problem: HealthProblem): string => cleanName(problem.name) ?? problem.session ?? ''
 
 export const problemText = (problem: HealthProblem): string =>
   problem.code === 'router-not-loaded' ? `总工会话 ${whoOf(problem)} 没有加载，需求送不到它，打开这个会话即可`
@@ -76,7 +93,7 @@ export const problemText = (problem: HealthProblem): string =>
   : problem.code === 'mcp-no-seat' ? `团队 MCP 服务器 ${problem.title ?? ''} 还用不了：团队里还没有带席位 id 的成员，市场只给名册里的席位发令牌`
   : problem.code === 'mcp-token-unavailable' ? `团队 MCP 服务器 ${problem.title ?? ''} 换不到席位令牌，成员对它的调用会失败：${problem.detail ?? ''}`
   : problem.code === 'member-not-loaded' ? `成员会话 ${whoOf(problem)} 没有加载，工单派不给它，打开这个会话即可`
-  : problem.code === 'tickets-queued' ? queuedText(problem, session => problem.name ?? session)
+  : problem.code === 'tickets-queued' ? queuedText(problem, session => cleanName(problem.name) ?? session)
   : problem.code === 'session-wait-overdue' ? `成员会话 ${whoOf(problem)} 登记的等待已过期限（${problem.detail ?? ''}，已过 ${String(problem.minutes ?? 0)} 分钟），还没有被叫醒；工单「${problem.title ?? problem.ticketId ?? ''}」`
   : problem.code === 'session-orphan-stop' ? `成员会话 ${whoOf(problem)} 上一次停下是孤儿停（没做完，也没登记任何会叫它回来的东西）；工单「${problem.title ?? problem.ticketId ?? ''}」`
   : problem.code === 'session-no-selfcheck' ? `成员会话 ${whoOf(problem)} 持单 ${String(problem.minutes ?? 0)} 分钟，一条收尾自查记录都没有（可能出错、中断或没加载）；工单「${problem.title ?? problem.ticketId ?? ''}」`
