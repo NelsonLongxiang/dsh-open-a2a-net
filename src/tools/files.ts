@@ -10,8 +10,9 @@
  *   (routeTrunk's local-route shapes) rolls this call's new grants back — a pre-existing grant of the
  *   same (sha256, to, by) is kept (stage() only extended its expiry). A refusal from beyond this host,
  *   or an unknown outcome, revokes nothing: the result says the grants are live (files[].expiresAt)
- *   and names the exact revoke entry. The join gate runs BEFORE staging, so an unjoined session is
- *   refused with nothing staged.
+ *   and names the exact revoke entry. A failure part-way through staging (a missing/oversized file, a
+ *   full store) rolls the same fresh set back too. The join gate runs BEFORE staging, so an unjoined
+ *   session is refused with nothing staged.
  * - `a2a_file_fetch { ref }` pulls one referenced file — from this host's own store when the
  *   reference names this host, else over the pull face with this host's OriginClaim envelope — checks
  *   sha256 and size, and lands it at `<workspace>/a2a-inbox/<sha12>-<name>`, never following a link.
@@ -110,20 +111,30 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
         // existed for the same (sha256, to, by) is a prior legitimate send — stage() only extended its expiry.
         const preExisting = new Set(blobStore.grantsBy(by).filter(g => g.to === team).map(g => g.sha256))
         const staged: Array<{ sha256: string; size: number; name: string; expiresAt: number }> = []
+        // Nothing has left this host while the loop below runs: a failure part-way through (a missing or
+        // oversized file, a full store) rolls this call's NEW grants back — a partial send must not leave
+        // grants the result never hands a reference for. Pre-existing keys are kept (only their expiry moved).
+        const rollBackFresh = (): { rolled: number; kept: number } => {
+          const shas = [...new Set(staged.map(f => f.sha256))]
+          const fresh = shas.filter(sha => !preExisting.has(sha))
+          for (const sha of fresh) blobStore.revoke(sha, team, by)
+          return { rolled: fresh.length, kept: shas.length - fresh.length }
+        }
+
         for (const p of paths) {
           const abs = isAbsolute(p) ? p : cwd !== '' ? resolve(cwd, p) : ''
-          if (abs === '') return { ok: false, error: `relative path ${p} needs a session workspace`, peer_content: false }
+          if (abs === '') { const r = rollBackFresh(); return { ok: false, error: `relative path ${p} needs a session workspace`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept } }
           let bytes: Uint8Array
           try {
             const st = statSync(abs)
-            if (!st.isFile()) return { ok: false, error: `${p} is not a file`, peer_content: false }
-            if (st.size > BLOB_FILE_MAX) return { ok: false, error: `${p} is ${String(st.size)} bytes; the file channel takes at most ${String(BLOB_FILE_MAX)}`, peer_content: false }
+            if (!st.isFile()) { const r = rollBackFresh(); return { ok: false, error: `${p} is not a file`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept } }
+            if (st.size > BLOB_FILE_MAX) { const r = rollBackFresh(); return { ok: false, error: `${p} is ${String(st.size)} bytes; the file channel takes at most ${String(BLOB_FILE_MAX)}`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept } }
             bytes = readFileSync(abs)
           } catch (error) {
-            return { ok: false, error: `cannot read ${p}: ${error instanceof Error ? error.message : String(error)}`, peer_content: false }
+            { const r = rollBackFresh(); return { ok: false, error: `cannot read ${p}: ${error instanceof Error ? error.message : String(error)}`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept } }
           }
           const out = blobStore.stage(bytes, { name: abs.split(/[\\/]/).pop() ?? p, to: team, by, ...(taskId !== undefined ? { taskId } : {}) })
-          if (!out.ok) return { ok: false, error: `${p}: ${out.error}`, code: out.code, peer_content: false }
+          if (!out.ok) { const r = rollBackFresh(); return { ok: false, error: `${p}: ${out.error}`, code: out.code, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept } }
           staged.push({ sha256: out.sha256, size: out.size, name: out.name, expiresAt: out.expiresAt })
         }
         const note = typeof args.note === 'string' ? args.note.trim() : ''
@@ -133,9 +144,8 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
         if (routed.ok !== true) {
           // A local-route refusal is host-deterministic: nothing left this host, so nothing was delivered.
           if (local === true) {
-            const fresh = [...new Set(staged.map(f => f.sha256))].filter(sha => !preExisting.has(sha))
-            for (const sha of fresh) blobStore.revoke(sha, team, by)
-            return { ...routed, ok: false, team, files: staged, grants: 'rolled-back', rolled_back: fresh.length, kept_pre_existing: staged.length - fresh.length, peer_content: false }
+            const r = rollBackFresh()
+            return { ...routed, ok: false, team, files: staged, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept, peer_content: false }
           }
           // Beyond this host (a peer's refusal, or an outcome we cannot know): a delivered reference may exist,
           // so revoking would break it. The grants stay live and the result says so, with the exact revoke entry.

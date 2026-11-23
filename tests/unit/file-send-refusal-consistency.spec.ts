@@ -82,6 +82,21 @@ describe('a2a_file_send refusal consistency', () => {
     expect(h.store.usage()).toMatchObject({ files: 0 })
   })
 
+  it('a staging failure mid-send rolls back the files already staged (pre-existing kept, nothing routed)', async () => {
+    const h = harness()
+    writeFileSync(join(h.ws, '件一.txt'), '首件内容')
+    // A prior legitimate grant of the SAME bytes and target by THIS session: must survive the rollback.
+    h.store.stage(Buffer.from('首件内容'), { name: '件一.txt', to: 'peer/bbbb2222', by: 'session-aaaa1111' })
+    writeFileSync(join(h.ws, '件二.txt'), '次件内容')
+    const out = await h.run({ paths: ['件一.txt', '件二.txt', 'missing.txt'], team: 'peer/bbbb2222' })
+    expect(out).toEqual(expect.objectContaining({ ok: false, grants: 'rolled-back', rolled_back: 1, kept_pre_existing: 1 }))
+    expect(h.routed).toHaveLength(0)
+    // 件一's grant was pre-existing → kept (extended); 件二's fresh grant → rolled back.
+    expect(h.store.grantFor(sha('首件内容'), ['peer/bbbb2222'])).toBeDefined()
+    expect(h.store.grantFor(sha('次件内容'), ['peer/bbbb2222'])).toBeUndefined()
+    expect(h.store.usage().files).toBe(1)
+  })
+
   it('a successful send keeps its exact shape: grants live, no consistency fields added', async () => {
     const h = harness()
     writeFileSync(join(h.ws, 'ok.txt'), '好件')
