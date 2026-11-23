@@ -6,6 +6,9 @@
  *   stages each (by sha256, granted to `team`), and routes ONE message carrying one reference line
  *   per file through the ordinary route trunk — admission, ledger and receipts are a2a_route's. The
  *   route's host-written `peer_content` flag rides the result (N4: a route that reached a peer taints).
+ *   With `grant_only: true` it stages the grants and sends NOTHING (a member seat takes no direct
+ *   delivery): no message is routed, and the result carries each file's reference line for the sender to
+ *   hand over through an admitted channel. The audience's pull admission is the pull face's own, unchanged.
  * - `a2a_file_fetch { ref }` pulls one referenced file — from this host's own store when the
  *   reference names this host, else over the pull face with this host's OriginClaim envelope — checks
  *   sha256 and size, and lands it at `<workspace>/a2a-inbox/<sha12>-<name>`, never following a link.
@@ -67,19 +70,26 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
         'Send one or more files to an A2A team WITHOUT putting their bytes in a session message (#91 file channel). '
         + 'Each file is stored on this host by sha256 and granted to the team for 24h; the team receives ONE message '
         + 'with one "[A2A file] v1 …" reference line per file and pulls them with a2a_file_fetch. At most 16 files, '
-        + '64 MiB each. Paths are relative to your workspace (or absolute).',
+        + '64 MiB each. Paths are relative to your workspace (or absolute). '
+        + 'With grant_only: true nothing is sent: the grants are staged and the "[A2A file] v1 …" reference lines come '
+        + 'back in the result, for you to hand over through an admitted channel (a member seat takes no direct delivery).',
       parameters: {
         paths: { type: 'array', items: { type: 'string' }, required: true, description: 'Files to send (1–16).' },
         team: { type: 'string', required: true, description: 'Target team, as for a2a_route.' },
         note: { type: 'string', description: 'Optional text to put above the references.' },
         task_id: { type: 'string', description: 'Optional task id to record on the grants (default: the task this send goes out in).' },
+        grant_only: { type: 'boolean', description: 'Stage the grants for the team WITHOUT routing any message (no direct delivery, no task, no receipt). The result carries the "[A2A file] v1 …" reference lines: hand them to the designated audience through a channel that admits it (e.g. your ticket report). For an audience that must not be direct-messaged, such as a member seat.' },
       },
       output: {
         schema: { type: 'object', additionalProperties: true },
-        render: (_args, value) => [{ type: 'text', text: value.ok === true ? `Sent ${String((value.files as unknown[]).length)} file(s) to ${String(value.team)} (task ${String(value.task_id)}).` : `File send refused: ${String(value.error)}` }],
+        render: (_args, value) => [{ type: 'text', text: value.ok !== true
+          ? `File send refused: ${String(value.error)}`
+          : value.grant_only === true
+            ? `Granted ${String((value.files as unknown[]).length)} file(s) to ${String(value.team)} for pull; nothing was sent — hand these reference lines over yourself:\n${(value.refs as string[]).join('\n')}`
+            : `Sent ${String((value.files as unknown[]).length)} file(s) to ${String(value.team)} (task ${String(value.task_id)}).` }],
       },
-      presentCall: args => ({ card: 'generic', title: `A2A file send → ${String(args.team)}`, kind: 'other', rawInput: args }),
-      execute: async (args: { paths: string[]; team: string; note?: string; task_id?: string }, exec): Promise<Record<string, JsonValue>> => {
+      presentCall: args => ({ card: 'generic', title: args.grant_only === true ? `A2A file grant → ${String(args.team)}` : `A2A file send → ${String(args.team)}`, kind: 'other', rawInput: args }),
+      execute: async (args: { paths: string[]; team: string; note?: string; task_id?: string; grant_only?: boolean }, exec): Promise<Record<string, JsonValue>> => {
         const agent = exec.agent as Agent | undefined
         const team = String(args.team ?? '').trim()
         const paths = Array.isArray(args.paths) ? args.paths.map(p => String(p)) : []
@@ -87,9 +97,13 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
         if (paths.length === 0 || paths.length > FILE_SEND_MAX) return { ok: false, error: `paths must name 1–${String(FILE_SEND_MAX)} files`, peer_content: false }
         const taskId = typeof args.task_id === 'string' && args.task_id.trim() !== '' ? args.task_id.trim() : undefined
         if (taskId !== undefined && !BLOB_TASK_RE.test(taskId)) return { ok: false, error: 'task_id is 1–80 of A-Z a-z 0-9 . _ : -', peer_content: false }
+        const grantOnly = args.grant_only === true
+        if (grantOnly && typeof args.note === 'string' && args.note.trim() !== '') return { ok: false, error: 'grant_only sends no message, so it carries no note: put the note in the channel you hand the reference lines over through', peer_content: false }
         // #787: file-channel `from` is still the default ownCardUrl origin, not a per-peer claim URL. A cloud that cannot reach that origin cannot pull the blob; this map does not cover the file channel.
         const from = originOf(d.ownCardUrl())
         if (from === '') return { ok: false, error: 'this host publishes no card URL yet (announce is off or the web server has not settled): a receiver could not pull from it', peer_content: false }
+        // The trunk applies the join gate for a routed send; a grant-only send never reaches it, so it is applied here, before anything is staged (as a2a_file_fetch does).
+        if (grantOnly) d.a2aJoinGateRefusal(agent === undefined ? undefined : { agent })
         const cwd = workspaceOf(agent)
         const by = agent !== undefined ? String(agent.id) : 'host'
         const staged: Array<{ sha256: string; size: number; name: string; expiresAt: number }> = []
@@ -110,7 +124,13 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
           staged.push({ sha256: out.sha256, size: out.size, name: out.name, expiresAt: out.expiresAt })
         }
         const note = typeof args.note === 'string' ? args.note.trim() : ''
-        const message = [...(note !== '' ? [note] : []), ...staged.map(f => formatFileRef({ ...f, from }))].join('\n')
+        const refs = staged.map(f => formatFileRef({ ...f, from }))
+        if (grantOnly) {
+          // Grants only: no message, no route, no ledger entry, no receipt. The grants stand alone for 24h and the
+          // sender hands the reference lines over through a channel that admits them. Nothing left this host.
+          return { ok: true, team, grant_only: true, notified: false, files: staged, refs, ...(taskId !== undefined ? { task_id: taskId } : {}), peer_content: false }
+        }
+        const message = [...(note !== '' ? [note] : []), ...refs].join('\n')
         // The route's own trunk: join gate, admission, ledger and receipts are a2a_route's.
         const { [LOCAL_ROUTE]: local, ...routed } = await d.routeTrunk({ team, message, async: true }, agent, exec.signal) as Record<string, JsonValue> & { [LOCAL_ROUTE]?: true }
         // The grants remember the task they went out in (unless the caller named one).
