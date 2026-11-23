@@ -155,6 +155,14 @@ describe('every exit that shows a member\'s name shows it cleaned (#861 review)'
     // 4. The team builder's inventory.
     const inv = orgInventory({ teams: [], sessions: ['session-a'], nameOf: () => RAW_ID, presetOf: () => undefined, staffing: [] })
     exits.push(['builder inventory', strings(inv).find(s => s.includes('lead')), SHOWN])
+    // #861 re-review (B2, B4, B5): a team with a router and members, so the router's and each member's name are cleaned
+    // too, and a name cleaned to nothing falls back to the session id.
+    const raw: Record<string, string> = { 'session-r': RAW_A, 'session-m': RAW_A, 'session-z': INVISIBLE }
+    const team = { ref: 'dsh/canvas/team', revisions: {}, seatOf: () => undefined, children: [],
+      settings: { canvas: 'team', router: 'session-r', members: ['session-m', 'session-z'], observers: [], profiles: {}, rules: [], dispatch: '', repos: {}, acceptMode: 'auto' } }
+    const placedInv = orgInventory({ teams: [team as never], sessions: [], nameOf: id => raw[id] ?? id, presetOf: () => undefined, staffing: [] }) as { teams: Array<{ router: { session: string; name: string }; members: Array<{ session: string; name: string }> }> }
+    expect(placedInv.teams[0]!.router).toMatchObject({ session: 'session-r', name: 'dev lead' })
+    expect(placedInv.teams[0]!.members.map(m => [m.session, m.name])).toEqual([['session-m', 'dev lead'], ['session-z', 'session-z']])
 
     for (const [exit, text, expected] of exits) {
       expect(text, exit).toBeDefined()
