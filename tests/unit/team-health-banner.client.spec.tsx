@@ -27,6 +27,13 @@ describe('the health banner', () => {
     expect(await screen.findByText(/ops：3 ticket\(s\) queued for over 90 minutes \(oldest: “R1 整改”\): waiting for member a0000000/)).toBeTruthy()
     expect(screen.getByText(/only members working in acme\/widgets can take them, and the team has none/)).toBeTruthy()
   })
+  it('owner decision card 2026-11-23: names the member when the host has a name, the short id only when it has none', async () => {
+    serve([{ code: 'member-not-loaded', team: 'ops', session: 'session-9b542ad3aaaa', name: 'open-a2a-net-开发 (9b542ad3)' }, { code: 'tickets-queued', team: 'docs', reason: 'member-busy', session: 'session-9b542ad3aaaa', name: 'open-a2a-net-开发 (9b542ad3)', count: 6, minutes: 63, title: '设计 issue' }, { code: 'router-not-loaded', team: 'qa', session: 'session-c0000000cccc' }])
+    render(<TeamHealthBanner t={t} />)
+    expect(await screen.findByText(/ops：.*open-a2a-net-开发 \(9b542ad3\)/)).toBeTruthy()
+    expect(screen.getByText(/docs：.*waiting for member open-a2a-net-开发 \(9b542ad3\)/)).toBeTruthy()
+    expect(screen.getByText(/qa：Router session c0000000/)).toBeTruthy()
+  })
   it('shows nothing when the teams are healthy', async () => {
     serve([])
     render(<TeamHealthBanner t={t} />)

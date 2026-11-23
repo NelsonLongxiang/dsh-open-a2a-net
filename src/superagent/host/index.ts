@@ -2103,7 +2103,7 @@ export class SuperagentHost {
    */
   // #722: default to the host's clock, the one routerFailure.at and the engine's updatedAt are stamped with (as #721 did for the
   // decision book); the real clock here misreported a ticket quiet for days whenever the host's clock was injected.
-  health(now = Date.parse(this.now())): Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string; reason?: string; repo?: string; count?: number }> {
+  health(now = Date.parse(this.now())): Array<{ code: string; session?: string; name?: string; ticketId?: string; title?: string; minutes?: number; detail?: string; reason?: string; repo?: string; count?: number }> {
     const out: Array<{ code: string; session?: string; ticketId?: string; title?: string; minutes?: number; detail?: string; reason?: string; repo?: string; count?: number }> = []
     const loaded = this.d.sessionLoaded
     if (loaded === undefined || !this.teamBound()) return out
@@ -2125,7 +2125,12 @@ export class SuperagentHost {
     // T8: a decision card the market refused (or this host could not shape for it) stays visible: one problem per team and card.
     for (const refused of this.decisionPush.problems()) out.push({ code: 'decision-push-refused', title: `${this.settings.canvas ?? ''}/${refused.cardId}`, detail: refused.why })
     if (this.settingsValue.idleSweep === true) out.push(...this.idleSweep(now))
-    return out
+    // A short id says nothing to the owner: a problem about a session carries its seat name or title when there is one
+    // (owner decision card 2026-11-23). The key stays the session id, so a rename never raises a problem anew.
+    return out.map(problem => {
+      const name = problem.session !== undefined ? this.memberName(problem.session) : undefined
+      return name !== undefined && name !== problem.session ? { ...problem, name } : problem
+    })
   }
 
   /**

@@ -6,13 +6,13 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { QUIET_MINUTES } from '../../src/superagent/host/index.ts'
 
-async function team(loaded: Set<string>, settled = () => true, deliver: (id: string, text: string) => boolean = () => true) {
+async function team(loaded: Set<string>, settled = () => true, deliver: (id: string, text: string) => boolean = () => true, sessionName: (id: string) => string = id => id) {
   const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
   const { routeItem } = await import('../../src/superagent/host/tools.ts')
   const clock = { ms: Date.parse('2026-11-10T00:00:00Z') }
   const h = new SuperagentHost({
     canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', 'session-a'], remote: [] } : undefined, home: mkdtempSync(join(tmpdir(), 'sa-health-')), logger: { info: () => {}, warn: () => {} },
-    deliverToSession: deliver, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id,
+    deliverToSession: deliver, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName,
     sessionLoaded: (id: string) => loaded.has(id), bootSettled: settled, now: () => new Date(clock.ms).toISOString(),
   } as never)
   expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
@@ -22,6 +22,19 @@ async function team(loaded: Set<string>, settled = () => true, deliver: (id: str
 }
 
 describe('the health check', () => {
+  it('owner decision card 2026-11-23: a problem about a session carries its seat name or title, the key stays the id', async () => {
+    const named = await team(new Set(['session-r']), undefined, undefined, id => id === 'session-a' ? '开发席 (aaaaaaaa)' : id)
+    expect(named.h.health()).toEqual([{ code: 'member-not-loaded', session: 'session-a', name: '开发席 (aaaaaaaa)' }])
+    await named.h.stop()
+    const { problemText, problemKey } = await import('../../src/superagent/host/health-reminders.ts')
+    const row = { code: 'member-not-loaded', session: 'session-a', name: '开发席 (aaaaaaaa)' }
+    expect(problemText(row)).toContain('成员会话 开发席 (aaaaaaaa) 没有加载')
+    expect(problemText(row)).not.toContain('session-a')
+    expect(problemKey(row)).toBe(problemKey({ code: 'member-not-loaded', session: 'session-a' }))
+    expect(problemText({ code: 'tickets-queued', reason: 'member-busy', session: 'session-a', name: '开发席 (aaaaaaaa)', count: 2, minutes: 70, title: '写文档' } as never)).toContain('在等成员 开发席 (aaaaaaaa)')
+    expect(problemText({ code: 'member-not-loaded', session: 'session-a' })).toContain('成员会话 session-a 没有加载')
+  })
+
   it('is empty when the router and members are loaded and nothing is stuck', async () => {
     const m = await team(new Set(['session-r', 'session-a']))
     expect(m.h.health()).toEqual([])
