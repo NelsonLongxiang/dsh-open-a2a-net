@@ -33,7 +33,7 @@ import {legacyOutboundApproval} from './legacy-outbound-approval.ts'
 import {NarrowOutboundRecovery} from './narrow-outbound.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { SettingsHistory } from './settings-history.ts'
-import { HealthReminders, HEALTH_TICK_MS, type HealthProblem } from './health-reminders.ts'
+import { HealthReminders, HEALTH_TICK_MS, cleanName, type HealthProblem } from './health-reminders.ts'
 import { DecisionPush, PUSH_TICK_MS } from './decision-push.ts'
 import { QuestionGate, questionToken } from './question-gate.ts'
 import { DECISION_FILES_MAX, DecisionBook, decisionFiles, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
@@ -2128,7 +2128,9 @@ export class SuperagentHost {
     // A short id says nothing to the owner: a problem about a session carries its seat name or title when there is one
     // (owner decision card 2026-11-23). The key stays the session id, so a rename never raises a problem anew.
     return out.map(problem => {
-      const name = problem.session !== undefined ? this.memberName(problem.session) : undefined
+      const raw = problem.session !== undefined ? this.memberName(problem.session) : undefined
+      // Shown text only: control characters and bidirectional controls are dropped and the length is capped; the key stays the id.
+      const name = cleanName(raw)
       return name !== undefined && name !== problem.session ? { ...problem, name } : problem
     })
   }

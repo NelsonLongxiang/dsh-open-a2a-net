@@ -34,6 +34,21 @@ describe('the health banner', () => {
     expect(screen.getByText(/docs：.*waiting for member open-a2a-net-开发 \(9b542ad3\)/)).toBeTruthy()
     expect(screen.getByText(/qa：Router session c0000000/)).toBeTruthy()
   })
+  it('follow-up of the #846 review: a member name is shown without control characters and at most 120 long', async () => {
+    serve([
+      { code: 'member-not-loaded', team: 'ops', session: 'session-9b542ad3aaaa', name: 'ab\u0007c\u202ed\nline2' },
+      { code: 'member-not-loaded', team: 'docs', session: 'session-9b542ad3aaaa', name: 'y'.repeat(400) },
+      { code: 'member-not-loaded', team: 'qa', session: 'session-9b542ad3aaaa', name: '\u0007\u202e' },
+    ])
+    render(<TeamHealthBanner t={t} />)
+    expect(await screen.findByText(/ops：.*abcd line2/)).toBeTruthy()
+    // Anchored on both sides: exactly 119 characters and the ellipsis, so a limit of 121 or 119 fails too.
+    expect(screen.getByText(/docs：.*[^y]y{119}…[^y]/)).toBeTruthy()
+    expect(screen.getByText(/qa：.*9b542ad3/)).toBeTruthy()
+    const all = document.body.textContent ?? ''
+    expect(/[\u0007\u202e]/.test(all)).toBe(false)
+    expect(/y{121}/.test(all)).toBe(false)
+  })
   it('shows nothing when the teams are healthy', async () => {
     serve([])
     render(<TeamHealthBanner t={t} />)
