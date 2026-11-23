@@ -144,12 +144,21 @@ export function probePath(root, probe) {
   return join(dirname(from), `zz-probe-${probe.id}${dot === -1 ? '' : name.slice(dot)}`)
 }
 
-/** Stop a test run and everything it started: its process group gets SIGTERM, then SIGKILL after 5 s. */
-export function stopChild(child) {
+/** How long a stopped test run's process group gets after SIGTERM before SIGKILL. */
+export const KILL_GRACE_MS = 5000
+
+/**
+ * Stop a test run and everything it started: its process group gets SIGTERM, then SIGKILL after KILL_GRACE_MS whether or
+ * not the direct child is still there (a wrapper exits on SIGTERM while a test process under it may ignore SIGTERM).
+ * pending holds the timers still to fire, so run() can send their SIGKILL at once when it finishes earlier.
+ */
+export function stopChild(child, pending) {
   if (!child?.pid) return
   const send = signal => { try { if (process.platform !== 'win32') { process.kill(-child.pid, signal); return } } catch { /* group gone */ } try { child.kill(signal) } catch { /* gone */ } }
   send('SIGTERM')
-  setTimeout(() => { if (child.exitCode === null && child.signalCode === null) send('SIGKILL') }, 5000).unref()
+  const timer = setTimeout(() => { pending?.delete(timer); send('SIGKILL') }, KILL_GRACE_MS)
+  timer.unref()
+  pending?.set(timer, send)
 }
 
 function runCommand(state, root, spec, files, logPath) {
@@ -162,7 +171,7 @@ function runCommand(state, root, spec, files, logPath) {
     // Its own process group, so a stop also reaches what the command starts (pnpm or npx wrappers, test workers).
     const child = spawn(exe, [...command.slice(1), ...files], { cwd: root, stdio: ['ignore', fd, fd], detached: process.platform !== 'win32' })
     state.child = child
-    if (spec.timeoutMs) timer = setTimeout(() => { timedOut = true; stopChild(child) }, spec.timeoutMs)
+    if (spec.timeoutMs) timer = setTimeout(() => { timedOut = true; stopChild(child, state.pending) }, spec.timeoutMs)
     child.on('error', error => finish({ code: -1, error: String(error) }))
     child.on('close', (code, signal) => finish({ code: code ?? -1, signal: signal ?? undefined }))
   })
@@ -183,6 +192,15 @@ function restore(root, touched) {
 const RED = 'RED', GREEN = 'GREEN'
 const colour = r => (r === undefined ? null : r.code === 0 ? GREEN : RED)
 
+/** Put the old test files (spec.oldTests at its rev) in place; restore() puts the current ones back. */
+function useOldTests(state, root, spec) {
+  for (const f of spec.oldTests.files) {
+    const path = inside(root, f)
+    if (!state.touched.has(f)) state.touched.set(f, readFileSync(path))
+    writeFileSync(path, git(root, ['show', `${spec.oldTests.rev}:${f}`]))
+  }
+}
+
 async function runMutation(state, root, spec, m, out) {
   const full = inside(root, m.file), original = readFileSync(full), text = original.toString('utf8')
   const next = replaceOccurrence(text, m.find, m.replace, m.occurrence ?? 1)
@@ -197,11 +215,7 @@ async function runMutation(state, root, spec, m, out) {
   const killed = narrow.code !== 0 || (wide !== undefined && wide.code !== 0)
   // The old tests only answer "would the tests before this pull request catch it" for a mutation the narrow tests caught.
   if (!state.interrupted && narrow.code !== 0 && spec.oldTests) {
-    for (const f of spec.oldTests.files) {
-      const path = inside(root, f)
-      if (!state.touched.has(f)) state.touched.set(f, readFileSync(path))
-      writeFileSync(path, git(root, ['show', `${spec.oldTests.rev}:${f}`]))
-    }
+    useOldTests(state, root, spec)
     old = await runCommand(state, root, spec, spec.narrow, join(out, `${m.id}.old.log`))
   }
   const verdict = !killed ? 'survived' : narrow.code !== 0 ? (old === undefined ? 'killed' : old.code === 0 ? 'only-new-kills' : 'old-also-kills') : 'killed-by-wide'
@@ -224,8 +238,8 @@ async function runProbe(state, root, spec, p, out) {
  */
 export async function run({ root, spec, out, signals = true }) {
   preflight(root, spec, out)
-  const state = { touched: new Map(), child: undefined, interrupted: false }
-  const onSignal = () => { state.interrupted = true; stopChild(state.child) }
+  const state = { touched: new Map(), child: undefined, interrupted: false, pending: new Map() }
+  const onSignal = () => { state.interrupted = true; stopChild(state.child, state.pending) }
   const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP']
   if (signals) for (const s of SIGNALS) process.on(s, onSignal)
   const results = [], probes = []
@@ -233,6 +247,13 @@ export async function run({ root, spec, out, signals = true }) {
   try {
     const base = await runCommand(state, root, spec, spec.narrow, join(out, 'baseline.log'))
     if (!state.interrupted && base.code !== 0) throw new UsageError(`baseline: the narrow tests are not green before any change (exit ${base.code}); see ${join(out, 'baseline.log')}`)
+    // The old tests are the comparison for "only the new tests catch it": they must pass on the unmutated tree, or a
+    // mutation they "catch" says nothing (a review of #859: the old file already failed on the new defaults).
+    if (!state.interrupted && spec.oldTests) {
+      let old
+      try { useOldTests(state, root, spec); old = await runCommand(state, root, spec, spec.narrow, join(out, 'baseline.old.log')) } finally { restore(root, state.touched) }
+      if (!state.interrupted && old.code !== 0) throw new UsageError(`baseline: the old tests (${spec.oldTests.files.join(', ')} at ${spec.oldTests.rev}) are not green on the unmutated tree (exit ${old.code}), so "only the new tests catch it" cannot be judged; drop oldTests or pick a rev whose tests pass here. See ${join(out, 'baseline.old.log')}`)
+    }
     for (const m of spec.mutations) {
       if (state.interrupted) break
       let r
@@ -253,6 +274,9 @@ export async function run({ root, spec, out, signals = true }) {
   } catch (error) {
     failure = error
   } finally {
+    // Whatever was stopped and is still waiting for its SIGKILL gets it now: nothing a test run started outlives the runner.
+    for (const [timer, send] of state.pending) { clearTimeout(timer); send('SIGKILL') }
+    state.pending.clear()
     restore(root, state.touched)
     if (signals) for (const s of SIGNALS) process.off(s, onSignal)
   }
