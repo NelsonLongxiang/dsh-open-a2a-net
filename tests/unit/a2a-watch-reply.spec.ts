@@ -193,12 +193,28 @@ describe('P3-8 · failures retry until 24 hours, then the message is gone with a
     expect(f.state.get(KV.sendFailed)).toEqual({ 'reply:0123': new Date(T0).toISOString() })
     await expect(sendReply(f.ctx, f.commands, message(), at(T0 + GONE_AFTER_MS - 1))).rejects.toThrow('exited 1')
     expect(f.state.get(KV.sendFailed)).toEqual({ 'reply:0123': new Date(T0).toISOString() })
-    expect(f.reports).toEqual([])
+    // 3.65 (2026-11-23): each failed attempt is reported at once, the reply kept for another try.
+    expect(f.reports).toEqual([0, 1].map(() => ['a2a-reply', expect.objectContaining({ state: 'error', detail: expect.stringContaining('kept for another try'), values: { task: 'task-1' } })]))
+    f.reports.length = 0
     expect(await sendReply(f.ctx, f.commands, message(), at(T0 + GONE_AFTER_MS))).toBe('gone')
     expect(f.reports).toEqual([['a2a-reply', expect.objectContaining({ state: 'error', detail: expect.stringContaining('24 hours'), values: { task: 'task-1' } })]])
     expect(f.state.get(KV.sendFailed)).toEqual({})
     // The health record keeps the task id, never the free text.
-    expect(f.state.get(KV.healthLog)).toEqual([expect.objectContaining({ entry: 'a2a-reply', values: { task: 'task-1' } })])
+    expect(f.state.get(KV.healthLog)).toEqual([0, 1, 2].map(() => expect.objectContaining({ entry: 'a2a-reply', values: { task: 'task-1' } })))
+    expect(JSON.stringify(f.state.get(KV.healthLog))).not.toContain('kept for another try')
+  })
+
+  it('3.65: a refused send is reported at once with the CLI\'s own reason, and the warning clears when the reply goes out', async () => {
+    let refused = true
+    const refusal = Object.assign(new CliExit(1), { stdout: JSON.stringify({ error: 'not forwarded: target is outside sender scope: no team membership', delivery: 'not-sent', class: 'retry' }) })
+    const f = fake(cli({ receipt: () => { if (refused) throw refusal; return '{"delivered":true,"class":"sent"}' } }))
+    await expect(sendReply(f.ctx, f.commands, message(), at(T0))).rejects.toThrow('exited 1')
+    expect(f.reports).toEqual([['a2a-reply', expect.objectContaining({ state: 'error', detail: expect.stringContaining('outside sender scope'), values: { task: 'task-1' } })]])
+    expect(f.state.get(KV.answered)).toBeUndefined()
+    refused = false
+    expect(await sendReply(f.ctx, f.commands, message(), at(T0 + 60_000))).toBe('sent')
+    expect(f.reports.at(-1)).toEqual(['a2a-reply', expect.objectContaining({ state: 'ready', values: { task: 'task-1' } })])
+    expect(f.state.get(KV.sendFailed)).toEqual({})
   })
 
   it('a failed recheck counts as a failure too, and a later success clears the record', async () => {
