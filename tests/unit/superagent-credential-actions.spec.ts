@@ -100,6 +100,79 @@ describe('credential-access card: the owner\'s own choice acts (4351d67f)', () =
     await m.h.stop()
   })
 
+  it('ticket 269f287e: a second stop card does not stop work the refiled ticket already runs on another member, even when the router named the excluded session', async () => {
+    const m = await team()
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const first = m.card()!.id
+    const out = m.h.decide(first, 'choose', m.CREDENTIAL_STOP) as { refiled: string[] }
+    m.h.pass()
+    // The router names the excluded session on accept: the named record keeps it, the work is bound to the other member.
+    const accepted = routeItem(m.h, { trigger_id: out.refiled[0]!, kind: 'accept', title: '写文档（重派）', scope: 's', reason: 'r', member: m.holder } as never) as { ok: boolean; ticket_id: string; member_refused?: { code: string } }
+    expect(accepted).toMatchObject({ ok: true, member_refused: { code: 'excluded' } })
+    const again = accepted.ticket_id
+    expect(m.h.executor.memberOfTicket(again)?.member).not.toBe(m.holder)
+    await vi.waitFor(() => { expect(m.h.executor.list().some(b => b.ticketId === again)).toBe(true) })
+    const ran = m.h.executor.list().find(b => b.ticketId === again)!
+    expect(ran.member).not.toBe(m.holder)
+    // The same session is audited again (after the card gap) and the owner stops its tickets: the one running on the other member stays.
+    m.clock.now += 24 * 60 * 60 * 1000
+    m.h.auditCall(m.holder, 'member', 'bash', CALL)
+    const second = m.h.decisionCards().find(c => c.by === 'credential:' + m.holder && c.id !== first)!
+    expect(second).toBeDefined()
+    const stop = m.h.decide(second.id, 'choose', m.CREDENTIAL_STOP) as { stopped: string[] }
+    expect(stop.stopped).not.toContain(again)
+    expect(m.h.store.tickets.get(again)!.ended).toBeUndefined()
+    expect(m.h.executor.list().find(b => b.ticketId === again)?.member).toBe(ran.member)
+    await m.h.stop()
+  })
+
+  it('ticket 269f287e: the stop decides by the binding, even when the named record still names the excluded session', async () => {
+    const m = await team()
+    const first = m.card()!.id
+    const out = m.h.decide(first, 'choose', m.CREDENTIAL_STOP) as { refiled: string[] }
+    m.h.pass()
+    const again = m.accept(out.refiled[0]!, '写文档（重派）')
+    await vi.waitFor(() => { expect(m.h.executor.list().some(b => b.ticketId === again)).toBe(true) })
+    const ran = m.h.executor.list().find(b => b.ticketId === again)!
+    expect(ran.member).not.toBe(m.holder)
+    // Any path that leaves the record on the excluded session (a split part, a named seat): the work is still the other member's.
+    m.h.executor.setMember(again, m.holder)
+    m.clock.now += 24 * 60 * 60 * 1000
+    m.h.auditCall(m.holder, 'member', 'bash', CALL)
+    const second = m.h.decisionCards().find(c => c.by === 'credential:' + m.holder && c.id !== first)!
+    expect((m.h.decide(second.id, 'choose', m.CREDENTIAL_STOP) as { stopped: string[] }).stopped).not.toContain(again)
+    expect(m.h.store.tickets.get(again)!.ended).toBeUndefined()
+    await m.h.stop()
+  })
+
+  it('ticket 269f287e: a ticket named to the session and not bound yet is still stopped', async () => {
+    const m = await team()
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const asked = m.h.request('另一件事') as { triggerId: string }
+    m.h.pass()
+    // The holder is busy (cap 1), so this one waits, named to it, with no binding.
+    const queued = (routeItem(m.h, { trigger_id: asked.triggerId, kind: 'accept', title: '另一件事', scope: 's', reason: 'r', member: m.holder } as never) as { ticket_id: string }).ticket_id
+    expect(m.h.executor.memberOfTicket(queued)?.member).toBe(m.holder)
+    expect(m.h.executor.list().some(b => b.ticketId === queued)).toBe(false)
+    const stop = m.h.decide(m.card()!.id, 'choose', m.CREDENTIAL_STOP) as { stopped: string[] }
+    expect(stop.stopped).toEqual(expect.arrayContaining([m.ticket, queued]))
+    await m.h.stop()
+  })
+
+  it('ticket 269f287e: with no other member, the refiled ticket named to the excluded session waits instead of being dropped', async () => {
+    const m = await team(1, ['session-a'])
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const out = m.h.decide(m.card()!.id, 'choose', m.CREDENTIAL_STOP) as { refiled: string[] }
+    m.h.pass()
+    const accepted = routeItem(m.h, { trigger_id: out.refiled[0]!, kind: 'accept', title: '写文档（重派）', scope: 's', reason: 'r', member: m.holder } as never) as { ok: boolean; ticket_id: string; member_refused?: { code: string } }
+    expect(accepted).toMatchObject({ ok: true, member_refused: { code: 'excluded' } })
+    m.h.pass()
+    await vi.waitFor(() => { expect(m.h.queueOf(accepted.ticket_id)?.reason).toBe('all-excluded') })
+    expect(m.h.store.tickets.get(accepted.ticket_id)!.ended).toBeUndefined()
+    expect(m.h.executor.list().some(b => b.ticketId === accepted.ticket_id)).toBe(false)
+    await m.h.stop()
+  })
+
   it('#825 review W6: only the session on the card loses its tickets', async () => {
     const m = await team(2)
     const asked = m.h.request('另一件事') as { triggerId: string }
