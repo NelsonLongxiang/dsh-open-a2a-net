@@ -48,6 +48,24 @@ export interface DirectForwardDeps {
   dispatch(url: string, request: ForwardRequest, guard: string): Promise<A2aRouteResult>
   ledger: TaskLedger
   activity(team: string, peer: string, ok: boolean): void
+  /** Records a forward that skipped team-scope as the receipt of an admitted task (via=receipt-of-admitted). */
+  audit?(via: 'receipt-of-admitted', taskId: string, team: string): void
+}
+
+/**
+ * Observer ruling 2026-11-23 (ticket c981a2f2, as the owner's delegate; revocable): a formal receipt for an inbound task
+ * this host admitted answers that admission, so the sender's team-scope does not judge it again (3.65: the request came in,
+ * its receipt could not go back). Only when every condition holds: the message is a receipt; this host's ledger holds that
+ * task inbound and still owed; the sender is the identity it is owed by; the target is exactly the receipt target recorded
+ * at admission. A task's formal result settles its row, so it passes once; an attention receipt answers the same owed row.
+ * Anything else is judged by team-scope as before (default refuse).
+ */
+export function receiptOfAdmitted(ledger: TaskLedger, caller: string, target: string, message: string): string | undefined {
+  const receipt = parseReceipt(message)
+  if (receipt === null || receipt.taskId === '') return undefined
+  const row = ledger.find(receipt.taskId)
+  if (row === undefined || row.direction !== 'inbound' || row.status !== 'pending' || row.team !== caller) return undefined
+  return row.auth !== undefined && row.auth.receipt_target === target ? receipt.taskId : undefined
 }
 const peerDispatchFingerprint=(r:ForwardRequest)=>peerPayloadFingerprint({caller:r.caller,team:r.team,message:JSON.stringify([r.message,r.contextId??'']),noWait:r.noWait})
 export function createDirectForward(d: DirectForwardDeps) {
@@ -64,7 +82,9 @@ export function createDirectForward(d: DirectForwardDeps) {
     // #282 S2: candidates honour an owner-qualified id; scope, the peer, the receivers and the ledger see the plain team.
     const qualifiedMember = splitQualifiedMember(request.team)
     const plainTeam = qualifiedMember?.handle ?? splitCanvasOwner(request.team).team
-    const scope = await d.scope(request.caller, qualifiedMember ? request.team : plainTeam)
+    const admitted = receiptOfAdmitted(d.ledger, request.caller, plainTeam, request.message)
+    if (admitted !== undefined) d.audit?.('receipt-of-admitted', admitted, plainTeam)
+    const scope = admitted !== undefined ? { ok: true as const } : await d.scope(request.caller, qualifiedMember ? request.team : plainTeam)
     if (!scope.ok) return refuse('target is outside sender scope: ' + scope.error, `ask this host's operator to link ${request.team} here: drag it (or one of its members) into a canvas team on this host`)
     const failures: string[] = []
     const capacityRefusals: CapacityRefusal[] = []

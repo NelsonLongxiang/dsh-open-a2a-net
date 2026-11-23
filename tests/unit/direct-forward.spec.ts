@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createDirectForward, ForwardBirths, forwardReceiptBasis, teamReceiptBasis, type DirectForwardDeps, type ForwardRequest } from '../../src/direct-forward.ts'
+import { createDirectForward, ForwardBirths, forwardReceiptBasis, receiptOfAdmitted, teamReceiptBasis, type DirectForwardDeps, type ForwardRequest } from '../../src/direct-forward.ts'
 import { TaskLedger } from '../../src/task-ledger.ts'
 import {receiptBirth,receiptPayloadHash,receiptTransportId,type ReceiptOutboxRecord} from '../../src/receipt-outbox.ts'
 import { checkGuardAtIngress, DEFAULT_HOP_BUDGET } from '../../src/recursion-guard.ts'
@@ -15,6 +15,57 @@ function fixture(results: A2aRouteResult[] = [ok]) {
   }
   return { deps, ledger, sent }
 }
+describe('observer ruling 2026-11-23 (c981a2f2): the receipt of an admitted task is not re-judged by team-scope', () => {
+  const refused = { scope: async () => ({ ok: false as const, error: 'this session has declared no team membership — a teamless node has no network' }) }
+  // An inbound task this host admitted, owed by the CLI identity, its receipt owed to request.team.
+  const owe = (ledger: TaskLedger, taskId: string, owner = request.caller, receiptTarget = request.team) =>
+    ledger.trackInbound(taskId, owner, receiptTarget, 'ctx', true, 'work', { receipt_target: receiptTarget } as never)
+  const receipt = (taskId: string) => ({ ...request, taskId: 'receipt-' + taskId, message: '[A2A receipt] task ' + taskId + ' done' })
+  it('a teamless sender\'s receipt for its admitted task goes out, and the skip is audited', async () => {
+    const x = fixture(), audited: string[][] = []
+    owe(x.ledger, 'job-1')
+    const out = await createDirectForward({ ...x.deps, ...refused, audit: (via, taskId, team) => { audited.push([via, taskId, team]) } })(receipt('job-1'))
+    expect(out.ok).toBe(true)
+    expect(x.sent).toHaveLength(1)
+    expect(audited).toEqual([['receipt-of-admitted', 'job-1', request.team]])
+  })
+  it('anything else is judged by team-scope: another target, no such owed task, another owner, not a receipt', async () => {
+    const cases: Array<[string, (l: TaskLedger) => void, ForwardRequest]> = [
+      ['another target', l => owe(l, 'job-2'), { ...receipt('job-2'), team: 'beta/99999999' }],
+      ['no such owed task', () => {}, receipt('job-3')],
+      ['owed by another identity', l => owe(l, 'job-4', 'other-cli/a1b2c3d4e5f60719'), receipt('job-4')],
+      ['not a receipt', l => owe(l, 'job-5'), { ...receipt('job-5'), message: 'free text about job-5' }],
+      ['receipt target recorded differently', l => owe(l, 'job-6', request.caller, 'beta/99999999'), receipt('job-6')],
+    ]
+    for (const [label, seed, req] of cases) {
+      const x = fixture(), audited: string[] = []
+      seed(x.ledger)
+      const out = await createDirectForward({ ...x.deps, ...refused, audit: via => { audited.push(via) } })(req)
+      expect(out, label).toMatchObject({ ok: false, delivery: 'not-sent', error: expect.stringContaining('outside sender scope') })
+      expect(x.sent, label).toHaveLength(0)
+      expect(audited, label).toEqual([])
+    }
+  })
+  it('an inbound row still in the ledger but no longer owed (expired dead) passes no more', () => {
+    let now = 1_700_000_000_000
+    const ledger = new TaskLedger('', { now: () => now, staleTtlMs: 1000 })
+    owe(ledger, 'job-8')
+    expect(receiptOfAdmitted(ledger, request.caller, request.team, '[A2A receipt] task job-8 done')).toBe('job-8')
+    now += 2000
+    ledger.trackInbound('job-other', request.caller, request.team, 'ctx', true, 'work', { receipt_target: request.team } as never)
+    expect(ledger.find('job-8')).toMatchObject({ status: 'dead' })
+    expect(receiptOfAdmitted(ledger, request.caller, request.team, '[A2A receipt] task job-8 done')).toBeUndefined()
+  })
+
+  it('a settled task passes no second time', async () => {
+    const x = fixture()
+    owe(x.ledger, 'job-7')
+    expect(receiptOfAdmitted(x.ledger, request.caller, request.team, '[A2A receipt] task job-7 done')).toBe('job-7')
+    x.ledger.cancel('job-7', 'settled for the test')
+    expect(receiptOfAdmitted(x.ledger, request.caller, request.team, '[A2A receipt] task job-7 done')).toBeUndefined()
+  })
+})
+
 describe('one-hop CLI forwarding', () => {
   it('only local pre-dispatch refusals carry not-sent; peer failure is never local proof', async () => {
     for (const over of [{ enabled: () => false }, { scope: async () => ({ ok: false as const, error: 'not linked' }) }, { candidates: async () => ({ urls: [], card: async () => undefined }) }]) {
