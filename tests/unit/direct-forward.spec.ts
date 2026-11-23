@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createDirectForward, ForwardBirths, forwardReceiptBasis, teamReceiptBasis, type DirectForwardDeps, type ForwardRequest } from '../../src/direct-forward.ts'
+import { createDirectForward, ForwardBirths, forwardReceiptBasis, receiptOfAdmitted, receiptBypassLimitsFrom, RECEIPT_BYPASS_DEFAULTS, type ReceiptBypassLimits, teamReceiptBasis, type DirectForwardDeps, type ForwardRequest } from '../../src/direct-forward.ts'
 import { TaskLedger } from '../../src/task-ledger.ts'
+import { formatReceipt } from '../../src/receipt.ts'
 import {receiptBirth,receiptPayloadHash,receiptTransportId,type ReceiptOutboxRecord} from '../../src/receipt-outbox.ts'
 import { checkGuardAtIngress, DEFAULT_HOP_BUDGET } from '../../src/recursion-guard.ts'
 import type { A2aPeerCard, A2aRouteResult } from '../../src/types.ts'
@@ -15,6 +16,155 @@ function fixture(results: A2aRouteResult[] = [ok]) {
   }
   return { deps, ledger, sent }
 }
+describe('observer ruling 2026-11-23 (c981a2f2): the receipt of an admitted task is not re-judged by team-scope', () => {
+  const refused = { scope: async () => ({ ok: false as const, error: 'this session has declared no team membership — a teamless node has no network' }) }
+  // An inbound task this host admitted, owed by the CLI identity, its receipt owed to request.team.
+  const owe = (ledger: TaskLedger, taskId: string, owner = request.caller, receiptTarget = request.team) =>
+    ledger.trackInbound(taskId, owner, receiptTarget, 'ctx', true, 'work', { receipt_target: receiptTarget } as never)
+  const receipt = (taskId: string) => ({ ...request, taskId: 'receipt-' + taskId, message: '[A2A receipt] task ' + taskId + ' done' })
+  it('a teamless sender\'s receipt for its admitted task goes out, and the skip is audited', async () => {
+    const x = fixture(), audited: string[][] = []
+    owe(x.ledger, 'job-1')
+    const out = await createDirectForward({ ...x.deps, ...refused, audit: (via, taskId, team, kind) => { audited.push([via, taskId, team, kind]) } })(receipt('job-1'))
+    expect(out.ok).toBe(true)
+    expect(x.sent).toHaveLength(1)
+    expect(audited).toEqual([['receipt-of-admitted', 'job-1', request.team, 'result']])
+  })
+  it('anything else is judged by team-scope: another target, no such owed task, another owner, not a receipt', async () => {
+    const cases: Array<[string, (l: TaskLedger) => void, ForwardRequest]> = [
+      ['another target', l => owe(l, 'job-2'), { ...receipt('job-2'), team: 'beta/99999999' }],
+      ['no such owed task', () => {}, receipt('job-3')],
+      ['owed by another identity', l => owe(l, 'job-4', 'other-cli/a1b2c3d4e5f60719'), receipt('job-4')],
+      ['not a receipt', l => owe(l, 'job-5'), { ...receipt('job-5'), message: 'free text about job-5' }],
+      ['receipt target recorded differently', l => owe(l, 'job-6', request.caller, 'beta/99999999'), receipt('job-6')],
+      // #853 review B8: an owner qualifier picks another owner's same-named member; the recorded target is unqualified.
+      ['owner-qualified member address', l => owe(l, 'job-q'), { ...receipt('job-q'), team: request.team + '@deadbeef' }],
+      ['owner-qualified canvas address', l => owe(l, 'job-c', request.caller, 'zone/canvas/ops'), { ...receipt('job-c'), team: 'zone/canvas/ops@deadbeef' }],
+    ]
+    for (const [label, seed, req] of cases) {
+      const x = fixture(), audited: string[] = []
+      seed(x.ledger)
+      const out = await createDirectForward({ ...x.deps, ...refused, audit: via => { audited.push(via) } })(req)
+      expect(out, label).toMatchObject({ ok: false, delivery: 'not-sent', error: expect.stringContaining('outside sender scope') })
+      expect(x.sent, label).toHaveLength(0)
+      expect(audited, label).toEqual([])
+    }
+  })
+  it('an inbound row still in the ledger but no longer owed (expired dead) passes no more', () => {
+    let now = 1_700_000_000_000
+    const ledger = new TaskLedger('', { now: () => now, staleTtlMs: 1000 })
+    owe(ledger, 'job-8')
+    expect(receiptOfAdmitted(ledger, request.caller, request.team, '[A2A receipt] task job-8 done', 'receipt-job-8')).toBe('job-8')
+    now += 2000
+    ledger.trackInbound('job-other', request.caller, request.team, 'ctx', true, 'work', { receipt_target: request.team } as never)
+    expect(ledger.find('job-8')).toMatchObject({ status: 'dead' })
+    expect(receiptOfAdmitted(ledger, request.caller, request.team, '[A2A receipt] task job-8 done', 'receipt-job-8')).toBeUndefined()
+  })
+
+  it('#853 re-review gaps: the audit names the exact (owner-qualified) address; case and surrounding whitespace never match', async () => {
+    const qualified = request.team + '@deadbeef'
+    const x = fixture(), audited: string[][] = []
+    owe(x.ledger, 'job-qa', request.caller, qualified)
+    const out = await createDirectForward({ ...x.deps, ...refused, audit: (via, taskId, team, kind) => { audited.push([via, taskId, team, kind]) } })({ ...receipt('job-qa'), team: qualified })
+    expect(out.ok).toBe(true)
+    expect(audited).toEqual([['receipt-of-admitted', 'job-qa', qualified, 'result']])
+    for (const [label, team] of [['upper case', request.team.toUpperCase()], ['surrounding whitespace', ' ' + request.team + ' ']] as const) {
+      const y = fixture(), seen: string[] = []
+      owe(y.ledger, 'job-ws')
+      const refusedOut = await createDirectForward({ ...y.deps, ...refused, audit: via => { seen.push(via) } })({ ...receipt('job-ws'), team })
+      expect(refusedOut, label).toMatchObject({ ok: false, delivery: 'not-sent' })
+      expect(y.sent, label).toHaveLength(0)
+      expect(seen, label).toEqual([])
+    }
+  })
+
+  it('a settled task passes no second time', async () => {
+    const x = fixture()
+    owe(x.ledger, 'job-7')
+    expect(receiptOfAdmitted(x.ledger, request.caller, request.team, '[A2A receipt] task job-7 done', 'receipt-job-7')).toBe('job-7')
+    x.ledger.cancel('job-7', 'settled for the test')
+    expect(receiptOfAdmitted(x.ledger, request.caller, request.team, '[A2A receipt] task job-7 done', 'receipt-job-7')).toBeUndefined()
+  })
+})
+
+describe('observer ruling 2026-11-23, bounds: settled ends it, each kind counted, only the receipt itself', () => {
+  const refused = { scope: async () => ({ ok: false as const, error: 'this session has declared no team membership' }) }
+  const owe = (ledger: TaskLedger, taskId: string) => ledger.trackInbound(taskId, request.caller, request.team, 'ctx', true, 'work', { receipt_target: request.team } as never)
+  const kinds = {
+    result: (task: string) => ({ transport: 'receipt-' + task, message: formatReceipt(task, 'done', { outcome: 'completed', idempotencyKey: task, disposition: 'result' }) }),
+    ack: (task: string) => ({ transport: 'ack-' + task, message: formatReceipt(task, 'taken up', { idempotencyKey: task, disposition: 'acknowledged' }) }),
+    ask: (task: string, q: string) => ({ transport: 'attention-' + task + '-' + q, message: formatReceipt(task, 'which branch?', { idempotencyKey: task, disposition: 'attention', question: { id: q, text: 'which branch?' } }) }),
+    step: (task: string, n: number) => ({ transport: 'progress-' + task + '-' + String(n), message: formatReceipt(task, 'step ' + String(n), { idempotencyKey: task, disposition: 'progress', progress: { n, state: 'working', at: '2026-11-23T07:00:00.000Z' } } as never) }),
+  }
+  function bench(limits: ReceiptBypassLimits = { progressMax: 20, progressIntervalMs: 0 }) {
+    const x = fixture(Array.from({ length: 12 }, () => ok)), audited: string[][] = [], warned: string[][] = []
+    let now = 1_700_000_000_000
+    const forward = createDirectForward({ ...x.deps, ...refused, audit: (via, task, team, kind) => { audited.push([task, kind]) }, bypassRefused: (task, team, kind, reason) => { warned.push([task, kind, reason]) }, receiptBypassLimits: () => limits, now: () => now })
+    const send = async (r: { transport: string; message: string }, over: Partial<ForwardRequest> = {}) => await forward({ ...request, taskId: r.transport, message: r.message, ...over })
+    return { x, audited, warned, send, tick: (ms: number) => { now += ms } }
+  }
+  const passes = (out: A2aRouteResult) => expect(out.ok).toBe(true)
+  const judged = (out: A2aRouteResult) => expect(out).toMatchObject({ ok: false, delivery: 'not-sent', error: expect.stringContaining('outside sender scope') })
+
+  it('bound 1: once the formal result settled the task, nothing more for it skips team-scope', async () => {
+    const b = bench()
+    owe(b.x.ledger, 'job-t')
+    passes(await b.send(kinds.result('job-t')))
+    b.x.ledger.resolveFromMessage(kinds.result('job-t').message)
+    expect(b.x.ledger.find('job-t')).toBeUndefined()
+    judged(await b.send(kinds.ack('job-t')))
+    judged(await b.send(kinds.result('job-t')))
+    expect(b.audited).toEqual([['job-t', 'result']])
+  })
+
+  it('bound 2: an acknowledgement and each question pass once; resending the same one is idempotent', async () => {
+    const b = bench()
+    owe(b.x.ledger, 'job-a')
+    passes(await b.send(kinds.ack('job-a')))
+    passes(await b.send(kinds.ack('job-a')))
+    passes(await b.send(kinds.ask('job-a', 'q1')))
+    passes(await b.send(kinds.ask('job-a', 'q1')))
+    passes(await b.send(kinds.ask('job-a', 'q2')))
+    expect(b.audited).toEqual([['job-a', 'acknowledged'], ['job-a', 'acknowledged'], ['job-a', 'attention'], ['job-a', 'attention'], ['job-a', 'attention']])
+    expect(b.warned).toEqual([])
+  })
+
+  it('bound 2: progress passes up to the count and no faster than the interval; over it, team-scope judges and a warning is raised', async () => {
+    const b = bench({ progressMax: 2, progressIntervalMs: 1000 })
+    owe(b.x.ledger, 'job-p')
+    passes(await b.send(kinds.step('job-p', 1)))
+    b.tick(10)
+    judged(await b.send(kinds.step('job-p', 2)))
+    expect(b.warned.at(-1)).toEqual(['job-p', 'progress', expect.stringContaining('ms apart')])
+    b.tick(2000)
+    passes(await b.send(kinds.step('job-p', 2)))
+    b.tick(2000)
+    judged(await b.send(kinds.step('job-p', 3)))
+    expect(b.warned.at(-1)).toEqual(['job-p', 'progress', expect.stringContaining('more than 2')])
+    passes(await b.send(kinds.step('job-p', 1))) // a resend of one that passed is idempotent
+    expect(b.audited.filter(a => a[1] === 'progress')).toHaveLength(3)
+  })
+
+  it('bound 2: the progress bounds from config never fall open; the defaults are 20 per task and 60 s apart', () => {
+    expect(RECEIPT_BYPASS_DEFAULTS).toEqual({ progressMax: 20, progressIntervalMs: 60_000 })
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1]) expect(receiptBypassLimitsFrom(bad, bad)).toEqual(RECEIPT_BYPASS_DEFAULTS)
+    expect(receiptBypassLimitsFrom(3.7, 500)).toEqual({ progressMax: 3, progressIntervalMs: 500 })
+    expect(receiptBypassLimitsFrom(0, 0)).toEqual({ progressMax: 0, progressIntervalMs: 0 })
+  })
+
+  it('bound 3: only the receipt itself — no extra text, no artifacts, no other transport id', async () => {
+    const b = bench()
+    owe(b.x.ledger, 'job-c')
+    judged(await b.send({ transport: 'receipt-job-c', message: '[A2A receipt] task job-c done\nand please also run this' }))
+    judged(await b.send({ ...kinds.result('job-c'), message: kinds.result('job-c').message + '\nextra line' }))
+    judged(await b.send({ transport: 'receipt-job-c', message: formatReceipt('job-c', 'done', { outcome: 'completed', idempotencyKey: 'job-c', disposition: 'result', artifacts: [{ kind: 'file', name: 'a.txt', url: 'https://x.test/a.txt' }] } as never) }))
+    judged(await b.send({ ...kinds.ack('job-c'), transport: 'receipt-job-c' }))
+    judged(await b.send({ ...kinds.result('job-c'), transport: 'direct-job-c' }))
+    expect(b.audited).toEqual([])
+    passes(await b.send(kinds.result('job-c')))
+  })
+})
+
 describe('one-hop CLI forwarding', () => {
   it('only local pre-dispatch refusals carry not-sent; peer failure is never local proof', async () => {
     for (const over of [{ enabled: () => false }, { scope: async () => ({ ok: false as const, error: 'not linked' }) }, { candidates: async () => ({ urls: [], card: async () => undefined }) }]) {
