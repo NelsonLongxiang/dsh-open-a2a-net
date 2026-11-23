@@ -20,7 +20,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { signCard } from '../../src/card.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE } from '../../src/transport-caps.ts'
-import { apply, Config as ConfigSchema, type A2aSchedule, type Config } from '../../src/index.ts'
+import { apply, CARD_TTL_MIN_MS, Config as ConfigSchema, type A2aSchedule, type Config } from '../../src/index.ts'
 import { envelopeFor } from './envelope.ts'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { NodeStore } from '../../src/node-store.ts'
@@ -202,6 +202,33 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+})
+
+describe('#835 review: the node card lifetime is checked before anything is signed', () => {
+  it.each([['missing', undefined], ['NaN', Number.NaN], ['Infinity', Number.POSITIVE_INFINITY], ['zero', 0], ['negative', -1], ['fractional', 150.5], ['below the floor', CARD_TTL_MIN_MS - 1]] as const)('refuses a %s cardTtlMs with an error naming the key, and publishes no card', async (_label, ttl) => {
+    const home = tmpHome()
+    const ctx = new Context()
+    cleanupBeforeTempDirs(() => ctx.fiber.dispose())
+    await ctx.plugin(TimerService); await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 }); await ctx.plugin(SystemPrompt); await ctx.plugin(ToolRuntime)
+    expect(() => apply(ctx, makeConfig({ announce: true, agentName: 'peer-ttl', dshHome: home, cardTtlMs: ttl as unknown as number }))).toThrow(/cardTtlMs must be a whole number of milliseconds/)
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    expect((await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).status).not.toBe(200)
+  })
+
+  it('accepts the floor itself and signs a card that expires one TTL later', async () => {
+    const home = tmpHome()
+    const ctx = new Context()
+    cleanupBeforeTempDirs(() => ctx.fiber.dispose())
+    await ctx.plugin(TimerService); await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 }); await ctx.plugin(SystemPrompt); await ctx.plugin(ToolRuntime)
+    const before = Date.now()
+    expect(() => apply(ctx, makeConfig({ announce: true, agentName: 'peer-ttl', dshHome: home, cardTtlMs: CARD_TTL_MIN_MS }))).not.toThrow()
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    await vi.waitFor(async () => { expect((await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).status).toBe(200) })
+    const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as { expiresAt: number }
+    expect(Number.isFinite(card.expiresAt)).toBe(true)
+    expect(card.expiresAt).toBeGreaterThanOrEqual(before)
+    expect(card.expiresAt).toBeLessThanOrEqual(Date.now() + CARD_TTL_MIN_MS)
+  })
 })
 
 describe('C2-R1 ordinary apply factory home isolation', () => {
