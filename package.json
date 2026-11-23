@@ -107,6 +107,7 @@
     "verify:layout": "node --test tests/repository-layout.test.mjs && node scripts/verify-repository-layout.mjs",
     "verify:storefront": "node --test tests/market-metadata.test.mjs",
     "reanchor:arch": "node scripts/reanchor-architecture.mjs",
+    "mutate": "node scripts/mutation-run.mjs",
     "verify:nexus": "node scripts/verify-nexus-ci.mjs && npm --prefix nexus-stage run build && npm --prefix nexus-stage run test && git diff --exit-code -- assets/nexusDist/assets && git diff --ignore-cr-at-eol --exit-code -- assets/nexusDist/index.html",
     "verify": "node scripts/verify-temp-clean.mjs",
     "verify:core": "pnpm verify:presets && pnpm verify:layout && pnpm verify:storefront && pnpm typecheck && pnpm verify:docs && pnpm build && pnpm test && pnpm test:build-layout && pnpm verify:nexus"

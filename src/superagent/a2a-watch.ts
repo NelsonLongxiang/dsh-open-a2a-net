@@ -459,6 +459,15 @@ export function questionIdFor(task: string, attentionId: string): string | undef
  * in the same context with an a2a- task id (O2, L1). A class of gone, a vanished link, or 24 hours of failures since the
  * first one end the message as gone with a health record; any other failure throws so the Outbox retries.
  */
+/** Why a send failed, for the health record: the CLI's own `error` from its --json stdout when there is one, else the error. */
+function sendFailureReason(error: unknown): string {
+  const stdout = (error as { stdout?: unknown } | null)?.stdout
+  try { const out = JSON.parse(typeof stdout === 'string' ? stdout : '') as { error?: unknown }; if (typeof out.error === 'string' && out.error !== '') return out.error.slice(0, 300) } catch { /* not JSON */ }
+  // #853 review: never the error's own message — a command runner may put the command line (the reply text) in it.
+  const code = exitCodeOf(error)
+  return `the a2a-net command failed${code !== undefined ? ` (exit ${String(code)})` : ''} without a reason on stdout`
+}
+
 export async function sendReply(ctx: SourceContext, commands: Commands, message: OutboundMessage, now: () => Date = () => new Date(), options: SendOptions = {}): Promise<'sent' | 'gone'> {
   const at = now()
   const nowMs = at.getTime()
@@ -502,12 +511,17 @@ export async function sendReply(ctx: SourceContext, commands: Commands, message:
       if (!((first || questionId !== undefined) && code === EXIT_RECEIPT_CONFLICT)) throw error
     }
     if (first) setStamp(ctx, KV.answered, task, at.toISOString(), ANSWERED_RECORD_CAP, nowMs)
+    // A reply that failed before and has now gone out clears the warning it raised.
+    if (stamps(ctx, KV.sendFailed)[message.id] !== undefined) reportError(ctx, HEALTH.reply, { state: 'ready', detail: `Task ${task}'s reply went out after an earlier failure`, at: at.toISOString(), values: { task: String(task) } }, now)
     setStamp(ctx, KV.sendFailed, message.id, undefined, SEND_FAILED_RECORD_CAP, nowMs)
     return 'sent'
   } catch (error) {
     const firstFailure = stamps(ctx, KV.sendFailed)[message.id]
     if (firstFailure !== undefined && nowMs - Date.parse(firstFailure) >= GONE_AFTER_MS) return gone(`Task ${task}'s reply stayed unsent for 24 hours; last: ${String(error)}`)
     if (firstFailure === undefined) setStamp(ctx, KV.sendFailed, message.id, at.toISOString(), SEND_FAILED_RECORD_CAP, nowMs)
+    // Every failed attempt is visible at once (3.65, 2026-11-23: a refused reply was silent until dropped). The reply is
+    // kept and tried again; only after GONE_AFTER_MS unsent is it gone.
+    reportError(ctx, HEALTH.reply, { state: 'error', detail: `Task ${String(task)}'s reply is not sent yet and is kept for another try (dropped after 24 hours unsent): ${sendFailureReason(error)}`, at: at.toISOString(), values: { task: String(task ?? '') } }, now)
     throw error
   }
 }

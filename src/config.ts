@@ -48,6 +48,12 @@ export interface Config {
   readonly isolated: boolean
   /** Forward online local CLI deliveries one hop after a local miss. Default on from 0.6.38; explicit false opts out. */
   readonly forwardDirect: boolean
+  /** Observer ruling 2026-11-23: at most this many progress receipts per owed task skip team-scope as receipts of an admitted task. */
+  readonly receiptBypassProgressMax: number
+  /** Observer ruling 2026-11-23: the shortest gap between two such progress receipts. */
+  readonly receiptBypassProgressIntervalMs: number
+  /** #853 re-review: at most this many distinct attention questions per owed task skip team-scope as receipts of an admitted task. */
+  readonly receiptBypassAttentionMax: number
   /**
    * superagent design v4: run superagent's domain engine in this host (router, Sources, tickets). On by default and idle
    * until the owner binds a canvas team and names its router in the workbench; `false` turns it off.
@@ -298,6 +304,9 @@ export const Config: s<Config> = s.object({
   announce: s.boolean().default(false),
   isolated: s.boolean().default(false),
   forwardDirect: s.boolean().default(true),
+  receiptBypassProgressMax: s.number().default(20),
+  receiptBypassProgressIntervalMs: s.number().default(60_000),
+  receiptBypassAttentionMax: s.number().default(20),
   superagent: s.boolean().default(true),
   agentName: s.string().default('DeepSeek Harness A2A node'),
   peers: s.array(s.string()).default([]),

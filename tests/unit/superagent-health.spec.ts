@@ -6,13 +6,13 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { QUIET_MINUTES } from '../../src/superagent/host/index.ts'
 
-async function team(loaded: Set<string>, settled = () => true, deliver: (id: string, text: string) => boolean = () => true) {
+async function team(loaded: Set<string>, settled = () => true, deliver: (id: string, text: string) => boolean = () => true, sessionName: (id: string) => string = id => id) {
   const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
   const { routeItem } = await import('../../src/superagent/host/tools.ts')
   const clock = { ms: Date.parse('2026-11-10T00:00:00Z') }
   const h = new SuperagentHost({
     canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', 'session-a'], remote: [] } : undefined, home: mkdtempSync(join(tmpdir(), 'sa-health-')), logger: { info: () => {}, warn: () => {} },
-    deliverToSession: deliver, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id,
+    deliverToSession: deliver, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName,
     sessionLoaded: (id: string) => loaded.has(id), bootSettled: settled, now: () => new Date(clock.ms).toISOString(),
   } as never)
   expect(h.saveSettings({ canvas: 'team', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
@@ -22,6 +22,55 @@ async function team(loaded: Set<string>, settled = () => true, deliver: (id: str
 }
 
 describe('the health check', () => {
+  it('owner decision card 2026-11-23: a problem about a session carries its seat name or title, the key stays the id', async () => {
+    const named = await team(new Set(['session-r']), undefined, undefined, id => id === 'session-a' ? '开发席 (aaaaaaaa)' : id)
+    expect(named.h.health()).toEqual([{ code: 'member-not-loaded', session: 'session-a', name: '开发席 (aaaaaaaa)' }])
+    await named.h.stop()
+    const { problemText, problemKey } = await import('../../src/superagent/host/health-reminders.ts')
+    const row = { code: 'member-not-loaded', session: 'session-a', name: '开发席 (aaaaaaaa)' }
+    expect(problemText(row)).toContain('成员会话 开发席 (aaaaaaaa) 没有加载')
+    expect(problemText(row)).not.toContain('session-a')
+    expect(problemKey(row)).toBe(problemKey({ code: 'member-not-loaded', session: 'session-a' }))
+    expect(problemText({ code: 'tickets-queued', reason: 'member-busy', session: 'session-a', name: '开发席 (aaaaaaaa)', count: 2, minutes: 70, title: '写文档' } as never)).toContain('在等成员 开发席 (aaaaaaaa)')
+    // #846 review M9: the queued reminder's dedupe key must not use the name, or renaming a seat resends the card.
+    const queued = { code: 'tickets-queued', reason: 'member-busy', session: 'session-a', count: 2, minutes: 70, title: '写文档' }
+    expect(problemKey({ ...queued, name: '开发席 (aaaaaaaa)' } as never)).toBe(problemKey(queued as never))
+    expect(problemText({ code: 'member-not-loaded', session: 'session-a' })).toContain('成员会话 session-a 没有加载')
+  })
+
+  it('follow-up of the #846 review: a member name is shown without control characters and at most 120 long, the key stays the id', async () => {
+    const { problemText, problemKey, cleanName, NAME_MAX } = await import('../../src/superagent/host/health-reminders.ts')
+    const dirty = 'a\u0007b\u202ec\u2066d\u200be\nline2\tx'
+    expect(NAME_MAX).toBe(120)
+    expect(cleanName(dirty)).toBe('abcde line2 x')
+    expect(cleanName('x'.repeat(120))).toBe('x'.repeat(120))
+    const cut = cleanName('x'.repeat(400))!
+    expect(Array.from(cut).length).toBe(120)
+    expect(cut.endsWith('…')).toBe(true)
+    const emoji = cleanName('😀'.repeat(200))!
+    expect(Array.from(emoji).length).toBe(120)
+    expect(/[\ud800-\udbff](?![\udc00-\udfff])/.test(emoji)).toBe(false)
+    // An address-like name is only text here: the control characters and the length are what is cleaned.
+    expect(cleanName('http://example.test:8080/x?token=abc')).toBe('http://example.test:8080/x?token=abc')
+    expect(cleanName('开发席 (aaaaaaaa)')).toBe('开发席 (aaaaaaaa)')
+    expect(cleanName(undefined)).toBeUndefined()
+    expect(cleanName('')).toBeUndefined()
+    expect(cleanName('\u0007\u202e \n')).toBeUndefined()
+    const row = { code: 'member-not-loaded', session: 'session-a', name: dirty }
+    expect(problemText(row)).toContain('成员会话 abcde line2 x 没有加载')
+    expect(/[\u0000-\u0008\u000b-\u001f\u202e\u2066]/.test(problemText(row))).toBe(false)
+    expect(problemText({ ...row, name: 'y'.repeat(400) })).toContain(`${'y'.repeat(119)}… 没有加载`)
+    expect(problemText({ ...row, name: '\u0007\u202e' })).toContain('成员会话 session-a 没有加载')
+    expect(problemText({ code: 'tickets-queued', reason: 'member-busy', session: 'session-a', name: dirty, count: 2, minutes: 70, title: '写文档' } as never)).toContain('在等成员 abcde line2 x')
+    expect(problemKey(row)).toBe(problemKey({ code: 'member-not-loaded', session: 'session-a' }))
+    const named = await team(new Set(['session-r']), undefined, undefined, id => id === 'session-a' ? dirty : id)
+    expect(named.h.health()).toEqual([{ code: 'member-not-loaded', session: 'session-a', name: 'abcde line2 x' }])
+    await named.h.stop()
+    const blank = await team(new Set(['session-r']), undefined, undefined, id => id === 'session-a' ? '\u0007\u202e' : id)
+    expect(blank.h.health()).toEqual([{ code: 'member-not-loaded', session: 'session-a' }])
+    await blank.h.stop()
+  })
+
   it('is empty when the router and members are loaded and nothing is stuck', async () => {
     const m = await team(new Set(['session-r', 'session-a']))
     expect(m.h.health()).toEqual([])

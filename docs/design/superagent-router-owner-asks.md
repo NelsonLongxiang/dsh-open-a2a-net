@@ -29,7 +29,7 @@ The owner can also edit any rule on the team page. The last row decides who may 
 
 ### Dispatch
 
-- **D4 The router chooses.** The candidate card lists each member with its name, role, rules, repository and whether it is free, and the dispatch rules. `superagent_route`'s accept gains `member`, by name or id. An unknown member is refused with the list.
+- **D4 The router chooses.** The candidate card lists each member with its name, role, rules, repository and whether it is free, and the dispatch rules. `superagent_route`'s accept gains `member`, by name or id. An unknown member is refused with the list. A member the owner took this work off on a credential-access card is not recorded: the accept still succeeds and reports `member_refused` with code `excluded` (ticket 269f287e).
 - **D5 A named member keeps the ticket.** The ticket waits for that member and goes to nobody else. Without `member` it goes to the first free member, as today, and within `repo` when one is named. If any member has a role or rules, the router must name a member.
 - **D6 The member sees why it has the ticket.** The assignment card carries the member's own rules and the team rules the ticket was accepted on. A ticket that does not fit the member's rules is reported `blocked` with the reason, and the router or the owner re-dispatches it.
 - **D7 Re-dispatch keeps the member.** The named member is recorded with the ticket (`executor.json`, beside its repository). A ticket whose assignment is replaced goes back to the same member unless the member has left the team.

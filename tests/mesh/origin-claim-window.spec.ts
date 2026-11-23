@@ -74,6 +74,7 @@ async function mount(overrides: Partial<Config> = {}): Promise<Mounted> {
     team: 'dsh',
     routeTimeoutMs: 5_000,
     flushTimeoutMs: 300_000,
+    cardTtlMs: 172_800_000, // the schema default; apply() refuses a missing card lifetime
     announce: false,
     agentName: 'm1-host',
     peers: [],
