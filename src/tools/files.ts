@@ -6,6 +6,12 @@
  *   stages each (by sha256, granted to `team`), and routes ONE message carrying one reference line
  *   per file through the ordinary route trunk — admission, ledger and receipts are a2a_route's. The
  *   route's host-written `peer_content` flag rides the result (N4: a route that reached a peer taints).
+ * - Refusal consistency (ticket 9c22cfa8): a refusal the HOST produced before anything left it
+ *   (routeTrunk's local-route shapes) rolls this call's new grants back — a pre-existing grant of the
+ *   same (sha256, to, by) is kept (stage() only extended its expiry). A refusal from beyond this host,
+ *   or an unknown outcome, revokes nothing: the result says the grants are live (files[].expiresAt)
+ *   and names the exact revoke entry. The join gate runs BEFORE staging, so an unjoined session is
+ *   refused with nothing staged.
  * - `a2a_file_fetch { ref }` pulls one referenced file — from this host's own store when the
  *   reference names this host, else over the pull face with this host's OriginClaim envelope — checks
  *   sha256 and size, and lands it at `<workspace>/a2a-inbox/<sha12>-<name>`, never following a link.
@@ -76,7 +82,13 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
       },
       output: {
         schema: { type: 'object', additionalProperties: true },
-        render: (_args, value) => [{ type: 'text', text: value.ok === true ? `Sent ${String((value.files as unknown[]).length)} file(s) to ${String(value.team)} (task ${String(value.task_id)}).` : `File send refused: ${String(value.error)}` }],
+        render: (_args, value) => [{ type: 'text', text: value.ok === true
+          ? `Sent ${String((value.files as unknown[]).length)} file(s) to ${String(value.team)} (task ${String(value.task_id)}).`
+          : value.grants === 'rolled-back'
+            ? `File send refused before anything left this host: ${String(value.error)} — ${String(value.rolled_back)} grant(s) from this send revoked, nothing was delivered.`
+            : value.grants === 'live'
+              ? `File send refused beyond this host (delivery may already have happened): ${String(value.error)} — the grants from this send are STILL LIVE until they expire (files[].expiresAt); revoke unwanted ones with a2a_file_revoke { sha256, to }.`
+              : `File send refused: ${String(value.error)}` }],
       },
       presentCall: args => ({ card: 'generic', title: `A2A file send → ${String(args.team)}`, kind: 'other', rawInput: args }),
       execute: async (args: { paths: string[]; team: string; note?: string; task_id?: string }, exec): Promise<Record<string, JsonValue>> => {
@@ -90,8 +102,13 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
         // #787: file-channel `from` is still the default ownCardUrl origin, not a per-peer claim URL. A cloud that cannot reach that origin cannot pull the blob; this map does not cover the file channel.
         const from = originOf(d.ownCardUrl())
         if (from === '') return { ok: false, error: 'this host publishes no card URL yet (announce is off or the web server has not settled): a receiver could not pull from it', peer_content: false }
+        // The trunk applies the join gate too, but only AFTER staging; running it here means an unjoined session is refused with nothing staged.
+        d.a2aJoinGateRefusal(agent === undefined ? undefined : { agent })
         const cwd = workspaceOf(agent)
         const by = agent !== undefined ? String(agent.id) : 'host'
+        // Rollback safety: only grants THIS call creates may be revoked on a local refusal. A grant that already
+        // existed for the same (sha256, to, by) is a prior legitimate send — stage() only extended its expiry.
+        const preExisting = new Set(blobStore.grantsBy(by).filter(g => g.to === team).map(g => g.sha256))
         const staged: Array<{ sha256: string; size: number; name: string; expiresAt: number }> = []
         for (const p of paths) {
           const abs = isAbsolute(p) ? p : cwd !== '' ? resolve(cwd, p) : ''
@@ -111,11 +128,22 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
         }
         const note = typeof args.note === 'string' ? args.note.trim() : ''
         const message = [...(note !== '' ? [note] : []), ...staged.map(f => formatFileRef({ ...f, from }))].join('\n')
-        // The route's own trunk: join gate, admission, ledger and receipts are a2a_route's.
+        // The route's own trunk: admission, ledger and receipts are a2a_route's (the join gate already ran above).
         const { [LOCAL_ROUTE]: local, ...routed } = await d.routeTrunk({ team, message, async: true }, agent, exec.signal) as Record<string, JsonValue> & { [LOCAL_ROUTE]?: true }
+        if (routed.ok !== true) {
+          // A local-route refusal is host-deterministic: nothing left this host, so nothing was delivered.
+          if (local === true) {
+            const fresh = [...new Set(staged.map(f => f.sha256))].filter(sha => !preExisting.has(sha))
+            for (const sha of fresh) blobStore.revoke(sha, team, by)
+            return { ...routed, ok: false, team, files: staged, grants: 'rolled-back', rolled_back: fresh.length, kept_pre_existing: staged.length - fresh.length, peer_content: false }
+          }
+          // Beyond this host (a peer's refusal, or an outcome we cannot know): a delivered reference may exist,
+          // so revoking would break it. The grants stay live and the result says so, with the exact revoke entry.
+          return { ...routed, ok: false, team, files: staged, grants: 'live', revoke: staged.map(f => ({ sha256: f.sha256, to: team })), peer_content: true }
+        }
         // The grants remember the task they went out in (unless the caller named one).
         if (taskId === undefined && typeof routed.task_id === 'string') for (const f of staged) blobStore.tagTask(f.sha256, team, by, routed.task_id)
-        return { ...routed, ok: routed.ok === true, team, files: staged, peer_content: local !== true }
+        return { ...routed, ok: true, team, files: staged, peer_content: local !== true }
       },
     }))
   }
