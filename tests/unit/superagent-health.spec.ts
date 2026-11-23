@@ -32,6 +32,9 @@ describe('the health check', () => {
     expect(problemText(row)).not.toContain('session-a')
     expect(problemKey(row)).toBe(problemKey({ code: 'member-not-loaded', session: 'session-a' }))
     expect(problemText({ code: 'tickets-queued', reason: 'member-busy', session: 'session-a', name: '开发席 (aaaaaaaa)', count: 2, minutes: 70, title: '写文档' } as never)).toContain('在等成员 开发席 (aaaaaaaa)')
+    // #846 review M9: the queued reminder's dedupe key must not use the name, or renaming a seat resends the card.
+    const queued = { code: 'tickets-queued', reason: 'member-busy', session: 'session-a', count: 2, minutes: 70, title: '写文档' }
+    expect(problemKey({ ...queued, name: '开发席 (aaaaaaaa)' } as never)).toBe(problemKey(queued as never))
     expect(problemText({ code: 'member-not-loaded', session: 'session-a' })).toContain('成员会话 session-a 没有加载')
   })
 
