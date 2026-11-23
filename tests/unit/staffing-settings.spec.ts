@@ -8,7 +8,7 @@ import { DEFAULT_POLICY, StaffingExecutor, type StaffingChange, type StaffingDep
 import { DEFAULT_SETTINGS, parseSettings, type TeamSettings } from '../../src/superagent/host/policy.ts'
 import { blueprintDiff } from '../../src/superagent/host/builder-tools.ts'
 
-function world(failJoin = false, reviewer: string | null = 'dsh/12345678') {
+function world(failJoin = false, reviewer: string | null = 'dsh/12345678', policy?: StaffingDeps['policy']) {
   let settings: TeamSettings = { ...DEFAULT_SETTINGS, canvas: 'ops', ...(reviewer !== null ? { reviewer } : {}) }
   const team: StaffingTeam = {
     get settings() { return settings },
@@ -21,6 +21,7 @@ function world(failJoin = false, reviewer: string | null = 'dsh/12345678') {
     canvasCreate: () => ({ ok: true }), canvasRemove: () => true, canvasAddLocal: async () => ({ ok: true }), canvasRemoveLocal: () => true,
     teamAdd: () => ({ ok: false, error: 'x' }), teamUnbind: () => true,
     sessionJoin: () => failJoin ? { ok: false, error: 'no live local session' } : { ok: true }, sessionLeave: () => true, sessionJoined: () => false,
+    ...(policy !== undefined ? { policy } : {}),
   }
   return { x: new StaffingExecutor(deps), settings: () => settings }
 }
@@ -56,6 +57,28 @@ describe('#808 P4 team.settings.set (A2A settings only)', () => {
     expect(w.x.get('s3')!.steps.map(s => s.state)).toEqual(['undone', 'failed'])
     expect(w.settings().reviewer).toBeUndefined()
     expect('reviewer' in w.settings()).toBe(false)
+  })
+
+  it('#829 review M10b: what the executor does on owner-local: waits for the owner, even when the policy says auto', async () => {
+    for (const w of [world(), world(false, 'dsh/12345678', () => ({ 'owner-local': { ...DEFAULT_POLICY['owner-local'], 'team.settings.set': 'auto' } }) as never)]) {
+      expect(await sub(w, 'a1', [set({ decisionPush: true })])).toMatchObject({ ok: true, entry: { state: 'awaiting' } })
+      // The team's card alone does not run it: the owner's own agreement is still missing.
+      await w.x.cardDecided('a1', 't-ops', true)
+      expect(w.x.get('a1')!.state).toBe('awaiting')
+      expect(w.settings().decisionPush).toBe(DEFAULT_SETTINGS.decisionPush)
+      await w.x.agree('a1', 'test')
+      expect(w.x.get('a1')!.state).toBe('done')
+      expect(w.settings().decisionPush).toBe(true)
+    }
+  })
+
+  it('#831 review: owner-local team.retire and member.retemplate are refused as off, not as not-yet', async () => {
+    const w = world()
+    for (const op of ['team.retire', 'member.retemplate'] as const) {
+      expect(DEFAULT_POLICY['owner-local'][op]).toBe('off')
+      expect(await sub(w, 'off-' + op, [{ op, params: {} } as never])).toMatchObject({ ok: false, code: 'off' })
+    }
+    expect(w.x.list()).toHaveLength(0)
   })
 
   it('#827 review M10: owner-local asks the owner, the market never runs it', () => {
