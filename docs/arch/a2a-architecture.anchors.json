@@ -14,7 +14,7 @@
     "nexus-stage/src/planning-search.ts": "d6f8b1a54ec36a047454163e6d32b43a124a1965fbbdda7d58fae34f37c2a7eb",
     "nexus-stage/src/planning-card-text.ts": "1cd8c266532093ad7a1d7fe7df3ac34c6440182eff1469a0dc1d5d3e70889033",
     "nexus-stage/src/planning-fit.ts": "cbda0255062632bd412deb2131c7a01e1e16ab9c72d2a70a32c362e108f8c07a",
-    "src/task-ledger.ts": "9663f8bd0f7c7b33800507ca462b3dacf0ffb69df85f427cba62a5b171787810",
+    "src/task-ledger.ts": "262bb31efb196b0b036f604f93333557dbad4a9d22b88effa4017058b7eb3dfc",
     "nexus-stage/src/world.ts": "8191581b4551b3b5ea3658a4a640fcb68cea0311d500743884de666441501cd0",
     "nexus-stage/src/planning-overlap.ts": "f4e7ecf5af229f6107191f35be2b5a10ebab921b175ba0950f577458dacc5019",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
@@ -309,7 +309,7 @@
     {
       "page": "p1-arch",
       "cell": "d10",
-      "ref": "src/task-ledger.ts:857",
+      "ref": "src/task-ledger.ts:868",
       "expect": "private trimOwed(): void {"
     },
     {
