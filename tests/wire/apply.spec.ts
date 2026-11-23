@@ -2594,6 +2594,7 @@ describe('a2a plugin module surface', () => {
       forwardDirect: true,
       receiptBypassProgressMax: 20,
       receiptBypassProgressIntervalMs: 60_000,
+      receiptBypassAttentionMax: 20,
       agentName: 'DeepSeek Harness A2A node',
       peers: [],
       delegates: [],
