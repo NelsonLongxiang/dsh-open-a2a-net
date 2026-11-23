@@ -1882,6 +1882,18 @@ export class SuperagentHost {
    * ticket that session holds and files it back to the router to give to another member; 「在团队设置里禁用这个工具」
    * adds the tool that touched the credentials to the team's blockedTools. Nothing here runs on a timeout or for an agent.
    */
+  /** Ticket 269f287e: whether the owner took this ticket's work off this member on a credential-access card. */
+  excludedFrom(ticketId: string, member: string): boolean { return this.credentialExcluded(ticketId).includes(member) }
+
+  /**
+   * Ticket 269f287e: whether a ticket is this session's to stop. Its binding decides when it has one (the named record can
+   * still name a session the work never went to); a ticket not bound yet is the session's when it is named to it.
+   */
+  private heldBy(ticketId: string, session: string): boolean {
+    const bound = this.executor.list().filter(b => b.ticketId === ticketId)
+    return bound.length > 0 ? bound.some(b => b.member === session) : this.executor.memberOfTicket(ticketId)?.member === session
+  }
+
   /** #825 review: the sessions a ticket must not go to: those a credential card took the same work off. */
   private credentialExcluded(ticketId: string): string[] {
     // #825 re-review: a split child is accepted from a new trigger, so walk up to every parent it was split from.
@@ -1899,7 +1911,7 @@ export class SuperagentHost {
     if (chosen === CREDENTIAL_STOP) {
       const stopped: string[] = [], refiled: string[] = [], failed: string[] = []
       for (const ticket of this.store.tickets.list()) {
-        if (ticket.ended !== undefined || this.executor.memberOfTicket(ticket.id)?.member !== session) continue
+        if (ticket.ended !== undefined || !this.heldBy(ticket.id, session)) continue
         try { this.engine.stopTicket(ticket.id, `属主在凭据访问审计卡上停掉了 ${who} 的工单`) } catch (error) { failed.push(ticket.id); this.d.logger.warn('superagent: credential card %s: ticket %s not stopped: %s', cardId, ticket.id, String(error)); continue }
         stopped.push(ticket.id)
         const scope = ticket.mandate.scope
