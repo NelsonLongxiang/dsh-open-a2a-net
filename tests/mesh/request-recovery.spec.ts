@@ -10,7 +10,7 @@ import {signOriginClaim} from '../../src/origin-claim.ts'
 import {signRecoveryProposal,recoveryFingerprint,type RecoveryBinding} from '../../src/request-recovery.ts'
 import {RequestRecoveryRuntime} from '../../src/request-recovery-runtime.ts'
 import {A2aClient} from '../../src/a2a-client.ts'
-import {bootNode,reservePort,MockGuiConnection,mockGuiLogin,type MeshNode} from './harness.ts'
+import {bootNode,reservePort,MockGuiConnection,mockGuiLogin,mockApiLogin,type MeshNode} from './harness.ts'
 const nativeFetch=globalThis.fetch.bind(globalThis),caller='superagent-team/0123456789abcdef',target='beta/bbbbbbbb',receiverId='session-bbbbbbbb11112222'
 afterEach(()=>vi.restoreAllMocks())
 /** #782 diagnostics: what the receiver's recovery journal holds, without permit bodies or keys. */
@@ -29,7 +29,7 @@ async function fixture(){
  const post=async(n:MeshNode,path:string,body:unknown,owner=false)=>{const r=await nativeFetch(n.baseUrl+path,{method:'POST',headers:{'Content-Type':'application/json',Connection:'close',...(owner?mockGuiLogin():{})},body:JSON.stringify(body)});return{status:r.status,data:await r.json() as any}}
  await post(b,'/__dsh_a2a/join',{id:receiverId})
  const cliKey=generateKeyPairSync('ed25519').privateKey,cliCard=signCard({name:'superagent-team',session:'cli-superagent-team',team:caller,capabilities:{route:true,async:true},expiresAt:Date.now()+3600000},cliKey)
- expect((await post(a,'/__dsh_a2a/cli-deposit',{action:'publish',card:JSON.stringify(cliCard)})).data.ok).toBe(true)
+ const deposit=await post(a,'/__dsh_a2a/cli-deposit',{action:'publish',card:JSON.stringify(cliCard)});expect(deposit.data.ok,JSON.stringify(deposit)).toBe(true)
  const ac=await nativeFetch(au+'/.well-known/agent-card.json').then(r=>r.json()) as any,bc=await nativeFetch(bu+'/.well-known/agent-card.json').then(r=>r.json()) as any
  const senderKey=createPrivateKey(readFileSync(join(a.home,'a2a/node-key.pem'),'utf8'))
  const binding:RecoveryBinding={version:1,requestId:'rr-fixture-original',ticketId:'original-ticket',originalCards:['first-card','second-card'],originalTasks:['direct-first','direct-second'],approvalDigest:'a'.repeat(64),approvalAt:new Date(Date.now()-1000).toISOString(),senderReconciliation:'sender owner checked both original attempts and original principal',caller,cliKey:cliCard.publicKey,senderHome:au,senderKey:ac.publicKey,receiverHome:bu,receiverKey:bc.publicKey,receiverSession:receiverId,target,message:'one exact previously approved business request',taskId:'recover-original',contextId:'recovery-original-context'}
@@ -81,14 +81,35 @@ it('real scoped receiver accepts exactly one permitted request and never creates
  }finally{await f.dispose()}
 })
 it('only original browser owner can consent; API-like credentials cannot grant or revoke',async()=>{
- const f=await fixture();try{
-  const body={action:'grant',proposal:f.proposal,reconciliation:'checked original attempts',checked_not_admitted:true}
-  expect((await f.post(f.b,'/__dsh_a2a/request-recovery',body)).status).toBe(401)
-  const grant=await f.grant();expect(grant.data.ok,JSON.stringify(grant)).toBe(true)
-  expect((await f.post(f.b,'/__dsh_a2a/request-recovery',{action:'revoke',request_id:f.binding.requestId})).status).toBe(401)
-  expect((await f.post(f.b,'/__dsh_a2a/request-recovery',{action:'revoke',request_id:f.binding.requestId},true)).data.ok).toBe(true)
-  expect((await f.raw({},grant.data.permit)).data.delivered).not.toBe(true);expect(f.b.steered).toHaveLength(0)
-  const revoked=await f.post(f.b,'/a2a/query',{task_id:f.binding.taskId,fingerprint:recoveryFingerprint(f.binding)});expect(revoked.data.recovery_delivery).not.toBe('ready')
+ // One full-suite red ("expected false to be true" at the owner revoke) matches PR #815's product race: grant samples
+ // now() twice, a 1 ms tick makes the permit 3600001 ms long, read() then rejects the journal and revoke answers 409.
+ // That is fixed in src by #815, not here. Every boolean now carries its answer, and any failure (a timeout included)
+ // prints the stage, each answer seen and the receiver's journal view, as #793 did for #782. Assertions only grow.
+ const t0=Date.now(),stages:Array<[string,number]>=[],seen:Record<string,unknown>={};let stage='fixture';let home:string|undefined
+ const at=(next:string)=>{stages.push([stage,Date.now()-t0]);stage=next}
+ onTestFailed(()=>{console.error('[request-recovery consent diagnostics] '+JSON.stringify({stage,elapsedMs:Date.now()-t0,finished:stages,seen,journal:home===undefined?'no receiver yet':journalView(home)}))})
+ const f=await fixture();home=f.b.home;try{
+  const path='/__dsh_a2a/request-recovery',query=()=>f.post(f.b,'/a2a/query',{task_id:f.binding.taskId,fingerprint:recoveryFingerprint(f.binding)})
+  // An authenticated API Peer: MockGuiConnection admits it, but it is not the browser owner.
+  const asApi=async(body:unknown)=>{const r=await nativeFetch(f.b.baseUrl+path,{method:'POST',headers:{'Content-Type':'application/json',Connection:'close',...mockApiLogin()},body:JSON.stringify(body)});return{status:r.status,data:await r.json() as any}}
+  const body={action:'grant',proposal:f.proposal,reconciliation:'checked original attempts',checked_not_admitted:true},revoke={action:'revoke',request_id:f.binding.requestId}
+  at('anonymous-grant')
+  const anonGrant=await f.post(f.b,path,body);seen.anonGrant=anonGrant;expect(anonGrant.status,JSON.stringify(anonGrant)).toBe(401)
+  at('api-grant')
+  const apiGrant=await asApi(body);seen.apiGrant=apiGrant;expect(apiGrant.status,JSON.stringify(apiGrant)).toBe(403);expect(apiGrant.data).toMatchObject({ok:false,code:'owner-proof'})
+  expect((await query()).data.recovery_delivery).toBeUndefined()
+  at('owner-grant')
+  const grant=await f.grant();seen.grant={status:grant.status,data:{ok:grant.data.ok,error:grant.data.error},errors:grant.errors};expect(grant.data.ok,JSON.stringify(seen.grant)).toBe(true)
+  at('anonymous-revoke')
+  const anonRevoke=await f.post(f.b,path,revoke);seen.anonRevoke=anonRevoke;expect(anonRevoke.status,JSON.stringify(anonRevoke)).toBe(401)
+  at('api-revoke')
+  const apiRevoke=await asApi(revoke);seen.apiRevoke=apiRevoke;expect(apiRevoke.status,JSON.stringify(apiRevoke)).toBe(403);expect(apiRevoke.data).toMatchObject({ok:false,code:'owner-proof'})
+  const stillReady=await query();seen.stillReady=stillReady.data;expect(stillReady.data.recovery_delivery,JSON.stringify(stillReady.data)).toBe('ready')
+  at('owner-revoke')
+  const ownerRevoke=await f.post(f.b,path,revoke,true);seen.ownerRevoke=ownerRevoke;expect(ownerRevoke.data.ok,JSON.stringify(ownerRevoke)).toBe(true)
+  at('revoked-permit')
+  const replay=await f.raw({},grant.data.permit);seen.replay=replay.data;expect(replay.data.delivered).not.toBe(true);expect(f.b.steered).toHaveLength(0)
+  const revoked=await query();seen.revoked=revoked.data;expect(revoked.data.recovery_delivery).not.toBe('ready')
  }finally{await f.dispose()}
 })
 

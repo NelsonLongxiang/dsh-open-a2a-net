@@ -70,6 +70,9 @@ function makeConfig (home: string): Config {
     sessionNodes: true,
     wakeJoinedOnBoot: false,
     dshHome: home,
+    // The schema default; apply() receives post-schema config, and without it the card re-sign interval
+    // (src/index.ts) gets NaN, which Node turns into a 1 ms timer (TimeoutNaNWarning).
+    cardTtlMs: 172_800_000,
   } as Config
 }
 
