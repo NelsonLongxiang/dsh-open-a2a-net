@@ -5,9 +5,11 @@
 
 > 2026-11-10（#569）：预览版从 npm 回读、核对通过后，立即单独提交一次「记录已发布」：把该版本一节的标题改成「已发布到 npm 的 preview 标签」，并写上状态行（标签指向的提交、npm 发布时间、shasum、integrity、回读结果）。不要等到下一版发版时才顺手改。
 
-## 0.8.1-preview.29（预览版，候选，未发布）
+## 0.8.1-preview.29（预览版，已发布到 npm 的 preview 标签）
 
-- 状态（2026-11-23）：候选，未发布、未打标签。候选提交与包的 sha256／sha1 在发版 PR 中钉定；按属主决策卡，合入 master、打标签 `v0.8.1-preview.29` 与发布到 npm 的 `preview` 标签各需属主另行决定，本席不做。发布后按本文开头（#569）的规定单独提交「记录已发布」。
+- 状态（2026-11-23）：2026-11-23T01:03:53.448Z 由属主发布到 npmjs，dist-tag 为 `preview`，`latest` 仍是 0.7.0。标签 `v0.8.1-preview.29`（注释标签对象 `8eae1514`）指向 `71cc5fcf90d3487f0f08822e3114a20d4b5e0df7`：钉定候选的打包源头，与发版 PR #832 合入 master 的合并提交 `fd04580c` 是同一棵树。标签在发布与读回核对之前打下（按属主裁定保留，不移动、不另打）。
+- **读回与钉定值不一致**（按属主裁定如实记录）：registry 读回 shasum `fcaa0800826ea58cdf423e40b79a4706fea14650`、integrity `sha512-AUVNlascNlSElF+wjPunz1KPdo65X+VtPk3kcC/08hjkeOJn0i9wdih7JmhspGy9goTbtgkzqwbhzcZR/whknQ==`、429 个文件；发版 PR #832 钉定的候选 tgz 为 sha1 `7b9a6fbe8c22913341546971f24fa05ff0c4c568`、sha256 `34d09d6c4db5885bb25a970fdfeabc1cafccdcfeb388cde89bdb4f4828e3a259`、integrity `sha512-jP2GrXQFVGlySMZQcz3Y0DH9p4EvgZ/xS1TeOQ3iowV1U1898mRzMs1xpCkwF2zoY6FFGTprwjbDcMYrutqMfQ==`。即发布的不是钉定的那一个文件，没有满足「同一 tgz 先审后发」（[release-gate](release-gate.md)）。
+- 内容等价证据（事后补的，不是事前候选审计）：下载已发布的 tgz（sha256 `5c4d6f8fdb820a50ee9e5ae5af0ba28d82491ac1a9ad17443f0039dc709fe004`）与钉定候选分别解包，逐文件比 sha256：429 对 429，差异 0；归档内文件时间戳与 gzip 头也相同。只有归档字节不同。原因待查：像是发布时重新打了包（例如按目录发布），未确认。按属主裁定不撤回该包（npm 同一版本号不能覆盖重发），照常升级。
 - 本版按属主 2026-11-23 决策卡（观察者提出）准备：只发布到 npm 的 `preview` 标签，`latest` 保持 0.7.0。发版与本机、13080 升级插件并重启是两件事，后者由属主指定的观察者核对状态面。
 - 基线：master `12eb960a`（preview.28 发版 PR #798 合入）合入 next/0.8 `e1a93c16`。相对 preview.28 的标签提交 `2d5788eb` 合入 17 个 PR（66 个提交，含合并提交）。PR #831（测试补丁）发版时仍在评审，未收入。
 - 升级、回退照 [0.8.1 升级检查](ops/0.8.1-upgrade-check.md) 的「preview.29 补充」。
