@@ -10,7 +10,7 @@
  */
 
 /** One health problem, as health() reports it. */
-export interface HealthProblem { readonly code: string; readonly session?: string; readonly ticketId?: string; readonly detail?: string; readonly title?: string; readonly reason?: string; readonly repo?: string; readonly count?: number; readonly minutes?: number }
+export interface HealthProblem { readonly code: string; readonly session?: string; readonly name?: string; readonly ticketId?: string; readonly detail?: string; readonly title?: string; readonly reason?: string; readonly repo?: string; readonly count?: number; readonly minutes?: number }
 
 /** How often the host looks (reliability R7: 对照上游的每小时,这里 15 分钟). */
 export const HEALTH_TICK_MS = 15 * 60_000
@@ -66,17 +66,20 @@ export function queuedText(problem: HealthProblem, name: (session: string) => st
 }
 
 /** What a problem's card says, in the words the health banner already uses (no internal codes). */
+/** The member a problem is about: its seat name or title when the host has one, else the session id. */
+const whoOf = (problem: HealthProblem): string => problem.name ?? problem.session ?? ''
+
 export const problemText = (problem: HealthProblem): string =>
-  problem.code === 'router-not-loaded' ? `总工会话 ${problem.session ?? ''} 没有加载，需求送不到它，打开这个会话即可`
+  problem.code === 'router-not-loaded' ? `总工会话 ${whoOf(problem)} 没有加载，需求送不到它，打开这个会话即可`
   : problem.code === 'decision-push-refused' ? `决策卡 ${problem.title ?? ''} 没有推到市场：${problem.detail ?? ''}；市场上这张卡会停在原来的状态，请在本机工作台上处理`
-  : problem.code === 'router-turn-failed' ? `总工会话 ${problem.session ?? ''} 上一回合失败（${problem.detail ?? '未知原因'}），需求在等它判断；常见原因是模型额度用完或服务中断`
+  : problem.code === 'router-turn-failed' ? `总工会话 ${whoOf(problem)} 上一回合失败（${problem.detail ?? '未知原因'}），需求在等它判断；常见原因是模型额度用完或服务中断`
   : problem.code === 'mcp-no-seat' ? `团队 MCP 服务器 ${problem.title ?? ''} 还用不了：团队里还没有带席位 id 的成员，市场只给名册里的席位发令牌`
   : problem.code === 'mcp-token-unavailable' ? `团队 MCP 服务器 ${problem.title ?? ''} 换不到席位令牌，成员对它的调用会失败：${problem.detail ?? ''}`
-  : problem.code === 'member-not-loaded' ? `成员会话 ${problem.session ?? ''} 没有加载，工单派不给它，打开这个会话即可`
-  : problem.code === 'tickets-queued' ? queuedText(problem)
-  : problem.code === 'session-wait-overdue' ? `成员会话 ${problem.session ?? ''} 登记的等待已过期限（${problem.detail ?? ''}，已过 ${String(problem.minutes ?? 0)} 分钟），还没有被叫醒；工单「${problem.title ?? problem.ticketId ?? ''}」`
-  : problem.code === 'session-orphan-stop' ? `成员会话 ${problem.session ?? ''} 上一次停下是孤儿停（没做完，也没登记任何会叫它回来的东西）；工单「${problem.title ?? problem.ticketId ?? ''}」`
-  : problem.code === 'session-no-selfcheck' ? `成员会话 ${problem.session ?? ''} 持单 ${String(problem.minutes ?? 0)} 分钟，一条收尾自查记录都没有（可能出错、中断或没加载）；工单「${problem.title ?? problem.ticketId ?? ''}」`
+  : problem.code === 'member-not-loaded' ? `成员会话 ${whoOf(problem)} 没有加载，工单派不给它，打开这个会话即可`
+  : problem.code === 'tickets-queued' ? queuedText(problem, session => problem.name ?? session)
+  : problem.code === 'session-wait-overdue' ? `成员会话 ${whoOf(problem)} 登记的等待已过期限（${problem.detail ?? ''}，已过 ${String(problem.minutes ?? 0)} 分钟），还没有被叫醒；工单「${problem.title ?? problem.ticketId ?? ''}」`
+  : problem.code === 'session-orphan-stop' ? `成员会话 ${whoOf(problem)} 上一次停下是孤儿停（没做完，也没登记任何会叫它回来的东西）；工单「${problem.title ?? problem.ticketId ?? ''}」`
+  : problem.code === 'session-no-selfcheck' ? `成员会话 ${whoOf(problem)} 持单 ${String(problem.minutes ?? 0)} 分钟，一条收尾自查记录都没有（可能出错、中断或没加载）；工单「${problem.title ?? problem.ticketId ?? ''}」`
   : problem.ticketId !== undefined ? `工单 ${problem.ticketId} 很久没有动静`
   : `问题 ${problem.code}`
 

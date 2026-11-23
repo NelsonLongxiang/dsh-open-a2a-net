@@ -6,21 +6,23 @@ import { useEffect, useState } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import styles from './TeamRequestTab.module.css'
 
-export interface HealthRow { readonly code: string; readonly team: string; readonly session?: string; readonly title?: string; readonly ticketId?: string; readonly minutes?: number; readonly detail?: string; readonly reason?: string; readonly repo?: string; readonly count?: number }
+export interface HealthRow { readonly code: string; readonly team: string; readonly session?: string; readonly name?: string; readonly title?: string; readonly ticketId?: string; readonly minutes?: number; readonly detail?: string; readonly reason?: string; readonly repo?: string; readonly count?: number }
 
 const POLL_MS = 30_000
 
 /** The words for one problem. */
 export function healthLine(row: HealthRow, t: PropsLocale<'a2aNet'>['t']): string {
   const team = row.team === '' ? '' : `${row.team}：`
-  if (row.code === 'router-not-loaded') return team + t('team.healthRouter', { session: (row.session ?? '').slice(8, 16) })
-  if (row.code === 'router-turn-failed') return team + t('team.healthRouterFailed', { session: (row.session ?? '').slice(8, 16), detail: (row.detail ?? '').slice(0, 120) })
+  // The member's seat name or title first; the short id only when the host has no name for it.
+  const who = row.name ?? (row.session ?? '').slice(8, 16)
+  if (row.code === 'router-not-loaded') return team + t('team.healthRouter', { session: who })
+  if (row.code === 'router-turn-failed') return team + t('team.healthRouterFailed', { session: who, detail: (row.detail ?? '').slice(0, 120) })
   if (row.code === 'mcp-no-seat') return team + t('team.healthMcpNoSeat', { server: row.title ?? '' })
   if (row.code === 'mcp-token-unavailable') return team + t('team.healthMcpUnavailable', { server: row.title ?? '' })
-  if (row.code === 'member-not-loaded') return team + t('team.healthMember', { session: (row.session ?? '').slice(8, 16) })
+  if (row.code === 'member-not-loaded') return team + t('team.healthMember', { session: who })
   if (row.code === 'ticket-quiet') return team + t('team.healthQuiet', { title: row.title ?? row.ticketId ?? '', minutes: String(row.minutes ?? 0) })
   if (row.code === 'tickets-queued') {
-    const session = (row.session ?? '').slice(8, 16), repo = row.repo ?? ''
+    const session = who, repo = row.repo ?? ''
     const why = row.reason === 'member-busy' ? t('team.healthQueuedBusy', { session })
       : row.reason === 'member-absent' ? t('team.healthQueuedAbsent', { session })
       : row.reason === 'no-repo-member' ? t('team.healthQueuedNoRepo', { repo })
