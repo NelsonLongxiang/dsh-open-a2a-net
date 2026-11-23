@@ -362,7 +362,7 @@ export class SuperagentHost {
       path: join(dir, 'seats.json'), engine: this.engine, ticket: id => this.store.tickets.get(id), tickets: () => this.store.tickets.list(),
       trigger: id => this.store.triggers.get(id), pool: () => this.pool(), router: () => this.settingsValue.router,
       loaded: member => member.includes('@') || (d.sessionLoaded?.(member) ?? true),
-      resolveMember: value => this.resolveMember(value), memberName: member => this.memberName(member),
+      resolveMember: value => this.resolveMember(value), memberName: member => this.displayName(member),
       declares: (caller, capability) => d.callerDeclares?.(caller, capability) === true,
       setMember: (ticketId, member) => this.executor.setMember(ticketId, member), clearMember: ticketId => this.executor.clearMember(ticketId),
       lastMemberOf: ticketId => this.executor.lastMemberOf(ticketId),
@@ -706,6 +706,8 @@ export class SuperagentHost {
   }
   private childSlots(member: string): number | undefined { return isChildTeam(member) ? this.childTeams().find(c => c.ref === member)?.slots : undefined }
   private memberName(id: string): string { return isChildTeam(id) ? childLabel(id) : this.d.sessionName?.(id) ?? id }
+  /** A member's name as it is shown anywhere (#851 review, non-blocking 3): the same cleaning as the health problems; the id when nothing is left. */
+  private displayName(id: string): string { return cleanName(this.memberName(id)) ?? id }
 
   /** A split that failed after its parent was accepted: the parent runs as an ordinary ticket after all. */
   releaseSplit(parentId: string): void {
@@ -868,14 +870,22 @@ export class SuperagentHost {
   }
   /** The stable seat id a member's team MCP calls are made as (#690 F1): the member's own, from the roster. */
   mcpSeatOf(member: string): string | undefined { return this.named.seatIdOf(member) }
-  memberListLine(): string { return `The team's members: ${this.pool().map(id => this.memberName(id)).join('; ') || '(none)'}.` }
+  memberListLine(): string {
+    // Names that read the same once cleaned also show their id, so the router can still name the one it means.
+    const pool = this.pool(), shown = pool.map(id => this.displayName(id))
+    const twice = new Set(shown.filter((name, i) => shown.indexOf(name) !== i))
+    return `The team's members: ${pool.map((id, i) => twice.has(shown[i]!) ? `${shown[i]} (${id})` : shown[i]).join('; ') || '(none)'}.`
+  }
 
   /** A member by its session id, the first eight of it, or its name; undefined when none matches, or more than one. */
   resolveMember(value: string): string | undefined {
     const wanted = value.trim().toLowerCase()
     const matches = this.pool().filter(id => {
       const short = id.replace(/^session-/, '')
-      return id.toLowerCase() === wanted || short.toLowerCase() === wanted || short.slice(0, 8).toLowerCase() === wanted || this.memberName(id).toLowerCase() === wanted
+      // The raw name still matches, and so does the name as shown (the router only ever sees that one); two members that
+      // read the same either way match together, so neither is picked. A name cleaned to nothing is reached by its id.
+      const raw = this.memberName(id), shown = cleanName(raw)
+      return id.toLowerCase() === wanted || short.toLowerCase() === wanted || short.slice(0, 8).toLowerCase() === wanted || raw.toLowerCase() === wanted || (shown !== undefined && shown.toLowerCase() === wanted)
     })
     return matches.length === 1 ? matches[0] : undefined
   }
@@ -914,7 +924,7 @@ export class SuperagentHost {
       const profile = this.settingsValue.profiles[id]
       const held = this.executor.bindingOf(id)
       const repo = this.settingsValue.repos[id]
-      lines.push(`- ${this.memberName(id)} · ${held === undefined ? 'free' : `working on ${held.ticketId}`}${repo !== undefined ? ` · repository ${repo}` : ''}${profile?.role !== undefined ? ` · role: ${clip(profile.role, 200)}` : ''}`)
+      lines.push(`- ${this.displayName(id)} · ${held === undefined ? 'free' : `working on ${held.ticketId}`}${repo !== undefined ? ` · repository ${repo}` : ''}${profile?.role !== undefined ? ` · role: ${clip(profile.role, 200)}` : ''}`)
       for (const rule of (profile?.rules ?? []).filter(r => r.enabled)) lines.push(`  - takes (${rule.name}): ${clip(rule.text, 400)}`)
     }
     if (dispatch !== '') lines.push('Dispatch rules:', clip(dispatch, 2_000))
@@ -957,11 +967,11 @@ export class SuperagentHost {
     const member = this.resolveMember(value)
     if (member === undefined) return { ok: false, code: 'member', error: `no such member: ${value}. ${this.memberListLine()}` }
     // Ticket 877ca64f: say so instead of ok:true for a member this ticket will never run on.
-    if (this.credentialExcluded(ticketId).includes(member)) return { ok: false, code: 'excluded', error: `${this.memberName(member)} is excluded from this ticket: the owner took this work off it on a credential-access card; give it to another member` }
+    if (this.credentialExcluded(ticketId).includes(member)) return { ok: false, code: 'excluded', error: `${this.displayName(member)} is excluded from this ticket: the owner took this work off it on a credential-access card; give it to another member` }
     const latest = ticket.assignments.at(-1)
     const card = this.executor.list().find(b => b.assignmentId === latest?.id)?.card
     if (card === 'sending') return { ok: false, code: 'assignment-in-flight', error: 'the original assignment card is still in flight; wait for its result or stop that ticket, do not send another card' }
-    if (latest?.state === 'pending' && card === undefined) { this.named.assigned(ticketId); this.executor.setMember(ticketId, member); return { ok: true, ticket_id: ticketId, member: this.memberName(member) } }
+    if (latest?.state === 'pending' && card === undefined) { this.named.assigned(ticketId); this.executor.setMember(ticketId, member); return { ok: true, ticket_id: ticketId, member: this.displayName(member) } }
     // A restored unknown card has a failed report: only this explicit retry action (after reconciliation) creates a new run.
     // A refused reassignment leaves nothing changed (#690 F1): the running member keeps the ticket, its name and its hold.
     const before = this.executor.memberOfTicket(ticketId)
@@ -972,7 +982,7 @@ export class SuperagentHost {
     }
     this.named.assigned(ticketId)
     this.pass()
-    return { ok: true, ticket_id: ticketId, member: this.memberName(member) }
+    return { ok: true, ticket_id: ticketId, member: this.displayName(member) }
   }
 
   /** What a rule set holds now, in the shape a proposal for it takes. */
@@ -1284,7 +1294,7 @@ export class SuperagentHost {
     const checked = this.outbound.check(session, ask, { role: this.toolRoleOf(session), a2aOn: this.settingsValue.sources.a2a, own: ownAddresses(this.d.handleOf, this.settingsValue.canvas, [this.settingsValue.router, ...this.pool(), ...this.settings.observers]),
       ticket: ticket === undefined ? undefined : { open: !ticket.ended, title: ticket.title, holder: this.executor.list().find(b => b.ticketId === ticket.id)?.member } })
     if (!checked.ok) return checked
-    const out = this.decisions.propose({ source: 'outbound', by: session, at: this.now(), question: `${this.memberName(session)} ${checked.question}`, ...(checked.reason !== undefined ? { reason: checked.reason } : {}), spec: { level: 'P0', options: [OUTBOUND_APPROVE, OUTBOUND_DECLINE], recommended: OUTBOUND_APPROVE }, outbound: { ticketId: checked.ticketId, address: checked.address, text: checked.text, team: this.settingsValue.canvas ?? '', title: ticket!.title } })
+    const out = this.decisions.propose({ source: 'outbound', by: session, at: this.now(), question: `${this.displayName(session)} ${checked.question}`, ...(checked.reason !== undefined ? { reason: checked.reason } : {}), spec: { level: 'P0', options: [OUTBOUND_APPROVE, OUTBOUND_DECLINE], recommended: OUTBOUND_APPROVE }, outbound: { ticketId: checked.ticketId, address: checked.address, text: checked.text, team: this.settingsValue.canvas ?? '', title: ticket!.title } })
     if (out.ok && out.reused !== true) this.outbound.waiting(out.id, checked.ticketId, checked.address, checked.text, session)
     return out.ok ? { ok: true, card_id: out.id } : out
   }
@@ -1319,7 +1329,7 @@ export class SuperagentHost {
   /** Design outbound-requests O3: an approver the owner named decides an outbound card it did not raise, with a reason. */
   approverDecide(session: string, id: string, option: unknown, reason: unknown): Record<string, unknown> {
     const checked = approverCheck({ approvers: this.settingsValue.approvers ?? [], role: this.toolRoleOf(session), card: this.decisionCards().find(row => row.id === id), session, reason })
-    return checked.ok ? this.decide(id, 'choose', option, `审批人 ${this.memberName(session)}：${checked.reason}`) : checked
+    return checked.ok ? this.decide(id, 'choose', option, `审批人 ${this.displayName(session)}：${checked.reason}`) : checked
   }
 
   requestTool(session: string, role: Role, name: string, why?: string): string {
@@ -1328,7 +1338,7 @@ export class SuperagentHost {
     const last = this.decisions.lastDecided('tool', by)
     if (last !== undefined && !last.decided!.text.includes('批准') && Date.parse(this.now()) - Date.parse(last.decided!.at) < TOOL_ASK_AGAIN_MS) return `The owner declined ${name} for this team at ${last.decided!.at}; it is not asked about again for a day.`
     const who = cls === 'router' ? '总工' : '成员和观察者'
-    const out = this.decisions.propose({ source: 'tool', by, at: this.now(), question: `${this.memberName(session)} 申请使用工具 ${name}（不在这个角色的工具列表里），要放行给本团队的${who}吗？`,
+    const out = this.decisions.propose({ source: 'tool', by, at: this.now(), question: `${this.displayName(session)} 申请使用工具 ${name}（不在这个角色的工具列表里），要放行给本团队的${who}吗？`,
       reason: `${why !== undefined && why.trim() !== '' ? `申请理由：${why.trim().slice(0, 300)}。` : ''}这个工具不在团队预设里，宿主确认不了它来自哪个插件、有没有沙箱。信得过提供它的插件再批准；批准后本团队的${who}都能用，可以在设置里收回。`,
       spec: { level: 'P0', options: [`批准：本团队的${who}可用 ${name}`, '拒绝'], recommended: '拒绝' } })
     return out.ok ? `A P0 decision card asks the owner whether this team's ${cls === 'router' ? 'router' : 'members'} may use ${name}; try again after it is approved.` : `The request could not be raised: ${out.error}`
@@ -1854,7 +1864,7 @@ export class SuperagentHost {
     let card: string | undefined
     if (last === undefined || nowMs - last >= CREDENTIAL_CARD_GAP_MS) {
       this.credentialCardAt.set(key, nowMs)
-      const who = this.memberName(session)
+      const who = this.displayName(session)
       const what = kinds.map(kind => CREDENTIAL_KIND_TEXT[kind]).join('、')
       const out = this.decisions.propose({ source: 'health', by: `credential:${session}`, question: `${who} 的 ${tool} 调用触及${what}（${at}）`, reason: `宿主只记录不拦截；命令预览（已遮蔽）：${preview}`, at,
         spec: { level: 'P1', options: ['知道了', CREDENTIAL_STOP, CREDENTIAL_BLOCK], recommended: '知道了' } })
@@ -1884,7 +1894,7 @@ export class SuperagentHost {
   }
 
   private credentialAction(cardId: string, session: string, question: string, chosen: string): Record<string, unknown> {
-    const who = this.memberName(session)
+    const who = this.displayName(session)
     if (chosen === CREDENTIAL_STOP) {
       const stopped: string[] = [], refiled: string[] = [], failed: string[] = []
       for (const ticket of this.store.tickets.list()) {
@@ -2191,7 +2201,7 @@ export class SuperagentHost {
     if (q === undefined) return undefined
     const since = this.queuedSince(q)
     const minutes = since === undefined ? undefined : Math.floor((Date.parse(this.now()) - Date.parse(since)) / 60_000)
-    return { reason: queueReason(q.reason, minutes), ...(q.member !== undefined ? { member: this.memberName(q.member) } : {}), ...(q.repo !== undefined ? { repo: q.repo } : {}), ...(since !== undefined ? { since } : {}), ...(q.refusedAt !== undefined ? { refusedAt: q.refusedAt } : {}) }
+    return { reason: queueReason(q.reason, minutes), ...(q.member !== undefined ? { member: this.displayName(q.member) } : {}), ...(q.repo !== undefined ? { repo: q.repo } : {}), ...(since !== undefined ? { since } : {}), ...(q.refusedAt !== undefined ? { refusedAt: q.refusedAt } : {}) }
   }
 
   state(): Record<string, unknown> {
