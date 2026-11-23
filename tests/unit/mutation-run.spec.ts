@@ -15,6 +15,7 @@ const RUNNER = fileURLToPath(new URL('../../scripts/mutation-run.mjs', import.me
 //   sleepif <file> <text> <ms>      sleep when <file> contains <text>
 //   touchif <file> <text> <target>  overwrite <target> when <file> contains <text>
 //   pidfileif <file> <text> <path>  write this process's pid to <path> (outside the repository) when <file> contains <text>
+//   ignoretermif <file> <text>      ignore SIGTERM when <file> contains <text> (a test process that does not stop politely)
 const CHECK = `import { readFileSync, writeFileSync } from 'node:fs'
 let bad = 0
 for (const f of process.argv.slice(2)) for (const l of readFileSync(f, 'utf8').split('\\n')) {
@@ -23,6 +24,7 @@ for (const f of process.argv.slice(2)) for (const l of readFileSync(f, 'utf8').s
   const s = l.match(/^sleepif (\\S+) (\\S+) (\\d+)$/); if (s && readFileSync(s[1], 'utf8').includes(s[2])) await new Promise(r => setTimeout(r, Number(s[3])))
   const t = l.match(/^touchif (\\S+) (\\S+) (\\S+)$/); if (t && readFileSync(t[1], 'utf8').includes(t[2])) writeFileSync(t[3], 'touched\\n')
   const p = l.match(/^pidfileif (\\S+) (\\S+) (\\S+)$/); if (p && readFileSync(p[1], 'utf8').includes(p[2])) writeFileSync(p[3], String(process.pid))
+  const q = l.match(/^ignoretermif (\\S+) (\\S+)$/); if (q && readFileSync(q[1], 'utf8').includes(q[2])) process.on('SIGTERM', () => {})
 }
 process.exit(bad ? 1 : 0)
 `
@@ -149,6 +151,21 @@ describe('mutation-run: refusals change nothing', () => {
     expect(clean(repo)).toBe('')
   }, T)
 
+  it('refuses oldTests whose tests are not green on the unmutated tree, and runs no mutation', () => {
+    // The old weak.t asks for a value the current source no longer has: it fails before anything is mutated.
+    const repo = fixture({ 'tests/weak.t': 'contains src/lib.js LIMIT = 9\n' })
+    const old = g(repo, 'rev-parse', 'HEAD').trim()
+    writeFileSync(join(repo, 'tests/weak.t'), 'contains src/lib.js LIMIT = 3\n')
+    g(repo, 'commit', '-q', '-am', 'new tests')
+    const r = cli(repo, { ...base, narrow: ['tests/weak.t'], oldTests: { rev: old, files: ['tests/weak.t'] }, mutations: [{ id: 'K', file: 'src/lib.js', find: 'LIMIT = 3', replace: 'LIMIT = 4' }] })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('the old tests (tests/weak.t at ' + old + ') are not green')
+    expect(existsSync(join(r.out, 'baseline.old.log'))).toBe(true)
+    expect(existsSync(join(r.out, 'K.narrow.log'))).toBe(false)
+    expect(readFileSync(join(repo, 'tests/weak.t'), 'utf8')).toBe('contains src/lib.js LIMIT = 3\n')
+    expect(clean(repo)).toBe('')
+  }, T)
+
   it('refuses a spec it cannot read as written', () => {
     expect(() => parseSpec('{')).toThrow(UsageError)
     expect(() => parseSpec({ ...base, narrow: ['t'], mutations: [{ id: 'a', file: 'f', find: 'x', replace: 'x' }] })).toThrow(/nothing would change/)
@@ -187,7 +204,8 @@ describe('mutation-run: restore and accounting', () => {
 
   it.each(['SIGTERM', 'SIGHUP'] as const)('on %s mid-run stops the test and what it started, restores the file and exits 130', async (signal) => {
     const pidDir = mkdtempSync('mutation-run-pid-'), pidFile = join(pidDir, 'pid')
-    const repo = fixture({ 'tests/slow.t': `pidfileif src/lib.js SLOW ${pidFile}\nsleepif src/lib.js SLOW 20000\ncontains src/lib.js NAME\n` })
+    // The test process ignores SIGTERM, so only the runner's SIGKILL of the group, sent as it finishes, can stop it.
+    const repo = fixture({ 'tests/slow.t': `ignoretermif src/lib.js SLOW\npidfileif src/lib.js SLOW ${pidFile}\nsleepif src/lib.js SLOW 20000\ncontains src/lib.js NAME\n` })
     const dir = mkdtempSync('mutation-run-spec-'), out = mkdtempSync('mutation-run-out-')
     writeFileSync(join(dir, 'spec.json'), JSON.stringify({ ...base, command: [process.execPath, 'wrap.mjs'], narrow: ['tests/slow.t'], mutations: [{ id: 'slow', file: 'src/lib.js', find: 'LIMIT = 3', replace: 'SLOW = 3' }, { id: 'never', file: 'src/lib.js', find: 'NAME', replace: 'NOM' }] }))
     const child = spawn(process.execPath, [RUNNER, join(dir, 'spec.json'), '--root', repo, '--out', out, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] })
@@ -233,6 +251,60 @@ describe('mutation-run: restore and accounting', () => {
     expect(r.code).toBe(2)
     expect(r.stderr).toContain('symbolic link')
     expect(readFileSync(outside, 'utf8')).toBe(LIB)
+  }, T)
+
+  it('after a timeout, the group gets SIGKILL after the grace period even though the direct child already exited', async () => {
+    // wrap.mjs dies on SIGTERM; the test process under it ignores SIGTERM. The runner's next mutation keeps it busy past the
+    // grace period, so the test process must be killed by the grace timer, while the runner is still running.
+    const pidDir = mkdtempSync('mutation-run-pid-'), pidFile = join(pidDir, 'pid')
+    const repo = fixture({ 'tests/slow.t': `ignoretermif src/lib.js SLOW\npidfileif src/lib.js SLOW ${pidFile}\nsleepif src/lib.js SLOW 60000\nsleepif src/lib.js BUSY 9000\ncontains src/lib.js NAME\n` })
+    const dir = mkdtempSync('mutation-run-spec-'), out = mkdtempSync('mutation-run-out-')
+    writeFileSync(join(dir, 'spec.json'), JSON.stringify({ ...base, command: [process.execPath, 'wrap.mjs'], timeoutMs: 3000, narrow: ['tests/slow.t'], mutations: [
+      { id: 'hang', file: 'src/lib.js', find: 'LIMIT = 3', replace: 'SLOW = 3' },
+      // Each busy run is stopped by the 3 s timeout too, so three of them keep the runner going well past the 5 s grace.
+      { id: 'busy1', file: 'src/lib.js', find: 'TWIN = 1', replace: 'BUSY = 1', occurrence: 1 },
+      { id: 'busy2', file: 'src/lib.js', find: 'TWIN = 1', replace: 'BUSY = 1', occurrence: 2 },
+      { id: 'busy3', file: 'src/lib.js', find: "NAME = 'alpha'", replace: "NAME = 'BUSY'" },
+    ] }))
+    const child = spawn(process.execPath, [RUNNER, join(dir, 'spec.json'), '--root', repo, '--out', out, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const exited = new Promise<number | null>(done => child.on('close', code => done(code)))
+    let grandchild = 0
+    try {
+      let until = Date.now() + 15_000
+      while (!(existsSync(pidFile) && readFileSync(pidFile, 'utf8') !== '') && Date.now() < until) await new Promise(r => setTimeout(r, 50))
+      grandchild = Number(readFileSync(pidFile, 'utf8'))
+      until = Date.now() + 15_000
+      while (alive(grandchild) && Date.now() < until) await new Promise(r => setTimeout(r, 50))
+      expect(alive(grandchild)).toBe(false)
+      expect(child.exitCode, 'killed by the grace timer, not only when the runner finished').toBeNull()
+      expect(await exited).toBe(0)
+      expect(lib(repo)).toBe(LIB)
+    } finally {
+      if (grandchild && alive(grandchild)) process.kill(grandchild, 'SIGKILL')
+      if (child.exitCode === null) child.kill('SIGKILL')
+    }
+  }, 45_000)
+
+  it('a fast test run with a long timeoutMs finishes without waiting for the timeout', () => {
+    const repo = fixture()
+    const started = Date.now()
+    const r = cli(repo, { ...base, timeoutMs: 25_000, narrow: ['tests/strong.t'], mutations: [{ id: 'K', file: 'src/lib.js', find: 'LIMIT = 3', replace: 'LIMIT = 4' }] })
+    expect(r.code, r.stderr).toBe(0)
+    expect(r.json.results[0]).toMatchObject({ verdict: 'killed', timedOut: false })
+    expect(Date.now() - started).toBeLessThan(15_000)
+  }, 45_000)
+
+  it('refuses a tracked symbolic link among the oldTests files too', () => {
+    const outside = join(mkdtempSync('mutation-run-outside-'), 'old.t')
+    writeFileSync(outside, 'contains src/lib.js NAME\n')
+    const repo = fixture()
+    symlinkSync(outside, join(repo, 'tests/link.t'))
+    g(repo, 'add', 'tests/link.t'); g(repo, 'commit', '-q', '-m', 'link')
+    const head = g(repo, 'rev-parse', 'HEAD').trim()
+    const r = cli(repo, { ...base, narrow: ['tests/strong.t'], oldTests: { rev: head, files: ['tests/link.t'] }, mutations: [{ id: 'K', file: 'src/lib.js', find: 'LIMIT = 3', replace: 'LIMIT = 4' }] })
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('tests/link.t is a symbolic link')
+    expect(lib(repo)).toBe(LIB)
   }, T)
 
   it('account() throws unless the counts match', () => {
