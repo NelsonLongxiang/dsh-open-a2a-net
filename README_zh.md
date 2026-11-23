@@ -178,8 +178,9 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | `announce` | `false` | 发布本节点 agent 卡片供 peer 发现。 |
 | `isolated` | `false` | 不向任何对端发请求：取卡、目录扫描、路由、远端日志读取、canvas 变更推送、舰队 canvas-op 中继一律拒绝（gh#193）。`a2a/peers.json` 不动，被拒的请求也不给对端扣分；入站面照常应答；state 面显示 `isolated: true`。供测试与验收主机使用。 |
 | `forwardDirect` | `true` | 从 0.6.38 起默认开启，本机目标未找到时，允许替已验签且在线的本地CLI转发一跳；仍检查发送作用域和跳数预算。A 链接 B 接收成员，B 链接 CLI 并钉住 A；对端不会再转发；显式设 `forwardDirect: false` 恢复 CLI 仅投本机。 |
-| `receiptBypassProgressMax` | `20` | 每个欠单任务最多有多少条进度回执可作为「已准入任务的回执」免发送方 team-scope（其余边界固定：确认一次、每个 attention 问题一次、只认回执本身、只发往记录的回执目标、只在欠单期间）；超出的按 team-scope 判并记告警。非有限或负值按默认。 |
-| `receiptBypassProgressIntervalMs` | `60000` | 同一任务两条这类进度回执的最小间隔；更近的按 team-scope 判并记告警。非有限或负值按默认。 |
+| `receiptBypassProgressMax` | `20` | 每个欠单任务最多有多少条进度回执可作为「已准入任务的回执」免发送方 team-scope（其余边界固定：确认一次、每个 attention 问题一次且不超过 `receiptBypassAttentionMax` 个、只认回执本身、只发往记录的回执目标、只在欠单期间）；超出的按 team-scope 判并记告警。`0` 有效，表示进度回执一条都不免检；只有非有限或负值才按默认。极大的有限值等于不限。 |
+| `receiptBypassProgressIntervalMs` | `60000` | 同一任务两条这类进度回执的最小间隔；更近的按 team-scope 判并记告警。`0` 有效，表示不限间隔（仍受条数约束）；只有非有限或负值才按默认。极大的有限值等于首条之后不再放行进度。 |
+| `receiptBypassAttentionMax` | `20` | 每个欠单任务最多有多少个不同的 attention 问题可作为「已准入任务的回执」免发送方 team-scope；已放行的问题重发是同一条回执。超出的按 team-scope 判并记告警。`0` 有效，表示 attention 回执一条都不免检；只有非有限或负值才按默认。极大的有限值等于不限。 |
 | `superagent` | `true` | superagent（设计 v4，团队模型 v5）：在本主机运行 superagent 自己的领域引擎（原样引入的上游 `src/core`）。绑定团队前保持空闲；`false` 关闭。团队就是一支画布团队：属主在画布上组队（总工与成员，本机或其他主机），再在 `/__dsh_a2a/superagent` 绑定画布、指定总工和允许的发送者；团队的 A2A 地址就是画布地址 `<zone>/canvas/<名字>`。总工与成员分别使用插件自带的 `superagent-router` / `superagent-member` 智能体预设；见 [`superagent.md`](src/skill/references/superagent.md)。 |
 | `peers` | `[]` | 种子 base URL；被引荐的 peers 从其卡片学习。 |
 | `delegates` | `[]` | 区域委托：`{ name, url, publicKey }` 发布在卡片上。 |
