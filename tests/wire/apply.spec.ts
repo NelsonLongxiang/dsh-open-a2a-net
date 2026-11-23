@@ -20,7 +20,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { signCard } from '../../src/card.ts'
 import { WIRE_ERROR_PAYLOAD_TOO_LARGE } from '../../src/transport-caps.ts'
-import { apply, CARD_TTL_MIN_MS, Config as ConfigSchema, type A2aSchedule, type Config } from '../../src/index.ts'
+import { apply, CARD_TTL_MAX_MS, CARD_TTL_MIN_MS, TIMER_MAX_DELAY_MS, Config as ConfigSchema, type A2aSchedule, type Config } from '../../src/index.ts'
 import { envelopeFor } from './envelope.ts'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { NodeStore } from '../../src/node-store.ts'
@@ -244,6 +244,40 @@ describe('#835 review: the node card lifetime is checked before anything is sign
     expect(() => apply(refused, makeConfig({ announce: true, agentName: 'peer-ttl', dshHome: tmpHome(), cardTtlMs: 99 }))).toThrow(/at least 100 \(got 99\)/)
     const accepted = await mount()
     expect(() => apply(accepted, makeConfig({ announce: true, agentName: 'peer-ttl', dshHome: tmpHome(), cardTtlMs: 100 }))).not.toThrow()
+  })
+
+  it('owner decision 2026-11-23: the ceiling is the timer limit times four, written out as numbers', () => {
+    // The re-sign interval is Math.floor(TTL / 4); Node keeps a delay only up to 2^31 - 1 ms.
+    expect(TIMER_MAX_DELAY_MS).toBe(2 ** 31 - 1)
+    expect(CARD_TTL_MAX_MS).toBe(8_589_934_591)
+    expect(Math.floor(CARD_TTL_MAX_MS / 4)).toBe(2 ** 31 - 1)
+    expect(Math.floor((CARD_TTL_MAX_MS + 1) / 4)).toBe(2 ** 31)
+  })
+
+  it('refuses one millisecond over the ceiling with an error naming the key, and publishes no card', async () => {
+    const ctx = new Context()
+    cleanupBeforeTempDirs(() => ctx.fiber.dispose())
+    await ctx.plugin(TimerService); await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 }); await ctx.plugin(SystemPrompt); await ctx.plugin(ToolRuntime)
+    expect(() => apply(ctx, makeConfig({ announce: true, agentName: 'peer-ttl', dshHome: tmpHome(), cardTtlMs: 8_589_934_592 }))).toThrow(/cardTtlMs must be a whole number of milliseconds, at most 8589934591 \(got 8589934592\)/)
+    const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+    expect((await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).status).not.toBe(200)
+  })
+
+  it('accepts the ceiling itself: the card is published and the re-sign timer does not overflow', async () => {
+    const warnings: string[] = []
+    const spy = vi.spyOn(process, 'emitWarning').mockImplementation(((warning: string | Error, type?: unknown) => { warnings.push(String((warning as Error)?.name ?? type ?? warning)) }) as never)
+    try {
+      const ctx = new Context()
+      cleanupBeforeTempDirs(() => ctx.fiber.dispose())
+      await ctx.plugin(TimerService); await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 }); await ctx.plugin(SystemPrompt); await ctx.plugin(ToolRuntime)
+      const before = Date.now()
+      expect(() => apply(ctx, makeConfig({ announce: true, agentName: 'peer-ttl', dshHome: tmpHome(), cardTtlMs: 8_589_934_591 }))).not.toThrow()
+      const port = (ctx as unknown as { webServer: WebServer }).webServer.port
+      await vi.waitFor(async () => { expect((await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).status).toBe(200) })
+      const card = await (await globalThis.fetch(`http://127.0.0.1:${String(port)}/.well-known/agent-card.json`)).json() as { expiresAt: number }
+      expect(card.expiresAt).toBeGreaterThanOrEqual(before + 8_589_934_591)
+      expect(warnings.filter(w => /TimeoutOverflow/.test(w))).toEqual([])
+    } finally { spy.mockRestore() }
   })
 })
 
