@@ -30,7 +30,7 @@ Status: implemented, 2026-11-11.
 - **Parent.** The ticket stays as the parent. The executor takes it back from its member: an assignment not started is never launched, and one that started is stopped with a note. It assigns the parent to nobody after that: the parent only coordinates.
 - **Children.**
   - For each part, the host files an internal request: source `workbench`, actor `split:<parent>`, text = the part's scope, on the parent's thread. It decides that request `accept` at once, with the part's title and scope and the parent's rules. The router's split is the decision, so no router turn is spent per part.
-  - The child is assigned like any ticket (to `member` when named).
+  - The child is assigned like any ticket (to `member` when named). A part named to a member the owner took the request's work off on a credential-access card is the exception, as for accept: that part records no member, goes to a member that is not excluded, and the split result lists it under `member_refused` with code `excluded` (ticket eabe1586).
   - The host records `parent → children`, persisted next to the executor's state.
 - **Progress.** The parent's progress steps list the children in `tickets`: each child's title, seat and state, then `ended` with its outcome. While children run, the parent's own state is `working`.
 
