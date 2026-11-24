@@ -2314,6 +2314,8 @@ export function apply(ctx: Context, config: Config): void {
     stageFiles: (id, paths, canvas) => stageCardFiles({ blobStore, from: originOf(ownCardUrl), cwd: (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd, team: `${config.team}/canvas/${canvas}`, by: id }, paths),
     memberTurn: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : memberTurnFrom(id, sessionEventsOf(agent), ctx.get('jobs' as never), message => logger.warn(message)) },
     teamSend: args => teamCanvasSend(args),
+    // #888 D3: a file input must still be on the file channel when the owner decides.
+    blobExists: sha256 => blobStore.list().some(grant => grant.sha256 === sha256),
     // #881 v2: a body reaches a session only after it is durably marked restricted (and tainted).
     restrict: id => nodeTaint.markRestricted(id),
     restricted: id => nodeTaint.isRestricted(id),

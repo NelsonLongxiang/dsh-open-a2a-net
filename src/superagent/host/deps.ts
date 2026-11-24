@@ -116,6 +116,8 @@ export interface SuperagentHostDeps {
     transport:(permit:RecoveryPermit,mode:'send'|'query',current:()=>boolean)=>Promise<{accepted:boolean;ready?:boolean}>
     receipt:(binding:RecoveryBinding,caller:string,message:string)=>boolean
   }
+  /** #888 D3: whether a staged file is still on the file channel (an input that is a file must be). */
+  readonly blobExists?: (sha256: string) => boolean
   /** #881 v2: the host's disclosure policy for outbound result bodies; absent means deny all. */
   readonly disclosure?: import('./outbound-disclosure.ts').DisclosurePolicy
   /** #881 v2: mark a session restricted before a body reaches it; true only when the mark is on disk. */

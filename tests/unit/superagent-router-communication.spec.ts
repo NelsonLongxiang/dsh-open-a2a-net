@@ -45,10 +45,10 @@ it('ships generated inline router text without changing preset ids or compositio
 })
 
 it('adds only the shared boundary to original worker personas and leaves the builder unchanged', () => {
-  // Target next/0.8 78e077c; preserve its member-proposal text and original worker semantics. The member's prefix adds the R7b question
+  // #888 D6 adds one sentence on option inputs to each persona's owner-reporting line. Target next/0.8 78e077c; preserve its member-proposal text and original worker semantics. The member's prefix adds the R7b question
   // contract (four parts); the observer's is D19's
   // rewrite (workbench-market 18: takes no tickets, tags and counts stuck points, sees health problems first — R7a).
-  const originalPrefixes = { member: 'dd48170602723c933cd0101026fc05c91b02fdd813535ff144c2de9efed4956e', observer: '1cfe304325f5868e61c68cb5e2ea666a16b8d1a9f9e2b35c9ae2c5e1656f05be' }
+  const originalPrefixes = { member: 'dca76d444c14e822b9f0e19a0175c67525ff1bbfbc05f9afd7fbfc3ab69a4c4e', observer: '24d40d26f1e912e66d4fb405bb0921670f8227634c2648cda08c93d5c12d7d64' }
   for (const [role, sha] of Object.entries(originalPrefixes)) {
     const original = readFileSync(new URL('src/superagent/prompts/' + role + '.md', root), 'utf8')
     expect(digest(original)).toBe(sha)

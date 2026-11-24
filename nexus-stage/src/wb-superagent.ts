@@ -36,7 +36,7 @@ export interface SaTicket {
   readonly mandate: { strength: string; scope: string; basis: { via: string }; actor: { source: string; id: string } }
   readonly channels: ReadonlyArray<{ source: string; thread: string }>
   readonly ended?: { at: string; outcome: string; reason?: string }
-  readonly attention?: { question: string }
+  readonly attention?: { question: string; readonly needsInput?: boolean }
   readonly follows?: ReadonlyArray<{ thread: string; closed?: { outcome: string } }>
   readonly delivery?: { error: string; at: string }
   readonly assignments: readonly SaAssignment[]
@@ -529,7 +529,10 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     if (ticket.ended === undefined) {
       const actions = el('div', 'wb-sa-actions')
       const thread = workbenchThreadOf(ticket)
-      if (opts.answer === true && ticket.stage?.action === 'answer') {
+      // #888 D4: a question with an option that needs input is decided in 等你拍板 (text, files, or both); here it only says so.
+      if (opts.answer === true && ticket.stage?.action === 'answer' && ticket.attention?.needsInput === true) {
+        card.appendChild(el('div', 'wb-sa-hint wb-sa-needs-input', '这个问题有需要你填写的选项，请到「等你拍板」作答'))
+      } else if (opts.answer === true && ticket.stage?.action === 'answer') {
         if (thread !== undefined) {
           const box = draftFor(thread, '回答这个问题（会作为这条需求的后续消息送给成员）')
           const answer = el('button', 'wb-btn wb-btn-primary', '回答')
