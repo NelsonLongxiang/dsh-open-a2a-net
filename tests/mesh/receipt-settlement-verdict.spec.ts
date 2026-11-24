@@ -130,3 +130,21 @@ describe('#884 review: interim receipts are judged too, and a late answer to an 
     } finally { await a.dispose() }
   }, 90_000)
 })
+
+describe('#884 review B3: a revival of a dead-lettered row by its owing identity is settled (real host)', () => {
+  it('the owed row goes dead with the stale sweep; the owing identity\'s final receipt revives and settles it', async () => {
+    const a = await bootNode({ name: 'A', session: 'mesh-verdict-dead', team: 'dsh', sessionNodes: true, taskStaleTtlMs: 1500, port: await reservePort() })
+    try {
+      for (const id of [CALLER, OWER]) await deposit(a, id, id === OWER)
+      expect((await send(a, CALLER, handleOf(OWER), 'v-dead-1')).body).toMatchObject({ task_status: 'TASK_STATE_DELIVERED' })
+      await new Promise(resolve => setTimeout(resolve, 2500))
+      await send(a, OWER, handleOf(CALLER), 'v-dead-r', formatReceipt('v-dead-1', 'late but real', { outcome: 'completed' }))
+      expect(await rowFor(a, CALLER, 'v-dead-r')).toMatchObject({ receipt_for: 'v-dead-1', settlement: 'settled' })
+      expect(await rowFor(a, CALLER, 'v-dead-r')).not.toHaveProperty('settlement_reason')
+      const state = await (await fetch(`${a.baseUrl}/__dsh_a2a/state`)).json() as { archived?: Array<{ taskId: string; endedBy?: string }> }
+      expect(state.archived?.find(r => r.taskId === 'v-dead-1')).toMatchObject({ endedBy: 'receipt' })
+    } finally {
+      await a.dispose()
+    }
+  }, 60_000)
+})

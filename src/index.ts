@@ -924,9 +924,10 @@ export function apply(ctx: Context, config: Config): void {
     } catch (error) {
       logger.warn(`a2a: receipt-resolved listener rejected: ${String(error)}`)
     }
-    // #884 review B2: resolved without an owed row means a late answer to a row already archived (abandoned, cancelled,
-    // dead-lettered, or settled by another receipt): it settled nothing, so it is never a positive verdict.
-    if (!owedByHeader || resolved.late === true) {
+    // #884 review B2: resolved without an owed row means a late answer to a row already archived (abandoned, cancelled, or
+    // settled by another receipt): it settled nothing, so it is never a positive verdict. A dead-lettered row is still owed
+    // (the sweep only flips its status): its revival is `late` too, and is judged like any owed row below (#884 review B3).
+    if (!owedByHeader) {
       const ended = taskLedger.archive().find(r => r.taskId === resolved.taskId)?.endedBy
       return ended === 'cancelled' || ended === 'abandoned' ? { settlement: 'refused', reason: 'task-ended' } : { settlement: 'none', reason: ended === 'receipt' ? 'already-settled' : 'not-owed' }
     }
