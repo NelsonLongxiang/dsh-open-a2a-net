@@ -38,7 +38,7 @@ import { SettingsHistory } from './settings-history.ts'
 import { HealthReminders, HEALTH_TICK_MS, cleanName, type HealthProblem } from './health-reminders.ts'
 import { DecisionPush, PUSH_TICK_MS } from './decision-push.ts'
 import { QuestionGate, questionToken } from './question-gate.ts'
-import { DECISION_FILES_MAX, DecisionBook, decisionFiles, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
+import { DECISION_FILES_MAX, DecisionBook, decisionFiles, DECISION_NOTE_MAX, inputFor, needsInput, recommendedNeedsInput, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
@@ -626,8 +626,10 @@ export class SuperagentHost {
     if (op !== 'report') return { ok: false, code: 'op', error: 'op must be report, ack, handback, rules-propose, rules-apply, ticket-request, read, idle or error' }
     const r = (report ?? {}) as Record<string, unknown>
     if (typeof r.state !== 'string' || !['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(r.state) || typeof r.summary !== 'string' || r.summary.trim() === '') return { ok: false, code: 'report', error: 'a report needs a state and a summary' }
-    // #688 G1: a Pi seat's question is a decision card, as a local member's a2a_ticket_report requires (C1/C2): no bare question.
-    if (pi && typeof r.question === 'string') { const decision = parseDecision(r); if (typeof decision === 'string') return { ok: false, code: 'decision', error: `a question for the owner is a decision card: ${decision}` } }
+    // #688 G1, #888 D2: every remote member's question is a decision card (Pi or DSH): a malformed one, inputs included, refuses
+    // the whole report instead of falling back to a bare card. Inputs without a question are refused too.
+    if (typeof r.question === 'string') { const decision = parseDecision(r); if (typeof decision === 'string') return { ok: false, code: 'decision', error: `a question for the owner is a decision card: ${decision}` } }
+    else if (r.inputs !== undefined && r.inputs !== null) return { ok: false, code: 'inputs', error: 'inputs go with a question for the owner' }
     return this.report(entry.ref, { state: r.state as ReportState, summary: r.summary, ...(typeof r.question === 'string' || r.question === null ? { question: r.question as string | null } : {}), ...(typeof r.answers === 'string' ? { answers: r.answers } : {}), ...(typeof r.question === 'string' && typeof parseDecision(r) !== 'string' ? { decision: parseDecision(r) as DecisionSpec } : {}) }, typeof r.ticket_id === 'string' ? r.ticket_id : undefined, typeof r.pull_request === 'string' ? r.pull_request : undefined)
   }
 
@@ -656,7 +658,7 @@ export class SuperagentHost {
   }
 
   /** PR-C2, member host side: a served member's report goes to the team host (it answers whether it took it). */
-  async forwardReport(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string; ticket_id?: string; pull_request?: string; options?: readonly string[]; recommended?: string; level?: string }): Promise<Record<string, unknown>> {
+  async forwardReport(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string; ticket_id?: string; pull_request?: string; options?: readonly string[]; recommended?: string; level?: string; inputs?: Readonly<Record<string, unknown>> }): Promise<Record<string, unknown>> {
     const serves = this.settingsValue.serves
     if (serves === undefined || !serves.members.includes(member) || this.d.signedPost === undefined || this.d.handleOf === undefined) return { ok: false, code: 'not-member', error: 'this session serves no team' }
     try { return await this.d.signedPost(serves.url, '/a2a/superagent-team', { op: 'report', member: this.d.handleOf(member), report }) } catch (error) { return { ok: false, code: 'unreachable', error: String(error) } }
@@ -855,12 +857,19 @@ export class SuperagentHost {
     return { tickets, ...(outcome !== undefined ? { outcome } : {}) }
   }
 
+  /** #888 D4: whether a ticket's open question is a card with an option that needs input (decided on the decision page). */
+  private questionNeedsInput(ticketId: string, question: string): boolean {
+    const card = this.decisions.get(ticketCardId(ticketId, question))
+    return card !== undefined && card.decided === undefined && needsInput(card)
+  }
+
   /** market N1d: the answers the ticket's open question offers, from the card the member's question report raised. */
   choicesOf(ticketId: string): { options: string[]; recommended?: string } | undefined {
     const ticket = this.store.tickets.get(ticketId)
     if (ticket?.attention === undefined) return undefined
     const card = this.decisions.get(ticketCardId(ticket.id, ticket.attention.question))
-    if (card === undefined || card.options.length === 0) return undefined
+    // #888 D4: a question with an option that needs input is decided on this host only in phase one; no choices go out.
+    if (card === undefined || card.options.length === 0 || needsInput(card)) return undefined
     return { options: [...card.options], ...(card.recommended !== '' ? { recommended: card.recommended } : {}) }
   }
 
@@ -1369,7 +1378,10 @@ export class SuperagentHost {
 
   /** Design outbound-requests O3: an approver the owner named decides an outbound card it did not raise, with a reason. */
   approverDecide(session: string, id: string, option: unknown, reason: unknown): Record<string, unknown> {
-    const checked = approverCheck({ approvers: this.settingsValue.approvers ?? [], role: this.toolRoleOf(session), card: this.decisionCards().find(row => row.id === id), session, reason })
+    const card = this.decisionCards().find(row => row.id === id)
+    // #888 D3: an approver has no input fields and its reason is not an input; an option that needs input waits for the owner.
+    if (card !== undefined && typeof option === 'string' && inputFor(card, option) !== undefined) return { ok: false, code: 'needs-input', error: 'that option needs the owner to fill something in; only the owner can choose it on the decision page' }
+    const checked = approverCheck({ approvers: this.settingsValue.approvers ?? [], role: this.toolRoleOf(session), card, session, reason })
     return checked.ok ? this.decide(id, 'choose', option, `审批人 ${this.displayName(session)}：${checked.reason}`) : checked
   }
 
@@ -1435,15 +1447,26 @@ export class SuperagentHost {
     if (!parsedFiles.ok) return parsedFiles
     const attached = parsedFiles.files
     const words = typeof note === 'string' ? note.trim() : ''
+    if (words.length > DECISION_NOTE_MAX) return { ok: false, code: 'text', error: `a decision's words are at most ${String(DECISION_NOTE_MAX)} characters` }
     let chosen: string
     if (how === 'approve') {
       if (!oneClick(card.level) || card.recommended === '') return { ok: false, code: 'needs-choice', error: `a ${card.level} decision needs an option chosen, not one click` }
+      // #888 D3: a recommendation that needs input is never one click, whatever came with the request.
+      if (recommendedNeedsInput(card)) return { ok: false, code: 'needs-input', error: 'the recommended option needs you to fill something in: choose it and fill it in' }
       chosen = card.recommended
     } else if (how === 'choose') {
       if (typeof option === 'string' && card.options.includes(option)) chosen = option
       else if (option === undefined || option === null || option === '') { if (words === '') return { ok: false, code: 'choice', error: 'choose an option, or write your decision' }; chosen = '' }
       else return { ok: false, code: 'choice', error: 'that is not one of the options' }
     } else return { ok: false, code: 'how', error: 'how must be approve or choose' }
+    // #888 D3: an option that needs input is chosen only with it (the owner's own free-text decision, no option, stays open).
+    const required = chosen === '' ? undefined : inputFor(card, chosen)
+    if (required !== undefined) {
+      if (required.kind !== 'file' && words === '') return { ok: false, code: 'needs-input', error: `「${chosen}」需要你填写：${required.prompt}` }
+      if (required.kind !== 'text' && attached.length === 0) return { ok: false, code: 'needs-input', error: `「${chosen}」需要你附上文件：${required.prompt}` }
+      if (required.kind !== 'text' && this.d.blobExists !== undefined && attached.some(file => this.d.blobExists!(file.sha256) !== true)) return { ok: false, code: 'needs-input', error: 'an attached file is no longer on the file channel; stage it again' }
+    }
+    // The first line stays exactly 决定：<option>; readers of decided.text depend on it.
     const answer = [...(chosen !== '' ? [`决定：${chosen}`] : []), ...(words !== '' ? [`说明：${words}`] : []), ...attached.map(file => file.ref)].join('\n')
     const withFiles = attached.length > 0 ? { files: attached } : {}
     const at = this.now()
@@ -1671,7 +1694,7 @@ export class SuperagentHost {
     let ticket: Ticket
     try { ticket = this.engine.report(binding.ticketId, report) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
     const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
-    if (decision !== undefined && typeof report.question === 'string') this.decisions.forTicket({ ticketId: ticket.id, by: member, question: report.question, spec: { level: decision.level, options: decision.options, recommended: decision.recommended }, at: this.now(), ...(decision.files !== undefined ? { files: decision.files } : {}) })
+    if (decision !== undefined && typeof report.question === 'string') this.decisions.forTicket({ ticketId: ticket.id, by: member, question: report.question, spec: { level: decision.level, options: decision.options, recommended: decision.recommended, ...(decision.inputs !== undefined ? { inputs: decision.inputs } : {}) }, at: this.now(), ...(decision.files !== undefined ? { files: decision.files } : {}) })
     // R7b: a new question for a person goes to the observer first; the person path waits while it holds it.
     const asks = typeof report.question === 'string' && report.question.trim() !== '' && ticket.attention !== undefined && ticket.ended === undefined
     const route = asks ? this.questionGate.ask(ticket.id, member, ticket.title, ticket.attention!.question, Date.parse(this.now())) : 'person'
@@ -2127,6 +2150,9 @@ export class SuperagentHost {
     const ticket = this.store.tickets.get(ticketId)
     if (ticket === undefined || ticket.ended !== undefined) return { ok: false, code: 'ticket', error: 'no open ticket has that id' }
     if (ticket.attention === undefined) return { ok: false, code: 'no-question', error: 'that ticket has no open question' }
+    // #888 D3: a question with an option that needs input is answered on the decision page, not in plain text here.
+    const card = this.decisions.get(ticketCardId(ticket.id, ticket.attention.question))
+    if (card !== undefined && card.decided === undefined && needsInput(card)) return { ok: false, code: 'needs-input', error: '这个问题有需要填写的选项，请到决策页作答' }
     const trigger = this.workbenchTrigger(body)
     // Received and attached in one step, so the router never gets it as a candidate.
     try { this.engine.receive(trigger); this.engine.attach(ticketId, trigger.id) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
@@ -2297,7 +2323,8 @@ export class SuperagentHost {
         decisions: this.store.decisions.byThread(thread.key),
         replies: thread.ref.source === 'workbench' ? repliesOf(thread.ref.id) : [],
       })),
-      tickets: this.store.tickets.list().map(ticket => ({ ...ticket, stage: ticket.ended ? null : ticketStage(ticket) })),
+      // #888 D4: an open question whose card has an option that needs input says so, for the workbench's ticket page.
+      tickets: this.store.tickets.list().map(ticket => ({ ...ticket, ...(ticket.attention !== undefined && this.questionNeedsInput(ticket.id, ticket.attention.question) ? { attention: { ...ticket.attention, needsInput: true } } : {}), stage: ticket.ended ? null : ticketStage(ticket) })),
     }
   }
 

@@ -5,6 +5,10 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/faces/superagent
  */
 import { CLI_HANDLE_RE } from '../cli-deposit.ts'
+import { needsInput, recommendedNeedsInput } from '../superagent/host/decisions.ts'
+/** #888 D4: the two derived input flags the decision pages read; never stored with the card. */
+const inputFlags = (card: Record<string, unknown>): { needsInput: boolean; recommendedNeedsInput: boolean } => ({ needsInput: needsInput(card as never), recommendedNeedsInput: recommendedNeedsInput(card as never) })
+
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type WebServer from '@deepseek-ai/dsh-host-webserver'
@@ -272,7 +276,7 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
       handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
         const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
         // Each card names its team's canvas address: the right bar stages the owner's files to it (C8).
-        if (req.method === 'GET') { send(200, { decisions: superagentTeams.decisionCards().map(card => ({ ...card, ...(typeof card.team === 'string' && card.team !== '' ? { address: `${config.team}/canvas/${card.team}` } : {}) })), health: superagentTeams.health() }); return }
+        if (req.method === 'GET') { send(200, { decisions: superagentTeams.decisionCards().map(card => ({ ...card, ...inputFlags(card), ...(typeof card.team === 'string' && card.team !== '' ? { address: `${config.team}/canvas/${card.team}` } : {}) })), health: superagentTeams.health() }); return }
         readJsonBody(req, res, (body) => {
           const fields = body as { teamId?: unknown; id?: unknown; how?: unknown; option?: unknown; note?: unknown; files?: unknown }
           const team = superagentTeams.get(typeof fields.teamId === 'string' ? fields.teamId : undefined)

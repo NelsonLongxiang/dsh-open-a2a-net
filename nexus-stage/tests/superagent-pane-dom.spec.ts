@@ -629,3 +629,18 @@ describe('team tab across reloads and teams (nexus sidebar report 2026-11-13)', 
     expect(third.pane.root.querySelector<HTMLTextAreaElement>('textarea[aria-label="需求内容"]')!.value).toBe('加一个导出按钮')
   })
 })
+
+describe('#888 D4: a ticket question with an option that needs input', () => {
+  it('says to decide it in 等你拍板 and offers no answer box, on a request thread or not', () => {
+    const { pane } = mount()
+    pane.update(state({ tickets: [
+      ticket('t-in', { attention: { question: '附哪份合同？', needsInput: true }, stage: { stage: 'person', action: 'answer' }, channels: [{ source: 'workbench', thread: 'th-ask' }] }),
+      ticket('t-bot', { attention: { question: '用哪种格式？', needsInput: true }, stage: { stage: 'person', action: 'answer' }, channels: [{ source: 'a2a', thread: 'a2a:ctx' }] }),
+    ] }), sessions, NOW)
+    for (const card of Array.from(pane.root.querySelectorAll<HTMLElement>('.wb-sa-ticket'))) {
+      expect(card.querySelector('.wb-sa-needs-input')?.textContent).toContain('等你拍板')
+      expect(card.querySelector('textarea')).toBeNull()
+      expect(button(card, '回答')).toBeUndefined()
+    }
+  })
+})

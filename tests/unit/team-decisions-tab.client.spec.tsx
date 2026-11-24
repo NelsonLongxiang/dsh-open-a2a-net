@@ -2,7 +2,7 @@
 /** The right bar's decisions view (docs/design/superagent-decision-cards.md). */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { DecisionList, STAGE_REUSE_MS, canApprove, type DecisionRow } from '../../src/client/TeamDecisionsTab.tsx'
+import { DecisionList, STAGE_REUSE_MS, canApprove, inputMet, type DecisionRow } from '../../src/client/TeamDecisionsTab.tsx'
 import { en } from '../../src/client/locales.ts'
 
 const t = ((key: string, values?: Record<string, string>) => Object.entries(values ?? {}).reduce((text, [name, value]) => text.replace(`{${name}}`, value), (en as Record<string, string>)[key] ?? key)) as never
@@ -215,5 +215,54 @@ describe('files on a card (C8)', () => {
     fireEvent.click(screen.getByRole('button', { name: en['team.approve'] }))
     await waitFor(() => { expect(screen.getByRole('status').textContent).toContain(en['team.noFileTarget']) })
     expect(screen.getByText('要不要升级？')).toBeTruthy()
+  })
+})
+
+describe('#888 D4: options that need the owner to fill something in', () => {
+  const text = { 不升: { kind: 'text' as const, prompt: '写下不升的原因' } }
+  it('marks the option and shows its prompt; confirming waits for the words', async () => {
+    const f = serve([card({ inputs: text, needsInput: true, recommendedNeedsInput: false })])
+    render(<DecisionList t={t} />)
+    await screen.findByText('要不要升级？')
+    expect(screen.getByText(en['team.needsInput'])).toBeTruthy()
+    expect(screen.getByText('写下不升的原因')).toBeTruthy()
+    fireEvent.click(screen.getByRole('radio', { name: /不升/ }))
+    const confirm = screen.getByRole('button', { name: en['team.confirmChoice'] }) as HTMLButtonElement
+    expect(confirm.disabled).toBe(true)
+    fireEvent.change(screen.getByRole('textbox', { name: en['team.decisionNote'] }), { target: { value: '太贵' } })
+    expect(confirm.disabled).toBe(false)
+    fireEvent.click(confirm)
+    await waitFor(() => { expect(posts(f)).toEqual([{ id: 'd-1', how: 'choose', option: '不升', note: '太贵' }]) })
+  })
+  it('no one-click approval when the recommendation needs input', async () => {
+    serve([card({ inputs: { 升级: { kind: 'text', prompt: 'p' } }, needsInput: true, recommendedNeedsInput: true })])
+    render(<DecisionList t={t} />)
+    await screen.findByText('要不要升级？')
+    expect(screen.queryByRole('button', { name: en['team.approve'] })).toBeNull()
+    expect(canApprove(card({ recommendedNeedsInput: true }))).toBe(false)
+  })
+  it('a file option without a team canvas says why it cannot be answered', async () => {
+    serve([card({ inputs: { 不升: { kind: 'file', prompt: '附合同' } }, needsInput: true })])
+    render(<DecisionList t={t} />)
+    await screen.findByText('要不要升级？')
+    fireEvent.click(screen.getByRole('radio', { name: /不升/ }))
+    expect(screen.getByText(en['team.inputNoFileTarget'])).toBeTruthy()
+    expect((screen.getByRole('button', { name: en['team.confirmChoice'] }) as HTMLButtonElement).disabled).toBe(true)
+  })
+  it('counts split by whether the recommendation needs input, without host-closed cards', async () => {
+    serve([card({ id: 'a', inputs: { 升级: { kind: 'text', prompt: 'p' } }, needsInput: true, recommendedNeedsInput: true }), card({ id: 'b', question: '二', inputs: text, needsInput: true }), card({ id: 'c', question: '三' }), card({ id: 'd', question: '四', autoAck: { at: 'x', minutes: 30 } })])
+    render(<DecisionList t={t} />)
+    await screen.findByText('二')
+    expect(screen.getByText(`${en['team.countNeedsInput'].replace('{count}', '1')} · ${en['team.countDirect'].replace('{count}', '2')}`)).toBeTruthy()
+  })
+  it('inputMet: text needs words, file needs a file, text+file both', () => {
+    const row = card({ inputs: { a: { kind: 'text', prompt: 'p' }, b: { kind: 'file', prompt: 'p' }, c: { kind: 'text+file', prompt: 'p' } } })
+    expect(inputMet(row, 'a', ' ', 1)).toBe(false)
+    expect(inputMet(row, 'a', 'x', 0)).toBe(true)
+    expect(inputMet(row, 'b', 'x', 0)).toBe(false)
+    expect(inputMet(row, 'b', '', 1)).toBe(true)
+    expect(inputMet(row, 'c', 'x', 0)).toBe(false)
+    expect(inputMet(row, 'c', 'x', 1)).toBe(true)
+    expect(inputMet(row, '升级', '', 0)).toBe(true)
   })
 })

@@ -19,11 +19,61 @@ export const OPEN_CARDS_MAX = 10
 /** How long a decided card is kept, and how many at most: the record of what was decided, not an archive. */
 export const DECIDED_KEEP_MS = 30 * 24 * 3_600_000, DECIDED_KEEP_MAX = 500
 
-export interface DecisionSpec { readonly level: DecisionLevel; readonly options: readonly string[]; readonly recommended: string }
+/** #888 D1: what the owner must fill in when choosing one option: words, files, or both, and what to write. */
+export interface DecisionInput { readonly kind: 'text' | 'file' | 'text+file'; readonly prompt: string }
+export const INPUT_KINDS: readonly string[] = ['text', 'file', 'text+file']
+export const INPUT_PROMPT_MAX = 300
+export interface DecisionSpec {
+  readonly level: DecisionLevel
+  readonly options: readonly string[]
+  readonly recommended: string
+  /** #888 D1: per option, what the owner must fill in to choose it. Absent when no option needs input. */
+  readonly inputs?: Readonly<Record<string, DecisionInput>>
+}
+
+/** #888 D1: whether any option needs the owner to fill something in (derived, never stored). */
+export const needsInput = (card: Pick<DecisionSpec, 'inputs'>): boolean => card.inputs !== undefined && Object.keys(card.inputs).length > 0
+/** #888 D1: whether the recommended option needs input (derived, never stored); such a card has no one-click approval. */
+export const recommendedNeedsInput = (card: Pick<DecisionSpec, 'inputs' | 'recommended'>): boolean => card.recommended !== '' && card.inputs !== undefined && Object.prototype.hasOwnProperty.call(card.inputs, card.recommended)
+/** #888 D1: what choosing `option` requires, if anything. */
+export const inputFor = (card: Pick<DecisionSpec, 'inputs'>, option: string): DecisionInput | undefined => card.inputs !== undefined && Object.prototype.hasOwnProperty.call(card.inputs, option) ? card.inputs[option] : undefined
+
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+/** Control characters other than a tab. */
+const CONTROL = /[\u0000-\u0008\u000a-\u001f\u007f]/
+
+/**
+ * #888 D1: read the `inputs` of a card against its options. A missing or empty object means none; anything malformed is a
+ * reason to refuse the whole card.
+ */
+export function parseInputs(raw: unknown, options: readonly string[]): { ok: true; inputs?: Record<string, DecisionInput> } | { ok: false; error: string } {
+  if (raw === undefined || raw === null) return { ok: true }
+  if (typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'inputs must be an object keyed by option' }
+  const proto = Object.getPrototypeOf(raw)
+  if (proto !== Object.prototype && proto !== null) return { ok: false, error: 'inputs must be a plain object keyed by option' }
+  const keys = Object.keys(raw)
+  if (keys.length === 0) return { ok: true }
+  const inputs: Record<string, DecisionInput> = {}
+  for (const key of keys) {
+    if (FORBIDDEN_KEYS.has(key)) return { ok: false, error: `inputs cannot use the key ${key}` }
+    if (!options.includes(key)) return { ok: false, error: `each inputs key must be one of the options, copied exactly (${key.slice(0, 60)})` }
+    const entry = (raw as Record<string, unknown>)[key]
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return { ok: false, error: `inputs for ${key.slice(0, 60)} must be { kind, prompt }` }
+    const { kind, prompt } = entry as { kind?: unknown; prompt?: unknown }
+    if (typeof kind !== 'string' || !INPUT_KINDS.includes(kind)) return { ok: false, error: 'an input kind must be text, file or text+file' }
+    const text = typeof prompt === 'string' ? prompt.trim() : ''
+    if (text === '' || text.length > INPUT_PROMPT_MAX) return { ok: false, error: `an input prompt is required, at most ${String(INPUT_PROMPT_MAX)} characters` }
+    if (CONTROL.test(text)) return { ok: false, error: 'an input prompt cannot hold control characters' }
+    inputs[key] = { kind: kind as DecisionInput['kind'], prompt: text }
+  }
+  return { ok: true, inputs }
+}
 /** A file on a card (C8): staged on this host's file channel, granted to the team; `ref` is its "[A2A file] v1 …" line. */
 export interface DecisionFile { readonly sha256: string; readonly size: number; readonly name: string; readonly ref: string }
 /** How many files a card, or a decision on it, carries at most (the file channel's per-send limit). */
 export const DECISION_FILES_MAX = 16
+/** #888 D3: an owner's words on a decision, at most (the same limit as answering a ticket's question). */
+export const DECISION_NOTE_MAX = 20_000
 export interface StoredCard extends DecisionSpec {
   readonly id: string
   readonly question: string
@@ -52,14 +102,16 @@ export const oneClick = (level: DecisionLevel): boolean => level === 'P2' || lev
  * @param raw - `{ options, recommended, level? }`.
  * @returns the card's spec, or what is wrong with it.
  */
-export function parseDecision(raw: { options?: unknown; recommended?: unknown; level?: unknown }): DecisionSpec | string {
+export function parseDecision(raw: { options?: unknown; recommended?: unknown; level?: unknown; inputs?: unknown }): DecisionSpec | string {
   const options = Array.isArray(raw.options) ? raw.options.filter((o): o is string => typeof o === 'string').map(o => o.trim()).filter(o => o !== '') : []
   if (options.length < OPTIONS_MIN || options.length > OPTIONS_MAX || options.some(o => o.length > OPTION_MAX)) return `a decision needs ${String(OPTIONS_MIN)} to ${String(OPTIONS_MAX)} options of at most ${String(OPTION_MAX)} characters`
   if (new Set(options).size !== options.length) return 'the options must differ from each other'
   const recommended = typeof raw.recommended === 'string' ? raw.recommended.trim() : ''
   if (!options.includes(recommended)) return 'recommended must be one of the options, copied exactly'
   if (raw.level !== undefined && raw.level !== null && raw.level !== '' && !LEVELS.includes(String(raw.level))) return 'level must be P0, P1, P2 or P3'
-  return { level: (LEVELS.includes(String(raw.level)) ? raw.level : 'P1') as DecisionLevel, options, recommended }
+  const inputs = parseInputs(raw.inputs, options)
+  if (!inputs.ok) return inputs.error
+  return { level: (LEVELS.includes(String(raw.level)) ? raw.level : 'P1') as DecisionLevel, options, recommended, ...(inputs.inputs !== undefined ? { inputs: inputs.inputs } : {}) }
 }
 
 /** The stable id of a member's question on a ticket: a new question is a new card. */
@@ -156,6 +208,8 @@ export class DecisionBook {
   propose(input: { source: 'router' | 'observer' | 'health' | 'tool' | 'outbound' | 'staffing' | 'sender'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[]; outbound?: StoredCard['outbound'] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
     const question = input.question.trim()
     if (question === '' || question.length > QUESTION_MAX) return { ok: false, code: 'question', error: `question is required, at most ${String(QUESTION_MAX)} characters` }
+    // #888 D2: only the router's and an observer's own cards may ask the owner to fill something in; host-fixed cards never.
+    if (input.spec.inputs !== undefined && input.source !== 'router' && input.source !== 'observer') return { ok: false, code: 'inputs', error: 'this kind of card takes no inputs' }
     // Design owner-reporting R5: a choice the owner decided is final; the same question gets that decision back.
     // Only recommendations (router, observer): a health reminder may come back with its problem, a tool or outbound card has its own rule.
     const final = (source: StoredCard['source']): boolean => source === 'router' || source === 'observer'

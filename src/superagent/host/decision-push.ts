@@ -10,6 +10,7 @@
  */
 
 import type { StoredCard } from './decisions.ts'
+import { needsInput } from './decisions.ts'
 
 export const DECISION_CARD_HEADER = '[A2A decision-card] v1'
 /** The market's limits (v1 final; workbench-market #898 parseDecisionCardDoc): checked here so nothing it would refuse is sent. */
@@ -116,7 +117,7 @@ export interface DecisionPushDeps {
   readonly load: () => unknown
   readonly save: (kept: Kept) => void
   readonly nowMs: () => number
-  readonly logger: { warn: (format: string, ...args: unknown[]) => void }
+  readonly logger: { warn: (format: string, ...args: unknown[]) => void; info?: (format: string, ...args: unknown[]) => void }
 }
 
 /** The outbox of card events, kept across restarts; sent with the roster's transport. */
@@ -148,6 +149,8 @@ export class DecisionPush {
    */
   noted(event: PushEvent, card: StoredCard): void {
     if (!pushedSource(card.source) || !this.d.on()) return
+    // #888 D4: a card with inputs is answered on this host only in phase one; skipped, not refused (no false health problem).
+    if (needsInput(card)) { this.d.logger.info?.('superagent: decision card %s not pushed: it has options that need input', card.id); return }
     const team = this.d.team()
     if (team === undefined) return
     const kept = this.state()

@@ -116,6 +116,8 @@ export interface SuperagentHostDeps {
     transport:(permit:RecoveryPermit,mode:'send'|'query',current:()=>boolean)=>Promise<{accepted:boolean;ready?:boolean}>
     receipt:(binding:RecoveryBinding,caller:string,message:string)=>boolean
   }
+  /** #888 D3: whether a staged file is still on the file channel (an input that is a file must be). */
+  readonly blobExists?: (sha256: string) => boolean
   readonly outboundOutcome?: (input: { sender: string; task: string; address: string; message: string }) => { delivery: 'unknown' | 'not-sent' | 'accepted' }
   /**
    * PR-C2: a signed request to another a2a host (OriginClaim, body-bound, on this host's card key). Absent: no remote

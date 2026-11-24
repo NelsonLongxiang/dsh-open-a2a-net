@@ -312,6 +312,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       options: { type: 'array', items: { type: 'string' }, description: 'With a question: the 2 to 6 choices the owner decides between.' },
       recommended: { type: 'string', description: 'With a question: the option you recommend, copied exactly from options.' },
       level: { type: 'string', description: 'With a question: P0 irreversible or production, P1 significant, P2 routine and easy to undo, P3 trivial. Default P1.' },
+      inputs: { type: 'object', additionalProperties: true, description: 'With a question (#888): Per option, what the owner must fill in to choose it: { "<option, copied exactly>": { kind: text | file | text+file, prompt: what to write or attach } }. Use it whenever an answer needs the owner\'s words or files, instead of an unmarked 「其他（请说明）」 option.' },
       pull_request: { type: 'string', description: 'The URL of the pull request this ticket opened. The ticket then ends when that pull request merges or closes.' },
       answers: { type: 'string', description: 'The trigger id of the person\'s question this report answers.' },
       files: { type: 'array', items: { type: 'string' }, description: 'With a question: up to 16 files from your workspace for the owner to look at (paths relative to it). They show on the card for the owner to download, and the team can pull them.' },
@@ -319,7 +320,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('ticket report', value) },
     presentCall: args => ({ card: 'generic', title: `ticket report: ${String(args.state)}`, kind: 'other', rawInput: args }),
-    execute: async (args: { ticket_id: string; state: string; summary: string; question?: string; answers?: string; pull_request?: string; options?: string[]; recommended?: string; level?: string; files?: string[]; ygl?: string[] }, exec): Promise<Record<string, JsonValue>> => {
+    execute: async (args: { ticket_id: string; state: string; summary: string; question?: string; answers?: string; pull_request?: string; options?: string[]; recommended?: string; level?: string; inputs?: Record<string, unknown>; files?: string[]; ygl?: string[] }, exec): Promise<Record<string, JsonValue>> => {
       const h = host(exec)
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
       if (h === undefined || me === undefined || h.roleOf(me) !== 'member') return { ok: false, code: 'not-member', error: 'a2a_ticket_report serves only the superagent team members the owner named' }
@@ -338,6 +339,8 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       // A question reaches the owner as a decision card, so it must say what to decide between and what you would do (C1, C2).
       const decision = typeof question === 'string' ? parseDecision(args) : undefined
       if (typeof decision === 'string') return { ok: false, code: 'decision', error: `a question for the owner is a decision card: ${decision}` }
+      // #888 D2: inputs belong to a question's options; without a question they are refused, as files are.
+      if (args.inputs !== undefined && args.inputs !== null && decision === undefined) return { ok: false, code: 'inputs', error: 'inputs go with a question for the owner' }
       const serving = h.settings.serves?.members.includes(me) === true
       const wantFiles = Array.isArray(args.files) && args.files.length > 0
       if (wantFiles && (decision === undefined || serving)) return { ok: false, code: 'files', error: serving ? 'files on a question go only to a team on this host' : 'files go with a question for the owner' }
@@ -345,7 +348,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       if (!staged.ok) return json(staged) as Record<string, JsonValue>
       const report = { state: args.state as 'progress', summary, ...(question !== undefined ? { question } : {}), ...(str(args.answers) !== undefined ? { answers: str(args.answers)! } : {}) }
       // PR-C2: a session serving another host's team reports there, signed by this host's key.
-      const out = serving ? await h.forwardReport(me, { ...report, ...(decision !== undefined ? { options: decision.options, recommended: decision.recommended, level: decision.level } : {}), ticket_id: ticketId, ...(str(args.pull_request) !== undefined ? { pull_request: str(args.pull_request)! } : {}) }) : h.report(me, { ...report, ...(decision !== undefined ? { decision: { ...decision, ...(staged.files.length > 0 ? { files: staged.files } : {}) } } : {}) }, ticketId, str(args.pull_request))
+      const out = serving ? await h.forwardReport(me, { ...report, ...(decision !== undefined ? { options: decision.options, recommended: decision.recommended, level: decision.level, ...(decision.inputs !== undefined ? { inputs: decision.inputs } : {}) } : {}), ticket_id: ticketId, ...(str(args.pull_request) !== undefined ? { pull_request: str(args.pull_request)! } : {}) }) : h.report(me, { ...report, ...(decision !== undefined ? { decision: { ...decision, ...(staged.files.length > 0 ? { files: staged.files } : {}) } } : {}) }, ticketId, str(args.pull_request))
       return json(out) as Record<string, JsonValue>
     },
   }))
@@ -463,9 +466,10 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     recommended: { type: 'string', required: true, description: 'The option you recommend, copied exactly from options.' },
     level: { type: 'string', description: 'P0 irreversible or production, P1 significant, P2 routine and easy to undo, P3 trivial. Default P1.' },
     reason: { type: 'string', required: true, description: 'Why you recommend it, in a sentence or two (required: design owner-reporting R3).' },
+    inputs: { type: 'object', additionalProperties: true, description: '#888: Per option, what the owner must fill in to choose it: { "<option, copied exactly>": { kind: text | file | text+file, prompt: what to write or attach } }. Use it whenever an answer needs the owner\'s words or files, instead of an unmarked 「其他（请说明）」 option.' },
     files: { type: 'array', items: { type: 'string' }, description: 'Up to 16 files from your workspace the owner should look at to decide (paths relative to it). They show on the card for the owner to download.' },
   } as const
-  type CardArgs = { question?: string; options?: string[]; recommended?: string; level?: string; reason?: string; files?: string[] }
+  type CardArgs = { question?: string; options?: string[]; recommended?: string; level?: string; inputs?: Record<string, unknown>; reason?: string; files?: string[] }
   const raise = (h: SuperagentHost, source: 'router' | 'observer', by: string, args: CardArgs): Record<string, JsonValue> => {
     const spec = parseDecision(args)
     if (typeof spec === 'string') return { ok: false, code: 'decision', error: spec }
