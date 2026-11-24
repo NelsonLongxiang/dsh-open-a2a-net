@@ -44,7 +44,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/node-self
  */
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { rmSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -143,7 +143,9 @@ export function sessionSource(events: readonly unknown[], others: SessionLookups
   // older log has none either: both stay evidence.
   const localCalls = new Set<unknown>()
   for (const event of events) {
-    const r = event as { type?: unknown; data?: { message?: { toolCallId?: unknown; isError?: unknown }; meta?: { a2aPeerContent?: unknown } } } | null
+    const r = event as { type?: unknown; data?: { message?: { toolCallId?: unknown; isError?: unknown }; meta?: { a2aPeerContent?: unknown; a2aOutboundBody?: unknown } } } | null
+    // #881 v2: a result that carried another team's outbound result body (host-written meta) is remote evidence.
+    if (r?.type === 'tool/result' && r.data?.meta?.a2aOutboundBody === true) return { local: false, via: 'outbound-result', evidence: true }
     if (r?.type === 'tool/result' && r.data?.meta?.a2aPeerContent === false && r.data.message?.isError !== true) localCalls.add(r.data.message?.toolCallId)
   }
   for (const event of events) {
@@ -199,6 +201,8 @@ export const TAINT_CAP = 4096
  */
 export class SessionTaint {
   private rows: Array<{ session: string; via: string; at: string }> = []
+  /** #881 v2: sessions that received another team's outbound result body: never paraphrased or served to peers. */
+  private restrictedRows: string[] = []
   private readOnlyReason = ''
 
   constructor(private readonly root: string, private readonly now: () => string = () => new Date().toISOString()) {
@@ -229,6 +233,51 @@ export class SessionTaint {
       }
       if (!this.rows.some(x => x.session === r.session)) this.rows.push({ session: r.session, via: r.via, at: typeof r.at === 'string' ? r.at : '' })
     }
+    const restricted = (raw as { restricted?: unknown }).restricted
+    if (restricted === undefined) return
+    if (!Array.isArray(restricted) || !restricted.every(s => typeof s === 'string' && s !== '')) {
+      const aside = `${this.file}.corrupt-${this.now().replace(/[:.]/g, '-')}`
+      try { copyFileSync(this.file, aside) } catch { /* the original stays in place either way */ }
+      this.readOnlyReason = `node-taint.json has a malformed restricted list (copy kept at ${aside}); every session reads as tainted and restricted until it is repaired`
+      this.rows = []
+      return
+    }
+    this.restrictedRows = [...new Set(restricted as string[])]
+  }
+
+  /** Write the given state; true only when it is on disk. */
+  private persist(rows: ReadonlyArray<{ session: string; via: string; at: string }>, restricted: readonly string[]): boolean {
+    if (this.root === '' || this.readOnlyReason !== '') return false
+    const tmp = `${this.file}.${String(process.pid)}.tmp`
+    try {
+      mkdirSync(this.root, { recursive: true })
+      writeFileSync(tmp, JSON.stringify({ sessions: rows, ...(restricted.length > 0 ? { restricted } : {}) }), { mode: 0o600 })
+      renameSync(tmp, this.file)
+      return true
+    } catch {
+      try { rmSync(tmp, { force: true }) } catch { /* nothing more to do */ }
+      return false
+    }
+  }
+
+  /** Whether a session received an outbound result body (#881 v2). Fail-closed while the file is unreadable. */
+  isRestricted(session: string): boolean {
+    if (this.readOnlyReason !== '') return true
+    return this.restrictedRows.includes(session)
+  }
+
+  /**
+   * #881 v2: mark a session restricted (and tainted) before a body is delivered into it. True only when the mark is on disk:
+   * a mark that cannot be written blocks the delivery instead of holding in memory alone.
+   */
+  markRestricted(session: string): boolean {
+    if (session === '' || this.readOnlyReason !== '') return false
+    const rows = this.rows.some(r => r.session === session) ? this.rows : [...this.rows, { session, via: 'outbound-result', at: this.now() }].slice(-TAINT_CAP)
+    const restricted = this.restrictedRows.includes(session) ? this.restrictedRows : [...this.restrictedRows, session]
+    if (!this.persist(rows, restricted)) return false
+    this.rows = rows
+    this.restrictedRows = restricted
+    return true
   }
 
   get readOnly(): string { return this.readOnlyReason }
@@ -243,13 +292,8 @@ export class SessionTaint {
   mark(session: string, via: string): void {
     if (session === '' || this.of(session) !== '') return
     this.rows = [...this.rows, { session, via: via === '' ? 'delivery' : via, at: this.now() }].slice(-TAINT_CAP)
-    if (this.root === '' || this.readOnlyReason !== '') return
-    try {
-      mkdirSync(this.root, { recursive: true })
-      const tmp = `${this.file}.${String(process.pid)}.tmp`
-      writeFileSync(tmp, JSON.stringify({ sessions: this.rows }), { mode: 0o600 })
-      renameSync(tmp, this.file)
-    } catch { /* memory still holds it for this process; the log backstop covers a restart */ }
+    // Memory holds the mark even when it cannot be written; the log backstop covers a restart.
+    this.persist(this.rows, this.restrictedRows)
   }
 }
 

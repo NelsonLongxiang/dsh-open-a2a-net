@@ -308,3 +308,25 @@ describe('control proxy /__dsh_a2a/remote-session-log (0.6.15)', () => {
     expect(body.error).toContain('team or peer is required')
   })
 })
+
+describe('#881 v2: a session that received an outbound result body is not served on /a2a/log', () => {
+  it('its tail is refused and it is left out of the list; other sessions are served as before', async () => {
+    const restricted = 'session-cccc3333-0000-4000-8000-000000000000'
+    const open = 'session-dddd4444-0000-4000-8000-000000000000'
+    const m = await mount()
+    mounted.push(m.dispose)
+    await m.dispose(); mounted.pop()
+    writeFileSync(join(m.home, 'a2a', 'node-taint.json'), JSON.stringify({ sessions: [{ session: restricted, via: 'outbound-result', at: '' }], restricted: [restricted] }))
+    const again = await mount({ dshHome: m.home })
+    mounted.push(again.dispose)
+    // The plugin reads dshHome (m.home); mount() reports its own fresh directory, so the logs go under m.home.
+    writeLog(m.home, restricted, ['受限正文'])
+    writeLog(m.home, open, ['普通对话'])
+    const tail = await (await fetch(logUrl(again.port, { caller_session: 'dsh', id: restricted }))).json() as { ok: boolean; error?: string; messages?: unknown }
+    expect(tail).toEqual({ ok: false, error: 'session unavailable' })
+    const list = await (await fetch(logUrl(again.port, { caller_session: 'dsh' }))).json() as { ok: boolean; sessions: Array<{ id: string }> }
+    expect(list.sessions.map(row => row.id)).toEqual([open])
+    const served = await (await fetch(logUrl(again.port, { caller_session: 'dsh', id: open }))).json() as { ok: boolean; messages: Array<{ text: string }> }
+    expect(served.messages.map(row => row.text)).toEqual(['普通对话'])
+  })
+})
