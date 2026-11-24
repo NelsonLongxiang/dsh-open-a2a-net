@@ -134,6 +134,8 @@ export interface WireDeps {
   /** #114 S6: record the version if it moved and re-judge affected tasks (observe only). */
   readonly observeAuthorization: (cause: string) => void
   readonly scanSessionLogList: () => Array<{ id: string; mtimeMs: number; sizeBytes: number }>
+  /** #881 v2: a session that received an outbound result body is never served to peers. */
+  readonly restrictedSession?: (id: string) => boolean
   readonly readSessionLogTail: (id: string, limit: number) => { ok: true; id: string; messages: Array<{ role: string; text: string; time?: number }> } | { ok: false; error: string }
   readonly taskLedger: TaskLedger
   /**
@@ -472,11 +474,15 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
       }
       if (id === '') {
         try {
-          const rows = scanSessionLogList()
+          const rows = scanSessionLogList().filter(row => d.restrictedSession?.(row.id) !== true)
           send(200, { ok: true, count: rows.length, sessions: rows.slice(0, 50) })
         } catch (error) {
           send(200, { ok: false, error: `transcript list failed: ${error instanceof Error ? error.message : String(error)}` })
         }
+        return
+      }
+      if (d.restrictedSession?.(id) === true) {
+        send(200, { ok: false, error: 'session unavailable' })
         return
       }
       try {

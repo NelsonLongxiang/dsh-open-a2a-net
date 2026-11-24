@@ -150,6 +150,9 @@ export function attentionText(text: string, question: string): string {
 /** The most a superagent tool result shows the model, in characters of its JSON. */
 export const SAID_CAP = 12_000
 
+/** #881 v2: whether a read result carried an outbound result body, persisted on tool/result for the taint backstop. */
+export const outboundBodyMeta = (args: unknown, value: unknown): { a2aOutboundBody: boolean } => ({ a2aOutboundBody: (args as { kind?: unknown } | null)?.kind === 'outbound_result' && typeof (value as { body?: unknown } | null)?.body === 'string' })
+
 export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string) => SuperagentHost | undefined): void {
   /** The team the calling session has a role in. */
   const host = (exec: { agent?: { id: unknown } }): SuperagentHost | undefined => exec.agent === undefined ? undefined : teamOf(String(exec.agent.id))
@@ -218,7 +221,8 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       ticket_id: { type: 'string', description: 'For kind ticket and outbound_result.' },
       task_id: { type: 'string', description: 'For kind outbound_result: the outbound request task.' },
     },
-    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('superagent read', value) },
+    // #881 v2: the host-written mark that this result carried an outbound result body (the log backstop of the taint).
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('superagent read', value), presentationMeta: outboundBodyMeta },
     presentCall: args => ({ card: 'generic', title: `superagent read ${String(args.kind)}`, kind: 'other', rawInput: args }),
     execute: async (args: { kind: string; trigger_id?: string; ticket_id?: string; task_id?: string }, exec): Promise<Record<string, JsonValue>> => {
       const h = asRouter(exec)
@@ -631,7 +635,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       ticket_id: { type: 'string', description: 'For kind ticket and outbound_result.' },
       task_id: { type: 'string', description: 'For kind outbound_result: the outbound request task.' },
     },
-    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_ticket_read', value) },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_ticket_read', value), presentationMeta: outboundBodyMeta },
     presentCall: args => ({ card: 'generic', title: `a2a_ticket_read ${String(args.kind)}`, kind: 'read', rawInput: args }),
     execute: async (args: { kind?: string; ticket_id?: string; task_id?: string; session_id?: string; since?: string; source?: string; limit?: number }, exec): Promise<Record<string, JsonValue>> => {
       const h = host(exec)

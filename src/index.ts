@@ -2310,6 +2310,9 @@ export function apply(ctx: Context, config: Config): void {
     stageFiles: (id, paths, canvas) => stageCardFiles({ blobStore, from: originOf(ownCardUrl), cwd: (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd, team: `${config.team}/canvas/${canvas}`, by: id }, paths),
     memberTurn: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : memberTurnFrom(id, sessionEventsOf(agent), ctx.get('jobs' as never), message => logger.warn(message)) },
     teamSend: args => teamCanvasSend(args),
+    // #881 v2: a body reaches a session only after it is durably marked restricted (and tainted).
+    restrict: id => nodeTaint.markRestricted(id),
+    restricted: id => nodeTaint.isRestricted(id),
     narrowRecovery:{identity:caller=>requestRecovery.identity(caller),proposal:binding=>requestRecovery.proposal(binding),transport:(permit,mode,current)=>requestRecovery.transport(permit,mode,current),receipt:(binding,caller,message)=>requestRecovery.receipt(binding,caller,message)},
     outboundOutcome: ({ sender, task, address, message }) => {
       const verdict = idempotencyStore.query(task, peerPayloadFingerprint({ caller: sender, team: homeCanvasTeam(address, ownCanvasFingerprint), message, noWait: true }))
@@ -3681,6 +3684,8 @@ export function apply(ctx: Context, config: Config): void {
       observeAuthorization,
       scanSessionLogList,
       readSessionLogTail,
+      // #881 v2: sessions that received an outbound result body are not served to peers.
+      restrictedSession: id => nodeTaint.isRestricted(id),
       taskLedger,
       receiptReplayAllowed:(message,caller,team,claim)=>{
         const parsed=parseReceipt(message);if(!parsed||!claim.bound||claim.bodyBound!==true||!claimCovers(caller,claim.caller)||!isRootOriginUrl(claim.callerUrl))return false

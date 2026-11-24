@@ -196,6 +196,15 @@ export class OutboundResults {
     return { status: row.clipped === true ? 'truncated' : 'ready', truncated: row.clipped === true, hasBody: true, ...base }
   }
 
+  /** The stored body of a result that reads ready or truncated, for the delivery pipeline (never served as is). */
+  bodyOf(ticketId: string, task: string): { readonly text: string; readonly hash: string; readonly outcome?: string; readonly source: 'local' | 'wire' | 'none'; readonly clipped: boolean } | undefined {
+    const view = this.view(ticketId, task)
+    if (view?.status !== 'ready' && view?.status !== 'truncated') return undefined
+    const row = this.index.find(r => r.key === `${ticketId}\u0000${task}`)!
+    const body = this.bodies.find(b => b.gen === row.gen && b.key === row.key)!
+    return { text: body.text, hash: body.hash, ...(row.outcome !== undefined ? { outcome: row.outcome } : {}), source: row.source, clipped: row.clipped === true }
+  }
+
   /**
    * Write bodies first, then the index that names their generation (a stop in between leaves an orphan, never a dangling
    * row), and only then take them as the store's state. A failed write leaves memory as it was and closes the store until a
@@ -218,7 +227,7 @@ export class OutboundResults {
 
 const fileBytes = (rows: readonly unknown[]): number => Buffer.byteLength(JSON.stringify({ version: 1, rows }), 'utf8')
 
-function writePrivate(path: string, data: string): void {
+export function writePrivate(path: string, data: string): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const tmp = `${path}.tmp-${randomUUID()}`
   try {

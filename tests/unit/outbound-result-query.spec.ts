@@ -57,7 +57,8 @@ describe('#881 v2: recording a verified outbound result', () => {
     receive(t.host, receipt())
     for (const f of ['outbound-results.json', 'outbound-bodies.json']) expect(statSync(join(t.home, 'superagent', f)).mode & 0o777).toBe(0o600)
     const out = t.host.outboundResult('session-r', t.ticketId, T)
-    expect(out).toMatchObject({ ok: true, status: 'ready', hasBody: true, outcome: 'completed', sourceCompleteness: 'complete' })
+    // Slice 2: the body is stored, but with no disclosure policy installed it is withheld.
+    expect(out).toMatchObject({ ok: true, status: 'unavailable', reason: 'policy', hasBody: true, outcome: 'completed', sourceCompleteness: 'complete' })
     expect(JSON.stringify(out)).not.toContain('line two')
   })
   it('a receipt the ledger did not settle records nothing', async () => {
@@ -93,7 +94,7 @@ describe('#881 v2: the two read tools serve kind outbound_result first', () => {
     registerSuperagentTools({ tools: { register: (tool: { name: string }) => { registered.set(tool.name, tool as never) } } } as never, id => (t.host.roleOf(id) !== undefined ? t.host : undefined))
     const as = (id: string) => ({ agent: { id }, signal: new AbortController().signal })
     const sread = registered.get('superagent_read')!, tread = registered.get('a2a_ticket_read')!
-    expect(await sread.execute({ kind: 'outbound_result', ticket_id: t.ticketId, task_id: T }, as('session-r'))).toMatchObject({ ok: true, status: 'ready', hasBody: true })
+    expect(await sread.execute({ kind: 'outbound_result', ticket_id: t.ticketId, task_id: T }, as('session-r'))).toMatchObject({ ok: true, status: 'unavailable', reason: 'policy', hasBody: true })
     expect(await sread.execute({ kind: 'outbound_result', ticket_id: t.ticketId.slice(0, -1), task_id: T }, as('session-r'))).toEqual(RESULT_UNAVAILABLE)
     expect(await tread.execute({ kind: 'outbound_result', ticket_id: t.ticketId, task_id: T }, as('session-o'))).toEqual({ ok: true, status: 'ready' })
     expect(await tread.execute({ kind: 'outbound_result', ticket_id: 'nope', task_id: T }, as('session-o'))).toEqual(RESULT_UNAVAILABLE)
@@ -115,7 +116,7 @@ describe('#881 v2 B1: who may read which status', () => {
     const t = await seeded(); receive(t.host, receipt())
     const real = t.host.executor.bindingFor.bind(t.host.executor)
     const spy = vi.spyOn(t.host.executor, 'bindingFor').mockImplementation((m: string, id: string) => (m === 'session-m' && id === t.ticketId ? {} as never : m === 'session-m' ? real(m, id) : undefined))
-    expect(t.host.outboundResult('session-m', t.ticketId, T)).toMatchObject({ ok: true, status: 'ready' })
+    expect(t.host.outboundResult('session-m', t.ticketId, T)).toMatchObject({ ok: true, status: 'unavailable', reason: 'policy' })
     expect(t.host.outboundResult('session-o', t.ticketId, T)).toEqual(RESULT_UNAVAILABLE)
     spy.mockReturnValue(undefined)
     expect(t.host.outboundResult('session-m', t.ticketId, T)).toEqual(RESULT_UNAVAILABLE)
@@ -131,7 +132,7 @@ describe('#881 v2 B1: who may read which status', () => {
     vi.spyOn(t.host, 'isObserver').mockImplementation((s: string) => s === 'session-o')
     const real = t.host.store.tickets.get(t.ticketId)!
     vi.spyOn(t.host.store.tickets, 'get').mockImplementation((id: string) => (id === t.ticketId ? { ...real, ended: { outcome: 'done' } } as never : undefined))
-    expect(t.host.outboundResult('session-r', t.ticketId, T)).toMatchObject({ ok: true, status: 'ready' })
+    expect(t.host.outboundResult('session-r', t.ticketId, T)).toMatchObject({ ok: true, status: 'unavailable', reason: 'policy' })
     expect(t.host.outboundResult('session-m', t.ticketId, T)).toEqual(RESULT_UNAVAILABLE)
     expect(t.host.outboundResult('session-o', t.ticketId, T)).toEqual(RESULT_UNAVAILABLE)
   })
