@@ -2,7 +2,7 @@
 /** The right bar's decisions view (docs/design/superagent-decision-cards.md). */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { DecisionList, STAGE_REUSE_MS, canApprove, inputMet, type DecisionRow } from '../../src/client/TeamDecisionsTab.tsx'
+import { DecisionList, STAGE_REUSE_MS, canApprove, inputMet, inputOf, type DecisionRow } from '../../src/client/TeamDecisionsTab.tsx'
 import { en } from '../../src/client/locales.ts'
 
 const t = ((key: string, values?: Record<string, string>) => Object.entries(values ?? {}).reduce((text, [name, value]) => text.replace(`{${name}}`, value), (en as Record<string, string>)[key] ?? key)) as never
@@ -264,5 +264,15 @@ describe('#888 D4: options that need the owner to fill something in', () => {
     expect(inputMet(row, 'c', 'x', 0)).toBe(false)
     expect(inputMet(row, 'c', 'x', 1)).toBe(true)
     expect(inputMet(row, '升级', '', 0)).toBe(true)
+  })
+})
+
+describe('#892 review follow-up: inputOf reads own keys only', () => {
+  it('an option called constructor or toString has no inherited input', () => {
+    const row = card({ options: ['constructor', '乙'], recommended: 'constructor', inputs: { 乙: { kind: 'text', prompt: 'p' } } })
+    expect(inputOf(row, 'constructor')).toBeUndefined()
+    expect(inputOf(row, 'toString')).toBeUndefined()
+    expect(inputMet(row, 'constructor', '', 0)).toBe(true)
+    expect(inputOf(row, '乙')).toEqual({ kind: 'text', prompt: 'p' })
   })
 })
