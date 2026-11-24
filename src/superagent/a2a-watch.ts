@@ -224,6 +224,7 @@ interface MailRow {
   admission?: string
   settlement?: string
   settlement_reason?: string
+  truncated?: true
 }
 
 /** Where one mailbox row went: a Trigger (whose scope then decides), a duplicate copy, or unreadable. */
@@ -275,6 +276,8 @@ export function translate(row: unknown, epoch: string): Translation {
         // #881 v2 B2: the network ledger's verdict on this receipt, from the row's field (never from the text).
         ...(settlement !== undefined ? { settlement } : {}),
         ...(settlementReason !== undefined ? { settlementReason } : {}),
+        // #881 v2: the mailbox cut this text (gh#113); a cut receipt never yields a result body.
+        ...(mail.truncated === true ? { truncated: true } : {}),
         // Observation only: what S13 ② would have given a verified caller. S21 replaced it with the rule-based inferred
         // path; it rides along for the audit and nothing reads it for a decision.
         ...(proof !== undefined && TRUSTED_PROOFS.has(proof) ? { s13Strength: 'explicit-if-allowed' } : {}),
