@@ -1,6 +1,6 @@
 # A2A 网络受信 LAN 部署方案（形态 A：pocket 隧道 + originClaimUrl）
 
-**交付对象**：运维（.156 / .157 / .85 三台受信 LAN 生产节点）
+**交付对象**：运维（lan-win-a / lan-ubuntu-a / lan-ubuntu-b 三台受信 LAN 生产节点）
 **编写**：dsh-open-a2a-net 开发席（dsh/66abc2cf）· 2026-10-24
 **状态基线**：dsh 0.2.1-rc.2 · @nelsonlongxiang/dsh-open-a2a-net 0.6.26（bc76ad4）
 **生效判据**：任意两节点互看 `linked ✓ verified ✓`（详见 §6 验收）
@@ -24,9 +24,9 @@
 
 | 节点 | 系统 | LAN IP | dsh web | pocket | 现状 |
 |---|---|---|---|---|---|
-| .156 | Windows | 10.20.30.10 | 127.0.0.1:3080 | 13080 | **0.6.24 待升级**（升级包见 §5.2）；originClaimUrl 待设 |
-| .157 | Ubuntu | 10.20.30.11 | 127.0.0.1:3080 | 13080 | 0.6.26 ✓ 已互链 .85 |
-| .85 | Ubuntu | 10.20.30.13 | 127.0.0.1:3080 | 13080 | 0.6.26 ✓ 已互链 .157 |
+| lan-win-a | Windows | 10.20.30.10 | 127.0.0.1:3080 | 13080 | **0.6.24 待升级**（升级包见 §5.2）；originClaimUrl 待设 |
+| lan-ubuntu-a | Ubuntu | 10.20.30.11 | 127.0.0.1:3080 | 13080 | 0.6.26 ✓ 已互链 lan-ubuntu-b |
+| lan-ubuntu-b | Ubuntu | 10.20.30.13 | 127.0.0.1:3080 | 13080 | 0.6.26 ✓ 已互链 lan-ubuntu-a |
 | 3081（测试参考） | Windows | 10.20.30.10:3081 | 直接 LAN 绑（形态 B，非本方案） | — | 0.6.26 |
 
 > 测试宿主 3081 走形态 B（直接绑定+密钥门），**不属于本方案范围**，仅供验收时做对照。
@@ -72,13 +72,13 @@ dsh web --port 3080 --no-open        # 默认绑 127.0.0.1，不要加 --host �
 | `peers` | 互种=运营者链接（W3 basis-3）。链接即授权：跨机团队调节（/a2a/canvas-op）凭它放行 | 填**对端**的 pocket 口；不要填自己 |
 | `wakeJoinedOnBoot` | 重启后冷会话自动唤醒（保持既有行为） | 照旧 |
 
-> .157/.85 的 `originClaimUrl` 已于 2026-10-24 设置并验证（互看 linked ✓）。**本方案剩余动作集中在 .156。**
+> lan-ubuntu-a/lan-ubuntu-b 的 `originClaimUrl` 已于 2026-10-24 设置并验证（互看 linked ✓）。**本方案剩余动作集中在 lan-win-a。**
 
-### 3.4 Windows 节点（.156）补丁位置
+### 3.4 Windows 节点（lan-win-a）补丁位置
 
-`.156` 的 a2a 配置当前在 `C:\Users\<user>\.dsh\profiles\web\cordis.patch.yml` 的 `- id: a2a` 块。运维操作：
+`lan-win-a` 的 a2a 配置当前在 `C:\Users\<user>\.dsh\profiles\web\cordis.patch.yml` 的 `- id: a2a` 块。运维操作：
 
-1. 追加/修改上述五键（peers 填 .157/.85 两台）。
+1. 追加/修改上述五键（peers 填 lan-ubuntu-a/lan-ubuntu-b 两台）。
 2. **重启 3080 宿主属于属主专属门**：运维准备好配置后，向属主申请重启窗口（一次重启=九件叠加重启窗，见 §7）。
 
 ## 4. 节点间信任动作（一次性）
@@ -91,13 +91,13 @@ dsh web --port 3080 --no-open        # 默认绑 127.0.0.1，不要加 --host �
 
 ## 5. 升级与部署步骤（运维执行单）
 
-### 5.1 版本统一（.156 从 0.6.24 → 0.6.26）
+### 5.1 版本统一（lan-win-a 从 0.6.24 → 0.6.26）
 
-升级包：`C:\tmp\gh34-sdk\nelsonlongxiang-dsh-open-a2a-net-0.6.26.tgz`（=master bc76ad4 构建；.157/.85 已在同版本）。
+升级包：`<upgrade-package-dir>\nelsonlongxiang-dsh-open-a2a-net-0.6.26.tgz`（=master bc76ad4 构建；lan-ubuntu-a/lan-ubuntu-b 已在同版本）。
 
 ```powershell
-# .156 上（管理员）：
-Copy-Item C:\tmp\gh34-sdk\nelsonlongxiang-dsh-open-a2a-net-0.6.26.tgz C:\Users\<user>\.dsh\plugins-data\ -Force
+# lan-win-a 上（管理员）：
+Copy-Item <upgrade-package-dir>\nelsonlongxiang-dsh-open-a2a-net-0.6.26.tgz C:\Users\<user>\.dsh\plugins-data\ -Force
 $env:DSH_HOME='C:\Users\<user>\.dsh'
 Set-Location C:\Users\<user>\.dsh\profiles\web
 corepack pnpm remove '@nelsonlongxiang/dsh-open-a2a-net' --config.minimum-release-age=0
@@ -122,7 +122,7 @@ curl http://127.0.0.1:3080/__dsh_a2a/owner-settings               # 三键面板
 
 ### 5.3 重启流程（每台）
 
-**Linux（.157/.85 已完成，此为复现单）：**
+**Linux（lan-ubuntu-a/lan-ubuntu-b 已完成，此为复现单）：**
 
 ```bash
 P=$(pgrep -f "dsh web --port 3080" | head -1)   # 精确 PID，勿模式杀全部
@@ -131,14 +131,14 @@ nohup dsh web --port 3080 --no-open >> /tmp/dsh-web-3080.log 2>&1 &
 # 25 秒后按 §5.2 验指纹
 ```
 
-**Windows（.156）：**（v1.18 起无需属主点头；重启生产宿主属高档，凭非自我评审 PASS 执行）
+**Windows（lan-win-a）：**（v1.18 起无需属主点头；重启生产宿主属高档，凭非自我评审 PASS 执行）
 
 ```powershell
 Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
   Where-Object { $_.CommandLine -match 'bin\.js web --port 3080' } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }   # 精确 PID
 Start-Sleep -Seconds 5
-Start-Process -FilePath 'D:\node-v24.12.0-win-x64\dsh.cmd' -ArgumentList 'web','--port','3080','--no-open' -WindowStyle Hidden
+Start-Process -FilePath '<dsh-install-dir>\dsh.cmd' -ArgumentList 'web','--port','3080','--no-open' -WindowStyle Hidden
 # 30 秒后按 §5.2 验指纹
 ```
 
@@ -160,7 +160,7 @@ Start-Process -FilePath 'D:\node-v24.12.0-win-x64\dsh.cmd' -ArgumentList 'web','
 
 ## 7. 与属主重启窗的关系
 
-.156 重启即触发「九件叠加重启窗」（0.6.26 升级 / 建联三角 / 派发回执落抽屉 / 远端下拉填满 / 画布成员卡 / 目录收窄 / 舰队团队规划 / 密钥门 / 远端框保位）。**运维准备就绪后执行 §5.3（v1.18 起无需属主开窗；生产重启属高档，凭非自我评审 PASS 放行，§5.2/§6 验证照做）。**
+lan-win-a 重启即触发「九件叠加重启窗」（0.6.26 升级 / 建联三角 / 派发回执落抽屉 / 远端下拉填满 / 画布成员卡 / 目录收窄 / 舰队团队规划 / 密钥门 / 远端框保位）。**运维准备就绪后执行 §5.3（v1.18 起无需属主开窗；生产重启属高档，凭非自我评审 PASS 放行，§5.2/§6 验证照做）。**
 
 ## 8. 常见故障速查
 
@@ -178,7 +178,7 @@ Start-Process -FilePath 'D:\node-v24.12.0-win-x64\dsh.cmd' -ArgumentList 'web','
 **场景**：远程机（如 NAT 后的 VM、点对点隧道对端）仅宿主一台可达。**实测结论**：发现层 gossip 自动让全网知道它；建联层只需把它的落点经宿主面向 LAN 转发——一条 portproxy，无 VPN、无中继代码。
 
 ```
-①宿主(.156)开转发（管理员，规则持久跨重启）：
+①宿主(lan-win-a)开转发（管理员，规则持久跨重启）：
   netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=<LAN口> connectaddress=<远程内网址> connectport=<远程a2a口>
   实测：13909 → 192.168.200.136:3091
 
@@ -192,7 +192,7 @@ Start-Process -FilePath 'D:\node-v24.12.0-win-x64\dsh.cmd' -ArgumentList 'web','
 ④暖目录（各机轮询两次 state 或等 60s）→ linked ✓ verified ✓
 ```
 
-**实测验收**：.157 → VM(13909) linked✓ verified✓ · .85 → VM linked✓ verified✓ · VM 经 gossip 自学全网 8 peer。VM 常驻=用户级 systemd + `loginctl enable-linger`（免 sudo）。
+**实测验收**：lan-ubuntu-a → VM(13909) linked✓ verified✓ · lan-ubuntu-b → VM linked✓ verified✓ · VM 经 gossip 自学全网 8 peer。VM 常驻=用户级 systemd + `loginctl enable-linger`（免 sudo）。
 
 **语义要点**：种子地址即「运营者链接」——各机种的是代理地址，信任落在宿主转发这个运营行为上；远程机的卡签名仍是它自己的钥（验签不受代理影响）。
 
