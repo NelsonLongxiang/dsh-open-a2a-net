@@ -160,7 +160,10 @@ export interface StaffingDeps {
   /** The session list's title (the host's session-title service): read a live local session's title, rename it (an explicit title, which the host pins), or put the automatic title back. */
   readonly sessionTitleRead?: (session: string) => { live: boolean; title?: string }
   readonly sessionTitleRename?: (session: string, title: string) => { ok: true; title: string } | { ok: false; error: string }
-  readonly sessionTitleReset?: (session: string) => boolean
+  /** Back to the automatic title; true only when the host no longer keeps a user title (an empty session cannot unpin). */
+  readonly sessionTitleReset?: (session: string) => boolean | Promise<boolean>
+  /** Whether the host's session-title service is mounted now; checked at submit, not left to fail at apply. */
+  readonly sessionTitleAvailable?: () => boolean
   /** A CLI member's pinned home origin (#809 R3: restored when a removal is undone). */
   readonly canvasCliHome?: (member: string) => string | undefined
   /** The owner's policy overrides, by source kind and op. */
@@ -399,7 +402,11 @@ export class StaffingExecutor {
       } else if (input.op === 'session.title.set') {
         if (typeof params.session !== 'string' || !SESSION.test(params.session)) return { ok: false, code: 'invalid', error: `${where}.session is a local session id` }
         if (typeof params.title !== 'string' || params.title.trim() === '' || parseSeatNames({ [params.session]: params.title }) === undefined) return { ok: false, code: 'invalid', error: `${where}.title is a title of at most 64 characters, not shaped like an address` }
+        // The session list collapses runs of spaces (the host's normalizeSessionTitle): what the owner previews is what shows.
+        const shown = params.title.replace(/\s+/gu, ' ').trim()
+        if (shown !== params.title.trim()) return { ok: false, code: 'invalid', error: `${where}.title would be shown as «${shown}»: the session list collapses runs of spaces; give it that way` }
         if (this.d.sessionTitleRead === undefined || this.d.sessionTitleRename === undefined || this.d.sessionTitleReset === undefined) return { ok: false, code: 'not-yet', error: `${where}: this host does not carry session titles` }
+        if (this.d.sessionTitleAvailable?.() === false) return { ok: false, code: 'not-yet', error: `${where}: this host's session-title service is not mounted now` }
         if (!this.d.sessionTitleRead(params.session).live) return { ok: false, code: 'invalid', error: `${where}.session is not a live local session` }
       } else if (input.op === 'team.github.set') {
         const team = teamRef(); if (typeof team !== 'string') return team
@@ -605,7 +612,13 @@ export class StaffingExecutor {
       if (!renamed.ok) return renamed
       // Undo puts the exact earlier text back (pinned, as any explicit title is); with none before, the automatic title comes back.
       const earlier = before.title
-      onUndo(() => { if (earlier === undefined) return this.d.sessionTitleReset!(session); const back = this.d.sessionTitleRename!(session, earlier); return back.ok && back.title === earlier })
+      const putBack = async (): Promise<boolean> => { if (earlier === undefined) return await this.d.sessionTitleReset!(session); const back = this.d.sessionTitleRename!(session, earlier); return back.ok && back.title === earlier }
+      // The host may store less than was previewed (its byte limit is its own): then this step did not do what was agreed.
+      if (renamed.title !== title) {
+        const restored = await putBack()
+        return { ok: false, error: `the host stored the title as «${renamed.title}», not as previewed (its length limit); ${restored ? 'the earlier title is back' : 'putting the earlier title back failed'}` }
+      }
+      onUndo(putBack)
       return { ok: true, result: { session, title: renamed.title, by: `builder-blueprint ${entry.id}` } }
     }
     // #808 P2: network settings, merged key by key into the home layer's a2a config; they take effect on restart.
