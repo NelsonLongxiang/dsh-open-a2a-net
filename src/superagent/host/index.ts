@@ -330,7 +330,9 @@ export class SuperagentHost {
       transport:(permit,mode,current)=>{if(!this.d.narrowRecovery)throw Error('narrow recovery unavailable');return this.d.narrowRecovery.transport(permit,mode,current)}})
     this.reviews = new ReviewRequests({
       path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
-      ask: (address, text) => this.a2a.askReview(address, text),
+      // #877 (owner decision 2026-11-24): review requests carry a task id recorded before the send, from the team identity.
+      ask: (address, text, task, sender) => task !== undefined && sender !== undefined ? this.a2a.askReviewAs(address, text, task, sender) : this.a2a.askReview(address, text),
+      sender: () => this.a2a.ensureIdentity(),
       note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: review verdict of %s not noted: %s', ticketId, String(error)) } },
     })
     this.engine = new Engine({

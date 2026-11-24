@@ -300,6 +300,19 @@ export class A2aSource {
     return await this.routeAs(address, text, context)
   }
 
+  /**
+   * #877 (owner decision 2026-11-24): ask the reviewer with a task id recorded before the send, from the team identity, so
+   * a retry after an unknown outcome reuses the same id and the send chain answers with the first result instead of a
+   * second request. Refused before anything runs when the team identity changed since the id was recorded (as
+   * askApproved). The reviewer must still be linked; undefined when not.
+   */
+  async askReviewAs(address: string, text: string, task: string, sender: string): Promise<string | undefined> {
+    if (sender === '' || this.address !== sender) throw new RouteRefused('团队发送身份变化，未执行 route。', task, 'not-sent')
+    const check = JSON.parse(await this.context.commands.run('a2a-net', ['admission', address, '--json'])) as { admitted?: unknown; rule?: unknown }
+    if (check.admitted !== true || typeof check.rule !== 'string' || !LINK_RULES.has(check.rule)) return undefined
+    return await this.routeAs(address, text, undefined, task)
+  }
+
   /** Send one persisted approved outbound attempt; no automatic retry under another task id. */
   async askApproved(address: string, text: string, task: string, sender: string): Promise<string | undefined> {
     if (sender === '' || this.address !== sender) throw new RouteRefused('团队发送身份变化，未执行 route。', task, 'not-sent')
