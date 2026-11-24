@@ -36,6 +36,8 @@ export interface DecisionCard {
   readonly address?: string
   /** #888 D1: per option, what the owner must fill in to choose it (read from the host, checked here as data). */
   readonly inputs: Readonly<Record<string, CardInput>>
+  /** #888 D5: the host took the recommendation on the owner's setting; the owner may still decide it. */
+  readonly autoApproved?: { readonly at: string; readonly minutes: number }
 }
 
 export interface CardInput { readonly kind: 'text' | 'file' | 'text+file'; readonly prompt: string }
@@ -98,6 +100,7 @@ export function cardOf(raw: unknown): DecisionCard | undefined {
     id: str(r.id), teamId: str(r.teamId), team: str(r.team), question: str(r.question), level: str(r.level) || 'P1', options, recommended: str(r.recommended),
     ...(typeof r.reason === 'string' && r.reason !== '' ? { reason: r.reason } : {}), ...(typeof r.title === 'string' && r.title !== '' ? { title: r.title } : {}), files,
     ...(typeof r.address === 'string' && r.address !== '' ? { address: r.address } : {}), inputs,
+    ...(r.autoApproved !== null && typeof r.autoApproved === 'object' && typeof (r.autoApproved as Json).at === 'string' && typeof (r.autoApproved as Json).minutes === 'number' ? { autoApproved: { at: (r.autoApproved as Json).at as string, minutes: (r.autoApproved as Json).minutes as number } } : {}),
   }
 }
 
@@ -196,6 +199,7 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
     if (card.title !== undefined) top.append(el('span', 'wb-sa-decision-ticket', `工单「${card.title}」`))
     node.append(top, el('div', 'wb-sa-decision-question', card.question))
     if (card.reason !== undefined) node.append(el('div', 'wb-sa-hint', `理由：${card.reason}`))
+    if (card.autoApproved !== undefined) node.append(el('div', 'wb-sa-hint wb-sa-auto-approved', `已自动采纳「${card.recommended}」：${String(card.autoApproved.minutes)} 分钟没人处理，宿主于 ${card.autoApproved.at} 按你的设置采纳（不是你本人的决定），仍可改判`))
     const options = el('div', 'wb-sa-decision-options')
     options.setAttribute('role', 'radiogroup')
     for (const option of card.options) {
@@ -358,8 +362,10 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
     if (!force && key === shown) return
     shown = key
     // #888 D4: split by whether the recommendation needs input, when any card has inputs.
-    const fill = cards.filter(recommendedNeedsInput).length
-    count.textContent = cards.some(c => Object.keys(c.inputs).length > 0) ? `${String(cards.length)}（需填写 ${String(fill)} · 可直接定 ${String(cards.length - fill)}）` : String(cards.length)
+    // #888 D5: cards the host already took are shown but not counted as waiting.
+    const open = cards.filter(card => card.autoApproved === undefined)
+    const fill = open.filter(recommendedNeedsInput).length
+    count.textContent = open.some(c => Object.keys(c.inputs).length > 0) ? `${String(open.length)}（需填写 ${String(fill)} · 可直接定 ${String(open.length - fill)}）` : String(open.length)
     list.replaceChildren(...cards.map(cardNode))
     if (failure !== '') list.append(el('div', 'wb-sa-hint wb-sa-decisions-failed', `${loaded ? '刷新失败，下面是上次读到的卡' : '读不到等你拍板的卡'}：${failure}（下次轮询会再试）`))
     if (cards.length === 0 && failure === '') list.append(el('div', 'wb-sa-hint', loaded ? '没有等你拍板的卡' : '正在读取…'))
@@ -400,6 +406,7 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
   return {
     root, refresh,
     focus(cardId: string) { if (!CARD_ID.test(cardId)) return; wanted = cardId; void refresh() },
-    waiting: () => cards.length,
+    // #888 D5: a card the host already took is shown for a day but is not waiting.
+    waiting: () => cards.filter(card => card.autoApproved === undefined).length,
   }
 }

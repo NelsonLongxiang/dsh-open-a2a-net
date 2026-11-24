@@ -267,6 +267,16 @@ describe('#888 D4: options that need the owner to fill something in', () => {
   })
 })
 
+describe('#888 D5: a card the host took automatically', () => {
+  it('shows the note and is left out of the split count', async () => {
+    serve([card({ id: 'a', question: '一', autoApproved: { at: '2026-11-24T10:30:00.000Z', minutes: 30 }, inputs: { 不升: { kind: 'text', prompt: 'p' } }, needsInput: true }), card({ id: 'b', question: '二', inputs: { 不升: { kind: 'text', prompt: 'p' } }, needsInput: true })])
+    render(<DecisionList t={t} />)
+    await screen.findByText('一')
+    expect(screen.getByText(/Taken automatically: 「升级」/)).toBeTruthy()
+    expect(screen.getByText(`${en['team.countNeedsInput'].replace('{count}', '0')} · ${en['team.countDirect'].replace('{count}', '1')}`)).toBeTruthy()
+  })
+})
+
 describe('#892 review follow-up: inputOf reads own keys only', () => {
   it('an option called constructor or toString has no inherited input', () => {
     const row = card({ options: ['constructor', '乙'], recommended: 'constructor', inputs: { 乙: { kind: 'text', prompt: 'p' } } })
@@ -274,5 +284,14 @@ describe('#892 review follow-up: inputOf reads own keys only', () => {
     expect(inputOf(row, 'toString')).toBeUndefined()
     expect(inputMet(row, 'constructor', '', 0)).toBe(true)
     expect(inputOf(row, '乙')).toEqual({ kind: 'text', prompt: 'p' })
+  })
+})
+
+describe('#894 review B3: the main count leaves out cards the host already closed or took', () => {
+  it('one waiting and one taken automatically shows 1', async () => {
+    serve([card({ id: 'a', question: '一', autoApproved: { at: '2026-11-24T10:30:00.000Z', minutes: 30 } }), card({ id: 'b', question: '二' }), card({ id: 'c', question: '三', autoAck: { at: '2026-11-24T10:30:00.000Z', minutes: 15 } })])
+    render(<DecisionList t={t} />)
+    await screen.findByText('一')
+    expect(screen.getByText(en['team.decisionsCount'].replace('{count}', '1'))).toBeTruthy()
   })
 })
