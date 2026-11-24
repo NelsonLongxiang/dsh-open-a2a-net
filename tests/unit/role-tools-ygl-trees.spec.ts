@@ -36,7 +36,7 @@ describe('assignment card wording', () => {
     const trees = yglCardLines('p', { scope: 'bench:x', caps, trees: true })
     expect(trees).toHaveLength(legacy.length + 1)
     expect(trees.join('\n')).not.toMatch(/mcp__ygl__(read|write)\b/)
-    expect(trees[1]).toMatch(/inside params/)
+    expect(trees[1]).toBe('- call mcp__ygl__trees with domain and action as named below and every other argument (project, scope, query, text, id, name, to) inside params; mcp__ygl__trees with action help lists what each domain takes')
     expect(trees.slice(2).join('\n')).toBe(legacy.slice(1).join('\n').replace(/mcp__ygl__(read|write)\b/g, 'mcp__ygl__trees'))
   })
 })
