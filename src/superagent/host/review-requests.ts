@@ -146,10 +146,10 @@ export class ReviewRequests {
     const retry = current !== undefined && current.head === head && current.state === 'asking' && current.task !== '' && current.sender !== undefined
     if (reviewer === undefined || this.asking.has(thread) || (current?.head === head && !retry)) return
     this.asking.add(thread)
+    // #885 review B1: a request asked again under its recorded id may already be with the reviewer, so restoring puts that
+    // same record back (a changed identity or an unlinked reviewer leaves it as it is, to be asked again under the same id).
     const before = current
-    // #885 review B1: a request asked again under its recorded id may already be with the reviewer, so its record is never
-    // dropped (a changed identity or an unlinked reviewer leaves it as it is, to be asked again under the same id).
-    const restore = (): void => { if (retry) return; if (before === undefined) delete this.records[thread]; else this.records[thread] = before; this.save() }
+    const restore = (): void => { if (before === undefined) delete this.records[thread]; else this.records[thread] = before; this.save() }
     try {
       const text = `[评审请求] ${url} @ ${head}。请在这个提交上评审，结论用回执给出，并在回执正文里单独写这一行（只写一行；不通过把 PASS 换成 FAIL）：${verdictLineFor(head)}`
       if (retry || this.d.sender !== undefined) {
