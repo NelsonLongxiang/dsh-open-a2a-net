@@ -31,6 +31,7 @@ import { ReviewRequests, reviewRoute } from './review-requests.ts'
 import { unsettledText } from './receipt-settlement.ts'
 import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, writeTicketNoteOnce, type OutboundAsk, type OutboundRecord, type OutboundApproval } from './outbound.ts'
 import {legacyOutboundApproval} from './legacy-outbound-approval.ts'
+import { OutboundResults, RESULT_UNAVAILABLE } from './outbound-results.ts'
 import {NarrowOutboundRecovery} from './narrow-outbound.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { SettingsHistory } from './settings-history.ts'
@@ -150,6 +151,8 @@ export class SuperagentHost {
   private readonly reviews: ReviewRequests
   private readonly narrowOutbound: NarrowOutboundRecovery
   private readonly outbound: OutboundRequests
+  /** #881 v2: verified final results of outbound requests (status served; bodies kept, not served yet). */
+  private readonly outboundResults: OutboundResults
   /** Proposals to change a rule set, each set's revision and last change (design D8–D10b). */
   readonly ruleChanges: RuleChanges
   private disposeTimer: (() => void) | undefined
@@ -315,7 +318,8 @@ export class SuperagentHost {
       persist: { load: () => { const path = join(dir, 'observer-questions.json'); return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) as unknown : undefined },
         save: kept => { const path = join(dir, 'observer-questions.json'), temporary = `${path}.tmp-${String(process.pid)}`; mkdirSync(dir, { recursive: true }); writeFileSync(temporary, JSON.stringify(kept), { mode: 0o600 }); renameSync(temporary, path) } },
     })
-    this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), ask: (address, text, task, sender) => this.a2a.askApproved(address, text, task!, sender!),
+    this.outboundResults = new OutboundResults({ indexPath: join(dir, 'outbound-results.json'), bodyPath: join(dir, 'outbound-bodies.json'), now: () => Date.parse(this.now()), logger: d.logger })
+    this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), result: credential => { this.outboundResults.register(credential) }, ask: (address, text, task, sender) => this.a2a.askApproved(address, text, task!, sender!),
       sender: create => create ? this.a2a.ensureIdentity() : Promise.resolve(this.a2a.address ?? ''), approval: record => this.outboundApproval(record),
       narrowReceipt:(binding,caller,message)=>this.d.narrowRecovery?.receipt(binding,caller,message)===true,
       narrowNote:(ticketId,text)=>{try{const ticket=this.store.tickets.get(ticketId);if(!ticket||ticket.ended)return false;if(!ticket.inputs.some(input=>input.kind==='note'&&input.text===text))this.engine.note(ticketId,text);return true}catch{return false}},
@@ -445,6 +449,30 @@ export class SuperagentHost {
 
   /** Whether a session is one of this team's observers: a local member created under the observer preset. */
   isObserver(sessionId: string): boolean { return this.settings.observers.includes(sessionId) }
+
+  /**
+   * #881 v2 B1: the status of one exact outbound result (ticket and task), for the router, a member truly working that open
+   * ticket on this host, or an observer (status alone, open tickets only). Everything else, and any unknown or out-of-scope
+   * pair, gets the same refusal with no hint of what exists. Bodies are not served in this slice.
+   */
+  outboundResult(session: string, ticketId: string, taskId: string): Record<string, unknown> {
+    const role = this.toolRoleOf(session)
+    const ticket = this.store.tickets.get(ticketId)
+    if (ticket === undefined || role === undefined) return { ...RESULT_UNAVAILABLE }
+    const open = ticket.ended === undefined
+    const allowed = role === 'router' || (open && (role === 'observer' || (this.settings.members.includes(session) && this.executor.bindingFor(session, ticketId) !== undefined)))
+    if (!allowed) return { ...RESULT_UNAVAILABLE }
+    const record = this.outbound.list().find(r => r.ticketId === ticketId && (r.task === taskId || (r.attempts ?? []).some(a => a.task === taskId)))
+    if (record === undefined || record.narrowRecovery !== undefined) return { ...RESULT_UNAVAILABLE }
+    const current = record.task === taskId
+    const view = current ? this.outboundResults.view(ticketId, taskId) : undefined
+    const result: Record<string, unknown> = view !== undefined ? { ...view }
+      : current && (record.state === 'sent' || record.state === 'sending') ? { status: 'pending' }
+        : current && record.state === 'answered' ? { status: 'unavailable', reason: 'source-unproven', hasBody: false }
+          : { status: 'unavailable' }
+    if (role === 'observer') return { ok: true, status: result['status'] }
+    return { ok: true, ...result }
+  }
 
   /** A session's tool list: its role, an observer being a member with one tool more. */
   toolRoleOf(sessionId: string): Exclude<Role, 'builder'> | undefined {

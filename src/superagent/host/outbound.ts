@@ -14,6 +14,7 @@ import {recoveryDigest,verifyRecoveryProposal,type RecoveryProposal,type Recover
 import {holdsRow,parseReceipt} from '../../receipt.ts'
 import {writeTaskLedger} from '../../task-ledger-persistence.ts'
 import {keepUnsettled,receiptStanding,type UnsettledReceipt} from './receipt-settlement.ts'
+import type { ResultCredential } from './outbound-results.ts'
 import type { Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
 
 /** Another team's address: a session handle `<zone>/<id8>` or a canvas team `<zone>/canvas/<name>`, either with `@<fp8>`. */
@@ -106,6 +107,8 @@ export interface OutboundDeps {
   /** Idempotent ticket note for answers (see writeTicketNoteOnce); without it, `note` is used and a throw counts as failed. */
   readonly noteOnce?: (ticketId: string, text: string) => NoteResult
   readonly note: (ticketId: string, text: string) => void
+  /** #881 v2: record a verified final result (never throws; its failure never touches settlement, notes or retries). */
+  readonly result?: (credential: ResultCredential) => void
   readonly logger: { warn(format: string, ...args: unknown[]): void }
   readonly now: () => string
 }
@@ -456,6 +459,14 @@ export class OutboundRequests {
       return
     }
     this.put({ ...record, state: 'answered', answer: { text: clip(trigger.text, 2000), at: trigger.at, key: trigger.id }, ...accepted })
+    // #881 v2: a result credential only for the current attempt of an approved request, settled positively by the ledger.
+    const attempt = record.attempts?.at(-1)
+    if (record.approval !== undefined && attempt !== undefined && attempt.task === receiptFor && record.task === receiptFor) {
+      try {
+        this.d.result?.({ ticketId: record.ticketId, card: record.card, task: receiptFor, sender: attempt.sender, replier: trigger.actor.id, transportId: trigger.id,
+          proof: trigger.meta.proof as string, approvedAt: record.approval.at, text: trigger.text, completeness: trigger.meta.truncated === true ? 'source-truncated' : 'complete' })
+      } catch (error) { this.d.logger.warn('superagent: outbound result for task %s not recorded: %s', receiptFor, String(error)) }
+    }
     this.flushOutboundNotes()
   }
 
