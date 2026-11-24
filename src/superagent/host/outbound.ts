@@ -36,8 +36,33 @@ export interface OutboundRecord {
   narrowRecovery?: NarrowRecoveryRecord
   task?: string
   error?: string
-  answer?: { readonly text: string; readonly at: string }
+  /** The final answer; `key` is the receipt trigger id it came from (stable result key). */
+  answer?: { readonly text: string; readonly at: string; readonly key?: string }
+  /** The ticket note for `answer` has been written (set only after the note is in the ticket). */
+  noted?: true
+  /** The note could not be written because the ticket had ended: an anomaly, never reopened and never resent. */
+  noteBlocked?: 'ticket-ended'
 }
+
+/** What writing one ticket note came to. */
+export type NoteResult = 'written' | 'ended' | 'failed'
+
+/**
+ * Write a note to a ticket at most once: the same text already among its notes counts as written. An ended ticket is not
+ * written to; a missing ticket or a write that throws is a failure, kept for a retry.
+ */
+export function writeTicketNoteOnce(ticket: { readonly ended?: unknown; readonly inputs: ReadonlyArray<{ readonly kind: string; readonly text?: string }> } | undefined, text: string, write: (text: string) => void): NoteResult {
+  if (ticket === undefined) return 'failed'
+  if (ticket.ended !== undefined && ticket.ended !== null && ticket.ended !== false) return 'ended'
+  if (ticket.inputs.some(input => input.kind === 'note' && input.text === text)) return 'written'
+  try { write(text); return 'written' } catch { return 'failed' }
+}
+
+/** The note an answered request leaves on its ticket; the same for a first write and every retry. */
+export const outboundAnswerNote = (record: Pick<OutboundRecord, 'address' | 'task' | 'answer'>): string => `对外请求（${record.address}，task ${record.task ?? ''}）的回执：${record.answer?.text ?? ''}`
+
+/** An answered request whose note is still owed, or whose ticket had ended (a health problem). */
+export interface OutboundNoteProblem { readonly kind: 'pending' | 'ticket-ended'; readonly ticketId: string; readonly card: string; readonly task: string; readonly at: string }
 
 export interface NarrowRecoveryRecord {
   proposal:RecoveryProposal
@@ -75,6 +100,8 @@ export interface OutboundDeps {
   readonly query?: (record: Readonly<OutboundRecord>, attempt: Readonly<OutboundAttempt>) => Promise<{ readonly delivery: OutboundAttempt['delivery'] }>
   readonly narrowReceipt?: (binding:RecoveryBinding,caller:string,message:string)=>boolean
   readonly narrowNote?: (ticketId:string,text:string)=>boolean
+  /** Idempotent ticket note for answers (see writeTicketNoteOnce); without it, `note` is used and a throw counts as failed. */
+  readonly noteOnce?: (ticketId: string, text: string) => NoteResult
   readonly note: (ticketId: string, text: string) => void
   readonly logger: { warn(format: string, ...args: unknown[]): void }
   readonly now: () => string
@@ -386,7 +413,17 @@ export class OutboundRequests {
     }
   }
 
-  /** A mailbox row: the other team's formal receipt on a sent request's task is its answer (O5). */
+  private writeNote(ticketId: string, text: string): NoteResult {
+    if (this.d.noteOnce !== undefined) { try { return this.d.noteOnce(ticketId, text) } catch { return 'failed' } }
+    try { this.d.note(ticketId, text); return 'written' } catch { return 'failed' }
+  }
+
+  /**
+   * A mailbox row: the other team's formal receipt on a sent request's task (O5). An acknowledgement, a progress step or an
+   * attention carrying a question keeps the request open (the same rule as the task ledger's holdsRow), so the final
+   * result still matches. Only a final receipt answers it: the answer is stored first, then its note is written (see
+   * flushOutboundNotes), so a restart or a failed note leaves the note owed, never lost.
+   */
   received(trigger: Trigger): void {
     const receiptFor = trigger.meta.receiptFor
     if (typeof receiptFor !== 'string') return
@@ -394,7 +431,46 @@ export class OutboundRequests {
     const record = Object.values(this.records).find(r => r.task === receiptFor && (r.state === 'sent' || r.state === 'sending' || r.state === 'unknown' || (r.state === 'failed' && r.attempts?.at(-1)?.phase === 'dispatching' && r.attempts.at(-1)?.delivery === 'not-sent')))
     if (record === undefined) return
     if (typeof trigger.meta.proof !== 'string' || !TRUSTED_PROOFS.has(trigger.meta.proof)) return
-    this.put({ ...record, state: 'answered', answer: { text: clip(trigger.text, 2000), at: trigger.at }, ...(record.attempts !== undefined ? { attempts: record.attempts.map(a => a.task === receiptFor ? { ...a, delivery: 'accepted' as const } : a) } : {}) })
-    this.d.note(record.ticketId, `对外请求（${record.address}，task ${receiptFor}）的回执：${clip(trigger.text, 2000)}`)
+    const accepted = record.attempts !== undefined ? { attempts: record.attempts.map(a => a.task === receiptFor ? { ...a, delivery: 'accepted' as const } : a) } : {}
+    const at = trigger.text.indexOf('[A2A receipt] task '), parsed = at < 0 ? null : parseReceipt(trigger.text.slice(at))
+    if (parsed !== null && holdsRow(parsed.envelope)) {
+      const open: OutboundRecord = { ...record, state: 'sent', ...accepted }
+      delete open.error
+      if (JSON.stringify(open) !== JSON.stringify(record)) this.put(open)
+      this.writeNote(record.ticketId, `对外请求（${record.address}，task ${receiptFor}）的进展（尚未结束）：${clip(trigger.text, 2000)}`)
+      return
+    }
+    this.put({ ...record, state: 'answered', answer: { text: clip(trigger.text, 2000), at: trigger.at, key: trigger.id }, ...accepted })
+    this.flushOutboundNotes()
+  }
+
+  /**
+   * Write every owed answer note, once each. Called on each answer and by the team pass, so a note that failed, or was
+   * lost to a restart between storing the answer and writing it, is written later. `noted` is stored only after the note
+   * is in the ticket; the note writer skips a note already there, so a note written before a crash is not written twice.
+   * An ended ticket is marked, not reopened, and the original request is never sent again.
+   */
+  flushOutboundNotes(): void {
+    for (const row of Object.values(this.records)) {
+      if (row.state !== 'answered' || row.answer === undefined || row.noted === true || row.noteBlocked !== undefined || row.narrowRecovery !== undefined) continue
+      const result = this.writeNote(row.ticketId, outboundAnswerNote(row))
+      if (result === 'failed') { this.d.logger.warn('superagent: outbound answer note on %s (task %s) is still owed', row.ticketId, row.task ?? ''); continue }
+      const latest = this.records[row.card]
+      if (latest === undefined || latest.noted === true || latest.noteBlocked !== undefined) continue
+      if (result === 'ended') this.d.logger.warn('superagent: outbound answer for ended ticket %s (task %s) not noted; the ticket is not reopened', row.ticketId, row.task ?? '')
+      this.put(result === 'written' ? { ...latest, noted: true } : { ...latest, noteBlocked: 'ticket-ended' })
+    }
+  }
+
+  /** Answers still owed a note, and answers that arrived for an ended ticket (both health problems). */
+  noteProblems(): OutboundNoteProblem[] {
+    const out: OutboundNoteProblem[] = []
+    for (const r of Object.values(this.records)) {
+      if (r.state !== 'answered' || r.answer === undefined || r.noted === true || r.narrowRecovery !== undefined) continue
+      // An answer stored before this check (no key) whose ticket had ended is history, not news: only pending ones of it count.
+      if (r.noteBlocked !== undefined && r.answer.key === undefined) continue
+      out.push({ kind: r.noteBlocked !== undefined ? 'ticket-ended' : 'pending', ticketId: r.ticketId, card: r.card, task: r.task ?? '', at: r.answer.at })
+    }
+    return out
   }
 }

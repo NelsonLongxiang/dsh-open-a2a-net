@@ -28,7 +28,7 @@ import { RosterReports } from './roster.ts'
 import { MemberExecutor, runOf, transientError, type MemberTurn, type PrepareRunner, type QueuedAssignment } from './executor.ts'
 import { PiEvents } from './pi-events.ts'
 import { ReviewRequests } from './review-requests.ts'
-import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, type OutboundAsk, type OutboundRecord, type OutboundApproval } from './outbound.ts'
+import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, writeTicketNoteOnce, type OutboundAsk, type OutboundRecord, type OutboundApproval } from './outbound.ts'
 import {legacyOutboundApproval} from './legacy-outbound-approval.ts'
 import {NarrowOutboundRecovery} from './narrow-outbound.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
@@ -318,7 +318,9 @@ export class SuperagentHost {
       sender: create => create ? this.a2a.ensureIdentity() : Promise.resolve(this.a2a.address ?? ''), approval: record => this.outboundApproval(record),
       narrowReceipt:(binding,caller,message)=>this.d.narrowRecovery?.receipt(binding,caller,message)===true,
       narrowNote:(ticketId,text)=>{try{const ticket=this.store.tickets.get(ticketId);if(!ticket||ticket.ended)return false;if(!ticket.inputs.some(input=>input.kind==='note'&&input.text===text))this.engine.note(ticketId,text);return true}catch{return false}},
-      query: async (record, attempt) => d.outboundOutcome?.({ sender: attempt.sender, task: attempt.task, address: record.address, message: record.approval!.message }) ?? { delivery: 'unknown' }, logger: d.logger, now: () => this.now(), note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: outbound note on %s lost: %s', ticketId, String(error)) } } })
+      query: async (record, attempt) => d.outboundOutcome?.({ sender: attempt.sender, task: attempt.task, address: record.address, message: record.approval!.message }) ?? { delivery: 'unknown' }, logger: d.logger, now: () => this.now(),
+      noteOnce: (ticketId, text) => { const result = writeTicketNoteOnce(this.store.tickets.get(ticketId), text, t => { this.engine.note(ticketId, t) }); if (result === 'written') queueMicrotask(() => { this.pass() }); return result },
+      note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: outbound note on %s lost: %s', ticketId, String(error)) } } })
     this.narrowOutbound=new NarrowOutboundRecovery({outbound:this.outbound,now:()=>Date.parse(this.now()),
       approval:record=>{if(!this.settingsValue.sources.a2a||this.settingsValue.paused)return undefined;const t=this.store.tickets.get(record.ticketId);return t&&!t.ended?legacyOutboundApproval(record,this.decisions.retainedForRecovery(record.card),this.settingsValue.canvas??'',Date.parse(this.now())):undefined},
       identity:()=>this.d.narrowRecovery?.identity(this.a2a.address??''),
@@ -1786,6 +1788,7 @@ export class SuperagentHost {
   pass(): void {
     if (this.store.loadError !== undefined) return
     try{this.outbound.flushNarrowNotes()}catch{this.d.logger.warn('superagent: original recovery result note remains pending')}
+    try { this.outbound.flushOutboundNotes() } catch (error) { this.d.logger.warn('superagent: outbound answer notes remain owed: %s', String(error)) }
     try { this.readMcpTools() } catch (error) { this.d.logger.warn('superagent: team MCP check failed: %s', String(error)) }
     try { this.engine.evaluateDue() } catch (error) { this.d.logger.warn('superagent: evaluation pass failed: %s', String(error)) }
     this.flushCandidates()
@@ -2152,6 +2155,7 @@ export class SuperagentHost {
     // A queued ticket has no binding, so the quiet check above never sees it: say what it has waited for, and for how long.
     out.push(...queuedProblems(this.executor.queued(), q => this.queuedSince(q), id => this.store.tickets.get(id)?.title ?? id, now))
     // T8: a decision card the market refused (or this host could not shape for it) stays visible: one problem per team and card.
+    for (const p of this.outbound.noteProblems()) out.push({ code: p.kind === 'pending' ? 'outbound-note-pending' : 'outbound-note-ticket-ended', ticketId: p.ticketId, title: this.store.tickets.get(p.ticketId)?.title ?? p.ticketId, detail: `task ${p.task}` })
     for (const refused of this.decisionPush.problems()) out.push({ code: 'decision-push-refused', title: `${this.settings.canvas ?? ''}/${refused.cardId}`, detail: refused.why })
     if (this.settingsValue.idleSweep === true) out.push(...this.idleSweep(now))
     // A short id says nothing to the owner: a problem about a session carries its seat name or title when there is one
