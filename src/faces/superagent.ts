@@ -21,6 +21,9 @@ import type { SuperagentTeams } from '../superagent/host/teams.ts'
 import { verifyCard } from '../card.ts'
 import { claimCovers } from '../task-auth.ts'
 import { browserOwnerProof, touchesRules } from '../superagent/host/owner-proof.ts'
+import { issueOwnerDelegate, parseOwnerDelegates, revokeOwnerDelegate } from '../superagent/host/owner-delegate.ts'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { canvasOwnerFingerprint, splitCanvasOwner } from '../canvas-id.ts'
 import type { StaffingExecutor, StaffingChange } from '../superagent/host/staffing.ts'
 import type { SidebarSends } from '../sidebar-sends.ts'
@@ -58,6 +61,8 @@ export interface SuperagentFaceDeps {
    * one, the only linked host that lists it. A locally deposited identity needs no link.
    */
   readonly linkRequester?: (canvas: string, handle: string, home: unknown) => Promise<{ ok: true; home?: string } | { ok: false; error: string }>
+  /** The owner-delegate store (`<dsh-home>/a2a/owner-delegates.json`): the browser owner issues and revokes there. */
+  readonly ownerDelegatesPath?: string
 }
 
 /**
@@ -377,5 +382,47 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
         })
       }),
     }), 'a2a: superagent teams face')
+  }
+  const delegatesPath = d.ownerDelegatesPath
+  if (delegatesPath !== undefined) {
+    // The control API's user scope (owner-delegate.ts): list for the control key; issue and revoke for the browser owner
+    // only, so a remote node's owner can hand its agent a delegate without a shell on that node.
+    const read = (path: string): string | undefined => { try { return readFileSync(path, 'utf8') } catch { return undefined } }
+    const write = (path: string, text: string): void => { const tmp = `${path}.${process.pid}.tmp`; writeFileSync(tmp, text, { encoding: 'utf8', mode: 0o600 }); renameSync(tmp, path) }
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/owner-delegates',
+      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+        const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
+        if (req.method === 'GET') {
+          const text = read(delegatesPath)
+          send(200, { delegates: (text === undefined ? [] : parseOwnerDelegates(text)).map(({ sha256: _sha, ...row }) => row) })
+          return
+        }
+        readJsonBody(req, res, (body) => {
+          const fields = body as { action?: unknown; name?: unknown; days?: unknown; id?: unknown }
+          let connection: unknown
+          try { connection = ctx.get('connection') } catch { /* refused below */ }
+          // Issuing needs the real browser owner; a delegate may revoke (itself or another), never issue.
+          const proof = browserOwnerProof(connection, req, { delegate: fields.action === 'revoke' })
+          if (!proof.ok) { send(proof.status, proof); return }
+          if (fields.action === 'issue') {
+            const name = typeof fields.name === 'string' ? fields.name.trim() : ''
+            if (name === '' || name.length > 80) { send(400, { ok: false, error: 'name is required, at most 80 characters' }); return }
+            const days = typeof fields.days === 'number' && Number.isFinite(fields.days) ? fields.days : 30
+            const out = issueOwnerDelegate(delegatesPath, name, days, { read, write, random: () => ({ token: `dshod_${randomBytes(32).toString('base64url')}`, id: randomUUID() }), now: () => new Date() })
+            const { sha256: _sha, ...record } = out.record
+            send(200, { ok: true, delegate: record, token: out.token })
+            return
+          }
+          if (fields.action === 'revoke') {
+            const id = typeof fields.id === 'string' ? fields.id : ''
+            send(200, { ok: revokeOwnerDelegate(delegatesPath, id, { read, write, now: () => new Date() }) })
+            return
+          }
+          send(400, { ok: false, error: 'action must be issue or revoke' })
+        })
+      }),
+    }), 'a2a: owner delegates face')
   }
 }
