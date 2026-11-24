@@ -82,12 +82,13 @@ export const BUILDER_CHECK_TOOLS: readonly string[] = ['a2a_status', 'a2a_tasks'
 export const BUILDER_ISSUE_TOOLS: readonly string[] = ['superagent_issue_propose', 'superagent_issue_file']
 
 /**
- * The team builder's tools (TB2): its own inventory and the rule templates, read-only files, and its own schedules and
- * identity. Everything else is refused at the call, whatever its preset carries: no shell, no writes, no other session, no
- * A2A sending, no canvas or team route. Blueprints (BS2) go to the host's staffing executor, never straight to a route.
+ * The team builder's tools (TB2): its own inventory and the rule templates, read-only files and skills, and its own schedules
+ * and identity. Everything else is refused at the call, whatever its preset carries: no shell, no writes, no other session, no
+ * A2A sending, no canvas or team route. A loaded skill is text to read: it grants no tool, and what a skill's text asks for
+ * does not widen this list (#83). Blueprints (BS2) go to the host's staffing executor, never straight to a route.
  * #791: it also reads the network to check itself, and drafts issues the host files after the owner agrees.
  */
-export const BUILDER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, ...SELF_TOOLS, ...SELF_REFLECT_TOOLS, ...BUILDER_CHECK_TOOLS, 'read', 'glob', 'grep', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', ...BUILDER_ISSUE_TOOLS]
+export const BUILDER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, ...SELF_TOOLS, ...SELF_REFLECT_TOOLS, ...BUILDER_CHECK_TOOLS, 'read', 'glob', 'grep', 'skill', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', ...BUILDER_ISSUE_TOOLS]
 
 /** The tools only a team's sessions have: a session with no role is not offered them. */
 export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS.filter(name => !SCHEDULE_TOOLS.includes(name) && !SELF_TOOLS.includes(name) && !SELF_REFLECT_TOOLS.includes(name) && !YGL_READ_TOOLS.includes(name) && !ROUTER_READ_TOOLS.includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_ticket_note', 'a2a_card_cast', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', ...BUILDER_ISSUE_TOOLS]
