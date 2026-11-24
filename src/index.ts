@@ -155,7 +155,8 @@ import { defaultGh } from './superagent/host/pr-follow.ts'
 import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
-import { browserOwnerProof, touchesRules } from './superagent/host/owner-proof.ts'
+import { browserOwnerProof, configureOwnerDelegates, touchesRules } from './superagent/host/owner-proof.ts'
+import { OwnerDelegates } from './superagent/host/owner-delegate.ts'
 import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, startWhenYglKnown, yglCapabilities, yglSettled } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { IntakeOrigins } from './intake-origins.ts'
@@ -430,7 +431,8 @@ export function apply(ctx: Context, config: Config): void {
     if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') return false
     let connection: unknown
     try { connection = ctx.get('connection') } catch { return false }
-    return browserOwnerProof(connection, req).ok
+    // A delegate token never stands in for the control key: only a real browser login opens the route without it.
+    return browserOwnerProof(connection, req, { delegate: false }).ok
   }
 
   /**
@@ -608,6 +610,8 @@ export function apply(ctx: Context, config: Config): void {
   // #731: Windows ignores the 0600 every journal here is created with; give the a2a directory an owner-only ACL.
   const a2aDirPrivacy = restrictDirToCurrentUser(join(home, 'a2a'))
   if (a2aDirPrivacy.mode === 'windows-acl' && !a2aDirPrivacy.ok) logger.warn('a2a: could not restrict the a2a directory to the current user (%s); its journals keep the inherited ACL', a2aDirPrivacy.error)
+  // The control API's user scope: tokens the owner issued with `a2a-net user issue` stand in for the browser owner.
+  configureOwnerDelegates(new OwnerDelegates(join(home, 'a2a', 'owner-delegates.json'), join(home, 'a2a', 'owner-delegates-audit.jsonl')))
   const peerStore = new PeerStore(config.peers, join(home, 'a2a', 'peers.json'))
   // Node identity (docs/design/node-identity.md, N1): human-named nodes and their prompt versions.
   const nodeStore = new NodeStore(join(home, 'a2a'))
@@ -3928,6 +3932,7 @@ export function apply(ctx: Context, config: Config): void {
   // superagent's HTTP faces live in src/faces/superagent.ts (#570 line ratchet); registered after cardCache exists: whenWebServerSettled may run its callback at once.
   if (superagentHost !== undefined && superagentTeams !== undefined) whenWebServerSettled((webServer) => {
     registerSuperagentFaces(webServer, {
+      ownerDelegatesPath: join(home, 'a2a', 'owner-delegates.json'),
       sidebarSends,
       ctx, config, superagentHost, superagentTeams, controlRoute, readJsonBody, recordActivity, routeTrunk,
       sessionNodes, sessionPresetOf, sessionTeamOf, joinedSessions, archivedSessionFilter, verifyOriginClaim, fetchPeerCard, peerStore, cardCache,

@@ -22,7 +22,7 @@
  *
  * Runs on the SDK subpaths only — no @deepseek-ai/* imports.
  */
-import { createHash, generateKeyPairSync, randomUUID, sign as edSign, createPrivateKey } from 'node:crypto'
+import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign as edSign, createPrivateKey } from 'node:crypto'
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -54,6 +54,10 @@ CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) 
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
 文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR] · file grants · file revoke <sha256> <to>   (#91: bytes never ride a message)
 superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
+user:     user issue [--name N] [--days D] [--dsh-home DIR] · user import --token-file F · user list · user revoke <id> · user nodes
+          · user teams · user state --team ID · user decisions · user decide <card id> (--approve | --option O) [--note T]
+          · user request --team ID <text…> · user answer --team ID <ticket id> <text…> · user api <GET|POST> <path> [--data JSON|@file]
+          (the control API's user scope: acts as the owner on --home, with the owner delegate saved for that home)
 pi 席位:  publish --pi-seat · publish --renew (keeps the last publish's declarations) · ticket read|idle [--text T] [--ticket ID --event ID] · ticket ack|handback --trigger ID -- <text> · ticket report --ticket ID --state S [--question Q --options A|B --recommended A [--level P1]] -- <summary>
           · ticket error [--transient] -- <what failed> · pi install [--dir DIR] [--force]   (docs/design/superagent-pi-platform.md)
 
@@ -114,8 +118,8 @@ admission: admission <caller> [--local] [--json]   how <caller> would be admitte
 /** The capabilities a CLI identity may declare on its card (superagent-root-team S5). */
 // piSeat: docs/design/superagent-pi-platform.md P1 — this identity is a Pi seat (it may join a superagent team as a member).
 const DECLARABLE = ['progressReceipts', 'teamRoster', 'directedSeats', 'reworkReturns', 'piSeat']
-const VALUE_FLAGS = new Set(['--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir', '--recommended', '--level', '--event', '--run'])
-const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class', '--pi-seat', '--transient'])
+const VALUE_FLAGS = new Set(['--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir', '--recommended', '--level', '--event', '--run', '--name', '--days', '--dsh-home', '--team', '--option', '--data', '--token-file'])
+const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class', '--pi-seat', '--transient', '--approve'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
 const HOOK_MODE = process.argv.includes('--hook')
@@ -818,6 +822,91 @@ async function cmdPi() {
     ? '[pi] next: a2a-net init <seat-name> --home <team host URL>, then a2a-net publish --pi-seat'
     : `[pi] next: a2a-net publish --pi-seat   (identity ${String(id.handle)}; its deposit must be on the team host)`)
   console.log('[pi] then the team owner adds this handle to the team canvas (planning view 建队); installing does not join a team')
+}
+
+
+// ── the control API's user scope (owner delegates) ────────────────────────────────────────────────────────────
+// One file maps each home URL to the delegate token the owner issued there (and, optionally, that home's control key),
+// so one agent can act as the owner across every node of the network. Mode 0600; tokens never go to stdout.
+const DELEGATES = join(IDENTITY_DIR, 'owner-delegates.json')
+const readDelegates = () => { try { const v = JSON.parse(readFileSync(DELEGATES, 'utf8')); return v !== null && typeof v === 'object' && v.homes !== null && typeof v.homes === 'object' ? v : { homes: {} } } catch { return { homes: {} } } }
+const writeDelegates = (book) => { mkdirSync(IDENTITY_DIR, { recursive: true }); const tmp = `${DELEGATES}.${process.pid}.tmp`; writeFileSync(tmp, `${JSON.stringify(book, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 }); renameSync(tmp, DELEGATES) }
+const homeKey = () => home().replace(/\/+$/, '')
+const userHeaders = () => {
+  const saved = readDelegates().homes[homeKey()]
+  if (saved === undefined || typeof saved.token !== 'string') die(`[user] no owner delegate saved for ${homeKey()}: run 'a2a-net user issue' on that node (or 'user import --token-file F --home ${homeKey()}')`)
+  const key = typeof saved.key === 'string' && flag('--key') === undefined && envValue('A2A_KEY') === undefined ? { 'X-API-Key': saved.key } : {}
+  return { ...keyHeaders(), ...key, 'X-DSH-Owner-Delegate': saved.token }
+}
+const dshHome = () => flag('--dsh-home') ?? envValue('DSH_HOME') ?? join(homedir(), '.dsh')
+
+async function userCall(method, path, body) {
+  const res = await homeFetch(`${homeKey()}${path}`, { method, headers: { ...userHeaders(), ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) })
+  const out = await replyOf(res)
+  if (res.status === 401) die(keyHint(401))
+  return out
+}
+
+const printOut = (out, line) => { if (has('--json') || line === undefined) { console.log(JSON.stringify(out, null, has('--json') ? 0 : 2)); if (out.ok === false) process.exitCode = 1; return } if (out.ok === false || (out.error !== undefined && out.ok !== true)) die(`[user] ${String(out.error ?? out.code ?? 'refused')}`); line(out) }
+
+async function cmdUser() {
+  const [sub, ...words] = positionals()
+  if (sub === 'issue') {
+    // Local issue: writes this node's store directly (owning the host's files is owning the host).
+    const store = join(dshHome(), 'a2a', 'owner-delegates.json')
+    if (!existsSync(join(dshHome(), 'a2a'))) die(`[user] ${join(dshHome(), 'a2a')} does not exist: pass --dsh-home <the DSH home of the node at ${homeKey()}>`)
+    let rows = []
+    try { const v = JSON.parse(readFileSync(store, 'utf8')); if (Array.isArray(v?.delegates)) rows = v.delegates } catch { /* none yet */ }
+    const token = `dshod_${randomBytes(32).toString('base64url')}`
+    const days = Number(flag('--days') ?? '30')
+    const at = new Date()
+    const record = { id: randomUUID(), name: flag('--name') ?? `agent@${homeKey()}`, sha256: createHash('sha256').update(token, 'utf8').digest('hex'), createdAt: at.toISOString(), expiresAt: Number.isFinite(days) && days > 0 ? new Date(at.getTime() + days * 86_400_000).toISOString() : null, revokedAt: null }
+    const tmp = `${store}.${process.pid}.tmp`
+    writeFileSync(tmp, `${JSON.stringify({ delegates: [...rows, record] }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 }); renameSync(tmp, store)
+    const book = readDelegates(); book.homes[homeKey()] = { ...(book.homes[homeKey()] ?? {}), token, id: record.id, name: record.name, expiresAt: record.expiresAt }; writeDelegates(book)
+    console.log(`[user] delegate ${record.id} (${record.name}) issued for ${homeKey()}, ${record.expiresAt === null ? 'no end' : `until ${record.expiresAt}`}; token saved to ${DELEGATES}`)
+    return
+  }
+  if (sub === 'import') {
+    const file = flag('--token-file')
+    if (file === undefined) usage('usage: a2a user import --token-file F [--home URL]')
+    const token = readFileSync(file, 'utf8').trim()
+    if (!/^dshod_[A-Za-z0-9_-]{20,}$/.test(token)) die('[user] that file holds no owner-delegate token')
+    const book = readDelegates(); book.homes[homeKey()] = { ...(book.homes[homeKey()] ?? {}), token }; writeDelegates(book)
+    console.log(`[user] token saved for ${homeKey()}`)
+    return
+  }
+  if (sub === 'nodes') {
+    const book = readDelegates()
+    for (const [url, row] of Object.entries(book.homes)) console.log(`${url}  ${String(row.name ?? '')}  ${row.expiresAt === null ? 'no end' : String(row.expiresAt ?? '?')}`)
+    return
+  }
+  if (sub === 'list') { printOut(await userCall('GET', '/__dsh_a2a/owner-delegates'), out => { for (const r of out.delegates ?? []) console.log(`${String(r.id)}  ${String(r.name)}  ${r.revokedAt !== null ? `revoked ${String(r.revokedAt)}` : r.expiresAt === null ? 'no end' : `until ${String(r.expiresAt)}`}`) }); return }
+  if (sub === 'revoke') { const [id] = words; if (id === undefined) usage('usage: a2a user revoke <id>'); printOut(await userCall('POST', '/__dsh_a2a/owner-delegates', { action: 'revoke', id }), out => console.log(out.ok ? `[user] ${id} revoked` : `[user] no live delegate ${id}`)); return }
+  if (sub === 'teams') { printOut(await userCall('GET', '/__dsh_a2a/superagent/teams'), out => { for (const t of out.teams ?? []) console.log(`${String(t.id || '(primary)').padEnd(24)} ${String(t.address ?? '')}  ${t.open ? 'open' : 'closed'}`) }); return }
+  const team = flag('--team')
+  if (sub === 'state') { printOut(await userCall('GET', `/__dsh_a2a/superagent${team !== undefined ? `?teamId=${encodeURIComponent(team)}` : ''}`), out => { for (const t of out.tickets ?? []) if (!t.ended) console.log(`${String(t.id)}  ${String(t.stage?.stage ?? '?')}${t.attention ? ' [question]' : ''}  ${String(t.title)}`) }); return }
+  if (sub === 'decisions') { printOut(await userCall('GET', '/__dsh_a2a/superagent/decisions'), out => { for (const c of out.decisions ?? []) console.log(`${String(c.id)}  ${String(c.level)}  [${String(c.team ?? '')}] ${String(c.question)}\n    options: ${(c.options ?? []).join(' | ')}  recommended: ${String(c.recommended ?? '')}`) }); return }
+  if (sub === 'decide') {
+    const [id] = words
+    if (id === undefined || (!has('--approve') && flag('--option') === undefined && flag('--note') === undefined)) usage('usage: a2a user decide <card id> (--approve | --option O) [--note T]')
+    const cards = (await userCall('GET', '/__dsh_a2a/superagent/decisions')).decisions ?? []
+    const card = cards.find(c => c.id === id)
+    if (card === undefined) die(`[user] no waiting decision ${id}`)
+    printOut(await userCall('POST', '/__dsh_a2a/superagent/decisions', { teamId: card.teamId, id, how: has('--approve') ? 'approve' : 'choose', ...(flag('--option') !== undefined ? { option: flag('--option') } : {}), ...(flag('--note') !== undefined ? { note: flag('--note') } : {}) }), () => console.log(`[user] ${id} decided`))
+    return
+  }
+  if (sub === 'request') { const text = words.join(' '); if (text === '' || team === undefined) usage('usage: a2a user request --team ID <text…>'); printOut(await userCall('POST', '/__dsh_a2a/superagent', { action: 'request', teamId: team, text }), out => console.log(`[user] ${String(out.result)} · trigger ${String(out.triggerId)} · thread ${String(out.thread)}`)); return }
+  if (sub === 'answer') { const [ticket, ...rest] = words; const text = rest.join(' '); if (ticket === undefined || text === '' || team === undefined) usage('usage: a2a user answer --team ID <ticket id> <text…>'); printOut(await userCall('POST', '/__dsh_a2a/superagent', { action: 'answer', teamId: team, ticket_id: ticket, ticketId: ticket, text }), () => console.log(`[user] answered ${ticket}`)); return }
+  if (sub === 'api') {
+    const [method, path] = words
+    if (method === undefined || path === undefined || !path.startsWith('/')) usage('usage: a2a user api <GET|POST> <path> [--data JSON|@file]')
+    const raw = flag('--data')
+    const body = raw === undefined ? undefined : JSON.parse(raw.startsWith('@') ? readFileSync(raw.slice(1), 'utf8') : raw)
+    printOut(await userCall(method.toUpperCase(), path, body))
+    return
+  }
+  usage('usage: a2a user issue|import|nodes|list|revoke|teams|state|decisions|decide|request|answer|api … (see a2a help)')
 }
 
 async function cmdSuperagent() {
@@ -1653,6 +1742,7 @@ async function main() {
   if (cmd === 'receipt') { await cmdReceipt(); return }
   if (cmd === 'admission') { await cmdAdmission(); return }
   if (cmd === 'superagent') { await cmdSuperagent(); return }
+  if (cmd === 'user') { await cmdUser(); return }
   if (cmd === 'ticket') { await cmdTicket(); return }
   if (cmd === 'pi') { await cmdPi(); return }
   if (cmd === 'tell-host' || cmd === 'report') {
