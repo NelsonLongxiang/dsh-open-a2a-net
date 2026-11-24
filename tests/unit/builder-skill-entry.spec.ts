@@ -149,7 +149,7 @@ describe('#83 the builder preset carries the skill tool, and still no way to act
   })
 
   it('the router, member and observer presets are not touched by this change', () => {
-    const shipped = JSON.parse(readFileSync(new URL('./__fixtures__/issue-83-presets-at-5e2ab4ab.json', import.meta.url), 'utf8')) as Record<string, string>
+    const shipped = JSON.parse(readFileSync(new URL('./__fixtures__/issue-83-presets-at-810dab3c.json', import.meta.url), 'utf8')) as Record<string, string>
     for (const id of ['superagent-router', 'superagent-member', 'superagent-observer']) expect(block(id), id).toBe(shipped[id])
   })
 })
