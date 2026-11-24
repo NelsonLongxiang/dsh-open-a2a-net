@@ -433,6 +433,8 @@ export class OutboundRequests {
     if (typeof trigger.meta.proof !== 'string' || !TRUSTED_PROOFS.has(trigger.meta.proof)) return
     const accepted = record.attempts !== undefined ? { attempts: record.attempts.map(a => a.task === receiptFor ? { ...a, delivery: 'accepted' as const } : a) } : {}
     const at = trigger.text.indexOf('[A2A receipt] task '), parsed = at < 0 ? null : parseReceipt(trigger.text.slice(at))
+    // A receipt line naming another task than the one this row answers is not this request's receipt.
+    if (parsed !== null && parsed.taskId !== receiptFor) return
     if (parsed !== null && holdsRow(parsed.envelope)) {
       const open: OutboundRecord = { ...record, state: 'sent', ...accepted }
       delete open.error
@@ -458,7 +460,8 @@ export class OutboundRequests {
       const latest = this.records[row.card]
       if (latest === undefined || latest.noted === true || latest.noteBlocked !== undefined) continue
       if (result === 'ended') this.d.logger.warn('superagent: outbound answer for ended ticket %s (task %s) not noted; the ticket is not reopened', row.ticketId, row.task ?? '')
-      this.put(result === 'written' ? { ...latest, noted: true } : { ...latest, noteBlocked: 'ticket-ended' })
+      // One record that cannot be saved (a held lock, a disk error) stays owed and does not stop the others this pass.
+      try { this.put(result === 'written' ? { ...latest, noted: true } : { ...latest, noteBlocked: 'ticket-ended' }) } catch (error) { this.d.logger.warn('superagent: outbound note checkpoint for %s not saved, retried next pass: %s', row.card, String(error)) }
     }
   }
 

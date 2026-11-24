@@ -5,7 +5,7 @@
  * when it was already written before the checkpoint. An answer for an ended ticket is marked, never reopened or resent.
  */
 import { mkdtempSync } from '../temp-dirs.ts'
-import { statSync } from 'node:fs'
+import { rmSync, statSync, writeFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -147,6 +147,39 @@ describe('O5: an answer for an ended ticket', () => {
     expect(answerNotes(h)).toHaveLength(0)
     expect(h.tickets.get('t1')!.ended).toBe('2026-11-24T05:00:00.000Z')
     expect(ask).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('#882 review: one failing checkpoint, and a receipt line for another task', () => {
+  it('a checkpoint that cannot be saved stays owed and does not stop the other owed notes in the same pass', async () => {
+    const path = fresh(), h = host()
+    h.tickets.set('t2', { inputs: [] })
+    const { out } = await sent(path, h)
+    out.waiting('c2', 't2', ADDR, '原文二', 'session-m')
+    const second = vi.fn(async () => 'direct-out000002' as string | undefined)
+    const two = new OutboundRequests({ path, ask: second, note: vi.fn(), noteOnce: h.noteOnce, logger: quiet, now })
+    await two.decided('c2', true, 'team', () => '调研')
+    // r1's note fails on its answer and again on r2's pass; r2's own note fails once: both stay owed.
+    h.failNext(3)
+    two.received(trigger('r1', RESULT))
+    two.received({ ...(trigger('r2', formatReceipt('direct-out000002', '第二份结果', { outcome: 'completed' })) as object), meta: { receiptFor: 'direct-out000002', proof: 'cli-identity' } } as never)
+    expect(two.noteProblems()).toHaveLength(2)
+    writeFileSync(path + '.lock', 'held')
+    two.flushOutboundNotes()
+    expect(answerNotes(h)).toHaveLength(2)
+    expect(two.noteProblems()).toHaveLength(2)
+    rmSync(path + '.lock')
+    two.flushOutboundNotes()
+    expect(answerNotes(h)).toHaveLength(2)
+    expect(two.noteProblems()).toEqual([])
+  })
+
+  it('a receipt whose receipt line names another task does not touch this request', async () => {
+    const h = host(), { out } = await sent(fresh(), h)
+    out.received(trigger('r1', formatReceipt('direct-out999999', '别的任务的结果', { outcome: 'completed' })))
+    expect(out.list()[0]).toMatchObject({ state: 'sent' })
+    expect(out.list()[0]!.answer).toBeUndefined()
+    expect(h.writes).toHaveLength(0)
   })
 })
 

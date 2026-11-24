@@ -319,7 +319,9 @@ export class SuperagentHost {
       narrowReceipt:(binding,caller,message)=>this.d.narrowRecovery?.receipt(binding,caller,message)===true,
       narrowNote:(ticketId,text)=>{try{const ticket=this.store.tickets.get(ticketId);if(!ticket||ticket.ended)return false;if(!ticket.inputs.some(input=>input.kind==='note'&&input.text===text))this.engine.note(ticketId,text);return true}catch{return false}},
       query: async (record, attempt) => d.outboundOutcome?.({ sender: attempt.sender, task: attempt.task, address: record.address, message: record.approval!.message }) ?? { delivery: 'unknown' }, logger: d.logger, now: () => this.now(),
-      noteOnce: (ticketId, text) => { const result = writeTicketNoteOnce(this.store.tickets.get(ticketId), text, t => { this.engine.note(ticketId, t) }); if (result === 'written') queueMicrotask(() => { this.pass() }); return result },
+      // Only a note actually added wakes another pass: one already in the ticket must not, or a checkpoint that keeps failing
+      // to save would wake pass after pass without end (#882 review B1).
+      noteOnce: (ticketId, text) => { let added = false; const result = writeTicketNoteOnce(this.store.tickets.get(ticketId), text, t => { this.engine.note(ticketId, t); added = true }); if (added) queueMicrotask(() => { this.pass() }); return result },
       note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: outbound note on %s lost: %s', ticketId, String(error)) } } })
     this.narrowOutbound=new NarrowOutboundRecovery({outbound:this.outbound,now:()=>Date.parse(this.now()),
       approval:record=>{if(!this.settingsValue.sources.a2a||this.settingsValue.paused)return undefined;const t=this.store.tickets.get(record.ticketId);return t&&!t.ended?legacyOutboundApproval(record,this.decisions.retainedForRecovery(record.card),this.settingsValue.canvas??'',Date.parse(this.now())):undefined},
