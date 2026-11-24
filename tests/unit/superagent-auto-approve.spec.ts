@@ -164,3 +164,32 @@ describe('D5 on the host', () => {
     await n.h.stop()
   })
 })
+
+describe('#894 review follow-up', () => {
+  it('B2: the owner deciding in the same millisecond is the owner\'s decision: it leaves the panel and is final', async () => {
+    const m = await team()
+    m.h.saveSettings({ canvas: 'team', router: 'session-r', autoApprove: on() }, () => true)
+    const id = (m.h.proposeDecision('router', 'session-r', '同毫秒', p3()) as { id: string }).id
+    m.clock.t = T0 + 30 * MIN; m.h.pass()
+    expect(m.h.decisionCards().map(c => c.id)).toContain(id)
+    expect(m.h.decide(id, 'choose', '乙')).toMatchObject({ ok: true })
+    expect(book(m.h).get(id)!.decided.at).toBe(book(m.h).get(id)!.autoApproved.at)
+    expect(m.h.decisionCards().map(c => c.id)).not.toContain(id)
+    expect(m.h.proposeDecision('router', 'session-r', '同毫秒', p3())).toMatchObject({ ok: false, code: 'decided' })
+    await m.h.stop()
+  })
+  it('N1: an automatically taken card leaves the panel after a day', async () => {
+    const m = await team()
+    m.h.saveSettings({ canvas: 'team', router: 'session-r', autoApprove: on() }, () => true)
+    const id = (m.h.proposeDecision('router', 'session-r', '过期', p3()) as { id: string }).id
+    m.clock.t = T0 + 30 * MIN; m.h.pass()
+    m.clock.t = T0 + 30 * MIN + 24 * 60 * MIN - 1
+    expect(m.h.decisionCards().map(c => c.id)).toContain(id)
+    m.clock.t = T0 + 30 * MIN + 24 * 60 * MIN + 1
+    expect(m.h.decisionCards().map(c => c.id)).not.toContain(id)
+    await m.h.stop()
+  })
+  it('N2: levels and sources are kept in one order', () => {
+    expect(parseSettings({ autoApprove: on({ levels: ['P3', 'P2'], sources: ['observer', 'router'] }) }, DEFAULT_SETTINGS)).toMatchObject({ ok: true, settings: { autoApprove: { levels: ['P2', 'P3'], sources: ['router', 'observer'] } } })
+  })
+})

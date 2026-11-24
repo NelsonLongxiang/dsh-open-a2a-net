@@ -173,11 +173,13 @@ export function DecisionList({ t }: TeamDecisionsTabProps) {
     return () => { clearInterval(timer) }
   }, [load])
   if (rows.length === 0 && problem === undefined) return null
+  // #894 review B3: cards the host already closed (timeout) or took (#888 D5) are shown but not waiting.
+  const open = rows.filter(row => row.autoAck === undefined && row.autoApproved === undefined)
   return (
     <section className={styles.decisions} aria-label={t('team.decisions')}>
-      {rows.length > 0 && <span className={styles.label}>{t('team.decisionsCount', { count: String(rows.length) })}</span>}
+      {rows.length > 0 && <span className={styles.label}>{t('team.decisionsCount', { count: String(open.length) })}</span>}
       {/* #888 D4: split by whether the recommendation needs input; cards the host already closed on a timeout are not counted. */}
-      {rows.some(row => row.needsInput === true) && (() => { const open = rows.filter(row => row.autoAck === undefined && row.autoApproved === undefined); const fill = open.filter(row => row.recommendedNeedsInput === true).length; return <span className={styles.hint}>{t('team.countNeedsInput', { count: String(fill) })} · {t('team.countDirect', { count: String(open.length - fill) })}</span> })()}
+      {rows.some(row => row.needsInput === true) && (() => { const fill = open.filter(row => row.recommendedNeedsInput === true).length; return <span className={styles.hint}>{t('team.countNeedsInput', { count: String(fill) })} · {t('team.countDirect', { count: String(open.length - fill) })}</span> })()}
       {problem !== undefined && <p role="alert" className={styles.error}>{t(problem === 'denied' ? 'team.decisionsDenied' : 'team.decisionsUnreadable')}{rows.length > 0 ? ` ${t('team.decisionsStale')}` : ''}</p>}
       {rows.map(row => <Card key={row.id} row={row} t={t} done={() => { void load() }} />)}
     </section>

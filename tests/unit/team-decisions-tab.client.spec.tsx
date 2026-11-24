@@ -286,3 +286,12 @@ describe('#892 review follow-up: inputOf reads own keys only', () => {
     expect(inputOf(row, '乙')).toEqual({ kind: 'text', prompt: 'p' })
   })
 })
+
+describe('#894 review B3: the main count leaves out cards the host already closed or took', () => {
+  it('one waiting and one taken automatically shows 1', async () => {
+    serve([card({ id: 'a', question: '一', autoApproved: { at: '2026-11-24T10:30:00.000Z', minutes: 30 } }), card({ id: 'b', question: '二' }), card({ id: 'c', question: '三', autoAck: { at: '2026-11-24T10:30:00.000Z', minutes: 15 } })])
+    render(<DecisionList t={t} />)
+    await screen.findByText('一')
+    expect(screen.getByText(en['team.decisionsCount'].replace('{count}', '1'))).toBeTruthy()
+  })
+})

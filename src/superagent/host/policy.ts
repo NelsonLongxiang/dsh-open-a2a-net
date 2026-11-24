@@ -237,7 +237,8 @@ function parseAutoApprove(raw: unknown, current: AutoApprove | undefined): AutoA
     if (!(key in r)) return [...fallback]
     const v = r[key]
     if (!Array.isArray(v) || v.some(x => typeof x !== 'string' || !allowed.includes(x as T)) || new Set(v).size !== v.length) return `autoApprove.${key} must be distinct values from ${allowed.join(', ')}`
-    return v as T[]
+    // #894 review N2: kept in one order, so the same rule compares equal however it was written.
+    return allowed.filter(x => (v as string[]).includes(x))
   }
   const levels = list('levels', ['P2', 'P3'] as const, base.levels)
   if (typeof levels === 'string') return levels

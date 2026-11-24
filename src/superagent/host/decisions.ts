@@ -86,7 +86,8 @@ export interface StoredCard extends DecisionSpec {
   readonly at: string
   /** Files the proposer put on the card (C8). */
   readonly files?: readonly DecisionFile[]
-  readonly decided?: { readonly at: string; readonly text: string; readonly triggerId?: string; readonly files?: readonly DecisionFile[] }
+  /** `by: 'host'` only on the host's automatic decision (#888 D5); the owner's own decision never carries it. */
+  readonly decided?: { readonly at: string; readonly text: string; readonly triggerId?: string; readonly files?: readonly DecisionFile[]; readonly by?: 'host' }
   /** The host closed this card as 「知道了」 on a timeout (owner 2026-11-23): the audit record; it stays when the owner decides again. */
   readonly autoAck?: { readonly at: string; readonly by: 'host'; readonly rule: 'credential-ack-timeout'; readonly minutes: number }
   /**
@@ -102,7 +103,8 @@ export const AUTO_ACK_TEXT = '决定：知道了（超时自动）'
 /** #888 D5: the decided text of a card the host took on the owner's setting (its first line stays 决定：<option>). */
 export const autoApprovedText = (option: string): string => `决定：${option}\n说明：宿主按属主设置自动采纳推荐项（非属主本人）`
 /** #888 D5: whether a card's decision is still the host's automatic one (not the owner's own). */
-export const autoDecided = (card: StoredCard): boolean => card.autoApproved !== undefined && card.decided !== undefined && card.decided.at === card.autoApproved.at
+// #894 review B2: told apart by who decided, not by time (the owner may decide in the same millisecond).
+export const autoDecided = (card: StoredCard): boolean => card.autoApproved !== undefined && card.decided?.by === 'host'
 
 /** Whether a level may be approved with one click. Absent a level the card is treated as P1, which may not. */
 export const oneClick = (level: DecisionLevel): boolean => level === 'P2' || level === 'P3'
@@ -223,7 +225,7 @@ export class DecisionBook {
   autoApproveDecide(id: string): boolean {
     const card = this.cards.find(c => c.id === id && c.decided === undefined && c.autoApproved !== undefined)
     if (card === undefined) return false
-    this.cards = this.cards.map(c => c.id === id ? { ...c, decided: { at: card.autoApproved!.at, text: autoApprovedText(card.recommended) } } : c)
+    this.cards = this.cards.map(c => c.id === id ? { ...c, decided: { at: card.autoApproved!.at, text: autoApprovedText(card.recommended), by: 'host' } } : c)
     this.save()
     this.changed('decided', this.get(id))
     return true
