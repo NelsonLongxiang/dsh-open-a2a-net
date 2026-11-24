@@ -9,7 +9,7 @@
  * receipt's human text: its summary line and the lines after the v2 envelope line, CRLF made LF, hashed before any cut.
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { RECEIPT_OUTCOMES, parseReceipt } from '../../receipt.ts'
 import { clipUtf8 } from '../../task-bodies.ts'
@@ -51,7 +51,8 @@ export interface ResultBody {
 }
 
 /** The human body of a final receipt for `taskId` (v1 projection), or undefined when it is not that task's receipt. */
-export function projectResultBody(receipt: string, taskId: string): ResultBody | undefined {
+export function projectResultBody(raw: string, taskId: string): ResultBody | undefined {
+  const receipt = raw.replace(/\r\n/g, '\n')
   const parsed = parseReceipt(receipt)
   if (parsed === null || parsed.taskId !== taskId) return undefined
   if (parsed.envelope === undefined) return { version: 1, normalized: '', terminalNoBody: true }
@@ -95,7 +96,7 @@ interface IndexRow {
   readonly terminalNoBody: boolean
   readonly gen?: string
   readonly clipped?: true
-  conflict?: true
+  readonly conflict?: true
   readonly at: number
 }
 interface BodyRow { readonly key: string; readonly gen: string; readonly hash: string; readonly text: string; readonly at: number }
@@ -113,8 +114,8 @@ export interface ResultView {
 
 /** The team's verified outbound results: an index and the bodies, each its own 0o600 file, replaced atomically. */
 export class OutboundResults {
-  private index: IndexRow[] = []
-  private bodies: BodyRow[] = []
+  private index: readonly IndexRow[] = []
+  private bodies: readonly BodyRow[] = []
   private broken = false
 
   constructor(private readonly d: { readonly indexPath: string; readonly bodyPath: string; readonly now: () => number; readonly logger: { warn(format: string, ...args: unknown[]): void } }) {
@@ -122,9 +123,12 @@ export class OutboundResults {
       const idx = existsSync(d.indexPath) ? JSON.parse(readFileSync(d.indexPath, 'utf8')) as { version?: unknown; rows?: unknown } : { version: 1, rows: [] }
       const bod = existsSync(d.bodyPath) ? JSON.parse(readFileSync(d.bodyPath, 'utf8')) as { version?: unknown; rows?: unknown } : { version: 1, rows: [] }
       if (idx.version !== 1 || bod.version !== 1 || !Array.isArray(idx.rows) || !Array.isArray(bod.rows)) throw new Error('unknown format')
+      // Every row must be an object with its string key (and a body its generation); anything else is a damaged store.
+      const keyed = (row: unknown): boolean => typeof row === 'object' && row !== null && typeof (row as { key?: unknown }).key === 'string'
+      if (!idx.rows.every(keyed) || !bod.rows.every(row => keyed(row) && typeof (row as { gen?: unknown }).gen === 'string')) throw new Error('malformed row')
       this.index = idx.rows as IndexRow[]
       // A body is read only through the generation its index row names, so an uncommitted body (a stop between the two
-      // writes) is never read; prune() drops it at the next write.
+      // writes) is never read; the next write drops it.
       this.bodies = bod.rows as BodyRow[]
     } catch (error) {
       // A damaged store fails closed: nothing is read from it and nothing new is kept until it is repaired.
@@ -138,36 +142,37 @@ export class OutboundResults {
     try {
       if (this.broken) return 'failed'
       const now = this.d.now()
-      this.prune(now)
+      const index = this.index.filter(r => now - r.at < RESULT_INDEX_TTL_MS)
+      const live = new Set(index.flatMap(r => (r.gen !== undefined && now - r.at < RESULT_BODY_TTL_MS ? [r.gen] : [])))
+      const bodies = this.bodies.filter(b => live.has(b.gen))
+      const pruned = index.length !== this.index.length || bodies.length !== this.bodies.length
       const key = `${c.ticketId}\u0000${c.task}`
       const source = receiptSource(c.text)
       const body = source === undefined ? undefined : projectResultBody(source.receipt, c.task)
-      if (source === undefined || body === undefined) return 'not-a-result'
+      if (source === undefined || body === undefined) return pruned && !this.commit(index, bodies) ? 'failed' : 'not-a-result'
       const payloadHash = sha(`v1\n${source.receipt}`)
       const bodyHash = body.terminalNoBody ? undefined : sha(`v1\n${body.normalized}`)
-      const existing = this.index.find(r => r.key === key)
+      const existing = index.find(r => r.key === key)
       if (existing !== undefined) {
-        if (existing.payloadHash === payloadHash && existing.replier === c.replier) return 'duplicate'
+        if (existing.payloadHash === payloadHash && existing.replier === c.replier) return pruned && !this.commit(index, bodies) ? 'failed' : 'duplicate'
         // A different result for the same request: the first one is kept and the result is frozen.
-        if (existing.conflict !== true) { existing.conflict = true; this.write() }
-        return 'conflict'
+        if (existing.conflict === true && !pruned) return 'conflict'
+        return this.commit(index.map(r => (r.key === key ? { ...r, conflict: true as const } : r)), bodies) ? 'conflict' : 'failed'
       }
-      const row: IndexRow = { key, ticketId: c.ticketId, task: c.task, card: c.card, sender: c.sender, replier: c.replier, transportId: c.transportId, proof: c.proof, approvedAt: c.approvedAt,
+      const base: IndexRow = { key, ticketId: c.ticketId, task: c.task, card: c.card, sender: c.sender, replier: c.replier, transportId: c.transportId, proof: c.proof, approvedAt: c.approvedAt,
         source: source.kind, completeness: c.completeness, payloadHash, ...(bodyHash !== undefined ? { bodyHash } : {}), ...(body.outcome !== undefined ? { outcome: body.outcome } : {}), terminalNoBody: body.terminalNoBody, at: now }
-      if (Buffer.byteLength(JSON.stringify(row), 'utf8') > RESULT_INDEX_ROW_MAX) return 'failed'
-      const indexBytes = Buffer.byteLength(JSON.stringify([...this.index, row]), 'utf8')
-      if (this.index.length + 1 > RESULT_INDEX_CAP.count || indexBytes > RESULT_INDEX_CAP.bytes) return 'full'
       // Only a complete source with a body is kept as a body; the body is cut at a character boundary and marked when it is.
-      if (body.terminalNoBody || c.completeness !== 'complete') { this.index.push(row); this.write(); return 'indexed' }
-      const clipped = clipUtf8(body.normalized, RESULT_BODY_MAX_BYTES)
-      const gen = randomUUID()
-      const next: BodyRow = { key, gen, hash: bodyHash!, text: clipped.text, at: now }
-      const bodyBytes = Buffer.byteLength(JSON.stringify([...this.bodies, next]), 'utf8')
-      if (this.bodies.length + 1 > RESULT_BODY_CAP.count || bodyBytes > RESULT_BODY_CAP.bytes) { this.index.push(row); this.write(); return 'full' }
-      this.bodies.push(next)
-      this.index.push({ ...row, gen, ...(clipped.truncated ? { clipped: true as const } : {}) })
-      this.write()
-      return 'stored'
+      const keepBody = !body.terminalNoBody && c.completeness === 'complete'
+      const clipped = keepBody ? clipUtf8(body.normalized, RESULT_BODY_MAX_BYTES) : undefined
+      const gen = keepBody ? randomUUID() : undefined
+      const row: IndexRow = gen === undefined ? base : { ...base, gen, ...(clipped!.truncated ? { clipped: true as const } : {}) }
+      // Sizes are checked on what is written: the final row, and each file with its wrapper.
+      if (Buffer.byteLength(JSON.stringify(row), 'utf8') > RESULT_INDEX_ROW_MAX) return 'failed'
+      if (index.length + 1 > RESULT_INDEX_CAP.count || fileBytes([...index, row]) > RESULT_INDEX_CAP.bytes) return 'full'
+      if (gen === undefined) return this.commit([...index, row], bodies) ? 'indexed' : 'failed'
+      const next: BodyRow = { key, gen, hash: bodyHash!, text: clipped!.text, at: now }
+      if (bodies.length + 1 > RESULT_BODY_CAP.count || fileBytes([...bodies, next]) > RESULT_BODY_CAP.bytes) return this.commit([...index, base], bodies) ? 'full' : 'failed'
+      return this.commit([...index, row], [...bodies, next]) ? 'stored' : 'failed'
     } catch (error) {
       this.d.logger.warn('superagent: outbound result not recorded: %s', String(error))
       return 'failed'
@@ -191,24 +196,36 @@ export class OutboundResults {
     return { status: row.clipped === true ? 'truncated' : 'ready', truncated: row.clipped === true, hasBody: true, ...base }
   }
 
-  private prune(now: number): void {
-    const keep = this.index.filter(r => now - r.at < RESULT_INDEX_TTL_MS)
-    const live = new Set(keep.flatMap(r => (r.gen !== undefined && now - r.at < RESULT_BODY_TTL_MS ? [r.gen] : [])))
-    const bodies = this.bodies.filter(b => live.has(b.gen))
-    if (keep.length !== this.index.length || bodies.length !== this.bodies.length) { this.index = keep; this.bodies = bodies; this.write() }
-  }
-
-  /** Bodies first, then the index that names their generation: a stop in between leaves an orphan, never a dangling row. */
-  private write(): void {
-    writePrivate(this.d.bodyPath, JSON.stringify({ version: 1, rows: this.bodies }))
-    writePrivate(this.d.indexPath, JSON.stringify({ version: 1, rows: this.index }))
+  /**
+   * Write bodies first, then the index that names their generation (a stop in between leaves an orphan, never a dangling
+   * row), and only then take them as the store's state. A failed write leaves memory as it was and closes the store until a
+   * restart reloads it from disk: nothing that was not committed is ever read.
+   */
+  private commit(index: readonly IndexRow[], bodies: readonly BodyRow[]): boolean {
+    try {
+      writePrivate(this.d.bodyPath, JSON.stringify({ version: 1, rows: bodies }))
+      writePrivate(this.d.indexPath, JSON.stringify({ version: 1, rows: index }))
+    } catch (error) {
+      this.broken = true
+      this.d.logger.warn('superagent: outbound results not saved, store closed until restart: %s', String(error))
+      return false
+    }
+    this.index = index
+    this.bodies = bodies
+    return true
   }
 }
+
+const fileBytes = (rows: readonly unknown[]): number => Buffer.byteLength(JSON.stringify({ version: 1, rows }), 'utf8')
 
 function writePrivate(path: string, data: string): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const tmp = `${path}.tmp-${randomUUID()}`
-  writeFileSync(tmp, data, { mode: 0o600 })
-  chmodSync(tmp, 0o600)
-  renameSync(tmp, path)
+  try {
+    writeFileSync(tmp, data, { mode: 0o600 })
+    chmodSync(tmp, 0o600)
+    renameSync(tmp, path)
+  } finally {
+    rmSync(tmp, { force: true })
+  }
 }

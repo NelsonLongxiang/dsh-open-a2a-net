@@ -6,7 +6,8 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { readFileSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { formatReceipt } from '../../src/receipt.ts'
 import { OutboundResults, RESULT_BODY_MAX_BYTES, RESULT_BODY_TTL_MS, RESULT_INDEX_TTL_MS, projectResultBody, receiptSource, type ResultCredential } from '../../src/superagent/host/outbound-results.ts'
 
@@ -28,11 +29,16 @@ describe('receiptSource and projectResultBody', () => {
     expect(receiptSource(`note\n\n${r}`)).toBeUndefined()
     expect(receiptSource(`[A2A direct] (task x) a\nb sent:\n\n${r}`)).toBeUndefined()
     expect(receiptSource(`junk\n[A2A direct] (task x) a sent:\n\n${r}`)).toBeUndefined()
+    // A receipt line inside the message after a valid header is not the receipt.
+    expect(receiptSource(`[A2A direct] (task x) a sent:\n\nplease see below\n${r}`)).toBeUndefined()
   })
   it('the body is the summary plus the lines after the envelope; CRLF becomes LF; blank lines kept', () => {
     const r = formatReceipt(TASK, 'summary line', { outcome: 'completed' }) + '\r\nfirst\r\n\r\nthird'
     const src = receiptSource(r)!
     expect(projectResultBody(src.receipt, TASK)).toMatchObject({ normalized: 'summary line\nfirst\n\nthird', outcome: 'completed', terminalNoBody: false })
+  })
+  it('a direct caller gets CRLF made LF too', () => {
+    expect(projectResultBody(formatReceipt(TASK, 's', { outcome: 'completed' }) + '\r\na\r\nb', TASK)!.normalized).toBe('s\na\nb')
   })
   it('unknown is a final outcome with a body; no envelope or no outcome is final with no body; another task is not a result', () => {
     expect(projectResultBody(formatReceipt(TASK, 's', { outcome: 'unknown' }), TASK)).toMatchObject({ outcome: 'unknown', terminalNoBody: false })
@@ -98,6 +104,31 @@ describe('OutboundResults', () => {
     t.s.register(cred(formatReceipt(TASK, 'ok', { outcome: 'completed' })))
     writeFileSync(t.paths.indexPath, JSON.stringify({ version: 1, rows: [] }))
     expect(t.reopen().view('t1', TASK)).toBeUndefined()
+  })
+  it('a failed index write changes nothing in memory, leaves no temp file, and closes the store', () => {
+    const t = store()
+    mkdirSync(t.paths.indexPath)
+    expect(t.s.register(cred(formatReceipt(TASK, 'ok', { outcome: 'completed' })))).toBe('failed')
+    expect(t.s.view('t1', TASK)).toEqual({ status: 'unavailable', reason: 'storage' })
+    expect(t.s.register(cred(formatReceipt(TASK, 'ok', { outcome: 'completed' }), { ticketId: 't2' }))).toBe('failed')
+    expect(readdirSync(dirname(t.paths.indexPath)).filter(n => n.includes('.tmp-'))).toEqual([])
+    rmSync(t.paths.indexPath, { recursive: true })
+    expect(t.reopen().view('t1', TASK)).toBeUndefined()
+  })
+  it('a conflict that cannot be saved does not leave the result readable as ready', () => {
+    const t = store()
+    t.s.register(cred(formatReceipt(TASK, 'ok', { outcome: 'completed' })))
+    rmSync(t.paths.indexPath); mkdirSync(t.paths.indexPath)
+    expect(t.s.register(cred(formatReceipt(TASK, 'other', { outcome: 'completed' })))).toBe('failed')
+    expect(t.s.view('t1', TASK)).toEqual({ status: 'unavailable', reason: 'storage' })
+  })
+  it('a row that is not a keyed object makes the store damaged', () => {
+    const t = store()
+    writeFileSync(t.paths.indexPath, JSON.stringify({ version: 1, rows: [null] }))
+    expect(t.reopen().view('t1', TASK)).toEqual({ status: 'unavailable', reason: 'storage' })
+    writeFileSync(t.paths.indexPath, JSON.stringify({ version: 1, rows: [] }))
+    writeFileSync(t.paths.bodyPath, JSON.stringify({ version: 1, rows: [{ key: 'k' }] }))
+    expect(t.reopen().view('t1', TASK)).toEqual({ status: 'unavailable', reason: 'storage' })
   })
   it('an orphan body is not carried into the next write', () => {
     const t = store()

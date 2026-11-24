@@ -71,11 +71,33 @@ describe('#881 v2: recording a verified outbound result', () => {
     receive(t.host, receipt({ truncated: true }))
     expect(t.host.outboundResult('session-r', t.ticketId, T)).toMatchObject({ ok: true, status: 'unavailable', reason: 'source-truncated', hasBody: false })
   })
+  it('a receipt for the record task whose latest attempt is another one records nothing', async () => {
+    const t = await seeded({ attempts: [{ task: T, sender: SENDER, at: '2026-11-24T00:00:02Z', phase: 'dispatching', delivery: 'accepted' }, { task: OLD, sender: SENDER, at: '2026-11-24T00:00:03Z', phase: 'dispatching', delivery: 'unknown' }] })
+    receive(t.host, receipt())
+    expect(existsSync(join(t.home, 'superagent', 'outbound-results.json'))).toBe(false)
+  })
   it('no approval (a legacy request) records nothing: answered without proof reads unavailable', async () => {
     const t = await seeded({ approval: undefined })
     receive(t.host, receipt())
     expect(existsSync(join(t.home, 'superagent', 'outbound-results.json'))).toBe(false)
     expect(t.host.outboundResult('session-r', t.ticketId, T)).toMatchObject({ ok: true, status: 'unavailable', reason: 'source-unproven' })
+  })
+})
+
+describe('#881 v2: the two read tools serve kind outbound_result first', () => {
+  it('superagent_read for the router and a2a_ticket_read for an observer; a wrong id is the one refusal, never a wrongId hint; kind outbound unchanged', async () => {
+    const t = await seeded(); receive(t.host, receipt())
+    vi.spyOn(t.host, 'isObserver').mockImplementation((s: string) => s === 'session-o')
+    const { registerSuperagentTools } = await import('../../src/superagent/host/tools.ts')
+    const registered = new Map<string, { execute(a: unknown, e: unknown): Promise<Record<string, unknown>> }>()
+    registerSuperagentTools({ tools: { register: (tool: { name: string }) => { registered.set(tool.name, tool as never) } } } as never, id => (t.host.roleOf(id) !== undefined ? t.host : undefined))
+    const as = (id: string) => ({ agent: { id }, signal: new AbortController().signal })
+    const sread = registered.get('superagent_read')!, tread = registered.get('a2a_ticket_read')!
+    expect(await sread.execute({ kind: 'outbound_result', ticket_id: t.ticketId, task_id: T }, as('session-r'))).toMatchObject({ ok: true, status: 'ready', hasBody: true })
+    expect(await sread.execute({ kind: 'outbound_result', ticket_id: t.ticketId.slice(0, -1), task_id: T }, as('session-r'))).toEqual(RESULT_UNAVAILABLE)
+    expect(await tread.execute({ kind: 'outbound_result', ticket_id: t.ticketId, task_id: T }, as('session-o'))).toEqual({ ok: true, status: 'ready' })
+    expect(await tread.execute({ kind: 'outbound_result', ticket_id: 'nope', task_id: T }, as('session-o'))).toEqual(RESULT_UNAVAILABLE)
+    expect(await tread.execute({ kind: 'outbound' }, as('session-o'))).toMatchObject({ code: 'not-approver' })
   })
 })
 
