@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "command": [
+    "node",
+    "scripts/verify-temp-clean.mjs",
+    "--",
+    "node",
+    "--test",
+    "--test-reporter=tap"
+  ],
+  "narrow": [
+    "tests/repository-layout.test.mjs"
+  ],
+  "timeoutMs": 60000,
+  "mutations": [
+    {
+      "id": "M1-revert-worktree-support",
+      "file": "scripts/verify-repository-layout.mjs",
+      "find": "const linkedWorktree = entries.some(entry => entry.name === '.git' && entry.kind === 'file') && isLinkedWorktree(absolute)",
+      "replace": "const linkedWorktree = false"
+    },
+    {
+      "id": "M2-trust-any-gitfile",
+      "file": "scripts/verify-repository-layout.mjs",
+      "find": "&& isLinkedWorktree(absolute)",
+      "replace": ""
+    },
+    {
+      "id": "M3-ignore-reverse-pointer",
+      "file": "scripts/verify-repository-layout.mjs",
+      "find": "return realpathSync(resolve(admin, back)) === realpathSync(join(root, '.git'))",
+      "replace": "return true",
+      "expect": "survived"
+    },
+    {
+      "id": "M4-accept-separate-gitdir",
+      "file": "scripts/verify-repository-layout.mjs",
+      "find": "if (admin === common || top !== realpathSync(root)) return false",
+      "replace": "if (top !== realpathSync(root)) return false",
+      "expect": "survived"
+    },
+    {
+      "id": "M5-allow-all-files-in-linked-tree",
+      "file": "scripts/verify-repository-layout.mjs",
+      "find": "(name === '.git' && linkedWorktree)",
+      "replace": "linkedWorktree"
+    },
+    {
+      "id": "M6-trust-Git-environment",
+      "file": "scripts/verify-repository-layout.mjs",
+      "find": "for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key]",
+      "replace": "// mutation: inherit Git environment overrides"
+    },
+    {
+      "id": "N1-revert-registration-check",
+      "file": "scripts/verify-repository-layout.mjs",
+      "find": "if (!isRegisteredAdmin(root, admin, common)) return false",
+      "replace": "// mutation: old admin/common/backlink-only logic"
+    },
+    {
+      "id": "C1-no-registration-no-backlink",
+      "file": "scripts/verify-repository-layout.mjs",
+      "find": "    if (!isRegisteredAdmin(root, admin, common)) return false\n    const back = readFileSync(join(admin, 'gitdir'), 'utf8').replace(/\\r?\\n$/, '')\n    return realpathSync(resolve(admin, back)) === realpathSync(join(root, '.git'))",
+      "replace": "    return true // mutation: remove registration and backlink checks"
+    },
+    {
+      "id": "C2-no-registration-no-admin-common",
+      "file": "scripts/verify-repository-layout.mjs",
+      "find": "    if (admin === common || top !== realpathSync(root)) return false\n    if (!isRegisteredAdmin(root, admin, common)) return false",
+      "replace": "    if (top !== realpathSync(root)) return false // mutation: remove registration and admin/common checks"
+    },
+    {
+      "id": "S1-reject-root-symlink-baseline",
+      "file": "scripts/verify-repository-layout.mjs",
+      "find": "  const absolute = resolve(root)",
+      "replace": "  const absolute = resolve(root)\n  if (realpathSync(absolute) !== absolute) throw Error('mutation: reject root aliases')"
+    },
+    {
+      "id": "S2-reject-dotgit-symlink-baseline",
+      "file": "scripts/verify-repository-layout.mjs",
+      "find": "['node_modules', '.git'].includes(name)",
+      "replace": "['node_modules'].includes(name)"
+    }
+  ]
+}
