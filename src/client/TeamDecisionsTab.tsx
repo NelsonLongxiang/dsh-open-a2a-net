@@ -26,6 +26,8 @@ export interface DecisionRow {
   readonly files?: ReadonlyArray<{ readonly sha256: string; readonly size: number; readonly name: string }>
   /** The host closed this credential card as 「知道了」 on a timeout (owner 2026-11-23); the owner may still decide it. */
   readonly autoAck?: { readonly at: string; readonly minutes: number }
+  /** #888 D5: the host took the recommendation on the owner's setting; the owner may still decide it. */
+  readonly autoApproved?: { readonly at: string; readonly minutes: number }
   /** #888 D1: per option, what the owner must fill in to choose it. */
   readonly inputs?: Readonly<Record<string, { readonly kind: 'text' | 'file' | 'text+file'; readonly prompt: string }>>
   /** #888 D1: derived by the host; never stored with the card. */
@@ -105,6 +107,7 @@ function Card({ row, t, done }: { readonly row: DecisionRow; readonly done: () =
       </header>
       <p className={styles.question}>{row.question}</p>
       {row.reason !== undefined && <p className={styles.hint}>{row.reason}</p>}
+      {row.autoApproved !== undefined && <p role="note" className={styles.hint}>{t('team.autoApproved', { minutes: String(row.autoApproved.minutes), at: row.autoApproved.at, option: row.recommended })}</p>}
       {row.autoAck !== undefined && <p role="note" className={styles.hint}>{t('team.autoAcked', { minutes: String(row.autoAck.minutes), at: row.autoAck.at })}</p>}
       {row.files !== undefined && row.files.length > 0 && (
         <div className={styles.files} aria-label={t('team.cardFiles')}>
@@ -174,7 +177,7 @@ export function DecisionList({ t }: TeamDecisionsTabProps) {
     <section className={styles.decisions} aria-label={t('team.decisions')}>
       {rows.length > 0 && <span className={styles.label}>{t('team.decisionsCount', { count: String(rows.length) })}</span>}
       {/* #888 D4: split by whether the recommendation needs input; cards the host already closed on a timeout are not counted. */}
-      {rows.some(row => row.needsInput === true) && (() => { const open = rows.filter(row => row.autoAck === undefined); const fill = open.filter(row => row.recommendedNeedsInput === true).length; return <span className={styles.hint}>{t('team.countNeedsInput', { count: String(fill) })} · {t('team.countDirect', { count: String(open.length - fill) })}</span> })()}
+      {rows.some(row => row.needsInput === true) && (() => { const open = rows.filter(row => row.autoAck === undefined && row.autoApproved === undefined); const fill = open.filter(row => row.recommendedNeedsInput === true).length; return <span className={styles.hint}>{t('team.countNeedsInput', { count: String(fill) })} · {t('team.countDirect', { count: String(open.length - fill) })}</span> })()}
       {problem !== undefined && <p role="alert" className={styles.error}>{t(problem === 'denied' ? 'team.decisionsDenied' : 'team.decisionsUnreadable')}{rows.length > 0 ? ` ${t('team.decisionsStale')}` : ''}</p>}
       {rows.map(row => <Card key={row.id} row={row} t={t} done={() => { void load() }} />)}
     </section>

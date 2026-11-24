@@ -89,10 +89,20 @@ export interface StoredCard extends DecisionSpec {
   readonly decided?: { readonly at: string; readonly text: string; readonly triggerId?: string; readonly files?: readonly DecisionFile[] }
   /** The host closed this card as 「知道了」 on a timeout (owner 2026-11-23): the audit record; it stays when the owner decides again. */
   readonly autoAck?: { readonly at: string; readonly by: 'host'; readonly rule: 'credential-ack-timeout'; readonly minutes: number }
+  /**
+   * #888 D5: the host took the recommendation on the owner's setting (written before `decided`, which carries the same at).
+   * It is not the owner's decision: the owner may decide again, and the same question may be asked again.
+   */
+  readonly autoApproved?: { readonly at: string; readonly by: 'host'; readonly rule: 'auto-approve'; readonly minutes: number; readonly deliveryId: string; readonly deliveredAt?: string }
 }
 
 /** The decision text of a credential-access card the host closed on its timeout. */
 export const AUTO_ACK_TEXT = '决定：知道了（超时自动）'
+
+/** #888 D5: the decided text of a card the host took on the owner's setting (its first line stays 决定：<option>). */
+export const autoApprovedText = (option: string): string => `决定：${option}\n说明：宿主按属主设置自动采纳推荐项（非属主本人）`
+/** #888 D5: whether a card's decision is still the host's automatic one (not the owner's own). */
+export const autoDecided = (card: StoredCard): boolean => card.autoApproved !== undefined && card.decided !== undefined && card.decided.at === card.autoApproved.at
 
 /** Whether a level may be approved with one click. Absent a level the card is treated as P1, which may not. */
 export const oneClick = (level: DecisionLevel): boolean => level === 'P2' || level === 'P3'
@@ -189,6 +199,41 @@ export class DecisionBook {
     return this.cards.filter(card => card.autoAck !== undefined && card.decided?.text === AUTO_ACK_TEXT && Date.parse(card.autoAck.at) >= sinceMs)
   }
 
+  /** #888 D5: cards the host took automatically since `sinceMs` that the owner has not decided since (they may still decide). */
+  autoApprovedSince(sinceMs: number): StoredCard[] {
+    return this.cards.filter(card => autoDecided(card) && Date.parse(card.autoApproved!.at) >= sinceMs)
+  }
+  /** #888 D5: how many cards the host took automatically since `sinceMs` (the hourly cap). */
+  autoApprovedCount(sinceMs: number): number {
+    return this.cards.filter(card => card.autoApproved !== undefined && Date.parse(card.autoApproved.at) >= sinceMs).length
+  }
+  /** #888 D5: cards whose automatic decision is recorded but not yet decided or not yet told to the proposer (restart). */
+  autoUnfinished(): StoredCard[] {
+    return this.cards.filter(card => card.autoApproved !== undefined && card.autoApproved.deliveredAt === undefined && (card.decided === undefined || autoDecided(card)))
+  }
+  /** #888 D5 step 1: record the automatic decision (durable) before the card is decided. */
+  autoApproveRecord(id: string, at: string, minutes: number, deliveryId: string): boolean {
+    const card = this.cards.find(c => c.id === id && c.decided === undefined && c.autoApproved === undefined)
+    if (card === undefined) return false
+    this.cards = this.cards.map(c => c.id === id ? { ...c, autoApproved: { at, by: 'host', rule: 'auto-approve', minutes, deliveryId } } : c)
+    this.save()
+    return true
+  }
+  /** #888 D5 step 2: decide it with the recommendation, at the recorded time. */
+  autoApproveDecide(id: string): boolean {
+    const card = this.cards.find(c => c.id === id && c.decided === undefined && c.autoApproved !== undefined)
+    if (card === undefined) return false
+    this.cards = this.cards.map(c => c.id === id ? { ...c, decided: { at: card.autoApproved!.at, text: autoApprovedText(card.recommended) } } : c)
+    this.save()
+    this.changed('decided', this.get(id))
+    return true
+  }
+  /** #888 D5 step 3: the proposer was told. */
+  autoApproveDelivered(id: string, at: string): void {
+    this.cards = this.cards.map(c => c.id === id && c.autoApproved !== undefined ? { ...c, autoApproved: { ...c.autoApproved, deliveredAt: at } } : c)
+    this.save()
+  }
+
   /** Close an undecided card as 「知道了」 on a timeout, with the audit record (who, which rule, when, after how long). */
   autoAcknowledge(id: string, at: string, minutes: number): boolean {
     const card = this.cards.find(c => c.id === id && c.decided === undefined)
@@ -213,7 +258,8 @@ export class DecisionBook {
     // Design owner-reporting R5: a choice the owner decided is final; the same question gets that decision back.
     // Only recommendations (router, observer): a health reminder may come back with its problem, a tool or outbound card has its own rule.
     const final = (source: StoredCard['source']): boolean => source === 'router' || source === 'observer'
-    const decided = !final(input.source) ? undefined : this.cards.filter(card => card.decided !== undefined && final(card.source) && card.question === question).sort((a, b) => b.decided!.at.localeCompare(a.decided!.at))[0]
+    // #888 D5: a decision the host took automatically is not the owner's; only the owner's own is final.
+    const decided = !final(input.source) ? undefined : this.cards.filter(card => card.decided !== undefined && !autoDecided(card) && final(card.source) && card.question === question).sort((a, b) => b.decided!.at.localeCompare(a.decided!.at))[0]
     if (decided !== undefined) return { ok: false, code: 'decided', error: `the owner already decided this (${decided.decided!.at.slice(0, 10)}): ${decided.decided!.text}. A decision is final: act on it, do not ask again.` }
     const mine = this.open().filter(card => card.source === input.source && card.by === input.by)
     const repeated = mine.find(card => card.question === question)

@@ -45,7 +45,7 @@ import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, blockableTool, grantClass, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
-import { CREDENTIAL_ACK_MINUTES_DEFAULT, DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
+import { armAutoApprove, CREDENTIAL_ACK_MINUTES_DEFAULT, DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 import { searchTeam } from './search.ts'
 import { A2aReceipts, END_RECEIPT_GRACE_MS } from './receipts.ts'
 export { END_RECEIPT_GRACE_MS } from './receipts.ts'
@@ -1451,7 +1451,9 @@ export class SuperagentHost {
     })
     // Owner 2026-11-23: credential cards the host closed on a timeout stay a day, so the owner sees them and may decide again.
     const autoAcked = this.decisions.autoAcked(Date.parse(this.now()) - AUTO_ACK_SHOWN_MS)
-    return [...this.decisions.open().filter(card => card.source !== 'ticket'), ...autoAcked, ...onTickets]
+    // #888 D5 I3: cards the host took automatically stay a day too, so the owner sees them and may decide again.
+    const autoApproved = this.decisions.autoApprovedSince(Date.parse(this.now()) - AUTO_ACK_SHOWN_MS)
+    return [...this.decisions.open().filter(card => card.source !== 'ticket'), ...autoAcked, ...autoApproved, ...onTickets]
   }
 
   /**
@@ -1878,6 +1880,7 @@ export class SuperagentHost {
     try { this.ackCredentialCards() } catch (error) { this.d.logger.warn('superagent: credential card timeout pass failed: %s', String(error)) }
     // Upstream: evaluation, dispatch and outbound delivery hold while paused.
     if (this.settingsValue.paused) return
+    try { this.autoApproveCards() } catch (error) { this.d.logger.warn('superagent: automatic approval pass failed: %s', String(error)) }
     this.executor.tick()
     this.prs.tick()
     this.issues.tick()
@@ -2050,6 +2053,50 @@ export class SuperagentHost {
     return closed
   }
 
+  /**
+   * #888 D5 (phase one: router and observer cards). On the owner's setting, an eligible card nobody decided gets its
+   * recommendation taken: the record first, then the decision, then a host note to the proposer. It is not a workbench
+   * trigger and passes no engine gate, so it is never the owner's explicit word and opens no ticket. Runs only while not
+   * paused (pass() returns before it). Unfinished ones from before a restart are finished with the same delivery id.
+   */
+  autoApproveCards(): number {
+    for (const card of this.decisions.autoUnfinished()) {
+      if (card.decided === undefined) this.decisions.autoApproveDecide(card.id)
+      const done = this.decisions.get(card.id)
+      if (done !== undefined) this.tellAutoApproved(done)
+    }
+    const rule = this.settingsValue.autoApprove
+    if (rule === undefined || !rule.enabled || rule.armedAt === undefined) return 0
+    const at = this.now(), nowMs = Date.parse(at), armedMs = Date.parse(rule.armedAt)
+    let room = rule.perHour - this.decisions.autoApprovedCount(nowMs - 3_600_000)
+    let taken = 0
+    for (const card of this.decisions.open()) {
+      if (room <= 0) break
+      // Levels are only ever P2 or P3 (parseSettings), so P0 and P1 never pass; a card already recorded is refused by the record.
+      if (!(rule.sources as readonly string[]).includes(card.source) || !(rule.levels as readonly string[]).includes(card.level)) continue
+      if (card.recommended === '' || !card.options.includes(card.recommended) || needsInput(card)) continue
+      if (nowMs - Math.max(Date.parse(card.at), armedMs) < rule.afterMinutes * 60_000) continue
+      if (!this.decisions.autoApproveRecord(card.id, at, rule.afterMinutes, `auto-${randomUUID()}`)) continue
+      this.decisions.autoApproveDecide(card.id)
+      const done = this.decisions.get(card.id)
+      if (done !== undefined) this.tellAutoApproved(done)
+      this.d.logger.info('superagent: card %s taken automatically after %d minutes (auto-approve)', card.id, rule.afterMinutes)
+      taken += 1
+      room -= 1
+    }
+    return taken
+  }
+
+  /** #888 D5: the host note to the proposer; marked delivered only once it reached the session. */
+  private tellAutoApproved(card: StoredCard): void {
+    const auto = card.autoApproved
+    if (auto === undefined || auto.deliveredAt !== undefined) return
+    const text = `[superagent decision] ${auto.deliveryId} 宿主按属主设置自动采纳了你提的决策卡的推荐项（非属主本人，等了 ${String(auto.minutes)} 分钟无人处理）：${card.question}\n决定：${card.recommended}\n这不是属主的指令：不开新工单，不放宽你的权限或接单规则；属主仍可改判。`
+    let delivered = false
+    try { delivered = this.d.deliverToSession(card.by, text) } catch (error) { this.d.logger.warn('superagent: automatic decision %s not told yet: %s', card.id, String(error)) }
+    if (delivered) this.decisions.autoApproveDelivered(card.id, this.now())
+  }
+
   noteRefusal(rule: string, detail: { caller?: string; target?: string } = {}): void {
     this.refusalCounts.set(rule, (this.refusalCounts.get(rule) ?? 0) + 1)
     this.refusalRecent.push({ at: (this.d.now ?? (() => new Date().toISOString()))(), rule, ...(detail.caller !== undefined ? { caller: detail.caller } : {}), ...(detail.target !== undefined ? { target: detail.target } : {}) })
@@ -2140,6 +2187,10 @@ export class SuperagentHost {
     const before = policyVersion(this.settingsValue)
     const previous = this.settings
     const routerChanged = parsed.settings.router !== this.settingsValue.router
+    // #888 D5 B-D5-2: the host stamps when automatic approval took effect; turning it on or widening it restamps.
+    const armed = armAutoApprove(this.settingsValue.autoApprove, parsed.settings.autoApprove, this.now())
+    const { autoApprove: _requested, ...withoutAuto } = parsed.settings
+    parsed.settings = { ...withoutAuto, ...(armed !== undefined ? { autoApprove: armed } : {}) } as typeof parsed.settings
     this.writeSettings(parsed.settings)
     // #671: the staffing executor writes its own history line for each rule set it changes, so a write it makes is not also
     // recorded as the owner's edit (that moved the revision twice and left a line for an edit nobody made).

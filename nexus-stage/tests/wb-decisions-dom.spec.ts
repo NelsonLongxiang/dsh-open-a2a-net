@@ -446,3 +446,16 @@ describe('#888 D4: options that need the owner to fill something in', () => {
     expect([inputMet(card, 'a', ' ', 1), inputMet(card, 'a', 'x', 0), inputMet(card, 'b', 'x', 0), inputMet(card, 'b', '', 1), inputMet(card, 'c', 'x', 0), inputMet(card, 'c', 'x', 1)]).toEqual([false, true, false, true, false, true])
   })
 })
+
+describe('#888 D5: a card the host took automatically', () => {
+  it('says so, is not counted as waiting, and can still be decided', async () => {
+    const plain = (over: Record<string, unknown> = {}) => row({ level: 'P3', options: ['甲', '乙'], recommended: '甲', files: [], ...over })
+    const m = mount(() => [plain({ id: 'a', autoApproved: { at: '2026-11-24T10:30:00.000Z', minutes: 30 } }), plain({ id: 'b' })])
+    await m.group.refresh()
+    expect(document.querySelector('[data-card="a"] .wb-sa-auto-approved')?.textContent).toContain('不是你本人的决定')
+    expect(document.querySelector('[data-card="b"] .wb-sa-auto-approved')).toBeNull()
+    expect(m.group.waiting()).toBe(1)
+    expect(document.querySelector('.wb-led-group-hint')!.textContent).toBe('1')
+    expect(cardOf(plain({ autoApproved: { at: 1 } }))!.autoApproved).toBeUndefined()
+  })
+})

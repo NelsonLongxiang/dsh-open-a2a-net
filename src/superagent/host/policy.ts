@@ -105,6 +105,11 @@ export interface TeamSettings {
    * absent: CREDENTIAL_ACK_MINUTES_DEFAULT; 0 turns it off. Only that card kind, only that option.
    */
   readonly credentialAckMinutes?: number
+  /**
+   * #888 D5: the host takes the recommendation of an eligible undecided card after a wait (owner 2026-11-24: off by default;
+   * when turned on, P3 only, 30 minutes, no sources). `armedAt` is the host's own stamp, never taken from a request.
+   */
+  readonly autoApprove?: AutoApprove
   /** How long the router may take over a candidate before its Eval expires (upstream: re-queued twice, then unavailable). */
   readonly evalTimeoutMs: number
   /** Pause processing (upstream docs/003): Sources still record Triggers; Evals, dispatch and replies wait. */
@@ -207,6 +212,64 @@ function parseRules(value: unknown, where: string): readonly ProactiveRule[] | s
 /** Validate an owner's settings write; returns the normalized settings or the first problem. */
 const BAD = Symbol('bad prompt')
 
+/** #888 D5 phase one: router and observer cards; ticket cards come with the engine's host-auto-decision input. */
+export const AUTO_APPROVE_SOURCES = ['router', 'observer'] as const
+export interface AutoApprove {
+  readonly enabled: boolean
+  readonly levels: readonly ('P2' | 'P3')[]
+  readonly sources: readonly (typeof AUTO_APPROVE_SOURCES)[number][]
+  readonly afterMinutes: number
+  readonly perHour: number
+  /** When the current rules took effect (host stamp): a card waits from the later of its own time and this. */
+  readonly armedAt?: string
+}
+/** Owner 2026-11-24: what turning it on starts from. */
+export const AUTO_APPROVE_DEFAULT: AutoApprove = { enabled: false, levels: ['P3'], sources: [], afterMinutes: 30, perHour: 10 }
+
+function parseAutoApprove(raw: unknown, current: AutoApprove | undefined): AutoApprove | undefined | string {
+  if (raw === null) return undefined
+  if (typeof raw !== 'object' || Array.isArray(raw)) return 'autoApprove must be an object'
+  const r = raw as Record<string, unknown>
+  const base = current ?? AUTO_APPROVE_DEFAULT
+  const enabled = 'enabled' in r ? r.enabled : base.enabled
+  if (typeof enabled !== 'boolean') return 'autoApprove.enabled must be true or false'
+  const list = <T extends string>(key: string, allowed: readonly T[], fallback: readonly T[]): T[] | string => {
+    if (!(key in r)) return [...fallback]
+    const v = r[key]
+    if (!Array.isArray(v) || v.some(x => typeof x !== 'string' || !allowed.includes(x as T)) || new Set(v).size !== v.length) return `autoApprove.${key} must be distinct values from ${allowed.join(', ')}`
+    return v as T[]
+  }
+  const levels = list('levels', ['P2', 'P3'] as const, base.levels)
+  if (typeof levels === 'string') return levels
+  const sources = list('sources', AUTO_APPROVE_SOURCES, base.sources)
+  if (typeof sources === 'string') return sources
+  const int = (key: string, min: number, max: number, fallback: number): number | string => {
+    const v = key in r ? r[key] : fallback
+    return typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max ? v : `autoApprove.${key} must be a whole number from ${String(min)} to ${String(max)}`
+  }
+  const afterMinutes = int('afterMinutes', 15, 1440, base.afterMinutes)
+  if (typeof afterMinutes === 'string') return afterMinutes
+  const perHour = int('perHour', 1, 60, base.perHour)
+  if (typeof perHour === 'string') return perHour
+  // A request never sets armedAt: the current stamp is kept, and the host decides on save whether it moves.
+  return { enabled, levels, sources, afterMinutes, perHour, ...(current?.armedAt !== undefined ? { armedAt: current.armedAt } : {}) }
+}
+
+/**
+ * #888 D5 B-D5-2: the stamp the new rules take effect from. Turning it on, or any widening (a new level or source, a shorter
+ * wait, a higher hourly cap), restamps it now, so a backlog is never taken at once; tightening keeps it.
+ */
+export function armAutoApprove(previous: AutoApprove | undefined, next: AutoApprove | undefined, now: string): AutoApprove | undefined {
+  if (next === undefined) return undefined
+  const { armedAt: _drop, ...rest } = next
+  if (!next.enabled) return rest
+  const before = previous?.enabled === true ? previous : undefined
+  const wider = before === undefined || before.armedAt === undefined
+    || next.levels.some(level => !before.levels.includes(level)) || next.sources.some(source => !before.sources.includes(source))
+    || next.afterMinutes < before.afterMinutes || next.perHour > before.perHour
+  return { ...rest, armedAt: wider ? now : before.armedAt }
+}
+
 export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'settings must be an object' }
   const r = raw as Record<string, unknown>
@@ -261,6 +324,12 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
     if (raw === null || (Array.isArray(raw) && raw.length === 0)) approvers = undefined
     else if (!Array.isArray(raw) || raw.length > 10 || raw.some(x => typeof x !== 'string' || !/^session-[A-Za-z0-9-]{1,64}$/.test(x))) return { ok: false, error: 'approvers must list at most 10 session ids of this team\'s members or observers' }
     else approvers = [...new Set(raw as string[])]
+  }
+  let autoApprove = current.autoApprove
+  if ('autoApprove' in r) {
+    const parsed = parseAutoApprove(r.autoApprove, current.autoApprove)
+    if (typeof parsed === 'string') return { ok: false, error: parsed }
+    autoApprove = parsed
   }
   let credentialAckMinutes = current.credentialAckMinutes
   if ('credentialAckMinutes' in r) {
@@ -419,7 +488,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const observers = current.observers ?? []
   const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
   if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
-  return { ok: true, settings: { ...(credentialAckMinutes !== undefined ? { credentialAckMinutes } : {}), ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), ...(approvers !== undefined ? { approvers } : {}), ...(blockedTools !== undefined ? { blockedTools } : {}), evalTimeoutMs, paused, ...(progressOff === true ? { progressOff: true as const } : {}), ...(observerCast === true ? { observerCast: true as const } : {}), ...(idleSweep === true ? { idleSweep: true as const } : {}), ...(decisionPush === true ? { decisionPush: true as const } : {}), ...(mcp !== undefined ? { mcp } : {}) } }
+  return { ok: true, settings: { ...(autoApprove !== undefined ? { autoApprove } : {}), ...(credentialAckMinutes !== undefined ? { credentialAckMinutes } : {}), ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), ...(approvers !== undefined ? { approvers } : {}), ...(blockedTools !== undefined ? { blockedTools } : {}), evalTimeoutMs, paused, ...(progressOff === true ? { progressOff: true as const } : {}), ...(observerCast === true ? { observerCast: true as const } : {}), ...(idleSweep === true ? { idleSweep: true as const } : {}), ...(decisionPush === true ? { decisionPush: true as const } : {}), ...(mcp !== undefined ? { mcp } : {}) } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
@@ -450,7 +519,15 @@ export function parseStoredSettings(raw: unknown): { ok: true; settings: TeamSet
     if (!validUrl(sv.url) || !validKey(sv.key) || !Array.isArray(sv.members) || sv.members.some(m => typeof m !== 'string' || m === '')) return { ok: false, error: 'the stored served team is malformed' }
     served = { url: sv.url, key: sv.key, members: sv.members as string[], ...(typeof sv.team === 'string' && /^[^/\s]+\/canvas\/[^/\s]+@[0-9a-f]{8}$/.test(sv.team) ? { team: sv.team } : {}) }
   }
-  return { ok: true, settings: { ...parsed.settings, members: [], remoteMembers: [], observers: [], ...(served !== undefined ? { serves: served } : {}) } }
+  // #888 D5 I4: the stored stamp is restored as it was; switched on without a valid one, it loads switched off (fail closed).
+  let autoApprove = parsed.settings.autoApprove
+  if (autoApprove !== undefined) {
+    const stamp = ((rest as { autoApprove?: { armedAt?: unknown } }).autoApprove)?.armedAt
+    const valid = typeof stamp === 'string' && Number.isFinite(Date.parse(stamp))
+    const { armedAt: _ignored, ...plain } = autoApprove
+    autoApprove = valid ? { ...plain, armedAt: stamp as string } : { ...plain, enabled: false }
+  }
+  return { ok: true, settings: { ...parsed.settings, ...(autoApprove !== undefined ? { autoApprove } : {}), members: [], remoteMembers: [], observers: [], ...(served !== undefined ? { serves: served } : {}) } }
 }
 
 /**

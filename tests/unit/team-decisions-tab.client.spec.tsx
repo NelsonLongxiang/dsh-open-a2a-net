@@ -266,3 +266,13 @@ describe('#888 D4: options that need the owner to fill something in', () => {
     expect(inputMet(row, '升级', '', 0)).toBe(true)
   })
 })
+
+describe('#888 D5: a card the host took automatically', () => {
+  it('shows the note and is left out of the split count', async () => {
+    serve([card({ id: 'a', question: '一', autoApproved: { at: '2026-11-24T10:30:00.000Z', minutes: 30 }, inputs: { 不升: { kind: 'text', prompt: 'p' } }, needsInput: true }), card({ id: 'b', question: '二', inputs: { 不升: { kind: 'text', prompt: 'p' } }, needsInput: true })])
+    render(<DecisionList t={t} />)
+    await screen.findByText('一')
+    expect(screen.getByText(/Taken automatically: 「升级」/)).toBeTruthy()
+    expect(screen.getByText(`${en['team.countNeedsInput'].replace('{count}', '0')} · ${en['team.countDirect'].replace('{count}', '1')}`)).toBeTruthy()
+  })
+})
