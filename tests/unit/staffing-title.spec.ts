@@ -6,10 +6,11 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_POLICY, StaffingExecutor, type StaffingChange, type StaffingDeps } from '../../src/superagent/host/staffing.ts'
 import { blueprintDiff } from '../../src/superagent/host/builder-tools.ts'
+import { createStaffing } from '../../src/superagent/host/staffing-wiring.ts'
 
 const A = 'session-aaaaaaaa-0001', B = 'session-bbbbbbbb-0002', GONE = 'session-dddddddd-0004'
 const MARKET = 'market:market/0123456789abcdef' as const
-function world(options: { titles?: Record<string, string>; failJoin?: string; withTitles?: boolean } = {}) {
+function world(options: { titles?: Record<string, string>; failJoin?: string; withTitles?: boolean; available?: boolean; storedAs?: (title: string) => string; resetUnpins?: boolean; renameIgnoresLive?: boolean } = {}) {
   const live = new Set([A, B])
   let titles: Record<string, string> = { ...(options.titles ?? {}) }
   const renames: Array<[string, string]> = [], resets: string[] = []
@@ -21,11 +22,12 @@ function world(options: { titles?: Record<string, string>; failJoin?: string; wi
     sessionJoin: id => id === options.failJoin ? { ok: false, error: 'no live local session' } : { ok: true }, sessionLeave: () => true, sessionJoined: () => false,
     ...(options.withTitles === false ? {} : {
       sessionTitleRead: (id: string) => live.has(id) ? (titles[id] !== undefined ? { live: true, title: titles[id] } : { live: true }) : { live: false },
-      sessionTitleRename: (id: string, title: string) => { if (!live.has(id)) return { ok: false as const, error: 'not live' }; renames.push([id, title]); titles = { ...titles, [id]: title }; return { ok: true as const, title } },
-      sessionTitleReset: (id: string) => { resets.push(id); const next = { ...titles }; delete next[id]; titles = next; return true },
+      sessionTitleRename: (id: string, title: string) => { if (!live.has(id) && options.renameIgnoresLive !== true) return { ok: false as const, error: 'not live' }; const stored = options.storedAs?.(title) ?? title; renames.push([id, stored]); titles = { ...titles, [id]: stored }; return { ok: true as const, title: stored } },
+      sessionTitleReset: async (id: string) => { resets.push(id); if (options.resetUnpins === false) return false; const next = { ...titles }; delete next[id]; titles = next; return true },
+      ...(options.available !== undefined ? { sessionTitleAvailable: () => options.available! } : {}),
     }),
   }
-  return { x: new StaffingExecutor(deps), titles: () => titles, renames, resets }
+  return { x: new StaffingExecutor(deps), titles: () => titles, renames, resets, kill: (id: string) => { live.delete(id) } }
 }
 const sub = (w: ReturnType<typeof world>, id: string, ops: StaffingChange['ops'], source: StaffingChange['source'] = 'owner-local') => w.x.submit({ id, source, by: {}, ops })
 const set = (session: string, title: unknown) => ({ op: 'session.title.set' as const, params: { session, title } })
@@ -78,6 +80,59 @@ describe('session.title.set', () => {
     expect(w.x.get('u2')!.steps.map(s => s.state)).toEqual(['undone', 'failed'])
     expect(w.resets).toEqual([A])
     expect(w.titles()[A]).toBeUndefined()
+  })
+
+  it('#880 review M11: the session is gone between submit and the owner\'s agreement: nothing is renamed', async () => {
+    const w = world({ titles: { [A]: '旧' }, renameIgnoresLive: true })
+    expect(await sub(w, 'g1', [set(A, '新标题')])).toMatchObject({ ok: true, entry: { state: 'awaiting' } })
+    w.kill(A)
+    await w.x.agree('g1', 'test')
+    expect(w.x.get('g1')!.steps.map(s => s.state)).toEqual(['failed'])
+    expect(w.renames).toEqual([])
+  })
+
+  it('#880 review M12: the host wiring passes the title service through, including whether it is mounted', async () => {
+    const titles = { [A]: '旧' } as Record<string, string>
+    let mounted = true
+    const sessionTitles = { read: (id: string) => id === A ? { live: true, title: titles[id] } : { live: false }, rename: (id: string, title: string) => { titles[id] = title; return { ok: true as const, title } }, reset: () => true, available: () => mounted }
+    const x = createStaffing({ path: join(mkdtempSync(join(tmpdir(), 'staffing-title-wire-')), 'staffing.json'), sessionTitles, logger: { info: () => {}, warn: () => {} } } as never)
+    expect(await x.submit({ id: 'w1', source: 'owner-local', by: {}, ops: [set(A, '新')] })).toMatchObject({ ok: true, entry: { state: 'awaiting' } })
+    mounted = false
+    expect(await x.submit({ id: 'w2', source: 'owner-local', by: {}, ops: [set(A, '新')] })).toMatchObject({ ok: false, code: 'not-yet' })
+  })
+
+  it('#880 review M13: an undo that does not bring the exact earlier title back is undo-failed', async () => {
+    const w = world({ titles: { [A]: '被截断的旧…' }, failJoin: B, storedAs: t => t === '被截断的旧…' ? '被截断的旧' : t })
+    await sub(w, 'g3', [set(A, '新标题'), { op: 'session.join', params: { session: B } }])
+    await w.x.agree('g3', 'test')
+    expect(w.x.get('g3')!.steps.map(s => s.state)).toEqual(['undo-failed', 'failed'])
+  })
+
+  it('#880 review: no mounted session-title service is refused at submit, not left to fail at the owner\'s agreement', async () => {
+    const w = world({ available: false })
+    expect(await sub(w, 'g4', [set(A, '新')])).toMatchObject({ ok: false, code: 'not-yet' })
+    expect(w.renames).toEqual([])
+  })
+
+  it('#880 review: a title the session list would show differently is refused with the shown form; one the host shortens is put back', async () => {
+    const w = world({ titles: { [A]: '旧' } })
+    const refused = await sub(w, 'g5', [set(A, '新  标题')])
+    expect(refused).toMatchObject({ ok: false, code: 'invalid' })
+    expect(JSON.stringify(refused)).toContain('«新 标题»')
+    const short = world({ titles: { [A]: '旧' }, storedAs: t => t.length > 10 ? t.slice(0, 10) : t })
+    await sub(short, 'g6', [set(A, '一二三四五六七八九十十一')])
+    await short.x.agree('g6', 'test')
+    const step = short.x.get('g6')!.steps[0]!
+    expect(step.state).toBe('failed')
+    expect(JSON.stringify(step)).toContain('一二三四五六七八九十')
+    expect(short.titles()[A]).toBe('旧')
+  })
+
+  it('#880 review: with no earlier title, an undo the host cannot unpin (an empty session) is undo-failed, not reported done', async () => {
+    const w = world({ failJoin: B, resetUnpins: false })
+    await sub(w, 'g7', [set(A, '新标题'), { op: 'session.join', params: { session: B } }])
+    await w.x.agree('g7', 'test')
+    expect(w.x.get('g7')!.steps.map(s => s.state)).toEqual(['undo-failed', 'failed'])
   })
 
   it('the owner reads that it is the session list title and that it stays fixed', () => {

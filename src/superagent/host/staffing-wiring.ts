@@ -32,7 +32,7 @@ export interface StaffingWiring {
   readonly sessionOps?: { join(id: string): { ok: true } | { ok: false; error: string }; leave(id: string): boolean; joined(id: string): boolean }
   readonly seatNames?: { read(): Readonly<Record<string, string>>; write(names: Record<string, string>): { ok: true } | { ok: false; error: string } }
   /** The session list's title, through the host's session-title service (a live local session only). */
-  readonly sessionTitles?: { read(id: string): { live: boolean; title?: string }; rename(id: string, title: string): { ok: true; title: string } | { ok: false; error: string }; reset(id: string): boolean }
+  readonly sessionTitles?: { read(id: string): { live: boolean; title?: string }; rename(id: string, title: string): { ok: true; title: string } | { ok: false; error: string }; reset(id: string): boolean | Promise<boolean>; available?(): boolean }
   readonly a2aConfig?: Readonly<Record<string, unknown>>
   readonly teamCanvasRefusal: (canvas: string, member: string) => string | undefined
   readonly revokeCanvasMember: (id: string, reason: 'remove', name: string) => boolean
@@ -82,7 +82,7 @@ export function createStaffing(w: StaffingWiring): StaffingExecutor {
     ...(w.a2aHome !== undefined && w.a2aConfig !== undefined ? networkDeps(w.a2aHome, w.a2aConfig) : {}),
     ...(w.sessionOps !== undefined ? { sessionJoin: w.sessionOps.join, sessionLeave: w.sessionOps.leave, sessionJoined: w.sessionOps.joined } : {}),
     ...(w.seatNames !== undefined ? { seatNamesRead: w.seatNames.read, seatNamesWrite: w.seatNames.write } : {}),
-    ...(w.sessionTitles !== undefined ? { sessionTitleRead: w.sessionTitles.read, sessionTitleRename: w.sessionTitles.rename, sessionTitleReset: w.sessionTitles.reset } : {}),
+    ...(w.sessionTitles !== undefined ? { sessionTitleRead: w.sessionTitles.read, sessionTitleRename: w.sessionTitles.rename, sessionTitleReset: w.sessionTitles.reset, ...(w.sessionTitles.available !== undefined ? { sessionTitleAvailable: w.sessionTitles.available } : {}) } : {}),
     teamAdd: (canvas, router) => {
       const out = w.teams.add({ canvas, router }, w.sessionValid, w.presetOf)
       return out.ok ? { ok: true, id: refOfId(out.id) } : out
