@@ -9,6 +9,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { generateKeyPairSync, sign as edSign, type KeyObject } from 'node:crypto'
 import { bootNode, postJson, reservePort, runContext, type MeshNode } from './harness.ts'
 import { signCard } from '../../src/card.ts'
+import { formatReceipt } from '../../src/receipt.ts'
 
 beforeEach(() => { vi.stubGlobal('WebSocket', function throwOnSocket() { throw new Error('no socket') }) })
 afterEach(() => { vi.unstubAllGlobals() })
@@ -79,5 +80,53 @@ describe('#881 v2 B2: the ledger verdict on each receipt row (real host)', () =>
     } finally {
       await a.dispose()
     }
+  }, 90_000)
+})
+
+describe('#884 review: interim receipts are judged too, and a late answer to an ended task is never settled (real host)', () => {
+  const TARGET = 'dsh/01234567'
+  async function forgery(settlementAuth: 'observe' | 'enforce') {
+    const a = await bootNode({ name: 'A', session: `mesh-verdict-forge-${settlementAuth}`, team: 'dsh', sessionNodes: true, teamScopeRouting: true, settlementAuth, port: await reservePort(), reply: () => '' })
+    expect((await postJson(a.baseUrl, '/__dsh_a2a/join', { id: 'session-0123456789abcdef' })).status).toBe(200)
+    const ops = ident('ops-cli', 'aaaaaaaaaaaaaaaa'), evil = ident('evil-cli', 'bbbbbbbbbbbbbbbb')
+    for (const id of [ops, evil]) await deposit(a, id, false)
+    return { a, ops, evil }
+  }
+  const forgeInterim = async (settlementAuth: 'observe' | 'enforce', task: string, fields: Parameters<typeof formatReceipt>[2]) => {
+    const f = await forgery(settlementAuth)
+    expect((await send(f.a, f.ops, TARGET, task, 'real work')).body.delivered).toBe(true)
+    const forged = await send(f.a, f.evil, handleOf(f.evil), `${task}-f`, formatReceipt(task, 'trust me', fields))
+    return { ...f, forged, row: await rowFor(f.a, f.evil, `${task}-f`) }
+  }
+
+  it('observe: an off-chain acknowledgement or question marks nothing positive (none / settler-off-chain, never held)', async () => {
+    for (const [task, fields] of [['direct-b1a00001', { disposition: 'acknowledged' }], ['direct-b1b00001', { disposition: 'attention', question: { id: 'q1', text: 'which option?', options: ['A', 'B'] } }]] as const) {
+      const f = await forgeInterim('observe', task, fields as never)
+      try {
+        expect(f.row, task).toMatchObject({ receipt_for: task, settlement: 'none', settlement_reason: 'settler-off-chain' })
+      } finally { await f.a.dispose() }
+    }
+  }, 120_000)
+
+  it('enforce: an off-chain acknowledgement is refused on the row and on the sender\'s wire response', async () => {
+    const f = await forgeInterim('enforce', 'direct-b1c00001', { disposition: 'acknowledged' })
+    try {
+      expect(f.row).toMatchObject({ receipt_for: 'direct-b1c00001', settlement: 'refused', settlement_reason: 'settler-off-chain' })
+      expect(f.forged.body.settlement).toEqual({ status: 'refused', reason: 'settler-off-chain', task_id: 'direct-b1c00001' })
+    } finally { await f.a.dispose() }
+  }, 90_000)
+
+  it('local: a late final receipt for an abandoned task is refused (task-ended), never settled', async () => {
+    const a = await bootNode({ name: 'A', session: 'mesh-verdict-late', team: 'dsh', sessionNodes: true, teamScopeRouting: false, port: await reservePort(), reply: () => '' })
+    try {
+      expect((await postJson(a.baseUrl, '/__dsh_a2a/join', { id: 'session-0123456789abcdef' })).status).toBe(200)
+      await deposit(a, CALLER, false)
+      expect((await send(a, CALLER, TARGET, 'direct-b2000001', 'real work')).body.delivered).toBe(true)
+      expect((await postJson(a.baseUrl, '/__dsh_a2a/tasks/abandon', { task_id: 'direct-b2000001' })).status).toBe(200)
+      const routed = await a.ctx.tools.get('a2a_route')!.execute({ team: handleOf(CALLER), message: formatReceipt('direct-b2000001', 'late result', { outcome: 'completed' }) }, runContext()) as { ok?: boolean }
+      expect(routed.ok, JSON.stringify(routed)).toBe(true)
+      const box = ((await (await postJson(a.baseUrl, '/__dsh_a2a/cli-deposit', { action: 'inbox', handle: handleOf(CALLER) })).json()) as { mail: Row[] }).mail
+      expect(box.find(m => m.receipt_for === 'direct-b2000001')).toMatchObject({ settlement: 'refused', settlement_reason: 'task-ended' })
+    } finally { await a.dispose() }
   }, 90_000)
 })

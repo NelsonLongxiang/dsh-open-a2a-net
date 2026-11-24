@@ -26,7 +26,7 @@ import { TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_LIMIT } from '../session-trans
 import { refuseIfBudgetExhausted } from '../recursion-guard.ts'
 import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from '../idempotency-store.ts'
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
-import { parseReceipt, taskIdRefusal } from '../receipt.ts'
+import { holdsRow, parseReceipt, taskIdRefusal } from '../receipt.ts'
 import {receiptMailboxBirth,receiptMailboxHash,type ReceiptMailboxCommit} from '../receipt-mailbox.ts'
 import type { ReceiptSettlement } from '../cli-deposit.ts'
 import { archivedBySameReceipt } from '../task-ledger-rows.ts'
@@ -505,7 +505,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     // settler and summary, after a stop between settling and recording) keeps its positive verdict. The transport phase is
     // unchanged: the receipt was delivered either way; what the row's reader sees is the verdict.
     const verdict:ReceiptSettlement&{readonly refusal?:SettlementRefusal}=archived?.endedBy==='receipt'
-      ?(archivedBySameReceipt(archived,commit.settler.caller,parsed.summary)?{settlement:'settled'}:{settlement:'none',reason:'already-settled'})
+      ?(!holdsRow(parsed.envelope)&&archivedBySameReceipt(archived,commit.settler.caller,parsed.summary)?{settlement:'settled'}:{settlement:'none',reason:'already-settled'})
       :settleWithVerdict(commit.message,commit.settler)
     const phase=verdict.refusal===undefined?'delivered':'refused'
     cliDeposits.completeReceiptCommit(commit.transportId,phase,{settlement:verdict.settlement,...(verdict.reason!==undefined?{reason:verdict.reason}:{})})

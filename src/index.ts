@@ -873,7 +873,9 @@ export function apply(ctx: Context, config: Config): void {
     const owedByHeader = owedRow !== undefined
     // #139 (design §4.4): an enforce refusal of the row the header names is
     // told to the sender on the wire response, not only in /state.
-    const headerVerdict = judge?.enforce === true && owedRow !== undefined ? judge.check(owedRow, false) : undefined
+    // #884 review B1: the judge's word on the owed row, in every mode (the ledger records it, but only enforce acts on it).
+    const rowVerdict = judge !== undefined && owedRow !== undefined ? judge.check(owedRow, false) : undefined
+    const headerVerdict = judge?.enforce === true ? rowVerdict : undefined
     // Capture authority while the owed row is still present; successful resolve archives it.
     const outcomeAllowed = judge?.enforce !== true || (owedRow !== undefined && headerVerdict?.ok === true)
     const resolved = taskLedger.resolveFromMessage(message, judge)
@@ -881,7 +883,11 @@ export function apply(ctx: Context, config: Config): void {
     // settlement seam is not told (its consumers treat a resolution as the end of the task).
     if (holdsRow(parsed?.envelope)) {
       if (resolved?.acknowledged === true) logger.info(`a2a: task ${resolved.taskId} ${parsed?.envelope?.disposition === 'attention' ? 'has a question from' : 'acknowledged by'} its target; it stays owed until the result`)
-      return resolved?.acknowledged === true ? { settlement: 'held' } : { settlement: 'none', reason: 'not-owed' }
+      // #884 review B1: an interim receipt is held only for a row owed here, by a settler the judge accepts. An off-chain
+      // one is refused under enforce (and the sender is told), and under observe marks the row but is no verdict.
+      if (owedRow === undefined) return { settlement: 'none', reason: 'not-owed' }
+      if (rowVerdict !== undefined && !rowVerdict.ok) return judge!.enforce ? { settlement: 'refused', reason: rowVerdict.reason, refusal: { status: 'refused', reason: rowVerdict.reason, task_id: parsed!.taskId } } : { settlement: 'none', reason: rowVerdict.reason }
+      return resolved?.acknowledged === true ? { settlement: 'held' } : { settlement: 'none', reason: 'not-resolved' }
     }
     if(resolved!==undefined)pruneReceiptWaiters()
     if (parsed !== null && parsed.taskId !== '') {
@@ -917,6 +923,12 @@ export function apply(ctx: Context, config: Config): void {
       ctx.emit('a2a/receipt-resolved', resolved)
     } catch (error) {
       logger.warn(`a2a: receipt-resolved listener rejected: ${String(error)}`)
+    }
+    // #884 review B2: resolved without an owed row means a late answer to a row already archived (abandoned, cancelled,
+    // dead-lettered, or settled by another receipt): it settled nothing, so it is never a positive verdict.
+    if (!owedByHeader || resolved.late === true) {
+      const ended = taskLedger.archive().find(r => r.taskId === resolved.taskId)?.endedBy
+      return ended === 'cancelled' || ended === 'abandoned' ? { settlement: 'refused', reason: 'task-ended' } : { settlement: 'none', reason: ended === 'receipt' ? 'already-settled' : 'not-owed' }
     }
     // Under observe the ledger still settles an off-chain settler's receipt (and records it as would-refuse): that is not a
     // positive verdict the team may take as an answer.
@@ -2895,7 +2907,10 @@ export function apply(ctx: Context, config: Config): void {
       return {ok,settlement:ok?positive:{settlement:'none',reason:'not-resolved'}}
     }
     const judge=settlementJudgeFor({caller:record.payer,proof:'in-process',ingress:'local'},parsed,true)
+    // #884 review B1: an interim return is held only for a settler the judge accepts (an archived row cannot show it).
+    const check=judge?.check(row,false)
     const ok=taskLedger.resolveFromMessage(record.text,judge)!==undefined
+    if(ok&&check!==undefined&&!check.ok)return {ok,settlement:{settlement:'none',reason:check.reason}}
     return {ok,settlement:!ok?{settlement:'none',reason:'not-resolved'}:offChainSettled(record.taskId)?{settlement:'none',reason:'settler-off-chain'}:positive}
   }
   async function deliverRetainedReceipt(record:ReceiptOutboxRecord):Promise<Record<string,JsonValue>> {
