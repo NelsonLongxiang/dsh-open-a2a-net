@@ -28,6 +28,8 @@ import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REP
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
 import { parseReceipt, taskIdRefusal } from '../receipt.ts'
 import {receiptMailboxBirth,receiptMailboxHash,type ReceiptMailboxCommit} from '../receipt-mailbox.ts'
+import type { ReceiptSettlement } from '../cli-deposit.ts'
+import { archivedBySameReceipt } from '../task-ledger-rows.ts'
 import { buildAuthorization, claimCovers, nextOf, refusalOf, type Admission, type AuthProof, type RemoteCliProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from '../admitted-bookkeeping.ts'
 import { capacityRefusalOf, capacityRefusalNote, type CapacityRefusal } from '../task-delivery-capacity.ts'
@@ -148,6 +150,8 @@ export interface WireDeps {
   /** Settles a receipt; returns the enforce refusal of the row its header names (#139), if any. */
   readonly waitForForwardBirth: (message: string) => Promise<void>
   readonly settleAndAnnounce: (message: string, settler?: Settler) => SettlementRefusal | undefined
+  /** #881 v2 B2: the same settlement, with the positive verdict a receipt's mailbox row carries. */
+  readonly settleWithVerdict: (message: string, settler?: Settler) => ReceiptSettlement & { readonly refusal?: SettlementRefusal }
   readonly touchWakeDemand: () => void
   readonly session: string
   readonly resolveAgentForTeam: (team: string) => Agent | undefined
@@ -251,7 +255,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     taskLedger,
     refuseIfFlooded,
     refuseIfQueueFull,
-    settleAndAnnounce, waitForForwardBirth,
+    settleAndAnnounce, settleWithVerdict, waitForForwardBirth,
     session,
     resolveAgentForTeam,
     parseCanvasTeamName,
@@ -495,11 +499,16 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     if(commit.originalBirth!==undefined&&(!row&&!archived||receiptMailboxBirth((row??archived)!)!==commit.originalBirth))throw Error('original mailbox receipt task birth changed')
     if(commit.phase!=='pending')return commit.phase
     if(archived?.endedBy==='cancelled'||archived?.endedBy==='abandoned') {
-      cliDeposits.completeReceiptCommit(commit.transportId,'refused');return 'refused'
+      cliDeposits.completeReceiptCommit(commit.transportId,'refused',{settlement:'refused',reason:'task-ended'});return 'refused'
     }
-    const refusal=archived?.endedBy==='receipt'?undefined:settleAndAnnounce(commit.message,commit.settler)
-    const phase=refusal===undefined?'delivered':'refused'
-    cliDeposits.completeReceiptCommit(commit.transportId,phase)
+    // #881 v2 B2: a task another receipt already settled endorses nothing; only a replay of this same receipt (the same
+    // settler and summary, after a stop between settling and recording) keeps its positive verdict. The transport phase is
+    // unchanged: the receipt was delivered either way; what the row's reader sees is the verdict.
+    const verdict:ReceiptSettlement&{readonly refusal?:SettlementRefusal}=archived?.endedBy==='receipt'
+      ?(archivedBySameReceipt(archived,commit.settler.caller,parsed.summary)?{settlement:'settled'}:{settlement:'none',reason:'already-settled'})
+      :settleWithVerdict(commit.message,commit.settler)
+    const phase=verdict.refusal===undefined?'delivered':'refused'
+    cliDeposits.completeReceiptCommit(commit.transportId,phase,{settlement:verdict.settlement,...(verdict.reason!==undefined?{reason:verdict.reason}:{})})
     idempotencyStore.recordOutcome(commit.transportId,{status:'completed',reply:'receipt '+phase,receiptDelivery:phase})
     return phase
   }

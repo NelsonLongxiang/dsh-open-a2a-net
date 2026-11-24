@@ -61,6 +61,35 @@ export interface CliDeposit {
 }
 
 /** One mailbox entry for a deposited handle. */
+/**
+ * #881 v2 B2: the network ledger's verdict on a receipt row. `settled`: this receipt resolved an owed row. `held`: an
+ * interim receipt (acknowledgement, progress, attention with a question) marked one. `refused`: the ledger refused its
+ * settler. `none`: it settled nothing it may (not owed here, another identity's row, a task another receipt settled).
+ * `pending`: stored, not decided yet. Only `settled` and `held` are positive.
+ */
+export const MAIL_SETTLEMENTS = ['settled', 'held', 'refused', 'none', 'pending'] as const
+export type MailSettlement = typeof MAIL_SETTLEMENTS[number]
+/** A decided verdict, with a short machine reason for the non-positive ones. */
+export interface ReceiptSettlement { readonly settlement: Exclude<MailSettlement, 'pending'>; readonly reason?: string }
+const SETTLEMENT_REASON_MAX = 64
+const withSettlement = (m: CliMail, s: ReceiptSettlement): CliMail => {
+  const { settlement: _s, settlement_reason: _r, ...rest } = m
+  void _s; void _r
+  return { ...rest, settlement: s.settlement, ...(s.reason !== undefined && s.reason !== '' ? { settlement_reason: s.reason.slice(0, SETTLEMENT_REASON_MAX) } : {}) }
+}
+
+/**
+ * #881 v2 B2: after an original receipt returned into a local CLI mailbox settles, its row gets the verdict (it was stored
+ * pending, before the settlement could run). Other lanes have no row here; a failed settlement leaves the row pending for
+ * the retry. A storage failure is reported, never thrown: the settlement itself stands. Returns whether it settled.
+ */
+export function markReturnedReceipt(store: Pick<CliDepositStore, 'settleRow'>, record: { readonly lane: { readonly kind: string }; readonly target: string; readonly transportId: string }, settled: { readonly ok: boolean; readonly settlement: ReceiptSettlement }, warn: (message: string) => void): boolean {
+  if (settled.ok && record.lane.kind === 'local-cli') {
+    try { store.settleRow(record.target, record.transportId, settled.settlement) } catch { warn('a2a: receipt row verdict not stored; the row stays pending') }
+  }
+  return settled.ok
+}
+
 export interface CliMail {
   readonly at: number
   readonly from: string
@@ -102,6 +131,9 @@ export interface CliMail {
    * AdmissionRule) — the name only, never its basis, so a reader learns how the caller was let in without the topology.
    */
   readonly admission?: AdmissionRule
+  /** #881 v2 B2: the ledger's verdict on this receipt (see MAIL_SETTLEMENTS); absent on non-receipt rows and older rows. */
+  readonly settlement?: MailSettlement
+  readonly settlement_reason?: string
 }
 
 /** p1-mail-proof: the AuthProof values a restored row may carry (task-auth.ts); anything else is dropped. */
@@ -129,6 +161,9 @@ export interface CliMailThread {
   readonly proof?: AuthProof
   readonly receiptFor?: string
   readonly admission?: AdmissionRule
+  /** #881 v2 B2: the verdict, when it is known as the row is written (the local face settles first). */
+  readonly settlement?: MailSettlement
+  readonly settlementReason?: string
 }
 
 /** gh#113: one mailbox read — the rows plus what a reader needs to notice loss. */
@@ -164,13 +199,16 @@ const isSeq = (n: unknown): n is number => typeof n === 'number' && Number.isInt
 
 /** p1-mail-proof: a damaged snapshot never promotes a row's proof — an unknown value (or a non-string receipt_for) is dropped. */
 function sanitizeMail(m: CliMail): CliMail {
-  const { proof, receipt_for: receiptFor, admission, ...rest } = m as CliMail & { proof?: unknown; receipt_for?: unknown; admission?: unknown }
+  const { proof, receipt_for: receiptFor, admission, settlement, settlement_reason: settlementReason, ...rest } = m as CliMail & { proof?: unknown; receipt_for?: unknown; admission?: unknown; settlement?: unknown; settlement_reason?: unknown }
   return {
     ...rest,
     ...(typeof proof === 'string' && (MAIL_PROOFS as readonly string[]).includes(proof) ? { proof: proof as AuthProof } : {}),
     ...(typeof receiptFor === 'string' && receiptFor !== '' ? { receipt_for: receiptFor } : {}),
     // p1-mail-admission: likewise an admission value outside the rule set is dropped, never kept as a link.
     ...(typeof admission === 'string' && (MAIL_ADMISSIONS as readonly string[]).includes(admission) ? { admission: admission as AdmissionRule } : {}),
+    // #881 v2 B2: a verdict outside the set is dropped (the row then has none, which no reader takes as positive).
+    ...(typeof settlement === 'string' && (MAIL_SETTLEMENTS as readonly string[]).includes(settlement) ? { settlement: settlement as MailSettlement } : {}),
+    ...(typeof settlementReason === 'string' && settlementReason !== '' ? { settlement_reason: settlementReason.slice(0, SETTLEMENT_REASON_MAX) } : {}),
   }
 }
 
@@ -354,7 +392,9 @@ export class CliDepositStore {
       ...(thread?.taskId ? { task_id: thread.taskId } : {}), ...(thread?.contextId ? { context_id: thread.contextId } : {}),
       ...(thread?.disposition !== undefined ? { disposition: thread.disposition } : {}),
       ...(thread?.proof !== undefined ? { proof: thread.proof } : {}), ...(thread?.receiptFor ? { receipt_for: thread.receiptFor } : {}),
-      ...(thread?.admission !== undefined ? { admission: thread.admission } : {}) })
+      ...(thread?.admission !== undefined ? { admission: thread.admission } : {}),
+      ...(thread?.settlement !== undefined ? { settlement: thread.settlement } : {}),
+      ...(thread?.settlementReason !== undefined && thread.settlementReason !== '' ? { settlement_reason: thread.settlementReason.slice(0, SETTLEMENT_REASON_MAX) } : {}) })
     // gh#113: the cap still holds, but what it pushes out is counted, not lost silently.
     if (list.length > MAILBOX_CAP) this.dropped.set(handle, (this.dropped.get(handle) ?? 0) + list.length - MAILBOX_CAP)
     this.mailbox.set(handle, list.slice(0, MAILBOX_CAP))
@@ -378,7 +418,7 @@ export class CliDepositStore {
       if(!old){while(retained.length>=RECEIPT_MAILBOX_CAP){const i=retained.findLastIndex(r=>r.phase!=='pending');if(i<0)throw Error('receipt mailbox journal capacity full');retained.splice(i,1)}retained.unshift(parsed)}
     }
     const seq=this.nextSeq.get(handle)??1
-    const list=same?prior:[{at:this.now(),from,text,seq,...(dup?{dup}:{}),task_id:thread.taskId,receipt_for:thread.receiptFor,...(thread.contextId?{context_id:thread.contextId}:{}),...(thread.proof?{proof:thread.proof}:{}),...(thread.admission?{admission:thread.admission}:{}),...(thread.disposition?{disposition:thread.disposition}:{})},...prior].slice(0,MAILBOX_CAP)
+    const list=same?prior:[{at:this.now(),from,text,seq,...(dup?{dup}:{}),task_id:thread.taskId,receipt_for:thread.receiptFor,...(thread.contextId?{context_id:thread.contextId}:{}),...(thread.proof?{proof:thread.proof}:{}),...(thread.admission?{admission:thread.admission}:{}),...(thread.disposition?{disposition:thread.disposition}:{}),settlement:thread.settlement??'pending',...(thread.settlementReason?{settlement_reason:thread.settlementReason.slice(0,SETTLEMENT_REASON_MAX)}:{})},...prior].slice(0,MAILBOX_CAP)
     const dropped=(this.dropped.get(handle)??0)+(same?0:Math.max(0,prior.length+1-MAILBOX_CAP))
     const snapshot:Snapshot={receiptCommits:retained,deposits:[...this.deposits.values()],mailbox:{...Object.fromEntries(this.mailbox),[handle]:list},epoch:this.epoch,nextSeq:{...Object.fromEntries(this.nextSeq),[handle]:same?seq:seq+1},dropped:{...Object.fromEntries(this.dropped),[handle]:dropped},truncated:Object.fromEntries(this.truncated)}
     writeTaskLedger(this.path,JSON.stringify(snapshot))
@@ -433,12 +473,32 @@ export class CliDepositStore {
     if(this.receiptCommitsCorrupt)throw Error('receipt mailbox journal is corrupt')
     const row=this.receiptCommits.find(r=>r.transportId===transportId);return row?structuredClone(row):undefined
   }
-  completeReceiptCommit(transportId:string,phase:'delivered'|'refused'):void {
+  /**
+   * Finish a journaled receipt; with `settlement`, its mailbox row gets the ledger's verdict in the same write, so a reader
+   * never sees a finished phase on a row still marked pending (#881 v2 B2). A session receipt has no row: nothing to mark.
+   */
+  completeReceiptCommit(transportId:string,phase:'delivered'|'refused',settlement?:ReceiptSettlement):void {
     const before=this.receiptCommits,record=before.find(r=>r.transportId===transportId)
     if(!record)throw Error('receipt mailbox commit not found')
     const next=before.map(r=>{if(r.transportId!==transportId)return r;const updated={...r,phase};return {...updated,hash:receiptMailboxHash(updated)}})
-    const snapshot:Snapshot={receiptCommits:next,deposits:[...this.deposits.values()],mailbox:Object.fromEntries(this.mailbox),epoch:this.epoch,nextSeq:Object.fromEntries(this.nextSeq),dropped:Object.fromEntries(this.dropped),truncated:Object.fromEntries(this.truncated)}
+    const rows=settlement===undefined?undefined:this.mailbox.get(record.handle),patched=rows?.some(m=>m.task_id===transportId)===true?rows.map(m=>m.task_id===transportId?withSettlement(m,settlement!):m):undefined
+    const snapshot:Snapshot={receiptCommits:next,deposits:[...this.deposits.values()],mailbox:{...Object.fromEntries(this.mailbox),...(patched!==undefined?{[record.handle]:patched}:{})},epoch:this.epoch,nextSeq:Object.fromEntries(this.nextSeq),dropped:Object.fromEntries(this.dropped),truncated:Object.fromEntries(this.truncated)}
     writeTaskLedger(this.path,JSON.stringify(snapshot));this.receiptCommits=next
+    if(patched!==undefined)this.mailbox.set(record.handle,patched)
+  }
+
+  /**
+   * #881 v2 B2: mark one receipt row with the ledger's verdict when its settlement runs after the row was stored (the
+   * original-receipt return to a local CLI settles only once delivery is confirmed). False when the row is gone.
+   */
+  settleRow(handle:string,transportId:string,settlement:ReceiptSettlement):boolean {
+    const rows=this.mailbox.get(handle)
+    if(rows===undefined||!rows.some(m=>m.task_id===transportId))return false
+    const patched=rows.map(m=>m.task_id===transportId?withSettlement(m,settlement):m)
+    const snapshot:Snapshot={receiptCommits:this.receiptCommits,deposits:[...this.deposits.values()],mailbox:{...Object.fromEntries(this.mailbox),[handle]:patched},epoch:this.epoch,nextSeq:Object.fromEntries(this.nextSeq),dropped:Object.fromEntries(this.dropped),truncated:Object.fromEntries(this.truncated)}
+    writeTaskLedger(this.path,JSON.stringify(snapshot))
+    this.mailbox.set(handle,patched)
+    return true
   }
 
   readMail(handle: string): readonly CliMail[] {

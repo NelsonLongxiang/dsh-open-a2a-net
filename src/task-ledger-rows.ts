@@ -20,6 +20,16 @@ export const ARCHIVE_CAP = 64
 export const SUMMARY_CAP = 200
 
 /**
+ * #881 v2 B2: whether a row already archived by a receipt was settled by this same receipt (a replay after a stop between
+ * settling and recording it): the same settler and the same summary line. Any other receipt finds the task settled by
+ * someone else, which endorses nothing. Without a recorded settler (settlement auth off) it cannot be bound: false.
+ */
+export function archivedBySameReceipt(row: { readonly endedBy?: string; readonly summary?: string; readonly settledBy?: { readonly caller: string; readonly chain_role: string } }, caller: string, summary: string): boolean {
+  // An off-chain settlement (settled only because settlement auth observes) is never a positive verdict, replayed or not.
+  return row.endedBy === 'receipt' && row.settledBy !== undefined && row.settledBy.chain_role !== 'off-chain' && row.settledBy.caller === caller && (row.summary ?? '') === summary.trim().slice(0, SUMMARY_CAP)
+}
+
+/**
  * Longest dispatch brief kept per row. A ledger row without its payload is
  * unreadable to supervision — "direct-8f3a1c2b → dsh/ec4ce7f8, 3h old" says
  * nothing about whether to nudge, abandon, or read the receipt. The brief is

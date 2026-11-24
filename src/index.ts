@@ -47,7 +47,8 @@ import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
 import { applyOwnerSettings, loadSeatNames, writeHomeA2a, type OwnerSettings } from './owner-settings.ts'
-import { CLI_HANDLE_RE, CliDepositStore, remoteCliTarget } from './cli-deposit.ts'
+import { CLI_HANDLE_RE, CliDepositStore, markReturnedReceipt, remoteCliTarget, type ReceiptSettlement } from './cli-deposit.ts'
+import { archivedBySameReceipt } from './task-ledger-rows.ts'
 import { cliHomeChoices, decideCliHome } from './cli-home.ts'
 import { forwardScope, outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
 import { createDirectForward, ForwardBirths, receiptBypassLimitsFrom } from './direct-forward.ts'
@@ -840,6 +841,15 @@ export function apply(ctx: Context, config: Config): void {
     if (receipt !== null) await forwardingBirths.wait(receipt.taskId)
   }
   function settleAndAnnounce(message: string, settler?: Settler): SettlementRefusal | undefined {
+    return settleWithVerdict(message, settler).refusal
+  }
+
+  /**
+   * #881 v2 B2: settle a receipt and say what the ledger did with it, as a positive verdict a mailbox row can carry:
+   * `settled` only when this receipt resolved an owed row, `held` only when an interim one marked it. Silence is never
+   * a verdict: a receipt that settled nothing it may (another identity's row, a task not owed here, an echo) is `none`.
+   */
+  function settleWithVerdict(message: string, settler?: Settler): ReceiptSettlement & { readonly refusal?: SettlementRefusal } {
     const parsedForJudge = parseReceipt(message)
     const judge = settlementJudgeFor(settler, parsedForJudge)
     // W7 slice-2 hook 3: a receipt that correlates an id THIS node's
@@ -859,7 +869,7 @@ export function apply(ctx: Context, config: Config): void {
     // p1-mailbox-owes (S33, a): a row owed by a CLI identity on this host (the inbound row an owing deposit keeps, or a
     // same-host caller's local row) is answered by that identity alone — keyed on the row, so it holds after the deposit
     // lapses too. A receipt header from anyone else names it without touching it: no settlement, no echo, no outcome.
-    if (owedRow !== undefined && (owedRow.direction === 'inbound' || owedRow.peer === 'local') && CLI_HANDLE_RE.test(owedRow.team) && settler?.caller !== owedRow.team) return undefined
+    if (owedRow !== undefined && (owedRow.direction === 'inbound' || owedRow.peer === 'local') && CLI_HANDLE_RE.test(owedRow.team) && settler?.caller !== owedRow.team) return { settlement: 'none', reason: 'not-payer' }
     const owedByHeader = owedRow !== undefined
     // #139 (design §4.4): an enforce refusal of the row the header names is
     // told to the sender on the wire response, not only in /state.
@@ -871,7 +881,7 @@ export function apply(ctx: Context, config: Config): void {
     // settlement seam is not told (its consumers treat a resolution as the end of the task).
     if (holdsRow(parsed?.envelope)) {
       if (resolved?.acknowledged === true) logger.info(`a2a: task ${resolved.taskId} ${parsed?.envelope?.disposition === 'attention' ? 'has a question from' : 'acknowledged by'} its target; it stays owed until the result`)
-      return undefined
+      return resolved?.acknowledged === true ? { settlement: 'held' } : { settlement: 'none', reason: 'not-owed' }
     }
     if(resolved!==undefined)pruneReceiptWaiters()
     if (parsed !== null && parsed.taskId !== '') {
@@ -885,7 +895,7 @@ export function apply(ctx: Context, config: Config): void {
       }
     }
     if (resolved === undefined && owedByHeader) {
-      return headerVerdict !== undefined && !headerVerdict.ok ? { status: 'refused', reason: headerVerdict.reason, task_id: parsed!.taskId } : undefined
+      return headerVerdict !== undefined && !headerVerdict.ok ? { settlement: 'refused', reason: headerVerdict.reason, refusal: { status: 'refused', reason: headerVerdict.reason, task_id: parsed!.taskId } } : { settlement: 'none', reason: 'not-resolved' }
     }
     if (resolved === undefined) {
       // F5 (settlement integrity): the formal envelope missed — an inbound
@@ -900,14 +910,22 @@ export function apply(ctx: Context, config: Config): void {
         pruneReceiptWaiters()
         logger.info(`a2a: ${String(echoed.length)} pending task(s) settled by content echo (${echoed.join(', ')})`)
       }
-      return undefined
+      // An echo settles weakly and a receipt for a task not owed here settles nothing: neither is a verdict on this receipt.
+      return { settlement: 'none', reason: 'not-owed' }
     }
     try {
       ctx.emit('a2a/receipt-resolved', resolved)
     } catch (error) {
       logger.warn(`a2a: receipt-resolved listener rejected: ${String(error)}`)
     }
-    return undefined
+    // Under observe the ledger still settles an off-chain settler's receipt (and records it as would-refuse): that is not a
+    // positive verdict the team may take as an answer.
+    return offChainSettled(resolved.taskId) ? { settlement: 'none', reason: 'settler-off-chain' } : { settlement: 'settled' }
+  }
+
+  /** #881 v2 B2: whether the row a receipt just settled was settled by an off-chain settler (recorded by the judge). */
+  function offChainSettled(taskId: string): boolean {
+    return taskLedger.archive().find(r => r.taskId === taskId)?.settledBy?.chain_role === 'off-chain'
   }
 
   /**
@@ -2852,11 +2870,8 @@ export function apply(ctx: Context, config: Config): void {
       return fail(result.code===-32002?'RECEIPT_PAYLOAD_CONFLICT':'RECEIPT_DELIVERY_REFUSED',false)
     },
     settle:record=>{
-      const row=taskLedger.find(record.taskId)
-      if(!row)return taskLedger.archive().some(r=>r.taskId===record.taskId&&r.endedBy==='receipt')
-      if(row.direction==='inbound')return settleOwnInbound(record.text,record.target,{caller:record.payer,proof:'in-process',ingress:'local'})&&taskLedger.find(record.taskId)===undefined
-      const judge=settlementJudgeFor({caller:record.payer,proof:'in-process',ingress:'local'},parseReceipt(record.text),true)
-      return taskLedger.resolveFromMessage(record.text,judge)!==undefined
+      // #881 v2 B2: a receipt returned into a local CLI mailbox was stored before this settlement; its row gets the verdict now.
+      return markReturnedReceipt(cliDeposits,record,settleOutboxReceipt(record),message=>{logger.warn(message)})
     },
     notify:record=>{logger.warn('a2a: receipt delivery blocked ref=%s; retained original return only',nudgeRef(record.taskId));requestReminderScan()},
     schedule:ms=>{
@@ -2866,6 +2881,23 @@ export function apply(ctx: Context, config: Config): void {
     warn:code=>logger.warn('a2a: receipt outbox %s',code),
   })
   ctx.effect(()=>{const timer=ctx.timer.interval(()=>{void receiptOutbox.scan()},REMINDER_SCAN_MS);queueMicrotask(()=>{void receiptOutbox.scan()});return ()=>{receiptOutbox.stop();timer();for(const stop of receiptTimers)stop();receiptTimers.clear();receiptValidationStamps.clear()}},'a2a: durable original receipt return')
+  /** The original-receipt return's settlement, with the verdict its local mailbox row carries (#881 v2 B2). */
+  function settleOutboxReceipt(record:ReceiptOutboxRecord):{ok:boolean;settlement:ReceiptSettlement} {
+    const parsed=parseReceipt(record.text),positive:ReceiptSettlement=holdsRow(parsed?.envelope)?{settlement:'held'}:{settlement:'settled'}
+    const row=taskLedger.find(record.taskId)
+    if(!row) {
+      const archived=taskLedger.archive().find(r=>r.taskId===record.taskId&&r.endedBy==='receipt')
+      if(archived===undefined)return {ok:false,settlement:{settlement:'none',reason:'not-owed'}}
+      return {ok:true,settlement:archivedBySameReceipt(archived,record.payer,parsed?.summary??'')?positive:{settlement:'none',reason:'already-settled'}}
+    }
+    if(row.direction==='inbound') {
+      const ok=settleOwnInbound(record.text,record.target,{caller:record.payer,proof:'in-process',ingress:'local'})&&taskLedger.find(record.taskId)===undefined
+      return {ok,settlement:ok?positive:{settlement:'none',reason:'not-resolved'}}
+    }
+    const judge=settlementJudgeFor({caller:record.payer,proof:'in-process',ingress:'local'},parsed,true)
+    const ok=taskLedger.resolveFromMessage(record.text,judge)!==undefined
+    return {ok,settlement:!ok?{settlement:'none',reason:'not-resolved'}:offChainSettled(record.taskId)?{settlement:'none',reason:'settler-off-chain'}:positive}
+  }
   async function deliverRetainedReceipt(record:ReceiptOutboxRecord):Promise<Record<string,JsonValue>> {
     try {
       const result=await receiptOutbox.send(record.taskId)
@@ -3644,7 +3676,7 @@ export function apply(ctx: Context, config: Config): void {
       },
       refuseIfFlooded,
       refuseIfQueueFull,
-      settleAndAnnounce, waitForForwardBirth,
+      settleAndAnnounce, settleWithVerdict, waitForForwardBirth,
       touchWakeDemand: () => { lastWakeDemandAt = Date.now() },
       session,
       resolveAgentForTeam,
@@ -4731,13 +4763,15 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // #114 S4 (design §4.5): a receipt dropped into a local CLI mailbox is
       // exactly the settlement a CLI-originated task waits for — settle it,
       // as the wire face settles before ITS mailbox split.
-      settleAndAnnounce(message, localSettler)
+      // #881 v2 B2: the verdict rides on the row, so the team reading it can tell a settled answer from a refused one.
+      const verdict = settleWithVerdict(message, localSettler)
       const answered = parseReceipt(message)
       const disposition = answered?.envelope?.disposition
       // p1-mail-admission: the same-host admission this delivery passed (a joined face's rule, else local-exempt).
       const localAdmission = localCandidateAdmission(admissionRecords, callerSession, mailTeam)
       const evicted = cliDeposits.mail(mailTeam, callerSession ?? 'unknown', message, undefined, { taskId: taskIdFromCaller, contextId, proof: 'in-process', ...(answered !== null ? { receiptFor: answered.taskId } : {}), ...(disposition !== undefined ? { disposition } : {}),
-        ...(localAdmission.ok ? { admission: localAdmission.rule } : {}) })
+        ...(localAdmission.ok ? { admission: localAdmission.rule } : {}),
+        ...(answered !== null ? { settlement: verdict.settlement, ...(verdict.reason !== undefined ? { settlementReason: verdict.reason } : {}) } : {}) })
       // p1-mailbox-owes (D-5): a row the cap pushed out takes its owed inbound row with it.
       for (const gone of evicted) if (gone.task_id !== undefined) taskLedger.evictInbound(gone.task_id, taskLedger.find(gone.task_id)?.team ?? mailTeam)
       recordActivity('in', team, callerSession ?? 'peer', true)

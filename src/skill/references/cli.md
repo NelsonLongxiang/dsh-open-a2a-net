@@ -263,6 +263,7 @@ Files do not go through session messages: use the file channel below, never JPFI
   back the `next` you received. It prints one JSON object
   `{handle, epoch, after, next, mail, lost, epochChanged}` with `mail` oldest
   first, and never reads or moves the local `inbox.cursor`:
+  - A receipt row carries `settlement`, the network ledger's verdict on it: `settled`, `held`, `refused`, `none` or `pending` (with `settlement_reason` for the non-positive ones). Only `settled` (a final receipt) and `held` (an interim one) are positive. A reader that keeps its own cursor waits at a `pending` receipt for a few minutes before taking it as it is.
   - `lost` counts mail the cap pushed out before this window. It is `null`,
     meaning unknown, when the host's store restarted (`epochChanged: true`);
     the read then returns every row it still has.

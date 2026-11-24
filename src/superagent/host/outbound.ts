@@ -13,6 +13,7 @@ import { TRUSTED_PROOFS } from '../a2a-watch.ts'
 import {recoveryDigest,verifyRecoveryProposal,type RecoveryProposal,type RecoveryBinding} from '../../request-recovery.ts'
 import {holdsRow,parseReceipt} from '../../receipt.ts'
 import {writeTaskLedger} from '../../task-ledger-persistence.ts'
+import {keepUnsettled,receiptStanding,type UnsettledReceipt} from './receipt-settlement.ts'
 import type { Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
 
 /** Another team's address: a session handle `<zone>/<id8>` or a canvas team `<zone>/canvas/<name>`, either with `@<fp8>`. */
@@ -42,6 +43,8 @@ export interface OutboundRecord {
   noted?: true
   /** The note could not be written because the ticket had ended: an anomaly, never reopened and never resent. */
   noteBlocked?: 'ticket-ended'
+  /** #881 v2 B2: receipts the network ledger did not settle positively (refused, settled by another, pending, none): kept, never answers. */
+  unsettled?: UnsettledReceipt[]
 }
 
 /** What writing one ticket note came to. */
@@ -435,7 +438,17 @@ export class OutboundRequests {
     const at = trigger.text.indexOf('[A2A receipt] task '), parsed = at < 0 ? null : parseReceipt(trigger.text.slice(at))
     // A receipt line naming another task than the one this row answers is not this request's receipt.
     if (parsed !== null && parsed.taskId !== receiptFor) return
-    if (parsed !== null && holdsRow(parsed.envelope)) {
+    const interim = parsed !== null && holdsRow(parsed.envelope)
+    // #881 v2 B2: only the ledger's positive verdict on this receipt makes it an answer (or a progress step); a refused or
+    // unsettled one is kept for the health view and the request stays as it was.
+    const standing = receiptStanding(trigger, interim)
+    if (!standing.ok) {
+      const kept = keepUnsettled(record.unsettled, standing.unsettled)
+      if (JSON.stringify(kept) !== JSON.stringify(record.unsettled ?? [])) this.put({ ...record, unsettled: kept })
+      this.d.logger.warn('superagent: receipt for outbound task %s not settled by the ledger (%s); not written to ticket %s', receiptFor, standing.unsettled.settlement, record.ticketId)
+      return
+    }
+    if (interim) {
       const open: OutboundRecord = { ...record, state: 'sent', ...accepted }
       delete open.error
       if (JSON.stringify(open) !== JSON.stringify(record)) this.put(open)
@@ -463,6 +476,11 @@ export class OutboundRequests {
       // One record that cannot be saved (a held lock, a disk error) stays owed and does not stop the others this pass.
       try { this.put(result === 'written' ? { ...latest, noted: true } : { ...latest, noteBlocked: 'ticket-ended' }) } catch (error) { this.d.logger.warn('superagent: outbound note checkpoint for %s not saved, retried next pass: %s', row.card, String(error)) }
     }
+  }
+
+  /** #881 v2 B2: requests still waiting for an answer whose receipts so far the ledger did not settle positively. */
+  unsettledProblems(): Array<{ readonly ticketId: string; readonly card: string; readonly task: string; readonly last: UnsettledReceipt }> {
+    return Object.values(this.records).filter(r => r.state !== 'answered' && (r.unsettled?.length ?? 0) > 0).map(r => ({ ticketId: r.ticketId, card: r.card, task: r.task ?? '', last: r.unsettled!.at(-1)! }))
   }
 
   /** Answers still owed a note, and answers that arrived for an ended ticket (both health problems). */

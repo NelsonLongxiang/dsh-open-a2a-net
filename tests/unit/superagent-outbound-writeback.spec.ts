@@ -37,7 +37,7 @@ async function sent(path: string, h: ReturnType<typeof host>) {
   expect(await m.out.decided('c1', true, 'team', () => '调研')).toBe(TASK)
   return m
 }
-const trigger = (id: string, text: string, proof = 'cli-identity') => ({ id, source: 'a2a', threads: [], actor: { source: 'a2a', id: ADDR }, human: false, at: now(), text, meta: { receiptFor: TASK, proof } }) as never
+const trigger = (id: string, text: string, proof = 'cli-identity') => ({ id, source: 'a2a', threads: [], actor: { source: 'a2a', id: ADDR }, human: false, at: now(), text, meta: { receiptFor: TASK, proof, settlement: holdsRow(parseReceipt(text)?.envelope) ? 'held' : 'settled' } }) as never
 const ACK = formatReceipt(TASK, '已收到，处理中', { disposition: 'acknowledged' })
 const ASKING = formatReceipt(TASK, '需要确认版本', { disposition: 'attention', question: { id: 'q1', text: '用哪个版本？' } })
 const RESULT = formatReceipt(TASK, '数据在附件里', { outcome: 'completed' })
@@ -162,7 +162,7 @@ describe('#882 review: one failing checkpoint, and a receipt line for another ta
     // r1's note fails on its answer and again on r2's pass; r2's own note fails once: both stay owed.
     h.failNext(3)
     two.received(trigger('r1', RESULT))
-    two.received({ ...(trigger('r2', formatReceipt('direct-out000002', '第二份结果', { outcome: 'completed' })) as object), meta: { receiptFor: 'direct-out000002', proof: 'cli-identity' } } as never)
+    two.received({ ...(trigger('r2', formatReceipt('direct-out000002', '第二份结果', { outcome: 'completed' })) as object), meta: { receiptFor: 'direct-out000002', proof: 'cli-identity', settlement: 'settled' } } as never)
     expect(two.noteProblems()).toHaveLength(2)
     writeFileSync(path + '.lock', 'held')
     two.flushOutboundNotes()
