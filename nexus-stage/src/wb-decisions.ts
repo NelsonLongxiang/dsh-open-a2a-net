@@ -293,12 +293,13 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
     const option = picks.get(card.id) ?? ''
     const picked = option !== ''
     const words = (notes.get(card.id) ?? '').trim() !== ''
-    // #888 D4: an option that needs input waits for it; a file it needs cannot come without a canvas or a file channel.
+    // #888 D4: an option that needs input waits for it. A file it needs cannot come without a canvas or a file channel: say
+    // why (without a file channel nothing can be attached; with files and no canvas, send() refuses with the same reason).
     const need = picked ? inputOf(card, option) : undefined
     const unreachable = need !== undefined && need.kind !== 'text' && (card.address === undefined || deps.stage === undefined)
     const why = node.querySelector<HTMLElement>('.wb-sa-input-why')
     if (why !== null) { why.hidden = !unreachable; why.textContent = unreachable ? '这个选项要附文件，但这里附不了（团队没有画布地址或主机不能附带文件）' : '' }
-    confirm.disabled = busy.has(card.id) || !(picked || words) || unreachable || (picked && !inputMet(card, option, notes.get(card.id) ?? '', (attached.get(card.id) ?? []).length))
+    confirm.disabled = busy.has(card.id) || !(picked || words) || (picked && !inputMet(card, option, notes.get(card.id) ?? '', (attached.get(card.id) ?? []).length))
   }
 
   async function send(card: DecisionCard, body: Json): Promise<void> {

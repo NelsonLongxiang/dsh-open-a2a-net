@@ -93,9 +93,10 @@ function Card({ row, t, done }: { readonly row: DecisionRow; readonly done: () =
     done()
   }
   const need = picked === '' ? undefined : inputOf(row, picked)
-  // #888 D4: a file input cannot be met when the team has no canvas to send files to.
+  // #888 D4: a file input cannot be met when the team has no canvas to send files to: say why (the confirm button already
+  // waits for the file, and a decision with files and no canvas is refused with the same reason).
   const unreachable = need !== undefined && need.kind !== 'text' && row.address === undefined
-  const canConfirm = !busy && (picked !== '' || note.trim() !== '') && !unreachable && (picked === '' || inputMet(row, picked, note, files.length))
+  const canConfirm = !busy && (picked !== '' || note.trim() !== '') && (picked === '' || inputMet(row, picked, note, files.length))
   return (
     <article className={`${styles.card} ${dragging ? styles.dragging : ''}`} {...dropProps}>
       <header className={styles.cardHead}>
