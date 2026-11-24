@@ -27,6 +27,7 @@ describe('receiptSource and projectResultBody', () => {
     expect(receiptSource(wire(r))).toEqual({ kind: 'wire', receipt: r })
     expect(receiptSource(`note\n\n${r}`)).toBeUndefined()
     expect(receiptSource(`[A2A direct] (task x) a\nb sent:\n\n${r}`)).toBeUndefined()
+    expect(receiptSource(`junk\n[A2A direct] (task x) a sent:\n\n${r}`)).toBeUndefined()
   })
   it('the body is the summary plus the lines after the envelope; CRLF becomes LF; blank lines kept', () => {
     const r = formatReceipt(TASK, 'summary line', { outcome: 'completed' }) + '\r\nfirst\r\n\r\nthird'

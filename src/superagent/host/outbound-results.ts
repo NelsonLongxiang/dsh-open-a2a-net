@@ -35,8 +35,9 @@ export function receiptSource(text: string): { readonly kind: 'local' | 'wire'; 
   const gap = t.indexOf('\n\n')
   if (gap < 0) return undefined
   const head = t.slice(0, gap)
-  // Only the one outer header the wire face writes, never a receipt line found further inside the text.
-  if (head.includes('\n') || !/^\[A2A direct\] \(task [^)]+\) .* sent:$/.test(head)) return undefined
+  // Only the one outer header the wire face writes (a single line: no m flag, so ^ and $ bound the whole head), never a
+  // receipt line found further inside the text.
+  if (!/^\[A2A direct\] \(task [^)]+\) .* sent:$/.test(head)) return undefined
   const rest = t.slice(gap + 2)
   return rest.startsWith('[A2A receipt] task ') ? { kind: 'wire', receipt: rest } : undefined
 }
