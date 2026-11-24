@@ -27,7 +27,7 @@ import { credentialAccess, redactedPreview, type CredentialKind } from './creden
 import { RosterReports } from './roster.ts'
 import { MemberExecutor, runOf, transientError, type MemberTurn, type PrepareRunner, type QueuedAssignment } from './executor.ts'
 import { PiEvents } from './pi-events.ts'
-import { ReviewRequests } from './review-requests.ts'
+import { ReviewRequests, reviewRoute } from './review-requests.ts'
 import { unsettledText } from './receipt-settlement.ts'
 import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, writeTicketNoteOnce, type OutboundAsk, type OutboundRecord, type OutboundApproval } from './outbound.ts'
 import {legacyOutboundApproval} from './legacy-outbound-approval.ts'
@@ -331,7 +331,8 @@ export class SuperagentHost {
       transport:(permit,mode,current)=>{if(!this.d.narrowRecovery)throw Error('narrow recovery unavailable');return this.d.narrowRecovery.transport(permit,mode,current)}})
     this.reviews = new ReviewRequests({
       path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
-      ask: (address, text) => this.a2a.askReview(address, text),
+      // #877 (owner decision 2026-11-24): review requests carry a task id recorded before the send, from the team identity.
+      ...reviewRoute(this.a2a),
       note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: review verdict of %s not noted: %s', ticketId, String(error)) } },
     })
     this.engine = new Engine({

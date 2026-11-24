@@ -30,6 +30,8 @@ export interface ReviewRecord {
   state?: 'asking' | 'unknown'
   /** For an `unknown` request: the ticket has been told (kept on disk, so a second restart neither loses nor repeats it). */
   told?: boolean
+  /** #877: the team identity the task id was recorded under; a retry is refused if it changed. Absent on the session path. */
+  sender?: string
   verdict?: ReviewVerdict
   /** #881 v2 B2: reviewer receipts the network ledger did not settle positively: kept, never a verdict. */
   unsettled?: UnsettledReceipt[]
@@ -69,12 +71,25 @@ export function readVerdict(text: string, head: string): { readonly pass: boolea
 export interface ReviewRequestsDeps {
   readonly path: string
   readonly reviewer: () => string | undefined
-  readonly ask: (address: string, text: string) => Promise<string | undefined>
+  /** With `task` and `sender` (#877): send under that task id from that team identity; without, the session's route. */
+  readonly ask: (address: string, text: string, task?: string, sender?: string) => Promise<string | undefined>
+  /** #877: the team identity to send from. When present, each request gets its task id before the send. */
+  readonly sender?: () => Promise<string>
+  /** #877: a fresh task id (tests fix it). */
+  readonly taskId?: () => string
   readonly note: (ticketId: string, text: string) => void
   readonly logger: { warn(format: string, ...args: unknown[]): void }
 }
 
 const clip = (text: string, max: number): string => (text.length <= max ? text : `${text.slice(0, max)}…`)
+
+/** #885 review M10: the host's wiring of the team route (#877): with a task and a sender, the team identity's --task route. */
+export function reviewRoute(a2a: { askReview(address: string, text: string): Promise<string | undefined>; askReviewAs(address: string, text: string, task: string, sender: string): Promise<string | undefined>; ensureIdentity(): Promise<string> }): Pick<ReviewRequestsDeps, 'ask' | 'sender'> {
+  return {
+    ask: (address, text, task, sender) => task !== undefined && sender !== undefined ? a2a.askReviewAs(address, text, task, sender) : a2a.askReview(address, text),
+    sender: () => a2a.ensureIdentity(),
+  }
+}
 
 export class ReviewRequests {
   /** The latest request per pull request: a new head replaces it, so a late verdict on the old head matches nothing. */
@@ -96,7 +111,9 @@ export class ReviewRequests {
       }
       // Still asking at start: the process stopped between the send and its record. Whether it went out is unknown;
       // asking again could ask twice, so it is marked and the ticket told once (`told` on disk). A new head asks as usual.
-      if (r.state === 'asking') { r.state = 'unknown'; r.told = false; changed = true }
+      // #877: a request recorded with its task id is asked again under that same id (the send chain answers with the first
+      // result, never a second request), so it stays asking; only an older request without an id is unknown.
+      if (r.state === 'asking' && !(r.task !== '' && r.sender !== undefined)) { r.state = 'unknown'; r.told = false; changed = true }
     }
     if (changed) this.save()
     for (const r of Object.values(stored)) {
@@ -128,17 +145,45 @@ export class ReviewRequests {
   async opened(thread: string, head: string, url: string, ticketId: string): Promise<void> {
     this.flushStartNotes()
     const reviewer = this.d.reviewer()
-    if (reviewer === undefined || this.asking.has(thread) || this.records[thread]?.head === head) return
+    const current = this.records[thread]
+    // #877: a request recorded with its task id whose outcome is not known yet is asked again under that same id.
+    const retry = current !== undefined && current.head === head && current.state === 'asking' && current.task !== '' && current.sender !== undefined
+    if (reviewer === undefined || this.asking.has(thread) || (current?.head === head && !retry)) return
     this.asking.add(thread)
-    const before = this.records[thread]
+    // #885 review B1: a request asked again under its recorded id may already be with the reviewer, so restoring puts that
+    // same record back (a changed identity or an unlinked reviewer leaves it as it is, to be asked again under the same id).
+    const before = current
     const restore = (): void => { if (before === undefined) delete this.records[thread]; else this.records[thread] = before; this.save() }
     try {
+      const text = `[评审请求] ${url} @ ${head}。请在这个提交上评审，结论用回执给出，并在回执正文里单独写这一行（只写一行；不通过把 PASS 换成 FAIL）：${verdictLineFor(head)}`
+      if (retry || this.d.sender !== undefined) {
+        // #877: the task id and the team identity are recorded before the send; a restart or a failed send keeps them.
+        const sender = retry ? current.sender! : await this.d.sender!()
+        const id = retry ? current.task : (this.d.taskId?.() ?? `rev-${randomUUID()}`)
+        if (!retry) { this.records[thread] = { thread, ticketId, head, task: id, reviewer, at: new Date().toISOString(), state: 'asking', sender }; this.save() }
+        // #885 review B4: asked again, it goes to the reviewer the id was recorded for, never to a newly configured one.
+        const to = retry ? current.reviewer : reviewer
+        let task: string | undefined
+        try { task = await this.d.ask(to, text, id, sender) } catch (error) {
+          // Nothing went out (the identity changed, the host refused before any dispatch): ask anew on a later read. Any other
+          // failure may have gone out: keep the id, so the next read asks again under it and never sends a second request.
+          if ((error as { delivery?: unknown }).delivery === 'not-sent') restore()
+          throw error
+        }
+        if (task === undefined) { restore(); this.d.logger.warn('superagent: the reviewer %s is not linked; no review request was sent', to); return }
+        if (task !== id) throw new Error(`review request answered for task ${task}, not ${id}; kept to ask again under ${id}`)
+        // #885 review B2: a verdict that arrived while the send was in flight is kept.
+        const now = this.records[thread]
+        this.records[thread] = { thread, ticketId, head, task, reviewer: to, at: now!.at, sender, ...(now?.verdict !== undefined ? { verdict: now.verdict } : {}) }
+        this.save()
+        return
+      }
       // Recorded before the send: a restart before the task id is kept finds it (see the constructor).
       this.records[thread] = { thread, ticketId, head, task: '', reviewer, at: new Date().toISOString(), state: 'asking' }
       this.save()
       let task: string | undefined
       // A thrown send is tried again on a later read, as before: the record goes back to what it was.
-      try { task = await this.d.ask(reviewer, `[评审请求] ${url} @ ${head}。请在这个提交上评审，结论用回执给出，并在回执正文里单独写这一行（只写一行；不通过把 PASS 换成 FAIL）：${verdictLineFor(head)}`) } catch (error) { restore(); throw error }
+      try { task = await this.d.ask(reviewer, text) } catch (error) { restore(); throw error }
       if (task === undefined) { restore(); this.d.logger.warn('superagent: the reviewer %s is not linked; no review request was sent', reviewer); return }
       this.records[thread] = { thread, ticketId, head, task, reviewer, at: this.records[thread]!.at }
       this.save()
@@ -172,6 +217,8 @@ export class ReviewRequests {
     const short = record.head.slice(0, 7)
     // The verdict must name the commit it was given on, in full, in its structured line; free text is a reference only.
     const read = readVerdict(trigger.text, record.head)
+    // #885 review B2: the reviewer answered this task, so it is no longer being asked (a later read does not ask again).
+    delete record.state
     record.verdict = { pass: read.pass, checked: read.checked, ...(read.reason !== undefined ? { reason: read.reason } : {}), text: clip(trigger.text, 500), at: trigger.at }
     this.save()
     const label = read.checked === 'verified' ? `已核对完整提交 ${record.head}` : `参考，未核验：${read.reason ?? ''}`
