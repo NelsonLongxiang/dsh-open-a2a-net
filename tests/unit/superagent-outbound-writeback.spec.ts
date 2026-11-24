@@ -5,6 +5,7 @@
  * when it was already written before the checkpoint. An answer for an ended ticket is marked, never reopened or resent.
  */
 import { mkdtempSync } from '../temp-dirs.ts'
+import { statSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -63,6 +64,30 @@ describe('O5: interim receipts keep the request open; only a final receipt answe
     expect(answerNotes(h)[0]).toContain('数据在附件里')
     out.received(trigger('r4', RESULT))
     expect(answerNotes(h)).toHaveLength(1)
+  })
+})
+
+describe('O5: the final/interim line is the task ledger\'s (#881 review B3)', () => {
+  it('an attention without a question and an outcome of unknown are final answers, as the ledger settles them', async () => {
+    const ATTENTION = formatReceipt(TASK, '请注意这个结果', { disposition: 'attention' })
+    const UNKNOWN = formatReceipt(TASK, '结果不确定', { outcome: 'unknown' })
+    expect(holdsRow(parseReceipt(ATTENTION)?.envelope)).toBe(false)
+    expect(holdsRow(parseReceipt(UNKNOWN)?.envelope)).toBe(false)
+    for (const [text, says] of [[ATTENTION, '请注意这个结果'], [UNKNOWN, '结果不确定']] as const) {
+      const h = host(), { out } = await sent(fresh(), h)
+      out.received(trigger('r1', text))
+      expect(out.list()[0]).toMatchObject({ state: 'answered', noted: true })
+      expect(answerNotes(h)[0]).toContain(says)
+    }
+  })
+
+  it('interim receipts are not stored: fifty of them leave the outbound file as it was after the first (4 MiB recovery bound)', async () => {
+    const path = fresh(), h = host(), { out } = await sent(path, h)
+    out.received(trigger('a0', ACK))
+    const size = statSync(path).size
+    for (let i = 1; i <= 50; i += 1) out.received(trigger(`a${String(i)}`, ACK))
+    expect(statSync(path).size).toBe(size)
+    expect(out.list()[0]).toMatchObject({ state: 'sent' })
   })
 })
 
