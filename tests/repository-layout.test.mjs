@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync, symlinkSync, renameSync, lstatSync } from 'node:fs'
 import { dirname, join, relative, resolve, isAbsolute, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -200,4 +200,71 @@ test('another missing registered worktree does not hide a valid linked checkout'
   const valid = join(home, 'valid checkout'); git(main, 'worktree', 'add', '--detach', valid, 'HEAD')
   rmSync(linked, { recursive: true, force: true }) // Our fixture only: leave a stale registration, without pruning it.
   assert.deepEqual(checkRepositoryLayout(valid).findings, [])
+})
+
+function layoutCli(root) {
+  const result = spawnSync(process.execPath, [join(repo, 'scripts/verify-repository-layout.mjs'), '--root', root], { encoding: 'utf8' })
+  assert.equal(result.error, undefined)
+  assert.equal(result.signal, null)
+  assert.equal(result.stderr, '')
+  return { status: result.status, report: JSON.parse(result.stdout) }
+}
+
+test('a real local submodule gitfile is rejected rather than treated as a linked worktree', t => {
+  const { home, main } = worktreeFixture(t)
+  const parent = join(home, 'parent'); mkdirSync(parent)
+  git(parent, 'init', '--quiet')
+  // Only this fixture command permits the local file transport; no network or global config changes.
+  git(parent, '-c', 'protocol.file.allow=always', 'submodule', 'add', main, 'sub')
+  const root = join(parent, 'sub'), pointer = readFileSync(join(root, '.git'), 'utf8')
+  assert.equal(lstatSync(join(root, '.git')).isFile(), true)
+  assert.match(pointer, /^gitdir: /)
+  assert.equal(realpathSync(git(root, 'rev-parse', '--show-superproject-working-tree').trim()), realpathSync(parent))
+  assert.equal(realpathSync(git(root, 'rev-parse', '--absolute-git-dir').trim()), realpathSync(join(parent, '.git', 'modules', 'sub')))
+  const result = layoutCli(root)
+  assert.equal(result.status, 1)
+  assert.deepEqual(result.report.findings.map(f => [f.code, f.path]), [['unexpected-root-entry', '.git']])
+  assert.equal(readFileSync(join(root, '.git'), 'utf8'), pointer, 'checking preserves the submodule pointer')
+})
+
+for (const kind of ['ordinary', 'linked']) {
+  test('the existing baseline accepts a root directory symlink for a checkout of kind ' + kind, t => {
+    const { home, main, linked } = worktreeFixture(t)
+    const target = kind === 'ordinary' ? main : linked, alias = join(home, 'root alias')
+    symlinkSync(target, alias, process.platform === 'win32' ? 'junction' : 'dir')
+    assert.equal(lstatSync(alias).isSymbolicLink(), true)
+    assert.deepEqual(checkRepositoryLayout(target).findings, [])
+    const result = layoutCli(alias)
+    assert.equal(result.status, 0)
+    assert.deepEqual(result.report.findings, [])
+    assert.equal(result.report.root, resolve(alias), 'the report retains the caller-supplied root')
+  })
+
+  test('the existing baseline accepts a .git symlink to the ' + kind + ' checkout metadata', {
+    skip: process.platform === 'win32' && kind === 'linked' ? 'File symlinks require Windows privileges; not covered by this fixture' : false,
+  }, t => {
+    const { home, main, linked } = worktreeFixture(t)
+    const root = kind === 'ordinary' ? main : linked, dotgit = join(root, '.git'), saved = join(home, 'saved git metadata')
+    // Move only this fixture's metadata. Both the symlink and its target remain under the owned fixture root.
+    renameSync(dotgit, saved)
+    symlinkSync(saved, dotgit, kind === 'ordinary' ? (process.platform === 'win32' ? 'junction' : 'dir') : 'file')
+    assert.equal(lstatSync(dotgit).isSymbolicLink(), true)
+    assert.equal(git(root, 'rev-parse', '--is-inside-work-tree').trim(), 'true')
+    const result = layoutCli(root)
+    assert.equal(result.status, 0)
+    assert.deepEqual(result.report.findings, [])
+    assert.equal(lstatSync(dotgit).isSymbolicLink(), true, 'checking does not replace the link')
+  })
+}
+
+test('node_modules symlinks remain allowed while arbitrary root symlinks remain rejected', t => {
+  const { home, main } = worktreeFixture(t)
+  const target = join(home, 'dependencies'); mkdirSync(target)
+  const linkType = process.platform === 'win32' ? 'junction' : 'dir'
+  symlinkSync(target, join(main, 'node_modules'), linkType)
+  assert.deepEqual(checkRepositoryLayout(main).findings, [])
+  symlinkSync(target, join(main, 'unexpected-link'), linkType)
+  const result = layoutCli(main)
+  assert.equal(result.status, 1)
+  assert.deepEqual(result.report.findings.map(f => [f.code, f.path]), [['unexpected-root-entry', 'unexpected-link']])
 })
