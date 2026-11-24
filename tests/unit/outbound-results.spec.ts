@@ -65,6 +65,13 @@ describe('OutboundResults', () => {
     expect(t.s.register(cred(formatReceipt(TASK, 'other', { outcome: 'completed' })))).toBe('conflict')
     expect(t.s.view('t1', TASK)).toMatchObject({ status: 'unavailable', reason: 'conflict' })
   })
+  it('the same receipt with CRLF line ends is a duplicate, not a conflict', () => {
+    const t = store()
+    const r = formatReceipt(TASK, 'ok', { outcome: 'completed' }) + '\nmore\nlines'
+    expect(t.s.register(cred(r))).toBe('stored')
+    expect(t.s.register(cred(r.replace(/\n/g, '\r\n')))).toBe('duplicate')
+    expect(t.s.view('t1', TASK)).toMatchObject({ status: 'ready' })
+  })
   it('a body over 8 KiB is cut at a character boundary and reads as truncated', () => {
     const t = store()
     expect(t.s.register(cred(formatReceipt(TASK, 's', { outcome: 'completed' }) + '\n' + '汉'.repeat(RESULT_BODY_MAX_BYTES)))).toBe('stored')
