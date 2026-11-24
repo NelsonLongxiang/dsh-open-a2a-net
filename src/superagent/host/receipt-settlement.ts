@@ -4,7 +4,7 @@
  * receipt (`settled`); an interim one only when the ledger marked the owed row with it (`held`). Anything else — a
  * refusal such as settler-off-chain, a task another receipt settled, a verdict still pending, or none at all — is kept as
  * an anomaly for the health view and never written into the ticket as an answer.
- * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/receipt-settlement
+ * @module superagent/host/receipt-settlement
  */
 import type { Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
 
