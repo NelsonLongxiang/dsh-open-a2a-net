@@ -156,7 +156,21 @@ export const YGL_WRITE = 'mcp__ygl__write'
  * team project for the session first. It does not ask for `rel attach`: that tool's source is always a
  * tree node, and a team project has no tree until the owner decides its milestones.
  */
-export function yglCardLines(project?: string, opts: { readonly scope?: string; readonly caps?: YglCapabilities } = {}): string[] {
+export function yglCardLines(project?: string, opts: { readonly scope?: string; readonly caps?: YglCapabilities; readonly trees?: boolean } = {}): string[] {
+  const lines = yglCardLinesLegacy(project, opts)
+  return opts.trees === true ? yglTreesWording(lines) : lines
+}
+/**
+ * ygl-trees' single tool (ygl-trees/1, PR #311): a member whose session has mcp__ygl__trees gets the same steps named for it,
+ * with domain and action as written and every other argument inside params. Without it the card is unchanged (the old four
+ * tools stay for one release).
+ */
+export function yglTreesWording(lines: readonly string[]): string[] {
+  const renamed = lines.map(line => line.replace(/mcp__ygl__(read|write)\b/g, YGL_TREES_NAME))
+  return [renamed[0]!, `- call ${YGL_TREES_NAME} with domain and action as named below and every other argument (project, scope, query, text, id, name, to) inside params; ${YGL_TREES_NAME} with action help lists what each domain takes`, ...renamed.slice(1)]
+}
+const YGL_TREES_NAME = 'mcp__ygl__trees'
+function yglCardLinesLegacy(project: string | undefined, opts: { readonly scope?: string; readonly caps?: YglCapabilities }): string[] {
   if (project === undefined) return [
     'team memory (ygl-trees), as part of this ticket:',
     '- first: mcp__ygl__read domain agent action brief (if it answers ambiguous project: mcp__ygl__write domain project action use, then again), and domain kb action search on this ticket\'s subject; build on what earlier work found',

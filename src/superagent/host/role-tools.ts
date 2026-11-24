@@ -56,9 +56,30 @@ export const SELF_REFLECT_TOOLS: readonly string[] = ['lesson_write', 'lesson_no
 /**
  * ygl-trees, the team's memory, through its MCP server (the presets mount it as `ygl`; the server runs outside the session's
  * sandbox, which keeps the CLI from opening the shared workspace). Its MCP face has no delete or admin action. The router
- * only reads; members and observers read, write, verify and check health (owner 2026-11-10).
+ * only reads; members and observers read, write, verify and check health (owner 2026-11-10). `trees` (ygl-trees/1) is the
+ * same server's single entry point: the router gets it narrowed to the old read routes; the old four names stay for one release.
  */
-export const YGL_READ_TOOLS: readonly string[] = ['mcp__ygl__read']
+/** ygl-trees' single progressive-disclosure tool (ygl-trees PR #311, contract ygl-trees/1): {domain, action, params}. */
+export const YGL_TREES = 'mcp__ygl__trees'
+/**
+ * The routes the old read-only `mcp__ygl__read` tool offered (ygl-trees master 546976ac, packages/ops/tools/src/mcp.ts
+ * READ_ROUTES). Through `trees` the router keeps exactly these, plus `help`: its reading does not shrink and nothing else is
+ * added. Read and write action names never overlap there, so a write route never matches.
+ */
+export const YGL_TREES_READ_ROUTES: Readonly<Record<string, readonly string[]>> = {
+  agent: ['brief', 'match', 'log'], kb: ['search', 'list', 'show'], library: ['list', 'show'],
+  research: ['query-list', 'source-list', 'source-search', 'source-show', 'evidence-list', 'evidence-show', 'claim-list', 'claim-show', 'claim-evaluate', 'claim-calibration', 'predict-list'],
+  tree: ['state', 'list', 'show'], node: ['can', 'ready', 'path', 'ancestors', 'descendants', 'validate'], task: ['list'], rel: ['list'],
+  produce: ['report-show', 'report-list'], project: ['list', 'show'], db: ['stats', 'timeline'], skill: ['list', 'match', 'show'],
+}
+/** Why a router's `trees` call is refused (owner's option A), or undefined for help and the old read routes. */
+export function yglTreesReadRefusal(args: unknown): string | undefined {
+  const a = args !== null && typeof args === 'object' ? args as { domain?: unknown; action?: unknown } : {}
+  if (a.action === 'help') return undefined
+  if (typeof a.domain === 'string' && typeof a.action === 'string' && Object.prototype.hasOwnProperty.call(YGL_TREES_READ_ROUTES, a.domain) && YGL_TREES_READ_ROUTES[a.domain]!.includes(a.action)) return undefined
+  return `[superagent-role-tools] the team router only reads the team's memory: ${YGL_TREES} takes help and the read routes, not ${String(a.domain ?? '?')}/${String(a.action ?? '?')}`
+}
+export const YGL_READ_TOOLS: readonly string[] = ['mcp__ygl__read', YGL_TREES]
 export const YGL_WORK_TOOLS: readonly string[] = [...YGL_READ_TOOLS, 'mcp__ygl__write', 'mcp__ygl__verify', 'mcp__ygl__doctor']
 
 /** The router's reads (owner 2026-11-18): files, search and skills, to see which member and repository a request fits. */
@@ -159,6 +180,7 @@ export function roleToolRefusal(role: Role, name: string, args?: unknown, grante
     if (memberBoundary(role, name)) return `[superagent-role-tools] a team member works with its host's tools and reports with a2a_ticket_report; ${name} leaves the team (other sessions, subagents, A2A sending or another role's tools)`
     return scheduleTargetRefusal(name, args)
   }
+  if (name === YGL_TREES && roleTools(role).includes(name)) return yglTreesReadRefusal(args)
   if (roleTools(role).includes(name) || (granted.includes(name) && grantableTool(role, name))) return scheduleTargetRefusal(name, args)
   return `[superagent-role-tools] the team router acts only through ${ROUTER_TOOLS.join(', ')}; ${name} is not one of them`
 }
