@@ -4,7 +4,7 @@
  * here through the same host route as the DSH right bar, and whether the person is the owner is the host's call alone.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { ATTACH_MAX, STAGE_REUSE_MS, CARD_ID, cardOf, inputMet, recommendedNeedsInput, createDecisionsGroup, decisionLink, fileHref, oneClick, refusalText, type DecisionCard } from '../src/wb-decisions.ts'
+import { ATTACH_MAX, STAGE_REUSE_MS, CARD_ID, cardOf, inputMet, inputOf, recommendedNeedsInput, createDecisionsGroup, decisionLink, fileHref, oneClick, refusalText, type DecisionCard } from '../src/wb-decisions.ts'
 import { createSuperagentPane } from '../src/wb-superagent.ts'
 
 const XSS = '<img src=x onerror="window.__pwned=1">'
@@ -457,5 +457,16 @@ describe('#888 D5: a card the host took automatically', () => {
     expect(m.group.waiting()).toBe(1)
     expect(document.querySelector('.wb-led-group-hint')!.textContent).toBe('1')
     expect(cardOf(plain({ autoApproved: { at: 1 } }))!.autoApproved).toBeUndefined()
+  })
+})
+
+describe('#892 review follow-up: inputs are read as own keys only', () => {
+  it('a recommended option called constructor keeps one click and has no inherited input', () => {
+    const card = cardOf(row({ level: 'P2', options: ['constructor', '乙'], recommended: 'constructor', files: [], inputs: { 乙: { kind: 'text', prompt: 'p' } } }))!
+    expect(inputOf(card, 'constructor')).toBeUndefined()
+    expect(inputOf(card, 'toString')).toBeUndefined()
+    expect(recommendedNeedsInput(card)).toBe(false)
+    expect(oneClick(card)).toBe(true)
+    expect(inputOf(card, '乙')).toEqual({ kind: 'text', prompt: 'p' })
   })
 })

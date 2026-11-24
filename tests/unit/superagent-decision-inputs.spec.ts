@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { DecisionPush } from '../../src/superagent/host/decision-push.ts'
-import { needsInput, parseDecision, recommendedNeedsInput, type DecisionSpec } from '../../src/superagent/host/decisions.ts'
+import { inputFor, needsInput, parseDecision, recommendedNeedsInput, type DecisionSpec } from '../../src/superagent/host/decisions.ts'
 
 const sha = (c: string): string => c.repeat(64)
 const ref = (c: string): string => `[A2A file] v1 sha256=${sha(c)} size=3 name=a.txt from=http://127.0.0.1:3084`
@@ -205,6 +205,33 @@ describe('D4: a ticket question with inputs stays on this host', () => {
     const row = ((m.h.state() as { tickets: Array<{ id: string; attention?: { needsInput?: boolean } }> }).tickets).find(t => t.id === ticket)!
     expect(row.attention).not.toHaveProperty('needsInput')
     expect(m.h.choicesOf(ticket)).toEqual({ options: ['甲', '乙'], recommended: '甲' })
+    await m.h.stop()
+  })
+})
+
+describe('#892 review follow-up: inputs read only as own keys of a plain object', () => {
+  it('R02: a Date or a Map as inputs refuses the whole card (not read as "no inputs")', () => {
+    expect(typeof withInputs(new Date())).toBe('string')
+    expect(typeof withInputs(new Map([['乙', { kind: 'text', prompt: 'p' }]]))).toBe('string')
+    // A null-prototype object is still a plain record.
+    const bare = Object.assign(Object.create(null) as Record<string, unknown>, { 乙: { kind: 'text', prompt: 'p' } })
+    expect(withInputs(bare)).toMatchObject({ inputs: { 乙: { kind: 'text', prompt: 'p' } } })
+  })
+  it('R08/R09: a recommended option called constructor is not taken for an inherited input', () => {
+    const card = parseDecision({ options: ['constructor', '乙'], recommended: 'constructor', level: 'P3', inputs: { 乙: { kind: 'text', prompt: 'p' } } }) as DecisionSpec
+    expect(needsInput(card)).toBe(true)
+    expect(recommendedNeedsInput(card)).toBe(false)
+    expect(inputFor(card, 'constructor')).toBeUndefined()
+    expect(inputFor(card, 'toString')).toBeUndefined()
+    expect(inputFor(card, '乙')).toEqual({ kind: 'text', prompt: 'p' })
+  })
+  it('R08/R09 on the host: such a card is still one click and its constructor option needs no words', async () => {
+    const m = await team()
+    const spec = parseDecision({ options: ['constructor', '乙'], recommended: 'constructor', level: 'P3', inputs: { 乙: { kind: 'text', prompt: 'p' } } }) as DecisionSpec
+    const a = (m.h.proposeDecision('router', 'session-r', '一键？', spec) as { id: string }).id
+    expect(m.h.decide(a, 'approve')).toMatchObject({ ok: true })
+    const b = (m.h.proposeDecision('router', 'session-r', '选项？', spec) as { id: string }).id
+    expect(m.h.decide(b, 'choose', 'constructor')).toMatchObject({ ok: true })
     await m.h.stop()
   })
 })
