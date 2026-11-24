@@ -75,3 +75,20 @@ describe('#882: the team pass and health for owed outbound answer notes', () => 
     expect(host.health().map(p => p.code)).toContain('outbound-note-pending')
   })
 })
+
+describe('#881 v2 B2: a receipt the ledger did not settle shows on the team health, and is not written', () => {
+  it('health names the unsettled receipt with its verdict and reason; the owner text says it was not written', async () => {
+    const t = await team()
+    t.seed([t.record('c1', 'direct-out000001', { state: 'sent', answer: undefined, unsettled: [{ key: 'r-1', at: '2026-11-24T00:00:04Z', settlement: 'refused', reason: 'settler-off-chain' }] }) as never])
+    writeFileSync(join(t.path, '..', 'reviews.json'), JSON.stringify({ 'o/net#7': { thread: 'o/net#7', ticketId: t.ticketId, head: 'abcdef1234567890', task: 'direct-rv0001', reviewer: 'dsh/f49961b0', at: '2026-11-24T00:00:02Z', unsettled: [{ key: 'v-1', at: '2026-11-24T00:00:05Z', settlement: 'none', reason: 'not-payer' }] } }))
+    const host = t.make()
+    expect(host.health().filter(p => p.code === 'receipt-unsettled').map(p => p.detail).sort()).toEqual(['对外请求 task direct-out000001：refused（settler-off-chain）', '评审 task direct-rv0001：none（not-payer）'])
+    const problem = host.health().find(p => p.code === 'receipt-unsettled')
+    expect(problem).toMatchObject({ ticketId: t.ticketId, title: '调研' })
+    expect(problem!.detail).toContain('direct-out000001')
+    expect(problem!.detail).toContain('refused（settler-off-chain）')
+    expect(problemText(problem as never)).toContain('没有写进工单')
+    host.pass()
+    expect(t.notes(host)).toHaveLength(0)
+  })
+})

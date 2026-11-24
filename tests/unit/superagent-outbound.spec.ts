@@ -80,7 +80,7 @@ describe('the answer (O5)', () => {
     out.waiting('c1', 't1', 'dsh/canvas/other', '原文', 'session-m')
     await out.decided('c1', true, 'team', () => '调研')
     note.mockClear()
-    const receipt = (proof: string) => ({ id: 'r', source: 'a2a', threads: [], actor: { source: 'a2a', id: 'dsh/canvas/other' }, human: false, at: now(), text: '[A2A receipt] task direct-out000001 数据在附件里', meta: { receiptFor: 'direct-out000001', proof } }) as never
+    const receipt = (proof: string) => ({ id: 'r', source: 'a2a', threads: [], actor: { source: 'a2a', id: 'dsh/canvas/other' }, human: false, at: now(), text: '[A2A receipt] task direct-out000001 数据在附件里', meta: { receiptFor: 'direct-out000001', proof, settlement: 'settled' } }) as never
     out.received(receipt('unbound'))
     expect(note).not.toHaveBeenCalled()
     out.received(receipt('cli-identity'))

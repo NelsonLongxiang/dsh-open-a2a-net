@@ -15,6 +15,8 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { TRUSTED_PROOFS } from '../a2a-watch.ts'
+import { holdsRow, parseReceipt } from '../../receipt.ts'
+import { keepUnsettled, receiptStanding, type UnsettledReceipt } from './receipt-settlement.ts'
 import type { Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
 
 export interface ReviewRecord {
@@ -29,6 +31,8 @@ export interface ReviewRecord {
   /** For an `unknown` request: the ticket has been told (kept on disk, so a second restart neither loses nor repeats it). */
   told?: boolean
   verdict?: ReviewVerdict
+  /** #881 v2 B2: reviewer receipts the network ledger did not settle positively: kept, never a verdict. */
+  unsettled?: UnsettledReceipt[]
 }
 
 /**
@@ -141,6 +145,11 @@ export class ReviewRequests {
     } finally { this.asking.delete(thread) }
   }
 
+  /** #881 v2 B2: review requests still without a verdict whose reviewer receipts the ledger did not settle positively. */
+  unsettledProblems(): Array<{ readonly ticketId: string; readonly task: string; readonly last: UnsettledReceipt }> {
+    return Object.values(this.records).filter(r => r.verdict === undefined && (r.unsettled?.length ?? 0) > 0).map(r => ({ ticketId: r.ticketId, task: r.task, last: r.unsettled!.at(-1)! }))
+  }
+
   /** A mailbox row: the reviewer's receipt on the task of a request that is still the latest is its verdict. */
   received(trigger: Trigger): void {
     this.flushStartNotes()
@@ -149,6 +158,17 @@ export class ReviewRequests {
     const record = Object.values(this.records).find(r => r.task !== '' && r.task === receiptFor && r.verdict === undefined)
     if (record === undefined || trigger.actor.id !== record.reviewer) return
     if (typeof trigger.meta.proof !== 'string' || !TRUSTED_PROOFS.has(trigger.meta.proof)) return
+    // #881 v2 B2: an acknowledgement or a question from the reviewer is not a verdict; a final receipt is one only when the
+    // network ledger settled the review task with it. Anything else is kept for the health view.
+    const at = trigger.text.indexOf('[A2A receipt] task '), parsed = at < 0 ? null : parseReceipt(trigger.text.slice(at))
+    const interim = parsed !== null && holdsRow(parsed.envelope)
+    const standing = receiptStanding(trigger, interim)
+    if (!standing.ok) {
+      const kept = keepUnsettled(record.unsettled, standing.unsettled)
+      if (JSON.stringify(kept) !== JSON.stringify(record.unsettled ?? [])) { record.unsettled = kept; this.save() }
+      return
+    }
+    if (interim) return
     const short = record.head.slice(0, 7)
     // The verdict must name the commit it was given on, in full, in its structured line; free text is a reference only.
     const read = readVerdict(trigger.text, record.head)

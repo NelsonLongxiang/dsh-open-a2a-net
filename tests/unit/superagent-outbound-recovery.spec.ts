@@ -54,7 +54,7 @@ describe('approved outbound recovery', () => {
   f.ask.mockImplementationOnce(async (_a, _m, task) => { throw noSend(task) })
   await f.out.decided('card', true, 'finance', () => 'cost')
   const task = f.out.list()[0]!.task!
-  f.out.received({ meta: { receiptFor: task, proof: 'origin-claim' }, text: 'late original receipt', at: now() } as never)
+  f.out.received({ meta: { receiptFor: task, proof: 'origin-claim', settlement: 'settled' }, text: 'late original receipt', at: now() } as never)
   expect(f.out.list()[0]!.state).toBe('answered')
   expect(await f.out.recover('card', task, true)).toMatchObject({ ok: false, code: 'outbound-state' })
   expect(f.ask).toHaveBeenCalledTimes(1)
@@ -181,7 +181,7 @@ describe('approved outbound recovery', () => {
   f.query.mockImplementationOnce(async () => { await new Promise<void>(r => { release = r }); return { delivery: 'not-sent' } })
   const recovering = f.out.recover('card', task, true)
   await vi.waitFor(() => expect(release).toBeTypeOf('function'))
-  f.out.received({ meta: { receiptFor: task, proof: 'origin-claim' }, text: 'delivered receipt', at: now() } as never)
+  f.out.received({ meta: { receiptFor: task, proof: 'origin-claim', settlement: 'settled' }, text: 'delivered receipt', at: now() } as never)
   release()
   expect(await recovering).toMatchObject({ ok: true, state: 'answered', task })
   expect(f.ask).toHaveBeenCalledTimes(1)

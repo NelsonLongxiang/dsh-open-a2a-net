@@ -6,6 +6,7 @@
  */
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import { pendingReceiptSeq, RECEIPT_VERDICT_HOLD_MS } from '../../src/superagent/a2a-watch.ts'
 import { a2aKind, ADMISSION_VALUES, apply, configSchema, HEALTH_RECORD_CAP, KV, LINK_RULES, lossHealth, PAGE_RECORD_CAP, policySchema, pollMailbox, recordPage, recordRows, renewDeposit, reportError, ROW_RECORD_CAP, scope, translate, TRUSTED_PROOFS, watch, type A2aConfig, type HealthRecord, type PageRecord, type RowRecord } from '../../src/superagent/a2a-watch.ts'
 import type { Health, SourceContext, TicketView, Trigger } from '../../src/superagent/source-types.ts'
 import { MAIL_ADMISSIONS } from '../../src/cli-deposit.ts'
@@ -424,5 +425,43 @@ describe('D1/D2 · records for the shadow acceptance (global review of the accep
     await new Promise(r => setTimeout(r, 10)); stop.abort(); await run
     expect(f.state.get(KV.healthLog)).toEqual([{ at, entry: 'a2a', state: 'error', values: { lost: '2', after: 'start', epochChanged: 'false' } }])
     expect(JSON.stringify(f.state.get(KV.healthLog))).not.toContain('pushed out')
+  })
+})
+
+describe('#881 v2 B2 · the ledger verdict on a receipt rides into the Trigger; a pending one is read again', () => {
+  it('carries a known verdict and its reason on a receipt row only; an unknown value or a non-receipt row carries none', () => {
+    const t = (over: Record<string, unknown>) => { const x = translate(row(over), 'e1'); if (x.kind !== 'trigger') throw Error('no trigger'); return x.trigger.meta }
+    expect(t({ receipt_for: 'out-1', settlement: 'refused', settlement_reason: 'settler-off-chain' })).toMatchObject({ settlement: 'refused', settlementReason: 'settler-off-chain' })
+    expect(t({ receipt_for: 'out-1', settlement: 'settled' })).toMatchObject({ settlement: 'settled' })
+    expect(t({ receipt_for: 'out-1', settlement: 'settled' })).not.toHaveProperty('settlementReason')
+    expect(t({ receipt_for: 'out-1', settlement: 'approved' })).not.toHaveProperty('settlement')
+    expect(t({ settlement: 'settled', settlement_reason: 'x' })).not.toHaveProperty('settlement')
+  })
+
+  it('waits at a young pending receipt: the rows before it are taken, the cursor stops just before it', async () => {
+    const at = 1_794_000_000_000
+    const f = fake(() => page([row(), row({ seq: 2, task_id: 'r-2', receipt_for: 'out-1', settlement: 'pending', at }), row({ seq: 3, task_id: 't-3' })]))
+    const summary = await pollMailbox(f.ctx, new AbortController().signal, () => new Date(at + 1000))
+    expect(f.received.map(t => t.meta.taskId)).toEqual(['task-1'])
+    expect(summary.next).toBe('e1:1')
+    expect(f.state.get(KV.cursor)).toBe('e1:1')
+  })
+
+  it('takes a pending receipt as it is once the hold has passed, and a decided one at once', async () => {
+    const at = 1_794_000_000_000
+    const f = fake(() => page([row({ seq: 1, task_id: 'r-1', receipt_for: 'out-1', settlement: 'pending', at }), row({ seq: 2, task_id: 'r-2', receipt_for: 'out-2', settlement: 'refused', at })]))
+    const summary = await pollMailbox(f.ctx, new AbortController().signal, () => new Date(at + RECEIPT_VERDICT_HOLD_MS))
+    expect(f.received.map(t => t.meta.settlement)).toEqual(['pending', 'refused'])
+    expect(summary.next).toBe('e1:2')
+  })
+
+  it('waits only at a pending receipt row that is not a sync copy', () => {
+    const at = 1_794_000_000_000
+    expect(pendingReceiptSeq(row({ seq: 4, receipt_for: 'out-1', settlement: 'pending', at }), at)).toBe(4)
+    expect(pendingReceiptSeq(row({ seq: 4, receipt_for: 'out-1', settlement: 'pending', at }), at + RECEIPT_VERDICT_HOLD_MS - 1)).toBe(4)
+    expect(pendingReceiptSeq(row({ seq: 4, receipt_for: 'out-1', settlement: 'pending', at }), at + RECEIPT_VERDICT_HOLD_MS)).toBeUndefined()
+    expect(pendingReceiptSeq(row({ seq: 4, settlement: 'pending', at }), at)).toBeUndefined()
+    expect(pendingReceiptSeq(row({ seq: 4, receipt_for: 'out-1', settlement: 'settled', at }), at)).toBeUndefined()
+    expect(pendingReceiptSeq(row({ seq: 4, receipt_for: 'out-1', settlement: 'pending', dup: 'sync-answered', at }), at)).toBeUndefined()
   })
 })
