@@ -6,6 +6,7 @@
  * The skill tool loads text; the tests below pin that the text grants nothing.
  */
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { BUILDER_TOOLS, MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, TEAM_TOOLS, memberBoundary, roleToolRefusal, roleTools, type Role, type RoleAgent } from '../../src/superagent/host/role-tools.ts'
 
@@ -150,6 +151,7 @@ describe('#83 the builder preset carries the skill tool, and still no way to act
 
   it('the router, member and observer presets are not touched by this change', () => {
     const shipped = JSON.parse(readFileSync(new URL('./__fixtures__/issue-83-presets-at-810dab3c.json', import.meta.url), 'utf8')) as Record<string, string>
-    for (const id of ['superagent-router', 'superagent-member', 'superagent-observer']) expect(block(id), id).toBe(shipped[id])
+    // SHA-256 of each block at next/0.8 810dab3c: the fixture holds no preset text (the push gate's privacy scan reads fixtures too).
+    for (const id of ['superagent-router', 'superagent-member', 'superagent-observer']) expect(createHash('sha256').update(block(id)).digest('hex'), id).toBe(shipped[id])
   })
 })
