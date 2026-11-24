@@ -118,6 +118,12 @@ export interface SuperagentHostDeps {
   }
   /** #888 D3: whether a staged file is still on the file channel (an input that is a file must be). */
   readonly blobExists?: (sha256: string) => boolean
+  /** #881 v2: the host's disclosure policy for outbound result bodies; absent means deny all. */
+  readonly disclosure?: import('./outbound-disclosure.ts').DisclosurePolicy
+  /** #881 v2: mark a session restricted before a body reaches it; true only when the mark is on disk. */
+  readonly restrict?: (sessionId: string) => boolean
+  /** #881 v2: whether a session received an outbound result body. */
+  readonly restricted?: (sessionId: string) => boolean
   readonly outboundOutcome?: (input: { sender: string; task: string; address: string; message: string }) => { delivery: 'unknown' | 'not-sent' | 'accepted' }
   /**
    * PR-C2: a signed request to another a2a host (OriginClaim, body-bound, on this host's card key). Absent: no remote

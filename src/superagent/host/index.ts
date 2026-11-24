@@ -32,6 +32,7 @@ import { unsettledText } from './receipt-settlement.ts'
 import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, writeTicketNoteOnce, type OutboundAsk, type OutboundRecord, type OutboundApproval } from './outbound.ts'
 import {legacyOutboundApproval} from './legacy-outbound-approval.ts'
 import { OutboundResults, RESULT_UNAVAILABLE } from './outbound-results.ts'
+import { DENY_ALL, RESTRICTED_TURN_TEXT, ResultAudit, renderResultBody } from './outbound-disclosure.ts'
 import {NarrowOutboundRecovery} from './narrow-outbound.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { SettingsHistory } from './settings-history.ts'
@@ -153,6 +154,8 @@ export class SuperagentHost {
   private readonly outbound: OutboundRequests
   /** #881 v2: verified final results of outbound requests (status served; bodies kept, not served yet). */
   private readonly outboundResults: OutboundResults
+  /** #881 v2: the delivery audit, written before any body leaves the store. */
+  private readonly resultAudit: ResultAudit
   /** Proposals to change a rule set, each set's revision and last change (design D8–D10b). */
   readonly ruleChanges: RuleChanges
   private disposeTimer: (() => void) | undefined
@@ -318,6 +321,7 @@ export class SuperagentHost {
       persist: { load: () => { const path = join(dir, 'observer-questions.json'); return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) as unknown : undefined },
         save: kept => { const path = join(dir, 'observer-questions.json'), temporary = `${path}.tmp-${String(process.pid)}`; mkdirSync(dir, { recursive: true }); writeFileSync(temporary, JSON.stringify(kept), { mode: 0o600 }); renameSync(temporary, path) } },
     })
+    this.resultAudit = new ResultAudit({ path: join(dir, 'outbound-result-audit.json'), now: () => Date.parse(this.now()), logger: d.logger })
     this.outboundResults = new OutboundResults({ indexPath: join(dir, 'outbound-results.json'), bodyPath: join(dir, 'outbound-bodies.json'), now: () => Date.parse(this.now()), logger: d.logger })
     this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), result: credential => { this.outboundResults.register(credential) }, ask: (address, text, task, sender) => this.a2a.askApproved(address, text, task!, sender!),
       sender: create => create ? this.a2a.ensureIdentity() : Promise.resolve(this.a2a.address ?? ''), approval: record => this.outboundApproval(record),
@@ -456,12 +460,8 @@ export class SuperagentHost {
    * pair, gets the same refusal with no hint of what exists. Bodies are not served in this slice.
    */
   outboundResult(session: string, ticketId: string, taskId: string): Record<string, unknown> {
-    const role = this.toolRoleOf(session)
-    const ticket = this.store.tickets.get(ticketId)
-    if (ticket === undefined || role === undefined) return { ...RESULT_UNAVAILABLE }
-    const open = ticket.ended === undefined
-    const allowed = role === 'router' || (open && (role === 'observer' || (this.settings.members.includes(session) && this.executor.bindingFor(session, ticketId) !== undefined)))
-    if (!allowed) return { ...RESULT_UNAVAILABLE }
+    const role = this.resultRole(session, ticketId)
+    if (role === undefined) return { ...RESULT_UNAVAILABLE }
     const record = this.outbound.list().find(r => r.ticketId === ticketId && (r.task === taskId || (r.attempts ?? []).some(a => a.task === taskId)))
     if (record === undefined || record.narrowRecovery !== undefined) return { ...RESULT_UNAVAILABLE }
     const current = record.task === taskId
@@ -471,7 +471,27 @@ export class SuperagentHost {
         : current && record.state === 'answered' ? { status: 'unavailable', reason: 'source-unproven', hasBody: false }
           : { status: 'unavailable' }
     if (role === 'observer') return { ok: true, status: result['status'] }
-    return { ok: true, ...result }
+    if (result['status'] !== 'ready' && result['status'] !== 'truncated') return { ok: true, ...result }
+    // #881 v2 B4: a body leaves only through policy, then an audit row on disk, then a restricted mark on disk, then the
+    // same authorization rechecked. Any step that fails withholds it (a row without a delivery is acceptable).
+    const body = this.outboundResults.bodyOf(ticketId, taskId)
+    const withheld = (reason: string): Record<string, unknown> => ({ ok: true, ...result, status: 'unavailable', reason, hasBody: true })
+    if (body === undefined) return withheld('storage')
+    const verdict = (this.d.disclosure ?? DENY_ALL)({ ticketId, task: taskId, ...(body.outcome !== undefined ? { outcome: body.outcome } : {}), bodyHash: body.hash, source: body.source })
+    if (!verdict.allow) return withheld('policy')
+    if (this.resultAudit.record({ session, role, ticketId, task: taskId, bodyHash: body.hash, rule: verdict.rule }) !== 'recorded') return withheld('audit')
+    if (this.d.restrict?.(session) !== true) return withheld('storage')
+    if (this.resultRole(session, ticketId) !== role || this.outboundResults.bodyOf(ticketId, taskId)?.hash !== body.hash) return { ...RESULT_UNAVAILABLE }
+    return { ok: true, ...result, body: renderResultBody({ ticketId, task: taskId, ...(body.outcome !== undefined ? { outcome: body.outcome } : {}), clipped: body.clipped, text: body.text }) }
+  }
+
+  /** Who may read this ticket's outbound results now (B1), or undefined: router; observer and bound local member while open. */
+  private resultRole(session: string, ticketId: string): Exclude<Role, 'builder'> | undefined {
+    const role = this.toolRoleOf(session)
+    const ticket = this.store.tickets.get(ticketId)
+    if (ticket === undefined || role === undefined) return undefined
+    const open = ticket.ended === undefined
+    return role === 'router' || (open && (role === 'observer' || (this.settings.members.includes(session) && this.executor.bindingFor(session, ticketId) !== undefined))) ? role : undefined
   }
 
   /** A session's tool list: its role, an observer being a member with one tool more. */
@@ -483,7 +503,10 @@ export class SuperagentHost {
   /** How a member's turn ended, and whether it answered the owner in person. */
   private turnOf(sessionId: string): MemberTurn | undefined {
     const turn = this.d.memberTurn?.(sessionId)
-    return turn === undefined ? undefined : { ...turn, person: this.d.personMessage?.(sessionId) !== undefined }
+    if (turn === undefined) return undefined
+    // #881 v2: a session that received an outbound result body is never paraphrased; whether its turn is over is kept.
+    const text = this.d.restricted?.(sessionId) === true ? RESTRICTED_TURN_TEXT : turn.text
+    return { ...turn, text, person: this.d.personMessage?.(sessionId) !== undefined }
   }
 
   /** A member's turn ended (agent idle): the executor's turn-end fact — told to the served team host when it is theirs. */

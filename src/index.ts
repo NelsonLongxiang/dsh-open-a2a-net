@@ -2316,6 +2316,9 @@ export function apply(ctx: Context, config: Config): void {
     teamSend: args => teamCanvasSend(args),
     // #888 D3: a file input must still be on the file channel when the owner decides.
     blobExists: sha256 => blobStore.list().some(grant => grant.sha256 === sha256),
+    // #881 v2: a body reaches a session only after it is durably marked restricted (and tainted).
+    restrict: id => nodeTaint.markRestricted(id),
+    restricted: id => nodeTaint.isRestricted(id),
     narrowRecovery:{identity:caller=>requestRecovery.identity(caller),proposal:binding=>requestRecovery.proposal(binding),transport:(permit,mode,current)=>requestRecovery.transport(permit,mode,current),receipt:(binding,caller,message)=>requestRecovery.receipt(binding,caller,message)},
     outboundOutcome: ({ sender, task, address, message }) => {
       const verdict = idempotencyStore.query(task, peerPayloadFingerprint({ caller: sender, team: homeCanvasTeam(address, ownCanvasFingerprint), message, noWait: true }))
@@ -3687,6 +3690,8 @@ export function apply(ctx: Context, config: Config): void {
       observeAuthorization,
       scanSessionLogList,
       readSessionLogTail,
+      // #881 v2: sessions that received an outbound result body are not served to peers.
+      restrictedSession: id => nodeTaint.isRestricted(id),
       taskLedger,
       receiptReplayAllowed:(message,caller,team,claim)=>{
         const parsed=parseReceipt(message);if(!parsed||!claim.bound||claim.bodyBound!==true||!claimCovers(caller,claim.caller)||!isRootOriginUrl(claim.callerUrl))return false
