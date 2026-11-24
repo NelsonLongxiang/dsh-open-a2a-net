@@ -123,7 +123,7 @@ describe('#877: askReviewAs sends under the task id from the team identity', () 
 
 describe('#885 review: a request asked again under its id is never dropped, re-addressed or overwritten', () => {
   const pass = `评审意见\nverdict: PASS head: ${head}`
-  const receipt = (task: string) => ({ actor: { source: 'a2a', id: reviewer }, text: pass, at: '2026-11-24T00:00:00Z', meta: { receiptFor: task, proof: 'origin-claim' } }) as never
+  const receipt = (task: string) => ({ actor: { source: 'a2a', id: reviewer }, text: pass, at: '2026-11-24T00:00:00Z', meta: { receiptFor: task, proof: 'origin-claim', settlement: 'settled' } }) as never
 
   it('B1: asked again, a changed identity (not-sent) or an unlinked reviewer keeps the record; no second id is ever sent', async () => {
     for (const second of [async (_a: string, _x: string, task?: string) => { throw new RouteRefused('团队发送身份变化，未执行 route。', task, 'not-sent') }, async () => undefined] as Ask[]) {

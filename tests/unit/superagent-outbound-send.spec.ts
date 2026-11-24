@@ -165,7 +165,7 @@ describe('the outbound record of a refused send', () => {
     expect(out.list()[0]!.error).toContain('not an online local CLI deposit')
     expect(String(note.mock.calls[0]![1])).toContain('task ' + task)
     // A trustworthy original-task receipt vetoes retry, even when a not-sent record conflicts with it.
-    out.received({ meta: { receiptFor: task, proof: 'origin-claim' }, text: 'x', at: 'now' } as never)
+    out.received({ meta: { receiptFor: task, proof: 'origin-claim', settlement: 'settled' }, text: 'x', at: 'now' } as never)
     expect(out.list()[0]!.state).toBe('answered')
   })
 })

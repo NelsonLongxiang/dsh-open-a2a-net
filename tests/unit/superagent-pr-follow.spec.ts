@@ -161,7 +161,7 @@ describe('asking for review', () => {
       ask: async (a, x) => { asked.push([a, x]); return await ask(a, x) } })
     return { r, asked, notes }
   }
-  const receipt = (task: string, text: string, actor = reviewer, proof = 'origin-claim') => ({ actor: { source: 'a2a', id: actor }, text, at: '2026-11-09T00:00:00Z', meta: { receiptFor: task, proof } }) as never
+  const receipt = (task: string, text: string, actor = reviewer, proof = 'origin-claim') => ({ actor: { source: 'a2a', id: actor }, text, at: '2026-11-09T00:00:00Z', meta: { receiptFor: task, proof, settlement: 'settled' } }) as never
 
   it('asks once per head, naming only the pull request and its commit', async () => {
     const m = channel()
