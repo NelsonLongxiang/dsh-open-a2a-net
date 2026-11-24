@@ -94,9 +94,11 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
     // The repository stays with the host (the engine has no such field); it is set before the first Assignment launches.
     const repoSet = decision.kind === 'accept' && decision.ticketId !== undefined && repo !== undefined
     if (repoSet) host.executor.setRepo(decision.ticketId!, repo!)
-    if (decision.kind === 'accept' && decision.ticketId !== undefined && member !== undefined) host.executor.setMember(decision.ticketId, member)
+    // Ticket 269f287e: a member the owner took this work off is not recorded as its member; the ticket goes to another.
+    const memberExcluded = decision.kind === 'accept' && decision.ticketId !== undefined && member !== undefined && host.excludedFrom(decision.ticketId, member)
+    if (decision.kind === 'accept' && decision.ticketId !== undefined && member !== undefined && !memberExcluded) host.executor.setMember(decision.ticketId, member)
     if (decision.kind === 'accept' && decision.ticketId !== undefined && named !== undefined) host.named.accepted(decision.ticketId, named)
-    return { ok: true, trigger_id: triggerId, kind, decision_id: decision.id, decision: decision.kind, ...(decision.ticketId !== undefined ? { ticket_id: decision.ticketId } : {}), ...(repoSet ? { repo: repo! } : {}), reason: json(decision.reason) }
+    return { ok: true, trigger_id: triggerId, kind, decision_id: decision.id, decision: decision.kind, ...(decision.ticketId !== undefined ? { ticket_id: decision.ticketId } : {}), ...(repoSet ? { repo: repo! } : {}), ...(memberExcluded ? { member_refused: { code: 'excluded', error: `${memberName!} is excluded from this ticket: the owner took this work off it on a credential-access card; it goes to another member` } } : {}), reason: json(decision.reason) }
   } catch (error) { return { trigger_id: triggerId, ...refusal(host, error, { trigger: triggerId, ...(str(item.ticket_id) !== undefined ? { ticket: str(item.ticket_id)! } : {}) }) } }
 }
 
@@ -111,12 +113,14 @@ export function splitRequest(host: SuperagentHost, input: { trigger_id?: unknown
   const raw = Array.isArray(input.parts) ? input.parts as Array<Record<string, unknown>> : []
   if (raw.length < 2 || raw.length > 6) return { ok: false, code: 'parts', error: 'split takes 2 to 6 parts, each { title, scope, member? }' }
   const parts: Array<{ title: string; scope: string; member?: string }> = []
+  const names: Array<string | undefined> = []
   for (const [index, part] of raw.entries()) {
     const title = str(part?.title), scope = str(part?.scope), memberName = str(part?.member)
     if (title === undefined || scope === undefined) return { ok: false, code: 'parts', error: `part ${String(index + 1)} needs a title and a scope` }
     const member = memberName !== undefined ? host.resolveMember(memberName) : undefined
     if (memberName !== undefined && member === undefined) return { ok: false, code: 'member', error: `part ${String(index + 1)}: no such member: ${memberName}. ${host.memberListLine()}` }
     parts.push({ title, scope, ...(member !== undefined ? { member } : {}) })
+    names.push(memberName)
   }
   if (!host.askedIn(triggerId, asked)) return { ok: false, code: 'not-asked', error: 'asked is not in the request: split only a request that asks for separate parts, and copy its words exactly. Otherwise accept it as one ticket.' }
   host.splits.beginFor(triggerId)
@@ -126,7 +130,9 @@ export function splitRequest(host: SuperagentHost, input: { trigger_id?: unknown
     if (accepted.ok !== true || parent === undefined) return accepted
     const out = host.splitParent(parent, asked, parts, reason)
     if (!out.ok) { host.releaseSplit(parent); return { ok: false, code: out.code, error: `${out.error}; the request was accepted as one ticket (${parent}) instead`, ticket_id: parent } }
-    return { ok: true, trigger_id: triggerId, ticket_id: parent, parts: out.children }
+    // Ticket eabe1586: a part named to an excluded member is reported, as accept reports it; that part goes to another member.
+    const refused = out.refused.map(r => ({ part: r.part, code: 'excluded', error: `${names[r.part - 1] ?? r.member} is excluded from part ${String(r.part)}: the owner took this work off it on a credential-access card; it goes to another member` }))
+    return { ok: true, trigger_id: triggerId, ticket_id: parent, parts: out.children, ...(refused.length > 0 ? { member_refused: refused } : {}) }
   } finally { host.splits.endFor(triggerId) }
 }
 

@@ -1,10 +1,10 @@
 import {describe,it,expect,vi,afterEach} from 'vitest'
-import {generateKeyPairSync,createPublicKey} from 'node:crypto'
+import {generateKeyPairSync,createPublicKey,sign} from 'node:crypto'
 import {readFileSync,writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {mkdtempSync} from '../temp-dirs.ts'
-import {RequestRecoveryStore,signRecoveryProposal,recoveryFingerprint,verifyRecoveryPermit,verifyRecoveryProposal,recoveryClaimMatches,type RecoveryBinding,type RecoveryClaim} from '../../src/request-recovery.ts'
+import {RequestRecoveryStore,signRecoveryProposal,recoveryFingerprint,verifyRecoveryPermit,verifyRecoveryProposal,recoveryClaimMatches,recoveryDigest,RECOVERY_PERMIT_MAX_MS,type RecoveryBinding,type RecoveryClaim} from '../../src/request-recovery.ts'
 const disk=vi.hoisted(()=>({fail:false}))
 vi.mock('../../src/task-ledger-persistence.ts',async original=>{const actual=await original<typeof import('../../src/task-ledger-persistence.ts')>();return {...actual,writeTaskLedger:(path:string,bytes:string)=>{if(disk.fail)throw Error('disk denied');actual.writeTaskLedger(path,bytes)}}})
 afterEach(()=>{disk.fail=false;vi.restoreAllMocks()})
@@ -16,6 +16,41 @@ function fixture(){const sender=key(),receiver=key(),cli=key();let now=1_700_000
  return{sender,receiver,binding,proposal,claim,file,store,tick:(ms:number)=>{now+=ms},reopen:()=>new RequestRecoveryStore(file,()=>now),grant:()=>store.grant(proposal,receiver,'receiver owner checked original attempts and stopped the old chain',true)}
 }
 describe('owner-reconciled one-request admission',()=>{
+ describe('#815 review: the one-hour permit cap is enforced where permits are made and where they are read',()=>{
+  const reason='receiver owner checked exact original attempts'
+  it('grant() refuses a ttl one millisecond over the cap or under one second, and accepts the cap and one second exactly',()=>{
+   for(const ttl of [RECOVERY_PERMIT_MAX_MS+1,999]){const f=fixture();expect(()=>f.store.grant(f.proposal,f.receiver,reason,true,ttl),String(ttl)).toThrow(/owner reconciliation/)}
+   for(const ttl of [RECOVERY_PERMIT_MAX_MS,1000]){const f=fixture();const p=f.store.grant(f.proposal,f.receiver,reason,true,ttl);expect(p.expiresAt-p.issuedAt).toBe(ttl)}
+  })
+  // A permit the receiver really signed, with whatever lifetime: only the cap can refuse it, not the signature.
+  // NOTE: this copies src's signed payload (JSON of [proposal, issuedAt, expiresAt, reconciliation], prefixed 'a2a-request-recovery-permit-v1\0')
+  // and journal digest format (recoveryDigest([permit, phase, at, null])). If src changes either format, the control below goes red first,
+  // which is the safe direction: the over-cap case can then never pass for the wrong reason.
+  const signedJournal=(f:ReturnType<typeof fixture>,lifetime:number)=>{
+   const issuedAt=1_700_000_000_000,p={proposal:f.proposal,issuedAt,expiresAt:issuedAt+lifetime,reconciliation:reason}
+   const permit={...p,signature:sign(null,Buffer.from('a2a-request-recovery-permit-v1\0'+JSON.stringify([p.proposal,p.issuedAt,p.expiresAt,p.reconciliation])),f.receiver).toString('base64')}
+   const at=issuedAt;writeFileSync(f.file,JSON.stringify({version:1,entries:[{permit,phase:'ready',at,digest:recoveryDigest([permit,'ready',at,null])}]}))
+   return permit
+  }
+  it('control: a receiver-signed entry of exactly one hour reads back ready and can be consumed',()=>{
+   const f=fixture(),permit=signedJournal(f,RECOVERY_PERMIT_MAX_MS)
+   expect(verifyRecoveryPermit(permit)).toEqual(permit)
+   expect(f.reopen().outcome(f.binding.taskId,recoveryFingerprint(f.binding))).toBe('ready')
+   expect(f.reopen().inspect(permit,f.claim)).toMatchObject({requestId:f.binding.requestId})
+   expect(f.reopen().consume(permit,f.claim)).toMatchObject({requestId:f.binding.requestId})
+  })
+  it('a receiver-signed entry one millisecond over the hour is invalid: never ready, never consumed',()=>{
+   const f=fixture(),permit=signedJournal(f,RECOVERY_PERMIT_MAX_MS+1)
+   expect(verifyRecoveryPermit(permit)).toBeUndefined()
+   let seen:unknown;try{seen=f.reopen().outcome(f.binding.taskId,recoveryFingerprint(f.binding))}catch(error){seen=error}
+   // The journal read refuses the over-cap entry, so the journal reads as corrupt (not merely "not ready").
+   expect(seen).toBeInstanceOf(Error)
+   expect((seen as Error).message).toMatch(/request recovery journal corrupt/)
+   expect(()=>f.reopen().consume(permit,f.claim)).toThrow(/invalid request recovery permit/)
+   expect(()=>f.reopen().inspect(permit,f.claim)).toThrow(/one-request recovery permit is unavailable/)
+  })
+ })
+
  it.each([1,7])('signs a valid maximum-TTL permit while the clock advances %sms between observations',step=>{
   const f=fixture();let clock=1_700_000_000_000
   const advancing=new RequestRecoveryStore(f.file,()=>{const value=clock;clock+=step;return value})

@@ -23,7 +23,7 @@ async function harness(): Promise<{ ctx: Context; dispose: () => Promise<void> }
   await ctx.plugin(TimerService)
   const home = mkdtempSync(join(tmpdir(), 'a2a-suppress-'))
   mkdirSync(join(home, 'a2a'), { recursive: true })
-  apply(ctx, { dshHome: home, session: 'suppress-test', peers: [], delegates: [] })
+  apply(ctx, { dshHome: home, session: 'suppress-test', peers: [], delegates: [], cardTtlMs: 172_800_000 })
   return { ctx }
 }
 

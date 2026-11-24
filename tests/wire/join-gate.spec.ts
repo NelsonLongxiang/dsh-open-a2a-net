@@ -31,7 +31,7 @@ async function harness(joinedIds: string[] = [], withAgents: boolean = false): P
     mkdirSync(join(home, 'a2a'), { recursive: true })
     writeFileSync(join(home, 'a2a', 'joined.json'), JSON.stringify({ sessions: joinedIds }), 'utf8')
   }
-  apply(ctx, { dshHome: home, session: 'gate-test', peers: [], delegates: [] })
+  apply(ctx, { dshHome: home, session: 'gate-test', peers: [], delegates: [], cardTtlMs: 172_800_000 })
   ;(ctx as any).__gateHome = home
   return { ctx, agents }
 }

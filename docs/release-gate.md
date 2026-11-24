@@ -34,6 +34,13 @@
 
 0.6.39 的 npm 包实际打自合并后的 a2389ba，比 tag 的 bc8f423 多了 #300，另外混进了一个 `.pyc`。
 
+**发布只发钉定的那个 tgz，不在本地重新打包**（2026-11-23 补。0.8.1-preview.29 发布出去的包与发版 PR 钉定的 tgz 字节不同、429 个文件内容相同，只能事后做文件级等价核对；原因待查，疑为发布时重新打包，未确认，见 master 分支上 `docs/release.md` 的 preview.29 一节。preview.28 是先发布、后补发版 PR 与记录，当时没有钉定 tgz，只在「只有事后的文件级等价核对」这一点上同类，见 master 分支上同一文件的 preview.28 一节）。由属主或任何人发布，都按下面做：
+
+1. **发版 PR 给出钉定值和发布命令**：写明钉定 tgz 的文件名、路径、字节数、sha256 和 sha1，并给一条可以直接复制的命令：`npm publish "<钉定 tgz 路径>" --tag preview --registry=https://registry.npmjs.org --@<包作用域>:registry=https://registry.npmjs.org/`（`<包作用域>` 是 `package.json` 里包名 `@` 后、`/` 前的部分；写好的完整命令见 [0.8.1 升级核对](ops/0.8.1-upgrade-check.md) §6）。它与 §6 的发布命令一致，显式带标签和作用域 registry，免得在配了私仓镜像的环境里发到别处；命令的参数必须是 tgz 文件，不是目录。
+2. **直接发布这个 tgz 文件**：发布前先 `shasum -a 256 <钉定 tgz 路径>` 与 PR 里的 sha256 比对，不一致就不发。不在本地重新 `npm pack`，不按目录发布（`npm publish <目录>` 或在包目录里直接跑 `npm publish` 会重跑 `prepare` 并重新打包），也不从别的检出重新构建。
+3. **发布后读回**：`npm view <包名>@<版本> dist.shasum dist.integrity`，并下载已发布的 tgz 计算 sha256。shasum 应与钉定 sha1 相同，integrity 应与 `sha512-$(openssl dgst -sha512 -binary <钉定 tgz 路径> | base64)` 相同（macOS 的 `base64` 输出一行；GNU coreutils 默认每 76 列换行，Linux 上用 `base64 -w0`），下载件的 sha256 应与钉定 sha256 相同，即与钉定 tgz 逐字节一致。
+4. **读回不一致时如实记录，不放宽**：在「记录已发布」里写出读回值、钉定值和不一致的原因（查得到的话），不写成一致，也不因此放宽本条。可以补做文件级等价核对（解包后逐文件比 sha256）作为附加证据，但它只说明内容等价、不替代字节一致，并在记录里单列「与往常的出入」。
+
 ## 发布面（双 registry）
 
 - **公网 npmjs 为主发布面**：0.6.24（2026-10-22）起有发布记录，README 徽章即指向它；
@@ -56,7 +63,7 @@
 
 - 环境机制（hoisted 快照、junction、HMR 边界）见技能 `dsh-plugin-dev-test`（本机权威）。
 - 发布到 Gitea 私仓（镜像面）的操作细节见 `gitea-npm-publishing` / `tea-npm-registry` 技能。
-- 本文只钉**顺序纪律**：3081 先行、用户校验、稳定期不自动发版。
+- 本文钉**顺序纪律**（3081 先行、用户校验、稳定期不自动发版），以及「打包源头钉死候选 SHA」与「发布只发钉定的那个 tgz」两段里的打包、发布和读回操作。打包与发布证据的总体原则见 [release-provenance.md](release-provenance.md) §2 B.5 与 §3 C2（该文仍是 proposed）。
 
 
 > 2026-10-28 属主授权：发版确认权授总工席（dsh/414d2b90）——铁律②③点头步代位，3081/全绿门禁不变。

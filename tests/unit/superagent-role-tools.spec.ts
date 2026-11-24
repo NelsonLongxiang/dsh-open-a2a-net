@@ -6,14 +6,17 @@ import { mkdtempSync, cleanupBeforeTempDirs } from '../temp-dirs.ts'
 import { Config } from '../../src/config.ts'
 import { MEMBER_DENY, MEMBER_TOOLS, ROUTER_TOOLS, RoleTools, TEAM_TOOLS, memberBoundary, roleToolRefusal, type Role, type RoleAgent } from '../../src/superagent/host/role-tools.ts'
 
+/** The session's own lesson and self-check tools (dsh-prompt-templates LESSON_SELF_TOOLS), written out so the list can only move with this test. */
+const REFLECT = ['lesson_write', 'lesson_none', 'lesson_keep', 'lesson_timeline', 'lesson_type_propose', 'selfcheck_write', 'selfcheck_conclude']
+
 describe('role tool lists', () => {
   it('the team\'s own tools are the router\'s, the member\'s ticket tools and the builder\'s inventory', () => {
-    expect(TEAM_TOOLS).toEqual([...ROUTER_TOOLS.filter(name => !name.startsWith('schedule_') && name !== 'a2a_whoami' && !name.startsWith('mcp__ygl__') && !['read', 'glob', 'grep', 'skill'].includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_ticket_note', 'a2a_card_cast', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', 'superagent_issue_propose', 'superagent_issue_file'])
+    expect(TEAM_TOOLS).toEqual([...ROUTER_TOOLS.filter(name => !name.startsWith('schedule_') && name !== 'a2a_whoami' && !REFLECT.includes(name) && !name.startsWith('mcp__ygl__') && !['read', 'glob', 'grep', 'skill'].includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_ticket_note', 'a2a_card_cast', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', 'superagent_issue_propose', 'superagent_issue_file'])
     for (const name of ['a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback']) expect(MEMBER_TOOLS).toContain(name)
   })
 
   it('pins what the router and a member may call', () => {
-    expect(ROUTER_TOOLS).toEqual(['schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view', 'schedule_update', 'schedule_delete', 'a2a_whoami', 'mcp__ygl__read', 'read', 'glob', 'grep', 'skill', 'a2a_tool_request', 'a2a_outbound_request', 'superagent_route', 'superagent_split', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
+    expect(ROUTER_TOOLS).toEqual(['schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view', 'schedule_update', 'schedule_delete', 'a2a_whoami', 'lesson_write', 'lesson_none', 'lesson_keep', 'lesson_timeline', 'lesson_type_propose', 'selfcheck_write', 'selfcheck_conclude', 'mcp__ygl__read', 'read', 'glob', 'grep', 'skill', 'a2a_tool_request', 'a2a_outbound_request', 'superagent_route', 'superagent_split', 'superagent_read', 'superagent_reply', 'superagent_status', 'superagent_note', 'superagent_request', 'superagent_assign', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_decision_propose'])
     expect(MEMBER_TOOLS).toEqual(['read', 'write', 'edit', 'read_image', 'glob', 'grep', 'bash', 'pwsh', 'job_output', 'job_list', 'job_kill',
       'web_search', 'web_fetch', 'skill', 'todo_write', 'schedule_create', 'schedule_edit', 'schedule_list', 'schedule_view', 'schedule_update', 'schedule_delete', 'a2a_whoami', 'mcp__ygl__read', 'mcp__ygl__write', 'mcp__ygl__verify', 'mcp__ygl__doctor', 'a2a_outbound_request', 'a2a_decision_decide', 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_ticket_request', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_file_fetch'])
   })
@@ -42,6 +45,23 @@ describe('role tool lists', () => {
     // The runtime's transport is not a capability: each call it makes is guarded on its own.
     expect(roleToolRefusal('router', 'run_code')).toBeUndefined()
     expect(roleToolRefusal('member', 'run_code')).toBeUndefined()
+  })
+
+  it('ticket d7de946a: the router and the builder close their own lesson and self-check rounds, and gain nothing else', () => {
+    for (const role of ['router', 'builder'] as const) {
+      for (const name of REFLECT) expect(roleToolRefusal(role, name), `${role} ${name}`).toBeUndefined()
+      // Still refused: other sessions, subagents, shell, writes, A2A sending, and look-alike names.
+      for (const name of ['send_message', 'list_agents', 'interrupt_agent', 'subagent', 'session_new', 'bash', 'pwsh', 'write', 'edit', 'a2a_route', 'a2a_report', 'a2a_file_send', 'lesson_delete', 'selfcheck_read_others', 'lesson_write_for'])
+        expect(roleToolRefusal(role, name), `${role} ${name}`).toContain('[superagent-role-tools]')
+    }
+    // Members and observers already have them (deny-list, not allow-list); their lists do not change.
+    for (const role of ['member', 'observer'] as const) for (const name of REFLECT) {
+      expect(roleToolRefusal(role, name), `${role} ${name}`).toBeUndefined()
+      expect(memberBoundary(role, name)).toBe(false)
+    }
+    for (const name of REFLECT) expect(MEMBER_TOOLS).not.toContain(name)
+    // Not team tools: a session outside a team keeps them.
+    for (const name of REFLECT) expect(TEAM_TOOLS).not.toContain(name)
   })
 })
 
@@ -111,7 +131,7 @@ describe('RoleTools', () => {
     roles.p = 'router'
     tools.sync(plain)
     // The fake registry has no schedule tools, no a2a_whoami and no MCP tools, and a restriction names only the tools the scope has.
-    expect(log.slice(1)).toEqual(['p lift', `p restrict ${ROUTER_TOOLS.filter(name => !name.startsWith('schedule_') && name !== 'a2a_whoami' && !name.startsWith('mcp__') && !['read', 'glob', 'grep', 'skill'].includes(name)).join(',')}`])
+    expect(log.slice(1)).toEqual(['p lift', `p restrict ${ROUTER_TOOLS.filter(name => !name.startsWith('schedule_') && name !== 'a2a_whoami' && !REFLECT.includes(name) && !name.startsWith('mcp__') && !['read', 'glob', 'grep', 'skill'].includes(name)).join(',')}`])
     expect(tools.list()).toEqual({ p: 'router' })
   })
 

@@ -12,7 +12,7 @@ Status: implemented, 2026-11-11.
 ## Context
 
 - **Inbound requests carry only text.** A request reaches the team as a mailbox row: caller, task id, context, how the caller was proven, and the text. There is no metadata channel. Receipts already solve the same problem with one JSON machine line inside the signed text (`src/receipt.ts`). Requests do the same here.
-- **Naming a member already exists for the router.** `superagent_route` accept takes `member`. The executor then keeps the ticket for that member: it waits while the member is busy and goes to nobody else (design D5). So ruling (b) is already the executor's behavior.
+- **Naming a member already exists for the router.** `superagent_route` accept takes `member`. The executor then keeps the ticket for that member: it waits while the member is busy and goes to nobody else (design D5). So ruling (b) is already the executor's behavior. The one exception is a member the owner took this work off on a credential-access card: accept records no member and reports `member_refused` with code `excluded`, and the ticket goes to a member that is not excluded, or waits as `all-excluded` (ticket 269f287e). A split part named to such a member is handled the same way: no member is recorded for that part, and the split result lists it under `member_refused` (ticket eabe1586).
 - **Members are sessions.** A member's handle changes when its session is replaced. The market keeps assignments, so it needs a seat id that outlives the session.
 
 ## Decisions
