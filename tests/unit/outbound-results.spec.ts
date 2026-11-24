@@ -6,7 +6,7 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { statSync, writeFileSync } from 'node:fs'
+import { readFileSync, statSync, writeFileSync } from 'node:fs'
 import { formatReceipt } from '../../src/receipt.ts'
 import { OutboundResults, RESULT_BODY_MAX_BYTES, RESULT_BODY_TTL_MS, RESULT_INDEX_TTL_MS, projectResultBody, receiptSource, type ResultCredential } from '../../src/superagent/host/outbound-results.ts'
 
@@ -98,5 +98,14 @@ describe('OutboundResults', () => {
     t.s.register(cred(formatReceipt(TASK, 'ok', { outcome: 'completed' })))
     writeFileSync(t.paths.indexPath, JSON.stringify({ version: 1, rows: [] }))
     expect(t.reopen().view('t1', TASK)).toBeUndefined()
+  })
+  it('an orphan body is not carried into the next write', () => {
+    const t = store()
+    t.s.register(cred(formatReceipt(TASK, 'orphaned', { outcome: 'completed' })))
+    writeFileSync(t.paths.indexPath, JSON.stringify({ version: 1, rows: [] }))
+    const s = t.reopen()
+    expect(s.register(cred(formatReceipt(TASK, 'fresh', { outcome: 'completed' }), { ticketId: 't2' }))).toBe('stored')
+    const rows = (JSON.parse(readFileSync(t.paths.bodyPath, 'utf8')) as { rows: Array<{ text: string }> }).rows
+    expect(rows.map(r => r.text)).toEqual(['fresh'])
   })
 })

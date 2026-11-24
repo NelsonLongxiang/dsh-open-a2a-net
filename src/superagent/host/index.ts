@@ -457,13 +457,10 @@ export class SuperagentHost {
    */
   outboundResult(session: string, ticketId: string, taskId: string): Record<string, unknown> {
     const role = this.toolRoleOf(session)
-    const ticket = ticketId === '' || taskId === '' ? undefined : this.store.tickets.get(ticketId)
+    const ticket = this.store.tickets.get(ticketId)
     if (ticket === undefined || role === undefined) return { ...RESULT_UNAVAILABLE }
     const open = ticket.ended === undefined
-    const allowed = role === 'router' ? true
-      : role === 'observer' ? open
-        : role === 'member' ? open && this.settings.members.includes(session) && this.executor.bindingFor(session, ticketId) !== undefined
-          : false
+    const allowed = role === 'router' || (open && (role === 'observer' || (this.settings.members.includes(session) && this.executor.bindingFor(session, ticketId) !== undefined)))
     if (!allowed) return { ...RESULT_UNAVAILABLE }
     const record = this.outbound.list().find(r => r.ticketId === ticketId && (r.task === taskId || (r.attempts ?? []).some(a => a.task === taskId)))
     if (record === undefined || record.narrowRecovery !== undefined) return { ...RESULT_UNAVAILABLE }
