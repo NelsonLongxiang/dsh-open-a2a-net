@@ -123,9 +123,9 @@ export class OutboundResults {
       const bod = existsSync(d.bodyPath) ? JSON.parse(readFileSync(d.bodyPath, 'utf8')) as { version?: unknown; rows?: unknown } : { version: 1, rows: [] }
       if (idx.version !== 1 || bod.version !== 1 || !Array.isArray(idx.rows) || !Array.isArray(bod.rows)) throw new Error('unknown format')
       this.index = idx.rows as IndexRow[]
-      // Only a body whose index row names its generation is readable: an uncommitted body (a stop between the two writes) is an orphan.
-      const gens = new Set(this.index.flatMap(r => (r.gen !== undefined ? [r.gen] : [])))
-      this.bodies = (bod.rows as BodyRow[]).filter(b => gens.has(b.gen))
+      // A body is read only through the generation its index row names, so an uncommitted body (a stop between the two
+      // writes) is never read; prune() drops it at the next write.
+      this.bodies = bod.rows as BodyRow[]
     } catch (error) {
       // A damaged store fails closed: nothing is read from it and nothing new is kept until it is repaired.
       this.broken = true
