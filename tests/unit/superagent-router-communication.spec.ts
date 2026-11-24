@@ -35,7 +35,8 @@ it('ships generated inline router text without changing preset ids or compositio
     // Owner 2026-11-19: members and observers gain the PTC executor (code mode by default); router and builder unchanged.
     'superagent-member': '37e7d7d7e52ce01c9c79c32f2c330515c29054f2b582a97ac67350a9f8f9577a',
     'superagent-observer': '37e7d7d7e52ce01c9c79c32f2c330515c29054f2b582a97ac67350a9f8f9577a',
-    'superagent-builder': '04658b48dfdf35e0c2dea710a6f58e4efca5f0ffaca3dfa5c566dfab76175390',
+    // #83: the builder gains the read-only search and skill rows, so its composition digest moves with them.
+    'superagent-builder': '4e36bbf212a2b60b8f677618d92f2b3450d48a6e61f328d3d2d25d6f1c961775',
   }
   for (const row of presets) {
     expect(digest(JSON.stringify(row.config!.plugins.filter((p: Row) => p.id !== 'persona')))).toBe(expectedComposition[row.config!.id as keyof typeof expectedComposition])
@@ -59,7 +60,10 @@ it('adds only the shared boundary to original worker personas and leaves the bui
   const builder = persona(presets.find(row => row.config?.id === 'superagent-builder')!).prefix as string
   expect(builder).toContain('only after their own reply in this session call superagent_issue_file')
   expect(builder).toContain('you never touch GitHub yourself')
-  expect(digest(builder)).toBe('972bb277f63a594b57f73bd3c261f593e27f0f2454f9fe65110a282ac3b14ddb')
+  // #83 (owner-approved minimal fix) added one sentence to the builder's persona: a loaded skill is guidance to read and
+  // grants no tool. Pin the new text as #791 did.
+  expect(builder).toContain('A skill is guidance you read: it gives you no tool')
+  expect(digest(builder)).toBe('75fdb142fd195418120f9597aa41c59ce429445211f7e04d5fd3d57ddd096d40')
 })
 
 it('retains upstream member initiative as a proposal, never a self-assignment or an external send', () => {
