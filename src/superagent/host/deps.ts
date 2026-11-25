@@ -104,7 +104,12 @@ export interface SuperagentHostDeps {
    * Undefined when the plugin, or a version with the service, is not on this host. The plugin recognizes the caller as
    * this a2a plugin; who may ask (the team's observer, into its own team's sessions) is checked here, before this call.
    */
-  readonly castCard?: (input: { sessionId: string; templateId: string; reason: string }) => { ok: boolean; code?: string; error?: string; queued?: number } | undefined
+  readonly castCard?: (input: { sessionId: string; templateId: string; reason: string; basis?: string }) => { ok: boolean; code?: string; error?: string; queued?: number; id?: string } | undefined
+  /**
+   * #902 S1: the same plugin's durable cast queue — list (no text) and withdraw. Undefined when the plugin, or a version
+   * with the queue, is not on this host.
+   */
+  readonly castQueue?: () => { list(filter: { sessionId?: string; state?: string; limit?: number }): { ok: boolean; items?: unknown[]; code?: string; error?: string }; withdraw(input: { sessionId: string; id: string }): { ok: boolean; withdrawn?: boolean; code?: string; error?: string } } | undefined
   /** This host's API key (the CLI's control credential). */
   readonly apiKey?: () => string | undefined
   /** The origin this host publishes as its own (its card URL's): what the team identity's claims are bound to. */

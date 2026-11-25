@@ -2241,8 +2241,13 @@ export function apply(ctx: Context, config: Config): void {
     selfChecksOf: sessionId => readSelfChecks(ctx.get('promptTemplates' as never), sessionId),
     // T5-A: dsh-prompt-templates' cast, reached through this plugin's own context so the plugin recognizes the caller.
     castCard: input => {
-      const svc = ctx.get('promptTemplates' as never) as { cast?: (i: typeof input) => { ok: boolean; code?: string; error?: string; queued?: number } } | undefined
+      const svc = ctx.get('promptTemplates' as never) as { cast?: (i: typeof input) => { ok: boolean; code?: string; error?: string; queued?: number; id?: string } } | undefined
       return typeof svc?.cast === 'function' ? svc.cast(input) : undefined
+    },
+    // #902 S1: the durable cast queue of the same plugin (0.23.1+): list and withdraw, only when the service has them.
+    castQueue: () => {
+      const svc = ctx.get('promptTemplates' as never) as { castQueue?: (f: object) => { ok: boolean; items?: unknown[] }; castWithdraw?: (i: object) => { ok: boolean; withdrawn?: boolean } } | undefined
+      return typeof svc?.castQueue === 'function' && typeof svc.castWithdraw === 'function' ? { list: f => svc.castQueue!(f), withdraw: i => svc.castWithdraw!(i) } : undefined
     },
     claimAudience: () => (ownCardUrl !== '' ? originOf(ownCardUrl) : undefined),
     apiKey: () => config.apiKey,

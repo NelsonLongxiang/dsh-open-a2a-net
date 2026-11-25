@@ -1273,7 +1273,7 @@ export class SuperagentHost {
    * the team's observer (by the session calling, never a parameter), into a session of this team other than itself, while
    * the owner has turned observerCast on. The target is woken so the card goes in at its next step.
    */
-  castCard(observer: string, input: { session_id?: unknown; template_id?: unknown; reason?: unknown }): Record<string, unknown> {
+  castCard(observer: string, input: { session_id?: unknown; template_id?: unknown; reason?: unknown; basis?: unknown }): Record<string, unknown> {
     if (!this.isObserver(observer)) return { ok: false, code: 'not-observer', error: 'a2a_card_cast serves only the team\'s observer' }
     if (this.settingsValue.observerCast !== true) return { ok: false, code: 'off', error: 'casting cards is off for this team (the owner turns on observerCast)' }
     const target = String(input.session_id ?? '').trim()
@@ -1282,13 +1282,16 @@ export class SuperagentHost {
     const templateId = String(input.template_id ?? '').trim()
     const reason = String(input.reason ?? '')
     if (templateId === '') return { ok: false, code: 'template', error: 'name the card (template_id from a2a_ticket_read kind library or templates)' }
+    // #902 S1: every cast names what it rests on — a ticket of this team, an event, or none with a sentence.
+    const basis = this.castBasis(input.basis)
+    if (typeof basis !== 'string') return basis
     // #764 review: per target, at most CAST_PER_HOUR casts an hour and one wake per CAST_WAKE_MS; kept across restarts.
     const now = Date.parse(this.now())
     const limits = this.castLimits()
     const entry = limits[target] ?? { casts: [], wakeAt: 0 }
     entry.casts = entry.casts.filter(at => now - at < 3_600_000 && at <= now + 60_000)
     if (entry.casts.length >= CAST_PER_HOUR) return { ok: false, code: 'rate-limited', error: `at most ${String(CAST_PER_HOUR)} casts an hour into one session` }
-    const out = this.d.castCard?.({ sessionId: target, templateId, reason })
+    const out = this.d.castCard?.({ sessionId: target, templateId, reason, basis })
     if (out === undefined) return { ok: true, available: false, reason: 'dsh-prompt-templates with the cast service (0.17+) is not on this host' }
     if (!out.ok) return { ok: false, code: out.code ?? 'refused', error: out.error ?? 'the card was not cast' }
     entry.casts.push(now)
@@ -1300,7 +1303,47 @@ export class SuperagentHost {
     }
     limits[target] = entry
     this.saveCastLimits(limits)
-    return { ok: true, queued: out.queued ?? 1, woken: wake }
+    return { ok: true, queued: out.queued ?? 1, woken: wake, ...(typeof out.id === 'string' ? { id: out.id } : {}), basis }
+  }
+
+  /**
+   * #902 S1: a cast's basis — `ticket:<id>` (a ticket of this team, named by its id or an unambiguous prefix of at least 8
+   * characters), `event:<id>`, or `none: <one sentence>`; one line, at most 200 characters. Returns the normalized basis,
+   * or the refusal.
+   */
+  private castBasis(raw: unknown): string | Record<string, unknown> {
+    const text = String(raw ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').trim()
+    const refuse = (error: string): Record<string, unknown> => ({ ok: false, code: 'basis', error })
+    if (text === '' || text.length > 200) return refuse('give a basis: ticket:<id> of this team, event:<id>, or none: <why>; one line, at most 200 characters')
+    const m = /^(ticket|event|none):\s*(.+)$/.exec(text)
+    if (m === null) return refuse('basis must start with ticket:, event: or none:')
+    if (m[1] !== 'ticket') return `${m[1]}: ${m[2]!.trim()}`.replace(/^event: /, 'event:')
+    const key = m[2]!.trim()
+    const hits = key.length >= 8 ? this.store.tickets.list().filter(t => t.id === key || t.id.startsWith(key)) : []
+    if (hits.length !== 1) return refuse('ticket: must name one ticket of this team (its id, or a prefix of at least 8 characters)')
+    return `ticket:${hits[0]!.id}`
+  }
+
+  /**
+   * #902 S1: the observer reads or withdraws cards queued for its own team's sessions, through the same host's
+   * prompt-template plugin (0.23.1+). Another team's or session's rows are never shown or touched.
+   */
+  cardQueue(observer: string, input: { action?: unknown; session_id?: unknown; id?: unknown; state?: unknown }): Record<string, unknown> {
+    if (!this.isObserver(observer)) return { ok: false, code: 'not-observer', error: 'a2a_card_queue serves only the team\'s observer' }
+    const team = new Set([this.settings.router, ...this.settings.members].filter((id): id is string => typeof id === 'string'))
+    const session = String(input.session_id ?? '').trim()
+    if (session !== '' && !team.has(session)) return { ok: false, code: 'not-in-team', error: 'that session is not on this team' }
+    const svc = this.d.castQueue?.()
+    if (svc === undefined) return { ok: true, available: false, reason: 'dsh-prompt-templates with the durable cast queue (#902 S1) is not on this host' }
+    if (input.action === 'withdraw') {
+      const id = String(input.id ?? '').trim()
+      if (session === '' || id === '') return { ok: false, code: 'input', error: 'withdraw takes session_id and id' }
+      return svc.withdraw({ sessionId: session, id }) as Record<string, unknown>
+    }
+    const state = input.state === undefined ? undefined : String(input.state)
+    const out = svc.list({ ...(session !== '' ? { sessionId: session } : {}), ...(state !== undefined ? { state } : {}), limit: 100 })
+    if (out.ok !== true || !Array.isArray(out.items)) return out as Record<string, unknown>
+    return { ok: true, items: (out.items as Array<{ session_id?: unknown }>).filter(row => team.has(String(row.session_id))) }
   }
 
   /** #764 review: the per-target cast limits, kept in the team's observer-casts.json. */
