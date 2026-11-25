@@ -9,13 +9,16 @@
  * - a source checkout is never overwritten: the running package must live under a `node_modules` directory;
  * - every swap keeps the previous directory as a backup (the newest three are kept) and the package's own
  *   `node_modules` moves across, so a rollback is two renames;
- * - one operation at a time, every operation is appended to `<dir>/log.jsonl`.
+ * - one operation at a time, every operation is appended to `<dir>/log.jsonl`;
+ * - #898 review: a tarball's entries are checked before and after unpacking — only plain files and directories under
+ *   `package/`, no absolute or `..` paths, no symbolic or hard links, no devices — and a package version is one safe
+ *   segment, so neither the running directory nor a backup can be pointed outside its place.
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/node-ops
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, sep } from 'node:path'
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve, sep } from 'node:path'
 
 /** This package's name: the only package node operations replace. */
 export const OWN_PACKAGE = '@nelsonlongxiang/dsh-open-a2a-net'
@@ -54,11 +57,57 @@ export function ownPackageRoot(from: string): string | undefined {
   }
 }
 
+/** #898 review: a version is one safe path segment (it names a backup directory). */
+export const SAFE_VERSION = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/
+
 const readPackage = (root: string): { version: string; dependencies: string } => {
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { name?: unknown; version?: unknown; dependencies?: unknown }
   if (pkg.name !== OWN_PACKAGE) throw new Error(`package.json names ${String(pkg.name)}, not ${OWN_PACKAGE}`)
+  const version = String(pkg.version ?? '')
+  if (!SAFE_VERSION.test(version) || version.includes('..')) throw new Error(`package.json version ${JSON.stringify(version)} is not a plain version`)
   const deps = pkg.dependencies !== null && typeof pkg.dependencies === 'object' ? pkg.dependencies as Record<string, unknown> : {}
-  return { version: String(pkg.version ?? '?'), dependencies: JSON.stringify(Object.keys(deps).sort().map(k => [k, deps[k]])) }
+  return { version, dependencies: JSON.stringify(Object.keys(deps).sort().map(k => [k, deps[k]])) }
+}
+
+/**
+ * #898 review: why a tarball's listing is refused, or undefined when every entry is a plain file or directory under
+ * `package/` with a relative path. Reads the verbose listing (`tar -tvzf`), whose first column is the entry type on GNU
+ * tar, bsdtar and Windows tar.exe alike.
+ */
+export function tarballListingRefusal(names: readonly string[], verbose: readonly string[]): string | undefined {
+  if (names.length === 0) return 'the tarball is empty'
+  for (const raw of names) {
+    const name = raw.replace(/\\/g, '/')
+    if (name.startsWith('/') || /^[A-Za-z]:/.test(name)) return `absolute path in the tarball: ${raw}`
+    if (name.split('/').includes('..')) return `a .. path in the tarball: ${raw}`
+    if (name !== 'package' && name !== 'package/' && !name.startsWith('package/')) return `an entry outside package/: ${raw}`
+  }
+  for (const line of verbose) {
+    if (line.trim() === '') continue
+    const type = line[0]
+    if (type !== '-' && type !== 'd') return `the tarball holds a link or special file: ${line.trim()}`
+    if (/ -> | link to /.test(line)) return `the tarball holds a link: ${line.trim()}`
+  }
+  return undefined
+}
+
+/** #898 review: why an unpacked tree is refused (a link, a special file, a hard-linked file), or undefined. */
+export function unpackedTreeRefusal(root: string): string | undefined {
+  const top = lstatSync(root)
+  if (!top.isDirectory() || top.isSymbolicLink()) return 'package/ is not a plain directory'
+  const stack = [root]
+  while (stack.length > 0) {
+    const at = stack.pop()!
+    for (const name of readdirSync(at)) {
+      const path = join(at, name)
+      const st = lstatSync(path)
+      if (st.isSymbolicLink()) return `a symbolic link in the package: ${path.slice(root.length + 1)}`
+      if (st.isDirectory()) { stack.push(path); continue }
+      if (!st.isFile()) return `a special file in the package: ${path.slice(root.length + 1)}`
+      if (st.nlink > 1) return `a hard-linked file in the package: ${path.slice(root.length + 1)}`
+    }
+  }
+  return undefined
 }
 
 /** The host's node operations: one at a time, each logged. */
@@ -128,8 +177,12 @@ export class NodeOps {
   /** Move the running root aside as a new backup, carrying its node_modules into `next`; undo on failure. */
   private swap(next: string, from: string): string {
     mkdirSync(this.backups, { recursive: true })
-    const id = `${this.now().toISOString().replace(/[:.]/g, '-')}-${from}`
+    if (!SAFE_VERSION.test(from) || from.includes('..')) throw new Error(`refusing a backup named after version ${JSON.stringify(from)}`)
+    // A short random tail keeps two swaps in the same millisecond apart (#898 review P2).
+    const id = `${this.now().toISOString().replace(/[:.]/g, '-')}-${from}-${randomUUID().slice(0, 8)}`
     const backup = join(this.backups, id)
+    // #898 review: the backup is a direct child of backups/, whatever the version says.
+    if (dirname(resolve(backup)) !== resolve(this.backups)) throw new Error(`backup ${id} would leave ${this.backups}`)
     const modules = join(this.paths.root, 'node_modules')
     const carried = existsSync(modules) && !existsSync(join(next, 'node_modules'))
     if (carried) renameSync(modules, join(next, 'node_modules'))
@@ -170,11 +223,18 @@ export class NodeOps {
       try {
         const file = join(stage, 'package.tgz')
         writeFileSync(file, tgz)
+        // #898 review: look before unpacking — paths and entry types — and again after, on the tree itself.
+        const list = (flags: string): string[] => execFileSync('tar', [flags, 'package.tgz'], { cwd: stage, encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }).split(/\r?\n/).filter(line => line !== '')
+        const listed = tarballListingRefusal(list('-tzf'), list('-tvzf'))
+        if (listed !== undefined) return { ok: false, code: 'tarball', error: listed }
         execFileSync('tar', ['-xzf', 'package.tgz'], { cwd: stage, stdio: 'ignore', timeout: 60_000 })
         const entries = readdirSync(stage).filter(name => name !== 'package.tgz')
         if (entries.length !== 1 || entries[0] !== 'package') return { ok: false, code: 'tarball', error: 'the tarball must hold exactly one package/ directory' }
         const next = join(stage, 'package')
-        const incoming = readPackage(next)
+        const tree = unpackedTreeRefusal(next)
+        if (tree !== undefined) return { ok: false, code: 'tarball', error: tree }
+        let incoming: { version: string; dependencies: string }
+        try { incoming = readPackage(next) } catch (error) { return { ok: false, code: 'tarball', error: String((error as Error).message ?? error) } }
         const running = readPackage(this.paths.root)
         if (incoming.dependencies !== running.dependencies && !forceDeps) return { ok: false, code: 'deps-changed', error: 'the tarball\'s dependencies differ from the running package; an unpack-only install cannot add them (forceDeps overrides)' }
         const backup = this.swap(next, running.version)

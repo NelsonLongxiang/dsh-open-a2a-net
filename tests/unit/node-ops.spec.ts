@@ -2,11 +2,11 @@
 /** Node operations: replace this plugin's own directory from a tarball, keep backups, roll back, restart through the owner. */
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, parse } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { KEEP_BACKUPS, NodeOps, OWN_PACKAGE, ownPackageRoot } from '../../src/superagent/host/node-ops.ts'
+import { KEEP_BACKUPS, NodeOps, OWN_PACKAGE, ownPackageRoot, tarballListingRefusal } from '../../src/superagent/host/node-ops.ts'
 import { registerNodeOpsFace } from '../../src/faces/node-ops.ts'
 import { OWNER_DELEGATE_HEADER, OwnerDelegates, issueOwnerDelegate } from '../../src/superagent/host/owner-delegate.ts'
 import { configureOwnerDelegates } from '../../src/superagent/host/owner-proof.ts'
@@ -100,11 +100,69 @@ describe('node operations', () => {
   it('a tarball of another package, or with more than package/, changes nothing', () => {
     const ops = new NodeOps({ root, dir }, clock)
     const other = tarball(JSON.stringify({ name: 'other', version: '9.9.9' }))
-    expect(ops.install(other, sha(other), 'owner')).toMatchObject({ ok: false, code: 'failed' })
+    expect(ops.install(other, sha(other), 'owner')).toMatchObject({ ok: false, code: 'tarball' })
     const extra = tarball(pkg('1.1.0'), { 'stray.txt': 'x' })
     expect(ops.install(extra, sha(extra), 'owner')).toMatchObject({ ok: false, code: 'tarball' })
     expect(version()).toBe('1.0.0')
     expect(existsSync(join(root, 'node_modules', 'dep'))).toBe(true)
+  })
+
+  // #898 review P1: a tarball cannot point the running directory, a file in it, or a backup outside its place.
+  it('a package/ that is a symbolic link is refused and nothing outside is touched (ATT3b)', () => {
+    const ops = new NodeOps({ root, dir }, clock)
+    const work = mkdtempSync(join(base, 'evil-'))
+    mkdirSync(join(base, 'outside'), { recursive: true })
+    symlinkSync('../../../../outside', join(work, 'package'))
+    execFileSync('tar', ['-czf', 'out.tgz', 'package'], { cwd: work })
+    const tgz = readFileSync(join(work, 'out.tgz'))
+    expect(ops.install(tgz, sha(tgz), 'owner')).toMatchObject({ ok: false, code: 'tarball' })
+    expect(lstatSync(root).isSymbolicLink()).toBe(false)
+    expect(version()).toBe('1.0.0')
+    expect(readdirSync(join(base, 'outside'))).toEqual([])
+    expect(existsSync(join(root, 'node_modules', 'dep'))).toBe(true)
+  })
+  it('a symbolic or hard link inside package/ is refused (ATT4)', () => {
+    const ops = new NodeOps({ root, dir }, clock)
+    for (const kind of ['symlink', 'hardlink'] as const) {
+      const work = mkdtempSync(join(base, `evil-${kind}-`))
+      mkdirSync(join(work, 'package'), { recursive: true })
+      writeFileSync(join(work, 'package', 'package.json'), pkg('1.1.0'))
+      writeFileSync(join(work, 'secret.txt'), 'host file\n')
+      if (kind === 'symlink') symlinkSync(join(work, 'secret.txt'), join(work, 'package', 'leak.txt'))
+      else linkSync(join(work, 'package', 'package.json'), join(work, 'package', 'twin.json'))
+      execFileSync('tar', ['-czf', 'out.tgz', 'package'], { cwd: work })
+      const tgz = readFileSync(join(work, 'out.tgz'))
+      expect(ops.install(tgz, sha(tgz), 'owner')).toMatchObject({ ok: false, code: 'tarball' })
+      expect(version()).toBe('1.0.0')
+    }
+  })
+  it('a version that is not one plain segment is refused, and no backup leaves backups/ (ATT5)', () => {
+    const ops = new NodeOps({ root, dir }, clock)
+    for (const bad of ['0.8.1/../../outside-backup', '..', 'a/b', '', '1.0.0\\..\\x']) {
+      const tgz = tarball(pkg(bad))
+      expect(ops.install(tgz, sha(tgz), 'owner')).toMatchObject({ ok: false, code: 'tarball' })
+    }
+    expect(version()).toBe('1.0.0')
+    expect(existsSync(join(dir, 'outside-backup'))).toBe(false)
+    expect(readdirSync(dir).filter(name => name !== 'log.jsonl')).toEqual([])
+  })
+  it('two installs in the same millisecond keep two backups (ATT7)', () => {
+    const fixed = () => new Date(at.getTime())
+    const ops = new NodeOps({ root, dir }, fixed)
+    for (const v of ['1.1.0', '1.2.0']) { const tgz = tarball(pkg(v)); expect(ops.install(tgz, sha(tgz), 'owner').ok).toBe(true) }
+    expect(readdirSync(join(dir, 'backups'))).toHaveLength(2)
+  })
+  it('the listing check refuses absolute, .. and outside paths and any non-plain entry', () => {
+    const ok = ['package/', 'package/package.json']
+    expect(tarballListingRefusal(ok, ['drwxr-xr-x  0 a b 0 Nov 25 00:00 package/', '-rw-r--r--  0 a b 9 Nov 25 00:00 package/package.json'])).toBeUndefined()
+    expect(tarballListingRefusal(['/etc/passwd'], [])).toMatch(/absolute/)
+    expect(tarballListingRefusal(['C:\\x'], [])).toMatch(/absolute/)
+    expect(tarballListingRefusal(['package/../x'], [])).toMatch(/\.\./)
+    expect(tarballListingRefusal(['other/x'], [])).toMatch(/outside/)
+    expect(tarballListingRefusal(ok, ['lrwxr-xr-x  0 a b 0 Nov 25 00:00 package/x -> /etc/hosts'])).toMatch(/link/)
+    expect(tarballListingRefusal(ok, ['hrw-r--r--  0 a b 0 Nov 25 00:00 package/y link to package/x'])).toMatch(/link/)
+    expect(tarballListingRefusal(ok, ['crw-r--r--  0 a b 0 Nov 25 00:00 package/dev'])).toMatch(/special/)
+    expect(tarballListingRefusal([], [])).toMatch(/empty/)
   })
 
   it('a source checkout is never replaced', () => {

@@ -71,18 +71,20 @@ export function registerNodeOpsFace(server: WebServer, d: NodeOpsFaceDeps): void
           d.ops.logRestart(who, answer)
           send(200, { ...out, restart: answer })
         }
+        // #898 review P2: an unexpected failure still answers the request instead of leaving it hanging.
+        const failed = (error: unknown): void => { try { send(500, { ok: false, code: 'failed', error: String((error as Error)?.message ?? error) }) } catch { /* already answered */ } }
         if (f.action === 'install') {
           if (typeof f.tgz !== 'string' || typeof f.sha256 !== 'string' || !/^[0-9a-fA-F]{64}$/.test(f.sha256)) { send(400, { ok: false, code: 'input', error: 'install takes tgz (base64) and sha256 (hex)' }); return }
-          void thenRestart(d.ops.install(Buffer.from(f.tgz, 'base64'), f.sha256, who, f.forceDeps === true))
+          void thenRestart(d.ops.install(Buffer.from(f.tgz, 'base64'), f.sha256, who, f.forceDeps === true)).catch(failed)
           return
         }
         if (f.action === 'rollback') {
           if (f.id !== undefined && typeof f.id !== 'string') { send(400, { ok: false, code: 'input', error: 'id must be a backup id' }); return }
-          void thenRestart(d.ops.rollback(who, f.id))
+          void thenRestart(d.ops.rollback(who, f.id)).catch(failed)
           return
         }
         if (f.action === 'restart') {
-          void restart(port).then((answer) => { d.ops.logRestart(who, answer); send(200, answer) })
+          void restart(port).then((answer) => { d.ops.logRestart(who, answer); send(200, answer) }).catch(failed)
           return
         }
         send(400, { ok: false, code: 'input', error: 'action must be install, rollback or restart' })
