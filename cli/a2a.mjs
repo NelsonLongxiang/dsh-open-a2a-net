@@ -120,7 +120,7 @@ admission: admission <caller> [--local] [--json]   how <caller> would be admitte
 /** The capabilities a CLI identity may declare on its card (superagent-root-team S5). */
 // piSeat: docs/design/superagent-pi-platform.md P1 — this identity is a Pi seat (it may join a superagent team as a member).
 const DECLARABLE = ['progressReceipts', 'teamRoster', 'directedSeats', 'reworkReturns', 'piSeat']
-const VALUE_FLAGS = new Set(['--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir', '--recommended', '--level', '--event', '--run', '--name', '--days', '--dsh-home', '--team', '--option', '--data', '--token-file'])
+const VALUE_FLAGS = new Set(['--poll-ms', '--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir', '--recommended', '--level', '--event', '--run', '--name', '--days', '--dsh-home', '--team', '--option', '--data', '--token-file'])
 const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class', '--pi-seat', '--transient', '--approve', '--restart', '--all', '--force-deps'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
@@ -976,6 +976,35 @@ async function cmdUser() {
     const book = readDelegates(); book.homes[homeKey()] = { ...(book.homes[homeKey()] ?? {}), token }; writeDelegates(book)
     console.log(`[user] token saved for ${homeKey()}`)
     return
+  }
+  if (sub === 'pair') {
+    // #933: device-code pairing. The node answers a short code; the owner allows it on that node's team page (their browser
+    // login), and the token is handed once to this terminal, which saves it to the delegate book. The token is never printed.
+    const name = flag('--name') ?? `terminal@${homeKey()}`
+    const days = Number(flag('--days') ?? '30')
+    const pollMs = Math.max(200, Number(flag('--poll-ms') ?? '2000'))
+    const url = `${homeKey()}/__dsh_a2a/owner-delegates/pair`
+    const post = async (body) => replyOf(await homeFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }))
+    const started = await post({ action: 'start', name, days })
+    if (started.ok !== true || typeof started.id !== 'string' || typeof started.secret !== 'string') die(`[user] ${homeKey()} did not start a pairing: ${String(started.error ?? started.code ?? 'no answer')}`)
+    console.error(`[user] pairing with ${homeKey()} as "${name}": code ${String(started.code)}, valid until ${String(started.expiresAt)}.`)
+    console.error('[user] open that node\'s team page, check the code matches, and allow it there. Waiting…')
+    const until = Date.parse(String(started.expiresAt)) + 5000
+    while (Date.now() < until) {
+      await new Promise(r => setTimeout(r, pollMs))
+      let poll
+      try { poll = await post({ action: 'poll', id: started.id, secret: started.secret }) } catch { continue }
+      if (poll.state === 'waiting') continue
+      if (poll.state === 'approved' && typeof poll.token === 'string' && /^dshod_[A-Za-z0-9_-]{20,}$/.test(poll.token)) {
+        const book = readDelegates()
+        book.homes[homeKey()] = { ...(book.homes[homeKey()] ?? {}), token: poll.token, id: String(poll.delegateId ?? ''), name }
+        writeDelegates(book)
+        console.log(`[user] paired with ${homeKey()}: delegate ${String(poll.delegateId)} (${name}); token saved to ${DELEGATES}`)
+        return
+      }
+      die(`[user] pairing with ${homeKey()} ${poll.state === 'denied' ? 'was refused on the node' : poll.state === 'expired' ? 'expired before it was allowed' : 'is no longer known to the node'}`)
+    }
+    die(`[user] pairing with ${homeKey()} expired before it was allowed`)
   }
   if (sub === 'nodes') {
     const book = readDelegates()
