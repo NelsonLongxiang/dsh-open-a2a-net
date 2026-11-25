@@ -19,11 +19,13 @@ let delegates: Pick<OwnerDelegates, 'check' | 'audit'> | undefined
  */
 export function configureOwnerDelegates(book: Pick<OwnerDelegates, 'check' | 'audit'> | undefined): void { delegates = book }
 
-// observerCast (#764 review): letting the observer cast cards into sessions is the owner's call, not a shell's.
+// observerCast (#764 review): letting the observer cast cards into sessions is the owner's call, not a shell's; so is
+// observerCardDraft (#902 S2), letting it write its own cards for named members; castOff and observerTriggerRouter (#902 S4),
+// which members it may not cast into and whether it may trigger the router.
 // credentialAckMinutes (#823 review): how soon a credential-access card closes itself is the owner's call too; a session
 // that touches credentials must not be able to shorten the card that watches it.
 // autoApprove (#888 D5): letting the host take recommendations is the owner's call; a session must not turn it on or widen it.
-const RULE_FIELDS = ['rules', 'dispatch', 'profiles', 'prepare', 'prompts', 'extraTools', 'approvers', 'blockedTools', 'mcp', 'observerCast', 'idleSweep', 'decisionPush', 'credentialAckMinutes', 'autoApprove'] as const
+const RULE_FIELDS = ['rules', 'dispatch', 'profiles', 'prepare', 'prompts', 'extraTools', 'approvers', 'blockedTools', 'mcp', 'observerCast', 'observerCardDraft', 'castOff', 'observerTriggerRouter', 'idleSweep', 'decisionPush', 'credentialAckMinutes', 'autoApprove'] as const
 
 /** Whether a settings write changes a rule, a role, the dispatch rules, or the command that runs on this host (reliability R4). */
 export function touchesRules(settings: unknown): boolean {

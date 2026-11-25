@@ -49,7 +49,7 @@ describe('#83 the team builder loads a skill, and that is all it gains', () => {
   it('skill stays out of the team\'s own tools, as the router\'s skill is', () => {
     // A session with no team keeps its skill tool; the team's protocol tools are what a roleless session is not offered.
     expect(TEAM_TOOLS).not.toContain('skill')
-    expect(TEAM_TOOLS).toEqual([...ROUTER_TOOLS.filter(name => !name.startsWith('schedule_') && name !== 'a2a_whoami' && !REFLECT.includes(name) && !name.startsWith('mcp__ygl__') && !READS.includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_ticket_note', 'a2a_card_cast', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', 'superagent_issue_propose', 'superagent_issue_file'])
+    expect(TEAM_TOOLS).toEqual([...ROUTER_TOOLS.filter(name => !name.startsWith('schedule_') && name !== 'a2a_whoami' && !REFLECT.includes(name) && !name.startsWith('mcp__ygl__') && !READS.includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_ticket_note', 'a2a_card_cast', 'a2a_card_queue', 'a2a_card_draft', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', 'superagent_issue_propose', 'superagent_issue_file'])
     // The builder's list is not a member's list: a member has write and bash, the builder never does.
     for (const name of ['write', 'edit', 'bash', 'pwsh']) expect(MEMBER_TOOLS, `member ${name}`).toContain(name)
     expect(memberBoundary('member', 'skill')).toBe(false)
@@ -151,7 +151,7 @@ describe('#83 the builder preset carries the skill tool, and still no way to act
 
   it('the router, member and observer presets are not touched by this change', () => {
     const shipped = JSON.parse(readFileSync(new URL('./__fixtures__/issue-83-presets-untouched.json', import.meta.url), 'utf8')) as Record<string, string>
-    // SHA-256 of each block as shipped (re-taken when the ygl-trees single tool changed the three role prompts, and again after merging #900's Windows ygl row): the fixture holds no preset text (the push gate's privacy scan reads fixtures too).
+    // SHA-256 of each block as shipped (re-taken when the ygl-trees single tool changed the three role prompts, again after merging #900's Windows ygl row, for the observer after #902 S1's and S2's card lines, and for all three after the 2026-11-25 forward-persona rewrite): the fixture holds no preset text (the push gate's privacy scan reads fixtures too).
     for (const id of ['superagent-router', 'superagent-member', 'superagent-observer']) expect(createHash('sha256').update(block(id)).digest('hex'), id).toBe(shipped[id])
   })
 })
