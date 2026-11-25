@@ -1364,6 +1364,26 @@ export class SuperagentHost {
     return `${this.castTeamPrefix()}observer:${observer}|mode:${mode}${release !== undefined ? `|release:${release}` : ''}`
   }
 
+  /**
+   * #911 review: withdraw this team's waiting casts and armed releases for the given sessions (the owner turned casting
+   * off for them). Rows of other teams and rows from before origins are left alone; the owner withdraws those by hand.
+   */
+  private withdrawCastsFor(sessions: readonly string[]): void {
+    try {
+      const svc = this.d.castQueue?.()
+      for (const session of sessions) {
+        const listed = svc?.list({ sessionId: session, state: 'waiting', limit: 500 })
+        for (const row of (listed?.ok === true && Array.isArray(listed.items) ? listed.items : []) as Array<{ id?: unknown; origin?: unknown }>) {
+          if (typeof row.origin === 'string' && row.origin.startsWith(this.castTeamPrefix())) svc!.withdraw({ sessionId: session, id: String(row.id), origin: row.origin })
+        }
+      }
+      const releases = this.releases()
+      let changed = false
+      for (const r of releases) if (r.state === 'armed' && sessions.includes(r.session_id)) { r.state = 'withdrawn'; r.endedAt = this.now(); r.result = 'member-off'; changed = true }
+      if (changed && !this.saveReleases(releases)) this.d.logger.warn('superagent: releases for members turned off not saved; they fail member-off when due')
+    } catch (error) { this.d.logger.warn('superagent: casts for members turned off not withdrawn: %s', String(error)) }
+  }
+
   /** The prefix of every origin this team writes: the plugin, the team (its canvas), then the fields. */
   private castTeamPrefix(): string { return `a2a|team:${this.settingsValue.canvas ?? 'primary'}|` }
 
@@ -1665,15 +1685,21 @@ export class SuperagentHost {
   private castQueueView(input: { action?: unknown; session_id?: unknown; id?: unknown; state?: unknown }, observer: string | undefined): Record<string, unknown> {
     const team = new Set([this.settings.router, ...this.settings.members].filter((id): id is string => typeof id === 'string'))
     const session = String(input.session_id ?? '').trim()
-    if (session !== '' && !team.has(session)) return { ok: false, code: 'not-in-team', error: 'that session is not on this team' }
+    // #911 review B2: a row is this team's by its origin, so a cast for a member that has since moved to another team is
+    // still listed and withdrawn here; only a list or withdraw for a session never on this team, with no row of ours, is refused.
+    if (session !== '' && !team.has(session) && input.action !== 'withdraw') return { ok: false, code: 'not-in-team', error: 'that session is not on this team' }
     const svc = this.d.castQueue?.()
     if (svc === undefined) return { ok: true, available: false, reason: 'dsh-prompt-templates with the durable cast queue (#902 S1) is not on this host' }
     const prefix = this.castTeamPrefix()
     const field = (origin: string, name: string): string | undefined => origin.split('|').find(part => part.startsWith(`${name}:`))?.slice(name.length + 1)
     type Row = { id?: unknown; session_id?: unknown; origin?: unknown; [k: string]: unknown }
     const ours = (row: Row): 'team' | 'legacy' | undefined => typeof row.origin === 'string' ? (row.origin.startsWith(prefix) ? 'team' : undefined) : (team.has(String(row.session_id)) ? 'legacy' : undefined)
+    // #911 review: only these fields of a plugin row leave this host's state and tools, whatever the plugin adds later.
+    const FIELDS = ['id', 'session_id', 'template_id', 'name', 'version', 'caller', 'reason', 'basis', 'at', 'state', 'ended_at', 'mode', 'sent_at'] as const
     const view = (row: Row): Record<string, unknown> => {
-      const { origin, ...rest } = row
+      const origin = row.origin
+      const rest: Record<string, unknown> = {}
+      for (const key of FIELDS) if (key in row) rest[key] = row[key]
       if (typeof origin !== 'string') return { ...rest, legacy: true }
       const release = field(origin, 'release')
       return { ...rest, requested: field(origin, 'mode') ?? null, ...(release !== undefined ? { release } : {}), ...(observer !== undefined ? { mine: field(origin, 'observer') === observer } : {}) }
@@ -1683,7 +1709,8 @@ export class SuperagentHost {
       // #902 S3: an armed release is withdrawn here, before it ever reaches the plugin.
       if (id.startsWith('r-')) {
         const releases = this.releases()
-        const r = releases.find(x => x.id === id && team.has(x.session_id))
+        // Releases live in this team's own state directory: each is this team's, wherever its target sits now.
+        const r = releases.find(x => x.id === id)
         if (r === undefined) return { ok: false, code: 'release', error: 'no release of this team with that id' }
         if (observer !== undefined && r.observer !== observer) return { ok: false, code: 'not-yours', error: 'that release was armed by another observer session; the owner can withdraw it' }
         if (r.state !== 'armed') return { ok: true, withdrawn: false, state: r.state }
@@ -1692,6 +1719,7 @@ export class SuperagentHost {
         return { ok: true, withdrawn: true }
       }
       if (session === '' || id === '') return { ok: false, code: 'input', error: 'withdraw takes session_id and id' }
+      if (!team.has(session) && observer !== undefined) return { ok: false, code: 'not-in-team', error: 'that session is not on this team; the owner can withdraw a card cast before it moved' }
       const listed = svc.list({ sessionId: session, limit: 500 })
       const row = listed.ok === true && Array.isArray(listed.items) ? (listed.items as Row[]).find(item => item.id === id) : undefined
       const kind = row === undefined ? undefined : ours(row)
@@ -1703,7 +1731,7 @@ export class SuperagentHost {
     const state = input.state === undefined ? undefined : String(input.state)
     const out = svc.list({ ...(session !== '' ? { sessionId: session } : {}), ...(state !== undefined ? { state } : {}), limit: 100 })
     if (out.ok !== true || !Array.isArray(out.items)) return out as Record<string, unknown>
-    const releases = this.releases().filter(r => team.has(r.session_id) && (session === '' || r.session_id === session)).reverse().map(({ observer: by, ...r }) => ({ ...r, ...(observer !== undefined ? { mine: by === observer } : {}) }))
+    const releases = this.releases().filter(r => session === '' || r.session_id === session).reverse().map(({ observer: by, ...r }) => ({ ...r, ...(observer !== undefined ? { mine: by === observer } : {}) }))
     return { ok: true, items: (out.items as Row[]).filter(row => ours(row) !== undefined).map(view), releases }
   }
 
@@ -2614,6 +2642,9 @@ export class SuperagentHost {
     // superagent-team-mcp: the allowed tools or the servers may have changed; the plugin registers what members may call.
     this.d.mcpToolsChanged?.()
     this.mcpReadAt = 0
+    // #911 review: turning casting off for a member also takes back what already waits for it (this team's casts).
+    const turnedOff = (parsed.settings.castOff ?? []).filter(id => !(previous.castOff ?? []).includes(id))
+    if (turnedOff.length > 0) this.withdrawCastsFor(turnedOff)
     this.executor.launch()
     this.pass()
     return { ok: true, settings: this.settings }

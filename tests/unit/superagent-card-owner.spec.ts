@@ -82,7 +82,7 @@ describe('#902 S4', () => {
     const armed = await m.cast({ session_id: 'session-m', mode: 'release', when: 'idle:10' })
     expect(m.h.ownerCastQueue({ action: 'withdraw', session_id: 'session-m', id: 'q1' })).toEqual({ ok: true, withdrawn: true })
     expect(m.withdrawn).toEqual([{ sessionId: 'session-m', id: 'q1' }])
-    expect(m.h.ownerCastQueue({ action: 'withdraw', session_id: 'session-elsewhere', id: 'q2' })).toMatchObject({ ok: false, code: 'not-in-team' })
+    expect(m.h.ownerCastQueue({ action: 'withdraw', session_id: 'session-elsewhere', id: 'q2' })).toMatchObject({ ok: false, code: 'cast' })
     expect(m.h.ownerCastQueue({ action: 'withdraw', id: String(armed.release) })).toEqual({ ok: true, withdrawn: true })
     expect((m.h.state().casts as { releases: unknown[] }).releases).toEqual([])
     await m.h.stop()

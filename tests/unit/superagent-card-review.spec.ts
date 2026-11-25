@@ -193,3 +193,37 @@ function findReleases(home: string): string[] {
   if (hit === undefined) throw new Error('no observer-releases.json under home')
   return hit
 }
+
+describe('#911 review: S4 boundaries', () => {
+  it('B2: a cast for a member that left the team stays this team\'s: listed, and withdrawn by the owner (not the observer)', async () => {
+    const rows: Row[] = [{ id: 'g1', session_id: 'session-gone', state: 'waiting', origin: 'a2a|team:team|observer:session-o|mode:insert' }, { id: 'g2', session_id: 'session-gone', state: 'waiting', origin: null }]
+    const m = await team({ rows })
+    expect(((await m.queue({})).items as Array<{ id: string }>).map(r => r.id)).toEqual(['g1'])
+    expect(await m.queue({ action: 'withdraw', session_id: 'session-gone', id: 'g1' })).toMatchObject({ ok: false, code: 'not-in-team' })
+    expect(m.h.ownerCastQueue({ action: 'withdraw', session_id: 'session-gone', id: 'g2' })).toMatchObject({ ok: false, code: 'cast' })
+    expect(m.h.ownerCastQueue({ action: 'withdraw', session_id: 'session-gone', id: 'g1' })).toEqual({ ok: true, withdrawn: true })
+    await m.h.stop()
+  })
+  it('only whitelisted fields of a plugin row reach the state and the tools', async () => {
+    const rows = [{ id: 'w1', session_id: 'session-m', state: 'waiting', origin: 'a2a|team:team|observer:session-o|mode:queue', content: 'CARD TEXT', observer: 'session-o', token: 'x' } as unknown as Row]
+    const m = await team({ rows })
+    const text = JSON.stringify([await m.queue({}), m.h.state().casts])
+    for (const leak of ['CARD TEXT', '"observer"', '"token"', 'origin']) expect(text).not.toContain(leak)
+    expect(text).toContain('"requested":"queue"')
+    await m.h.stop()
+  })
+  it('turning casting off for a member withdraws this team\'s waiting casts and armed releases for it, nothing else', async () => {
+    const rows: Row[] = [
+      { id: 'o1', session_id: 'session-m', state: 'waiting', origin: 'a2a|team:team|observer:session-o|mode:queue' },
+      { id: 'o2', session_id: 'session-m', state: 'waiting', origin: 'a2a|team:other|observer:session-z|mode:queue' },
+      { id: 'o3', session_id: 'session-m', state: 'waiting', origin: null },
+      { id: 'o4', session_id: 'session-r', state: 'waiting', origin: 'a2a|team:team|observer:session-o|mode:queue' },
+    ]
+    const m = await team({ rows })
+    const armed = await m.cast({ mode: 'release', when: 'idle:10' })
+    expect(m.h.saveSettings({ castOff: ['session-m'] }, () => true)).toMatchObject({ ok: true })
+    expect(m.withdrawn.map(w => w.id)).toEqual(['o1'])
+    expect(((await m.queue({})).releases as Array<{ id: string; state: string; result?: string }>).find(r => r.id === armed.release)).toMatchObject({ state: 'withdrawn', result: 'member-off' })
+    await m.h.stop()
+  })
+})
