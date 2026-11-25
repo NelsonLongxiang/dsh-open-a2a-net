@@ -51,7 +51,8 @@ it('adds only the shared boundary to original worker personas and leaves the bui
   // contract (four parts); the observer's is D19's
   // rewrite (workbench-market 18: takes no tickets, tags and counts stuck points, sees health problems first — R7a).
   // #902 S1: the observer's card line names the basis, the card kinds and a2a_card_queue; S2 adds a2a_card_draft.
-  const originalPrefixes = { member: '6b97b2cfdf0f8bf830d821d12791920dba51c1ae045feaab7e0ba28c30b5acbd', observer: '277f653ba8b8d03d9361426a08426c42cf984ae413c52569df77dd3f87672883' }
+  // Owner 2026-11-25 (forward personas): each rule now leads with the action or allowed path, keeping its force; router, member and observer gain one wrap-up line.
+  const originalPrefixes = { member: '5ba81a66112cba797f5634d52cef26d1de84f31c2627680e9613c7230928df3b', observer: '119b1456d964907cfdb6cf5ec5ddf5f0f8d6457fe1599eda9bd4f96543804a14' }
   for (const [role, sha] of Object.entries(originalPrefixes)) {
     const original = readFileSync(new URL('src/superagent/prompts/' + role + '.md', root), 'utf8')
     expect(digest(original)).toBe(sha)
@@ -65,7 +66,8 @@ it('adds only the shared boundary to original worker personas and leaves the bui
   // #83 (owner-approved minimal fix) added one sentence to the builder's persona: a loaded skill is guidance to read and
   // grants no tool. Pin the new text as #791 did.
   expect(builder).toContain('A skill is guidance you read: it gives you no tool')
-  expect(digest(builder)).toBe('75fdb142fd195418120f9597aa41c59ce429445211f7e04d5fd3d57ddd096d40')
+  // Owner 2026-11-25 (forward personas): the builder's rules lead with the allowed path; the pinned clauses above are unchanged.
+  expect(digest(builder)).toBe('e709a8f6d59bf48e28c562fb96d461a0813518138b911f88f0d3c052794e7a80')
 })
 
 it('retains upstream member initiative as a proposal, never a self-assignment or an external send', () => {
