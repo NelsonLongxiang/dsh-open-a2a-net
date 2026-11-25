@@ -58,6 +58,13 @@ const PROOF_VALUES: ReadonlySet<string> = new Set(['origin-claim', 'claim-mismat
 const LOG_VALUE_KEYS: ReadonlySet<string> = new Set(['count', 'lost', 'after', 'epochChanged', 'task'])
 /** The mailbox's duplicate markers a row record may keep. */
 const DUP_VALUES: ReadonlySet<string> = new Set(['sync-answered'])
+/** #881 v2 B2: the ledger verdicts a receipt row may carry (cli-deposit MAIL_SETTLEMENTS; a test pins the two together). */
+export const SETTLEMENT_VALUES: ReadonlySet<string> = new Set(['settled', 'held', 'refused', 'none', 'pending'])
+/**
+ * #881 v2 B2: how long a read waits at a receipt row whose verdict is still pending (its settlement runs just after it is
+ * stored, or on the 1-second recovery scan) before taking it as it is: pending, which no reader accepts as an answer.
+ */
+export const RECEIPT_VERDICT_HOLD_MS = 5 * 60_000
 
 /** Where one mailbox row went, as the shadow acceptance reads it (A5). */
 export type RowOutcome = 'stored' | 'duplicate' | 'filtered:unverified' | 'filtered:unlinked' | 'filtered:loop' | 'filtered:receipt' | 'duplicateCopy' | 'unreadable'
@@ -215,6 +222,9 @@ interface MailRow {
   receipt_for?: string
   dup?: string
   admission?: string
+  settlement?: string
+  settlement_reason?: string
+  truncated?: true
 }
 
 /** Where one mailbox row went: a Trigger (whose scope then decides), a duplicate copy, or unreadable. */
@@ -238,6 +248,8 @@ export function translate(row: unknown, epoch: string): Translation {
   const proof = typeof mail.proof === 'string' ? mail.proof : undefined
   const receiptFor = typeof mail.receipt_for === 'string' && mail.receipt_for !== '' ? mail.receipt_for : undefined
   const admission = typeof mail.admission === 'string' && ADMISSION_VALUES.has(mail.admission) ? mail.admission : undefined
+  const settlement = receiptFor !== undefined && typeof mail.settlement === 'string' && SETTLEMENT_VALUES.has(mail.settlement) ? mail.settlement : undefined
+  const settlementReason = settlement !== undefined && typeof mail.settlement_reason === 'string' && mail.settlement_reason !== '' ? mail.settlement_reason.slice(0, 64) : undefined
   // A reply rechecks the caller on the face it came in by: this host's own sessions on the local face, the rest on the wire.
   const ingress: Record<string, string> = proof === 'in-process' ? { ingress: 'local' } : {}
   return {
@@ -261,6 +273,11 @@ export function translate(row: unknown, epoch: string): Translation {
         ...(proof !== undefined ? { proof } : {}),
         ...(receiptFor !== undefined ? { receiptFor } : {}),
         ...(admission !== undefined ? { admission } : {}),
+        // #881 v2 B2: the network ledger's verdict on this receipt, from the row's field (never from the text).
+        ...(settlement !== undefined ? { settlement } : {}),
+        ...(settlementReason !== undefined ? { settlementReason } : {}),
+        // #881 v2: the mailbox cut this text (gh#113); a cut receipt never yields a result body.
+        ...(mail.truncated === true ? { truncated: true } : {}),
         // Observation only: what S13 ② would have given a verified caller. S21 replaced it with the rule-based inferred
         // path; it rides along for the audit and nothing reads it for a decision.
         ...(proof !== undefined && TRUSTED_PROOFS.has(proof) ? { s13Strength: 'explicit-if-allowed' } : {}),
@@ -326,8 +343,12 @@ export async function pollMailbox(ctx: SourceContext, signal: AbortSignal, now: 
   const summary: RoundSummary = { read: page.mail.length, triggers: 0, duplicateCopies: 0, unreadable: 0, next: page.next, ...(loss !== undefined ? { loss } : {}) }
   // Each row's record is written as soon as the row is through, so an interrupted round keeps what it did; the cursor
   // moves only after every row of the round has its record (D1).
+  let held: string | undefined
   for (const row of page.mail) {
     if (signal.aborted) throw new Error('The a2a Source stopped during the read')
+    // #881 v2 B2: a receipt whose verdict is not decided yet is read again next round, from just before it.
+    const wait = pendingReceiptSeq(row, now().getTime())
+    if (wait !== undefined) { held = `${page.epoch}:${String(wait - 1)}`; break }
     const result = translate(row, page.epoch)
     const raw = isRecord(row) ? row : {}
     const base = { epoch: page.epoch, seq: Number.isInteger(raw.seq) ? raw.seq as number : null,
@@ -346,9 +367,20 @@ export async function pollMailbox(ctx: SourceContext, signal: AbortSignal, now: 
     recordRows(ctx, [{ ...base, outcome }])
     ctx.threads.describe(threadKey(result.trigger.threads[0]!), { label: `A2A ${result.trigger.actor.id}` })
   }
-  ctx.state.set(KV.cursor, page.next)
+  const next = held ?? page.next
+  summary.next = next
+  ctx.state.set(KV.cursor, next)
   noteRound(ctx, header, firstRound)
   return summary
+}
+
+/** #881 v2 B2: the seq of a receipt row to wait at — its verdict still pending and younger than the hold — else undefined. */
+export function pendingReceiptSeq(row: unknown, nowMs: number): number | undefined {
+  if (!isRecord(row)) return undefined
+  const mail = row as Partial<MailRow>
+  if (mail.settlement !== 'pending' || typeof mail.receipt_for !== 'string' || mail.receipt_for === '' || mail.dup === 'sync-answered') return undefined
+  if (!Number.isInteger(mail.seq) || (mail.seq as number) < 1 || typeof mail.at !== 'number') return undefined
+  return nowMs - mail.at < RECEIPT_VERDICT_HOLD_MS ? mail.seq : undefined
 }
 
 /** The row outcome for a Trigger the Engine filtered: this kind's scope says why (unverified when it gives no reason it knows). */

@@ -8,11 +8,22 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/owner-proof
  */
 import type { IncomingMessage } from 'node:http'
+import { OWNER_DELEGATE_HEADER, type OwnerDelegates } from './owner-delegate.ts'
+
+// The host's owner-delegate book (owner-delegate.ts), set once at boot; none configured means no delegate is accepted.
+let delegates: Pick<OwnerDelegates, 'check' | 'audit'> | undefined
+
+/**
+ * Install the host's owner-delegate book (the control API's "user" scope).
+ * @param book - the book, or undefined to accept no delegate.
+ */
+export function configureOwnerDelegates(book: Pick<OwnerDelegates, 'check' | 'audit'> | undefined): void { delegates = book }
 
 // observerCast (#764 review): letting the observer cast cards into sessions is the owner's call, not a shell's.
 // credentialAckMinutes (#823 review): how soon a credential-access card closes itself is the owner's call too; a session
 // that touches credentials must not be able to shorten the card that watches it.
-const RULE_FIELDS = ['rules', 'dispatch', 'profiles', 'prepare', 'prompts', 'extraTools', 'approvers', 'blockedTools', 'mcp', 'observerCast', 'idleSweep', 'decisionPush', 'credentialAckMinutes'] as const
+// autoApprove (#888 D5): letting the host take recommendations is the owner's call; a session must not turn it on or widen it.
+const RULE_FIELDS = ['rules', 'dispatch', 'profiles', 'prepare', 'prompts', 'extraTools', 'approvers', 'blockedTools', 'mcp', 'observerCast', 'idleSweep', 'decisionPush', 'credentialAckMinutes', 'autoApprove'] as const
 
 /** Whether a settings write changes a rule, a role, the dispatch rules, or the command that runs on this host (reliability R4). */
 export function touchesRules(settings: unknown): boolean {
@@ -32,7 +43,7 @@ export interface BrowserOwnerConnection {
 export type BrowserOwnerProof = { readonly ok: true } | {
   readonly ok: false
   readonly status: 401 | 403 | 503
-  readonly code: 'owner-proof' | 'owner-auth-unavailable'
+  readonly code: 'owner-proof' | 'owner-auth-unavailable' | 'owner-delegate'
   readonly error: string
 }
 
@@ -42,7 +53,18 @@ const unavailable = (): BrowserOwnerProof => ({ ok: false, status: 503, code: 'o
  * Verify the original request as the Host's authenticated browser owner. Never rebuild its authority, trust proxy headers
  * independently, copy credentials to another request, or accept an API operator merely because it is authenticated.
  */
-export function browserOwnerProof(connection: unknown, request: Pick<IncomingMessage, 'headers'>): BrowserOwnerProof {
+export function browserOwnerProof(connection: unknown, request: Pick<IncomingMessage, 'headers'> & Partial<Pick<IncomingMessage, 'method' | 'url'>>, options: { readonly delegate?: boolean } = {}): BrowserOwnerProof {
+  // The owner's delegate (the control API's user scope) stands in for the browser owner on these operations. It never
+  // opens the control route by itself: the callers here already sit behind the control key. An unknown, revoked or
+  // expired token refuses outright instead of falling back to the browser login it was meant to replace.
+  const presented = request.headers[OWNER_DELEGATE_HEADER]
+  if (options.delegate !== false && presented !== undefined) {
+    const token = Array.isArray(presented) ? '' : presented
+    const found = delegates?.check(token)
+    if (found === undefined || !found.ok) return { ok: false, status: 403, code: 'owner-delegate', error: `属主代理凭证无效（${found === undefined ? 'unconfigured' : found.reason}），未执行操作。` }
+    if (delegates?.audit(found, { method: request.method, url: request.url }) !== true) return { ok: false, status: 503, code: 'owner-delegate', error: '属主代理的审计记录写不进去，未执行操作。' }
+    return { ok: true }
+  }
   try {
     if (connection === null || typeof connection !== 'object') return unavailable()
     const host = connection as BrowserOwnerConnection

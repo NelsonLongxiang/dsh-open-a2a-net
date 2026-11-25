@@ -27,22 +27,25 @@ import { credentialAccess, redactedPreview, type CredentialKind } from './creden
 import { RosterReports } from './roster.ts'
 import { MemberExecutor, runOf, transientError, type MemberTurn, type PrepareRunner, type QueuedAssignment } from './executor.ts'
 import { PiEvents } from './pi-events.ts'
-import { ReviewRequests } from './review-requests.ts'
-import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, type OutboundAsk, type OutboundRecord, type OutboundApproval } from './outbound.ts'
+import { ReviewRequests, reviewRoute } from './review-requests.ts'
+import { unsettledText } from './receipt-settlement.ts'
+import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, writeTicketNoteOnce, type OutboundAsk, type OutboundRecord, type OutboundApproval } from './outbound.ts'
 import {legacyOutboundApproval} from './legacy-outbound-approval.ts'
+import { OutboundResults, RESULT_UNAVAILABLE } from './outbound-results.ts'
+import { DENY_ALL, RESTRICTED_TURN_TEXT, ResultAudit, renderResultBody } from './outbound-disclosure.ts'
 import {NarrowOutboundRecovery} from './narrow-outbound.ts'
 import { RuleChanges, memberScope, type RuleScope } from './rule-changes.ts'
 import { SettingsHistory } from './settings-history.ts'
 import { HealthReminders, HEALTH_TICK_MS, cleanName, type HealthProblem } from './health-reminders.ts'
 import { DecisionPush, PUSH_TICK_MS } from './decision-push.ts'
 import { QuestionGate, questionToken } from './question-gate.ts'
-import { DECISION_FILES_MAX, DecisionBook, decisionFiles, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
+import { DECISION_FILES_MAX, DecisionBook, decisionFiles, DECISION_NOTE_MAX, inputFor, needsInput, recommendedNeedsInput, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
-import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, blockableTool, grantClass, type Role } from './role-tools.ts'
+import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, YGL_TREES, blockableTool, grantClass, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
-import { CREDENTIAL_ACK_MINUTES_DEFAULT, DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
+import { armAutoApprove, CREDENTIAL_ACK_MINUTES_DEFAULT, DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 import { searchTeam } from './search.ts'
 import { A2aReceipts, END_RECEIPT_GRACE_MS } from './receipts.ts'
 export { END_RECEIPT_GRACE_MS } from './receipts.ts'
@@ -149,6 +152,10 @@ export class SuperagentHost {
   private readonly reviews: ReviewRequests
   private readonly narrowOutbound: NarrowOutboundRecovery
   private readonly outbound: OutboundRequests
+  /** #881 v2: verified final results of outbound requests (status served; bodies kept, not served yet). */
+  private readonly outboundResults: OutboundResults
+  /** #881 v2: the delivery audit, written before any body leaves the store. */
+  private readonly resultAudit: ResultAudit
   /** Proposals to change a rule set, each set's revision and last change (design D8–D10b). */
   readonly ruleChanges: RuleChanges
   private disposeTimer: (() => void) | undefined
@@ -314,11 +321,17 @@ export class SuperagentHost {
       persist: { load: () => { const path = join(dir, 'observer-questions.json'); return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) as unknown : undefined },
         save: kept => { const path = join(dir, 'observer-questions.json'), temporary = `${path}.tmp-${String(process.pid)}`; mkdirSync(dir, { recursive: true }); writeFileSync(temporary, JSON.stringify(kept), { mode: 0o600 }); renameSync(temporary, path) } },
     })
-    this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), ask: (address, text, task, sender) => this.a2a.askApproved(address, text, task!, sender!),
+    this.resultAudit = new ResultAudit({ path: join(dir, 'outbound-result-audit.json'), now: () => Date.parse(this.now()), logger: d.logger })
+    this.outboundResults = new OutboundResults({ indexPath: join(dir, 'outbound-results.json'), bodyPath: join(dir, 'outbound-bodies.json'), now: () => Date.parse(this.now()), logger: d.logger })
+    this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), result: credential => { this.outboundResults.register(credential) }, ask: (address, text, task, sender) => this.a2a.askApproved(address, text, task!, sender!),
       sender: create => create ? this.a2a.ensureIdentity() : Promise.resolve(this.a2a.address ?? ''), approval: record => this.outboundApproval(record),
       narrowReceipt:(binding,caller,message)=>this.d.narrowRecovery?.receipt(binding,caller,message)===true,
       narrowNote:(ticketId,text)=>{try{const ticket=this.store.tickets.get(ticketId);if(!ticket||ticket.ended)return false;if(!ticket.inputs.some(input=>input.kind==='note'&&input.text===text))this.engine.note(ticketId,text);return true}catch{return false}},
-      query: async (record, attempt) => d.outboundOutcome?.({ sender: attempt.sender, task: attempt.task, address: record.address, message: record.approval!.message }) ?? { delivery: 'unknown' }, logger: d.logger, now: () => this.now(), note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: outbound note on %s lost: %s', ticketId, String(error)) } } })
+      query: async (record, attempt) => d.outboundOutcome?.({ sender: attempt.sender, task: attempt.task, address: record.address, message: record.approval!.message }) ?? { delivery: 'unknown' }, logger: d.logger, now: () => this.now(),
+      // Only a note actually added wakes another pass: one already in the ticket must not, or a checkpoint that keeps failing
+      // to save would wake pass after pass without end (#882 review B1).
+      noteOnce: (ticketId, text) => { let added = false; const result = writeTicketNoteOnce(this.store.tickets.get(ticketId), text, t => { this.engine.note(ticketId, t); added = true }); if (added) queueMicrotask(() => { this.pass() }); return result },
+      note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: outbound note on %s lost: %s', ticketId, String(error)) } } })
     this.narrowOutbound=new NarrowOutboundRecovery({outbound:this.outbound,now:()=>Date.parse(this.now()),
       approval:record=>{if(!this.settingsValue.sources.a2a||this.settingsValue.paused)return undefined;const t=this.store.tickets.get(record.ticketId);return t&&!t.ended?legacyOutboundApproval(record,this.decisions.retainedForRecovery(record.card),this.settingsValue.canvas??'',Date.parse(this.now())):undefined},
       identity:()=>this.d.narrowRecovery?.identity(this.a2a.address??''),
@@ -326,7 +339,8 @@ export class SuperagentHost {
       transport:(permit,mode,current)=>{if(!this.d.narrowRecovery)throw Error('narrow recovery unavailable');return this.d.narrowRecovery.transport(permit,mode,current)}})
     this.reviews = new ReviewRequests({
       path: join(dir, 'reviews.json'), reviewer: () => this.settingsValue.reviewer, logger: d.logger,
-      ask: (address, text) => this.a2a.askReview(address, text),
+      // #877 (owner decision 2026-11-24): review requests carry a task id recorded before the send, from the team identity.
+      ...reviewRoute(this.a2a),
       note: (ticketId, text) => { try { this.engine.note(ticketId, text); this.pass() } catch (error) { this.d.logger.warn('superagent: review verdict of %s not noted: %s', ticketId, String(error)) } },
     })
     this.engine = new Engine({
@@ -440,6 +454,46 @@ export class SuperagentHost {
   /** Whether a session is one of this team's observers: a local member created under the observer preset. */
   isObserver(sessionId: string): boolean { return this.settings.observers.includes(sessionId) }
 
+  /**
+   * #881 v2 B1: the status of one exact outbound result (ticket and task), for the router, a member truly working that open
+   * ticket on this host, or an observer (status alone, open tickets only). Everything else, and any unknown or out-of-scope
+   * pair, gets the same refusal with no hint of what exists. Bodies are not served in this slice.
+   */
+  outboundResult(session: string, ticketId: string, taskId: string): Record<string, unknown> {
+    const role = this.resultRole(session, ticketId)
+    if (role === undefined) return { ...RESULT_UNAVAILABLE }
+    const record = this.outbound.list().find(r => r.ticketId === ticketId && (r.task === taskId || (r.attempts ?? []).some(a => a.task === taskId)))
+    if (record === undefined || record.narrowRecovery !== undefined) return { ...RESULT_UNAVAILABLE }
+    const current = record.task === taskId
+    const view = current ? this.outboundResults.view(ticketId, taskId) : undefined
+    const result: Record<string, unknown> = view !== undefined ? { ...view }
+      : current && (record.state === 'sent' || record.state === 'sending') ? { status: 'pending' }
+        : current && record.state === 'answered' ? { status: 'unavailable', reason: 'source-unproven', hasBody: false }
+          : { status: 'unavailable' }
+    if (role === 'observer') return { ok: true, status: result['status'] }
+    if (result['status'] !== 'ready' && result['status'] !== 'truncated') return { ok: true, ...result }
+    // #881 v2 B4: a body leaves only through policy, then an audit row on disk, then a restricted mark on disk, then the
+    // same authorization rechecked. Any step that fails withholds it (a row without a delivery is acceptable).
+    const body = this.outboundResults.bodyOf(ticketId, taskId)
+    const withheld = (reason: string): Record<string, unknown> => ({ ok: true, ...result, status: 'unavailable', reason, hasBody: true })
+    if (body === undefined) return withheld('storage')
+    const verdict = (this.d.disclosure ?? DENY_ALL)({ ticketId, task: taskId, ...(body.outcome !== undefined ? { outcome: body.outcome } : {}), bodyHash: body.hash, source: body.source })
+    if (!verdict.allow) return withheld('policy')
+    if (this.resultAudit.record({ session, role, ticketId, task: taskId, bodyHash: body.hash, rule: verdict.rule }) !== 'recorded') return withheld('audit')
+    if (this.d.restrict?.(session) !== true) return withheld('storage')
+    if (this.resultRole(session, ticketId) !== role || this.outboundResults.bodyOf(ticketId, taskId)?.hash !== body.hash) return { ...RESULT_UNAVAILABLE }
+    return { ok: true, ...result, body: renderResultBody({ ticketId, task: taskId, ...(body.outcome !== undefined ? { outcome: body.outcome } : {}), clipped: body.clipped, text: body.text }) }
+  }
+
+  /** Who may read this ticket's outbound results now (B1), or undefined: router; observer and bound local member while open. */
+  private resultRole(session: string, ticketId: string): Exclude<Role, 'builder'> | undefined {
+    const role = this.toolRoleOf(session)
+    const ticket = this.store.tickets.get(ticketId)
+    if (ticket === undefined || role === undefined) return undefined
+    const open = ticket.ended === undefined
+    return role === 'router' || (open && (role === 'observer' || (this.settings.members.includes(session) && this.executor.bindingFor(session, ticketId) !== undefined))) ? role : undefined
+  }
+
   /** A session's tool list: its role, an observer being a member with one tool more. */
   toolRoleOf(sessionId: string): Exclude<Role, 'builder'> | undefined {
     const role = this.roleOf(sessionId)
@@ -449,7 +503,10 @@ export class SuperagentHost {
   /** How a member's turn ended, and whether it answered the owner in person. */
   private turnOf(sessionId: string): MemberTurn | undefined {
     const turn = this.d.memberTurn?.(sessionId)
-    return turn === undefined ? undefined : { ...turn, person: this.d.personMessage?.(sessionId) !== undefined }
+    if (turn === undefined) return undefined
+    // #881 v2: a session that received an outbound result body is never paraphrased; whether its turn is over is kept.
+    const text = this.d.restricted?.(sessionId) === true ? RESTRICTED_TURN_TEXT : turn.text
+    return { ...turn, text, person: this.d.personMessage?.(sessionId) !== undefined }
   }
 
   /** A member's turn ended (agent idle): the executor's turn-end fact — told to the served team host when it is theirs. */
@@ -592,8 +649,10 @@ export class SuperagentHost {
     if (op !== 'report') return { ok: false, code: 'op', error: 'op must be report, ack, handback, rules-propose, rules-apply, ticket-request, read, idle or error' }
     const r = (report ?? {}) as Record<string, unknown>
     if (typeof r.state !== 'string' || !['progress', 'waiting', 'ready', 'blocked', 'failed', 'dropped'].includes(r.state) || typeof r.summary !== 'string' || r.summary.trim() === '') return { ok: false, code: 'report', error: 'a report needs a state and a summary' }
-    // #688 G1: a Pi seat's question is a decision card, as a local member's a2a_ticket_report requires (C1/C2): no bare question.
-    if (pi && typeof r.question === 'string') { const decision = parseDecision(r); if (typeof decision === 'string') return { ok: false, code: 'decision', error: `a question for the owner is a decision card: ${decision}` } }
+    // #688 G1, #888 D2: every remote member's question is a decision card (Pi or DSH): a malformed one, inputs included, refuses
+    // the whole report instead of falling back to a bare card. Inputs without a question are refused too.
+    if (typeof r.question === 'string') { const decision = parseDecision(r); if (typeof decision === 'string') return { ok: false, code: 'decision', error: `a question for the owner is a decision card: ${decision}` } }
+    else if (r.inputs !== undefined && r.inputs !== null) return { ok: false, code: 'inputs', error: 'inputs go with a question for the owner' }
     return this.report(entry.ref, { state: r.state as ReportState, summary: r.summary, ...(typeof r.question === 'string' || r.question === null ? { question: r.question as string | null } : {}), ...(typeof r.answers === 'string' ? { answers: r.answers } : {}), ...(typeof r.question === 'string' && typeof parseDecision(r) !== 'string' ? { decision: parseDecision(r) as DecisionSpec } : {}) }, typeof r.ticket_id === 'string' ? r.ticket_id : undefined, typeof r.pull_request === 'string' ? r.pull_request : undefined)
   }
 
@@ -622,7 +681,7 @@ export class SuperagentHost {
   }
 
   /** PR-C2, member host side: a served member's report goes to the team host (it answers whether it took it). */
-  async forwardReport(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string; ticket_id?: string; pull_request?: string; options?: readonly string[]; recommended?: string; level?: string }): Promise<Record<string, unknown>> {
+  async forwardReport(member: string, report: { state: ReportState; summary: string; question?: string | null; answers?: string; ticket_id?: string; pull_request?: string; options?: readonly string[]; recommended?: string; level?: string; inputs?: Readonly<Record<string, unknown>> }): Promise<Record<string, unknown>> {
     const serves = this.settingsValue.serves
     if (serves === undefined || !serves.members.includes(member) || this.d.signedPost === undefined || this.d.handleOf === undefined) return { ok: false, code: 'not-member', error: 'this session serves no team' }
     try { return await this.d.signedPost(serves.url, '/a2a/superagent-team', { op: 'report', member: this.d.handleOf(member), report }) } catch (error) { return { ok: false, code: 'unreachable', error: String(error) } }
@@ -742,12 +801,13 @@ export class SuperagentHost {
    * start fans into nothing), accepted at once with the part's title and scope under the parent's rules: the router's
    * split is the decision. A part may name its member. The parent is held from members from now on.
    */
-  splitParent(parentId: string, asked: string, parts: ReadonlyArray<{ title: string; scope: string; member?: string }>, reason: string): { ok: true; children: string[] } | { ok: false; code: string; error: string } {
+  splitParent(parentId: string, asked: string, parts: ReadonlyArray<{ title: string; scope: string; member?: string }>, reason: string): { ok: true; children: string[]; refused: Array<{ part: number; member: string }> } | { ok: false; code: string; error: string } {
     const parent = this.store.tickets.get(parentId)
     const origin = parent === undefined ? undefined : this.store.triggers.get(parent.origin.triggerId)
     if (parent === undefined || origin === undefined || parent.ended) return { ok: false, code: 'ticket', error: 'no open ticket with that id' }
     const rules = parent.mandate.basis.rules ?? []
     const children: string[] = []
+    const refused: Array<{ part: number; member: string }> = []
     const at = this.now()
     for (const [index, part] of parts.entries()) {
       const thread = origin.threads[0]!
@@ -761,14 +821,19 @@ export class SuperagentHost {
         if (decision.ticketId === undefined) return { ok: false, code: 'part', error: `part ${String(index + 1)} opened no ticket` }
         children.push(decision.ticketId)
         const named = this.named.namedOf(parentId)
-        if (part.member !== undefined) this.executor.setMember(decision.ticketId, part.member)
+        // Ticket eabe1586 (#865 review): a part named to a member the owner took this work off is not recorded as that
+        // member's, nor handed to the parent's named seat: like accept, it goes to another member and the result says so. It asks
+        // about the parent: the children are recorded as its split only after this loop, so a child cannot reach it yet.
+        const excluded = part.member !== undefined && this.excludedFrom(parentId, part.member)
+        if (excluded) refused.push({ part: index + 1, member: part.member! })
+        else if (part.member !== undefined) this.executor.setMember(decision.ticketId, part.member)
         else if (named !== undefined) this.named.accepted(decision.ticketId, named)
       } catch (error) { return { ok: false, code: 'part', error: `part ${String(index + 1)}: ${String(error)}` } }
     }
     this.splits.record(parentId, children, asked, at)
     this.d.logger.info('superagent: ticket %s split into %s', parentId, children.join(', '))
     queueMicrotask(() => this.pass())
-    return { ok: true, children }
+    return { ok: true, children, refused }
   }
 
   /**
@@ -815,12 +880,19 @@ export class SuperagentHost {
     return { tickets, ...(outcome !== undefined ? { outcome } : {}) }
   }
 
+  /** #888 D4: whether a ticket's open question is a card with an option that needs input (decided on the decision page). */
+  private questionNeedsInput(ticketId: string, question: string): boolean {
+    const card = this.decisions.get(ticketCardId(ticketId, question))
+    return card !== undefined && card.decided === undefined && needsInput(card)
+  }
+
   /** market N1d: the answers the ticket's open question offers, from the card the member's question report raised. */
   choicesOf(ticketId: string): { options: string[]; recommended?: string } | undefined {
     const ticket = this.store.tickets.get(ticketId)
     if (ticket?.attention === undefined) return undefined
     const card = this.decisions.get(ticketCardId(ticket.id, ticket.attention.question))
-    if (card === undefined || card.options.length === 0) return undefined
+    // #888 D4: a question with an option that needs input is decided on this host only in phase one; no choices go out.
+    if (card === undefined || card.options.length === 0 || needsInput(card)) return undefined
     return { options: [...card.options], ...(card.recommended !== '' ? { recommended: card.recommended } : {}) }
   }
 
@@ -908,7 +980,7 @@ export class SuperagentHost {
   private ensureYglProject(): void { const project = this.yglProject(); if (project !== undefined) { try { this.d.ensureYglProject?.(project) } catch { /* best effort */ } } }
   private yglRouterLines(router: string): string[] {
     const project = this.yglProject()
-    if (project === undefined || this.d.hasTool?.(router, 'mcp__ygl__read') !== true) return []
+    if (project === undefined || (this.d.hasTool?.(router, 'mcp__ygl__read') !== true && this.d.hasTool?.(router, YGL_TREES) !== true)) return []
     this.ensureYglProject()
     return [yglRouterLine(project, this.yglScope())]
   }
@@ -940,7 +1012,7 @@ export class SuperagentHost {
     for (const rule of (profile?.rules ?? []).filter(r => r.enabled)) lines.push(`your rule ${rule.name}: ${clip(rule.text, 600)}`)
     if (profile !== undefined) lines.push('If this ticket does not fit your role and rules, report blocked and say why; the router will choose again.')
     // The team's memory, in the card the member acts on (owner 2026-11-10: a persona line alone was not followed).
-    if (this.d.hasTool?.(member, YGL_WRITE) === true) { this.ensureYglProject(); lines.push(...yglCardLines(this.yglProject(), { scope: this.yglScope(), caps: this.yglCaps() })) }
+    if (this.d.hasTool?.(member, YGL_WRITE) === true || this.d.hasTool?.(member, YGL_TREES) === true) { this.ensureYglProject(); lines.push(...yglCardLines(this.yglProject(), { scope: this.yglScope(), caps: this.yglCaps(), trees: this.d.hasTool?.(member, YGL_TREES) === true })) }
     for (const name of ticket.mandate.basis.rules ?? []) {
       const rule = this.settingsValue.rules.find(r => r.name === name)
       if (rule !== undefined) lines.push(`accepted on team rule ${rule.name}: ${clip(rule.text, 600)}`)
@@ -1259,9 +1331,9 @@ export class SuperagentHost {
    * @returns the refusal, or undefined to take the report.
    */
   yglReadyRefusal(member: string, ticketId: string, state: string, ids: readonly string[]): { ok: false; code: string; error: string } | undefined {
-    if (state !== 'ready' || ids.length > 0 || this.d.hasTool?.(member, YGL_WRITE) !== true || this.yglReminded.has(ticketId)) return undefined
+    if (state !== 'ready' || ids.length > 0 || (this.d.hasTool?.(member, YGL_WRITE) !== true && this.d.hasTool?.(member, YGL_TREES) !== true) || this.yglReminded.has(ticketId)) return undefined
     this.yglReminded.add(ticketId)
-    return { ok: false, code: 'ygl-record', error: 'Before ready, record what this ticket found in ygl-trees: evidence and claims with mcp__ygl__write, and kb add what the next session should reuse. Then report ready again with the ids in ygl. If nothing here is worth keeping, report ready again and say why in summary; this reminder comes only once.' }
+    return { ok: false, code: 'ygl-record', error: 'Before ready, record what this ticket found in ygl-trees: evidence and claims with mcp__ygl__write (or mcp__ygl__trees), and kb add what the next session should reuse. Then report ready again with the ids in ygl. If nothing here is worth keeping, report ready again and say why in summary; this reminder comes only once.' }
   }
 
   /** The team page's 搜索 (host/search.ts): this team's records only. */
@@ -1329,7 +1401,10 @@ export class SuperagentHost {
 
   /** Design outbound-requests O3: an approver the owner named decides an outbound card it did not raise, with a reason. */
   approverDecide(session: string, id: string, option: unknown, reason: unknown): Record<string, unknown> {
-    const checked = approverCheck({ approvers: this.settingsValue.approvers ?? [], role: this.toolRoleOf(session), card: this.decisionCards().find(row => row.id === id), session, reason })
+    const card = this.decisionCards().find(row => row.id === id)
+    // #888 D3: an approver has no input fields and its reason is not an input; an option that needs input waits for the owner.
+    if (card !== undefined && typeof option === 'string' && inputFor(card, option) !== undefined) return { ok: false, code: 'needs-input', error: 'that option needs the owner to fill something in; only the owner can choose it on the decision page' }
+    const checked = approverCheck({ approvers: this.settingsValue.approvers ?? [], role: this.toolRoleOf(session), card, session, reason })
     return checked.ok ? this.decide(id, 'choose', option, `审批人 ${this.displayName(session)}：${checked.reason}`) : checked
   }
 
@@ -1376,7 +1451,9 @@ export class SuperagentHost {
     })
     // Owner 2026-11-23: credential cards the host closed on a timeout stay a day, so the owner sees them and may decide again.
     const autoAcked = this.decisions.autoAcked(Date.parse(this.now()) - AUTO_ACK_SHOWN_MS)
-    return [...this.decisions.open().filter(card => card.source !== 'ticket'), ...autoAcked, ...onTickets]
+    // #888 D5 I3: cards the host took automatically stay a day too, so the owner sees them and may decide again.
+    const autoApproved = this.decisions.autoApprovedSince(Date.parse(this.now()) - AUTO_ACK_SHOWN_MS)
+    return [...this.decisions.open().filter(card => card.source !== 'ticket'), ...autoAcked, ...autoApproved, ...onTickets]
   }
 
   /**
@@ -1395,15 +1472,26 @@ export class SuperagentHost {
     if (!parsedFiles.ok) return parsedFiles
     const attached = parsedFiles.files
     const words = typeof note === 'string' ? note.trim() : ''
+    if (words.length > DECISION_NOTE_MAX) return { ok: false, code: 'text', error: `a decision's words are at most ${String(DECISION_NOTE_MAX)} characters` }
     let chosen: string
     if (how === 'approve') {
       if (!oneClick(card.level) || card.recommended === '') return { ok: false, code: 'needs-choice', error: `a ${card.level} decision needs an option chosen, not one click` }
+      // #888 D3: a recommendation that needs input is never one click, whatever came with the request.
+      if (recommendedNeedsInput(card)) return { ok: false, code: 'needs-input', error: 'the recommended option needs you to fill something in: choose it and fill it in' }
       chosen = card.recommended
     } else if (how === 'choose') {
       if (typeof option === 'string' && card.options.includes(option)) chosen = option
       else if (option === undefined || option === null || option === '') { if (words === '') return { ok: false, code: 'choice', error: 'choose an option, or write your decision' }; chosen = '' }
       else return { ok: false, code: 'choice', error: 'that is not one of the options' }
     } else return { ok: false, code: 'how', error: 'how must be approve or choose' }
+    // #888 D3: an option that needs input is chosen only with it (the owner's own free-text decision, no option, stays open).
+    const required = chosen === '' ? undefined : inputFor(card, chosen)
+    if (required !== undefined) {
+      if (required.kind !== 'file' && words === '') return { ok: false, code: 'needs-input', error: `「${chosen}」需要你填写：${required.prompt}` }
+      if (required.kind !== 'text' && attached.length === 0) return { ok: false, code: 'needs-input', error: `「${chosen}」需要你附上文件：${required.prompt}` }
+      if (required.kind !== 'text' && this.d.blobExists !== undefined && attached.some(file => this.d.blobExists!(file.sha256) !== true)) return { ok: false, code: 'needs-input', error: 'an attached file is no longer on the file channel; stage it again' }
+    }
+    // The first line stays exactly 决定：<option>; readers of decided.text depend on it.
     const answer = [...(chosen !== '' ? [`决定：${chosen}`] : []), ...(words !== '' ? [`说明：${words}`] : []), ...attached.map(file => file.ref)].join('\n')
     const withFiles = attached.length > 0 ? { files: attached } : {}
     const at = this.now()
@@ -1631,7 +1719,7 @@ export class SuperagentHost {
     let ticket: Ticket
     try { ticket = this.engine.report(binding.ticketId, report) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
     const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
-    if (decision !== undefined && typeof report.question === 'string') this.decisions.forTicket({ ticketId: ticket.id, by: member, question: report.question, spec: { level: decision.level, options: decision.options, recommended: decision.recommended }, at: this.now(), ...(decision.files !== undefined ? { files: decision.files } : {}) })
+    if (decision !== undefined && typeof report.question === 'string') this.decisions.forTicket({ ticketId: ticket.id, by: member, question: report.question, spec: { level: decision.level, options: decision.options, recommended: decision.recommended, ...(decision.inputs !== undefined ? { inputs: decision.inputs } : {}) }, at: this.now(), ...(decision.files !== undefined ? { files: decision.files } : {}) })
     // R7b: a new question for a person goes to the observer first; the person path waits while it holds it.
     const asks = typeof report.question === 'string' && report.question.trim() !== '' && ticket.attention !== undefined && ticket.ended === undefined
     const route = asks ? this.questionGate.ask(ticket.id, member, ticket.title, ticket.attention!.question, Date.parse(this.now())) : 'person'
@@ -1780,6 +1868,7 @@ export class SuperagentHost {
   pass(): void {
     if (this.store.loadError !== undefined) return
     try{this.outbound.flushNarrowNotes()}catch{this.d.logger.warn('superagent: original recovery result note remains pending')}
+    try { this.outbound.flushOutboundNotes() } catch (error) { this.d.logger.warn('superagent: outbound answer notes remain owed: %s', String(error)) }
     try { this.readMcpTools() } catch (error) { this.d.logger.warn('superagent: team MCP check failed: %s', String(error)) }
     try { this.engine.evaluateDue() } catch (error) { this.d.logger.warn('superagent: evaluation pass failed: %s', String(error)) }
     this.flushCandidates()
@@ -1791,6 +1880,7 @@ export class SuperagentHost {
     try { this.ackCredentialCards() } catch (error) { this.d.logger.warn('superagent: credential card timeout pass failed: %s', String(error)) }
     // Upstream: evaluation, dispatch and outbound delivery hold while paused.
     if (this.settingsValue.paused) return
+    try { this.autoApproveCards() } catch (error) { this.d.logger.warn('superagent: automatic approval pass failed: %s', String(error)) }
     this.executor.tick()
     this.prs.tick()
     this.issues.tick()
@@ -1882,6 +1972,18 @@ export class SuperagentHost {
    * ticket that session holds and files it back to the router to give to another member; 「在团队设置里禁用这个工具」
    * adds the tool that touched the credentials to the team's blockedTools. Nothing here runs on a timeout or for an agent.
    */
+  /** Ticket 269f287e: whether the owner took this ticket's work off this member on a credential-access card. */
+  excludedFrom(ticketId: string, member: string): boolean { return this.credentialExcluded(ticketId).includes(member) }
+
+  /**
+   * Ticket 269f287e: whether a ticket is this session's to stop. Its binding decides when it has one (the named record can
+   * still name a session the work never went to); a ticket not bound yet is the session's when it is named to it.
+   */
+  private heldBy(ticketId: string, session: string): boolean {
+    const bound = this.executor.list().filter(b => b.ticketId === ticketId)
+    return bound.length > 0 ? bound.some(b => b.member === session) : this.executor.memberOfTicket(ticketId)?.member === session
+  }
+
   /** #825 review: the sessions a ticket must not go to: those a credential card took the same work off. */
   private credentialExcluded(ticketId: string): string[] {
     // #825 re-review: a split child is accepted from a new trigger, so walk up to every parent it was split from.
@@ -1899,7 +2001,7 @@ export class SuperagentHost {
     if (chosen === CREDENTIAL_STOP) {
       const stopped: string[] = [], refiled: string[] = [], failed: string[] = []
       for (const ticket of this.store.tickets.list()) {
-        if (ticket.ended !== undefined || this.executor.memberOfTicket(ticket.id)?.member !== session) continue
+        if (ticket.ended !== undefined || !this.heldBy(ticket.id, session)) continue
         try { this.engine.stopTicket(ticket.id, `属主在凭据访问审计卡上停掉了 ${who} 的工单`) } catch (error) { failed.push(ticket.id); this.d.logger.warn('superagent: credential card %s: ticket %s not stopped: %s', cardId, ticket.id, String(error)); continue }
         stopped.push(ticket.id)
         const scope = ticket.mandate.scope
@@ -1949,6 +2051,50 @@ export class SuperagentHost {
       closed += 1
     }
     return closed
+  }
+
+  /**
+   * #888 D5 (phase one: router and observer cards). On the owner's setting, an eligible card nobody decided gets its
+   * recommendation taken: the record first, then the decision, then a host note to the proposer. It is not a workbench
+   * trigger and passes no engine gate, so it is never the owner's explicit word and opens no ticket. Runs only while not
+   * paused (pass() returns before it). Unfinished ones from before a restart are finished with the same delivery id.
+   */
+  autoApproveCards(): number {
+    for (const card of this.decisions.autoUnfinished()) {
+      if (card.decided === undefined) this.decisions.autoApproveDecide(card.id)
+      const done = this.decisions.get(card.id)
+      if (done !== undefined) this.tellAutoApproved(done)
+    }
+    const rule = this.settingsValue.autoApprove
+    if (rule === undefined || !rule.enabled || rule.armedAt === undefined) return 0
+    const at = this.now(), nowMs = Date.parse(at), armedMs = Date.parse(rule.armedAt)
+    let room = rule.perHour - this.decisions.autoApprovedCount(nowMs - 3_600_000)
+    let taken = 0
+    for (const card of this.decisions.open()) {
+      if (room <= 0) break
+      // Levels are only ever P2 or P3 (parseSettings), so P0 and P1 never pass; a card already recorded is refused by the record.
+      if (!(rule.sources as readonly string[]).includes(card.source) || !(rule.levels as readonly string[]).includes(card.level)) continue
+      if (card.recommended === '' || !card.options.includes(card.recommended) || needsInput(card)) continue
+      if (nowMs - Math.max(Date.parse(card.at), armedMs) < rule.afterMinutes * 60_000) continue
+      if (!this.decisions.autoApproveRecord(card.id, at, rule.afterMinutes, `auto-${randomUUID()}`)) continue
+      this.decisions.autoApproveDecide(card.id)
+      const done = this.decisions.get(card.id)
+      if (done !== undefined) this.tellAutoApproved(done)
+      this.d.logger.info('superagent: card %s taken automatically after %d minutes (auto-approve)', card.id, rule.afterMinutes)
+      taken += 1
+      room -= 1
+    }
+    return taken
+  }
+
+  /** #888 D5: the host note to the proposer; marked delivered only once it reached the session. */
+  private tellAutoApproved(card: StoredCard): void {
+    const auto = card.autoApproved
+    if (auto === undefined || auto.deliveredAt !== undefined) return
+    const text = `[superagent decision] ${auto.deliveryId} 宿主按属主设置自动采纳了你提的决策卡的推荐项（非属主本人，等了 ${String(auto.minutes)} 分钟无人处理）：${card.question}\n决定：${card.recommended}\n这不是属主的指令：不开新工单，不放宽你的权限或接单规则；属主仍可改判。`
+    let delivered = false
+    try { delivered = this.d.deliverToSession(card.by, text) } catch (error) { this.d.logger.warn('superagent: automatic decision %s not told yet: %s', card.id, String(error)) }
+    if (delivered) this.decisions.autoApproveDelivered(card.id, this.now())
   }
 
   noteRefusal(rule: string, detail: { caller?: string; target?: string } = {}): void {
@@ -2041,6 +2187,10 @@ export class SuperagentHost {
     const before = policyVersion(this.settingsValue)
     const previous = this.settings
     const routerChanged = parsed.settings.router !== this.settingsValue.router
+    // #888 D5 B-D5-2: the host stamps when automatic approval took effect; turning it on or widening it restamps.
+    const armed = armAutoApprove(this.settingsValue.autoApprove, parsed.settings.autoApprove, this.now())
+    const { autoApprove: _requested, ...withoutAuto } = parsed.settings
+    parsed.settings = { ...withoutAuto, ...(armed !== undefined ? { autoApprove: armed } : {}) } as typeof parsed.settings
     this.writeSettings(parsed.settings)
     // #671: the staffing executor writes its own history line for each rule set it changes, so a write it makes is not also
     // recorded as the owner's edit (that moved the revision twice and left a line for an edit nobody made).
@@ -2074,6 +2224,9 @@ export class SuperagentHost {
     const ticket = this.store.tickets.get(ticketId)
     if (ticket === undefined || ticket.ended !== undefined) return { ok: false, code: 'ticket', error: 'no open ticket has that id' }
     if (ticket.attention === undefined) return { ok: false, code: 'no-question', error: 'that ticket has no open question' }
+    // #888 D3: a question with an option that needs input is answered on the decision page, not in plain text here.
+    const card = this.decisions.get(ticketCardId(ticket.id, ticket.attention.question))
+    if (card !== undefined && card.decided === undefined && needsInput(card)) return { ok: false, code: 'needs-input', error: '这个问题有需要填写的选项，请到决策页作答' }
     const trigger = this.workbenchTrigger(body)
     // Received and attached in one step, so the router never gets it as a candidate.
     try { this.engine.receive(trigger); this.engine.attach(ticketId, trigger.id) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
@@ -2134,6 +2287,9 @@ export class SuperagentHost {
     // A queued ticket has no binding, so the quiet check above never sees it: say what it has waited for, and for how long.
     out.push(...queuedProblems(this.executor.queued(), q => this.queuedSince(q), id => this.store.tickets.get(id)?.title ?? id, now))
     // T8: a decision card the market refused (or this host could not shape for it) stays visible: one problem per team and card.
+    for (const p of this.outbound.unsettledProblems()) out.push({ code: 'receipt-unsettled', ticketId: p.ticketId, title: this.store.tickets.get(p.ticketId)?.title ?? p.ticketId, detail: `对外请求 task ${p.task}：${unsettledText(p.last)}` })
+    for (const p of this.reviews.unsettledProblems()) out.push({ code: 'receipt-unsettled', ticketId: p.ticketId, title: this.store.tickets.get(p.ticketId)?.title ?? p.ticketId, detail: `评审 task ${p.task}：${unsettledText(p.last)}` })
+    for (const p of this.outbound.noteProblems()) out.push({ code: p.kind === 'pending' ? 'outbound-note-pending' : 'outbound-note-ticket-ended', ticketId: p.ticketId, title: this.store.tickets.get(p.ticketId)?.title ?? p.ticketId, detail: `task ${p.task}` })
     for (const refused of this.decisionPush.problems()) out.push({ code: 'decision-push-refused', title: `${this.settings.canvas ?? ''}/${refused.cardId}`, detail: refused.why })
     if (this.settingsValue.idleSweep === true) out.push(...this.idleSweep(now))
     // A short id says nothing to the owner: a problem about a session carries its seat name or title when there is one
@@ -2241,7 +2397,8 @@ export class SuperagentHost {
         decisions: this.store.decisions.byThread(thread.key),
         replies: thread.ref.source === 'workbench' ? repliesOf(thread.ref.id) : [],
       })),
-      tickets: this.store.tickets.list().map(ticket => ({ ...ticket, stage: ticket.ended ? null : ticketStage(ticket) })),
+      // #888 D4: an open question whose card has an option that needs input says so, for the workbench's ticket page.
+      tickets: this.store.tickets.list().map(ticket => ({ ...ticket, ...(ticket.attention !== undefined && this.questionNeedsInput(ticket.id, ticket.attention.question) ? { attention: { ...ticket.attention, needsInput: true } } : {}), stage: ticket.ended ? null : ticketStage(ticket) })),
     }
   }
 

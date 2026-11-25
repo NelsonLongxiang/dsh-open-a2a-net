@@ -8,7 +8,8 @@
  * The market links here with `/__dsh_a2a_nexus/?tab=team&view=decisions&card=<id>`: only those three parameters are read,
  * the card id must match the card id rule, and it is never put into markup or a request path — only compared.
  * Only the router's and the observer's cards are listed — the same cards the host pushes to the market. A member's
- * question on a ticket is answered on its ticket card in 待你处理的工单, so it is neither shown nor counted twice.
+ * question on a ticket is answered on its ticket card in 待你处理的工单, so it is neither shown nor counted twice — except
+ * (#888 D4) one with an option that needs input: the host refuses a plain-text answer to it, so it is decided here.
  * Cards are attacker-shaped data (a router or observer wrote them): textContent only.
  * @module nexus-stage/wb-decisions
  */
@@ -33,6 +34,24 @@ export interface DecisionCard {
   readonly files: ReadonlyArray<{ readonly sha256: string; readonly size: number; readonly name: string }>
   /** The team's canvas address: the owner's files on a decision are granted to it (C8). */
   readonly address?: string
+  /** #888 D1: per option, what the owner must fill in to choose it (read from the host, checked here as data). */
+  readonly inputs: Readonly<Record<string, CardInput>>
+  /** #888 D5: the host took the recommendation on the owner's setting; the owner may still decide it. */
+  readonly autoApproved?: { readonly at: string; readonly minutes: number }
+}
+
+export interface CardInput { readonly kind: 'text' | 'file' | 'text+file'; readonly prompt: string }
+const INPUT_KINDS = ['text', 'file', 'text+file']
+
+/** #888 D1: what choosing `option` requires, if anything. */
+export const inputOf = (card: DecisionCard, option: string): CardInput | undefined => Object.prototype.hasOwnProperty.call(card.inputs, option) ? card.inputs[option] : undefined
+/** #888 D1: whether the recommended option needs input; such a card has no one-click approval. */
+export const recommendedNeedsInput = (card: DecisionCard): boolean => card.recommended !== '' && inputOf(card, card.recommended) !== undefined
+/** #888 D4: whether the owner's words and files satisfy the chosen option. */
+export const inputMet = (card: DecisionCard, option: string, note: string, fileCount: number): boolean => {
+  const need = inputOf(card, option)
+  if (need === undefined) return true
+  return (need.kind === 'file' || note.trim() !== '') && (need.kind === 'text' || fileCount > 0)
 }
 
 export interface DecisionsDeps {
@@ -64,7 +83,15 @@ export function cardOf(raw: unknown): DecisionCard | undefined {
   const str = (v: unknown): string => typeof v === 'string' ? v : ''
   const options = Array.isArray(r.options) ? r.options.filter((o): o is string => typeof o === 'string') : []
   if (str(r.id) === '' || str(r.question) === '' || options.length === 0) return undefined
-  if (r.source !== 'router' && r.source !== 'observer') return undefined
+  // Only entries for real options with a known kind and a text prompt; anything else is dropped (records are data).
+  const inputs: Record<string, CardInput> = {}
+  if (r.inputs !== null && typeof r.inputs === 'object' && !Array.isArray(r.inputs)) {
+    for (const [key, value] of Object.entries(r.inputs as Json)) {
+      const v = (value ?? {}) as Json
+      if (options.includes(key) && typeof v.kind === 'string' && INPUT_KINDS.includes(v.kind) && typeof v.prompt === 'string' && v.prompt !== '') inputs[key] = { kind: v.kind as CardInput['kind'], prompt: v.prompt }
+    }
+  }
+  if (r.source !== 'router' && r.source !== 'observer' && !(r.source === 'ticket' && Object.keys(inputs).length > 0)) return undefined
   const files = Array.isArray(r.files) ? r.files.flatMap(f => {
     const x = (f ?? {}) as Json
     return typeof x.sha256 === 'string' && SHA256.test(x.sha256) && typeof x.name === 'string' && typeof x.size === 'number' ? [{ sha256: x.sha256, size: x.size, name: x.name }] : []
@@ -72,12 +99,13 @@ export function cardOf(raw: unknown): DecisionCard | undefined {
   return {
     id: str(r.id), teamId: str(r.teamId), team: str(r.team), question: str(r.question), level: str(r.level) || 'P1', options, recommended: str(r.recommended),
     ...(typeof r.reason === 'string' && r.reason !== '' ? { reason: r.reason } : {}), ...(typeof r.title === 'string' && r.title !== '' ? { title: r.title } : {}), files,
-    ...(typeof r.address === 'string' && r.address !== '' ? { address: r.address } : {}),
+    ...(typeof r.address === 'string' && r.address !== '' ? { address: r.address } : {}), inputs,
+    ...(r.autoApproved !== null && typeof r.autoApproved === 'object' && typeof (r.autoApproved as Json).at === 'string' && typeof (r.autoApproved as Json).minutes === 'number' ? { autoApproved: { at: (r.autoApproved as Json).at as string, minutes: (r.autoApproved as Json).minutes as number } } : {}),
   }
 }
 
 /** P2 and P3 with a recommendation can be approved with one click; P0 and P1 need an option chosen (the host enforces it too). */
-export const oneClick = (card: DecisionCard): boolean => (card.level === 'P2' || card.level === 'P3') && card.recommended !== ''
+export const oneClick = (card: DecisionCard): boolean => (card.level === 'P2' || card.level === 'P3') && card.recommended !== '' && !recommendedNeedsInput(card)
 
 /** Where a card's file is fetched: every part encoded, the digest checked. */
 export const fileHref = (card: DecisionCard, sha256: string): string =>
@@ -171,6 +199,7 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
     if (card.title !== undefined) top.append(el('span', 'wb-sa-decision-ticket', `工单「${card.title}」`))
     node.append(top, el('div', 'wb-sa-decision-question', card.question))
     if (card.reason !== undefined) node.append(el('div', 'wb-sa-hint', `理由：${card.reason}`))
+    if (card.autoApproved !== undefined) node.append(el('div', 'wb-sa-hint wb-sa-auto-approved', `已自动采纳「${card.recommended}」：${String(card.autoApproved.minutes)} 分钟没人处理，宿主于 ${card.autoApproved.at} 按你的设置采纳（不是你本人的决定），仍可改判`))
     const options = el('div', 'wb-sa-decision-options')
     options.setAttribute('role', 'radiogroup')
     for (const option of card.options) {
@@ -183,6 +212,8 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
       input.addEventListener('change', () => { picks.set(card.id, option); sync(card, node) })
       label.append(input, el('span', undefined, option))
       if (option === card.recommended) label.append(el('span', 'wb-sa-badge', '推荐'))
+      const need = inputOf(card, option)
+      if (need !== undefined) label.append(el('span', 'wb-sa-badge is-input', '需你填写'), el('span', 'wb-sa-hint wb-sa-input-prompt', need.prompt))
       options.append(label)
     }
     node.append(options)
@@ -217,6 +248,9 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
     node.append(words)
     if (deps.stage !== undefined) node.append(attachRow(card, node))
     node.append(actions)
+    const why = el('div', 'wb-sa-hint wb-sa-input-why')
+    why.hidden = true
+    node.append(why)
     const line = el('div', 'wb-sa-hint wb-sa-decision-said', said.get(card.id) ?? '')
     line.setAttribute('role', 'status')
     node.append(line)
@@ -260,9 +294,16 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
   function sync(card: DecisionCard, node: HTMLElement): void {
     const confirm = node.querySelector<HTMLButtonElement>('.wb-sa-confirm')
     if (confirm === null) return
-    const picked = (picks.get(card.id) ?? '') !== ''
+    const option = picks.get(card.id) ?? ''
+    const picked = option !== ''
     const words = (notes.get(card.id) ?? '').trim() !== ''
-    confirm.disabled = busy.has(card.id) || !(picked || words)
+    // #888 D4: an option that needs input waits for it. A file it needs cannot come without a canvas or a file channel: say
+    // why (without a file channel nothing can be attached; with files and no canvas, send() refuses with the same reason).
+    const need = picked ? inputOf(card, option) : undefined
+    const unreachable = need !== undefined && need.kind !== 'text' && (card.address === undefined || deps.stage === undefined)
+    const why = node.querySelector<HTMLElement>('.wb-sa-input-why')
+    if (why !== null) { why.hidden = !unreachable; why.textContent = unreachable ? '这个选项要附文件，但这里附不了（团队没有画布地址或主机不能附带文件）' : '' }
+    confirm.disabled = busy.has(card.id) || !(picked || words) || (picked && !inputMet(card, option, notes.get(card.id) ?? '', (attached.get(card.id) ?? []).length))
   }
 
   async function send(card: DecisionCard, body: Json): Promise<void> {
@@ -320,7 +361,11 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
     const key = JSON.stringify([cards, [...said], [...busy], failure, loaded, [...attached].map(([id, fs]) => [id, fs.map(f => `${f.name}:${String(f.size)}`)])])
     if (!force && key === shown) return
     shown = key
-    count.textContent = String(cards.length)
+    // #888 D4: split by whether the recommendation needs input, when any card has inputs.
+    // #888 D5: cards the host already took are shown but not counted as waiting.
+    const open = cards.filter(card => card.autoApproved === undefined)
+    const fill = open.filter(recommendedNeedsInput).length
+    count.textContent = open.some(c => Object.keys(c.inputs).length > 0) ? `${String(open.length)}（需填写 ${String(fill)} · 可直接定 ${String(open.length - fill)}）` : String(open.length)
     list.replaceChildren(...cards.map(cardNode))
     if (failure !== '') list.append(el('div', 'wb-sa-hint wb-sa-decisions-failed', `${loaded ? '刷新失败，下面是上次读到的卡' : '读不到等你拍板的卡'}：${failure}（下次轮询会再试）`))
     if (cards.length === 0 && failure === '') list.append(el('div', 'wb-sa-hint', loaded ? '没有等你拍板的卡' : '正在读取…'))
@@ -361,6 +406,7 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
   return {
     root, refresh,
     focus(cardId: string) { if (!CARD_ID.test(cardId)) return; wanted = cardId; void refresh() },
-    waiting: () => cards.length,
+    // #888 D5: a card the host already took is shown for a day but is not waiting.
+    waiting: () => cards.filter(card => card.autoApproved === undefined).length,
   }
 }

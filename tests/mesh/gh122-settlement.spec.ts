@@ -47,13 +47,18 @@ async function forgedReceiptHost(settlementAuth: 'observe' | 'enforce') {
   expect(forged.body.delivered, JSON.stringify(forged.body)).toBe(true)
   const state = await globalThis.fetch(`${a.baseUrl}/__dsh_a2a/state`).then(async r => await r.json()) as { tasks: Array<Record<string, any>>; archived: Array<Record<string, any>>; settlement: Record<string, any> }
   const query = await post(`${a.baseUrl}/a2a/query`, { task_id: task.task_id, fingerprint: peerPayloadFingerprint({ caller: task.caller_session, message: task.message, noWait: true, team: task.team }) })
-  return { a, state, query: query.body, evil: ids[1], forged: forged.body }
+  // #881 v2 B2: the forged receipt's own mailbox row carries the ledger's verdict, read back from the inbox.
+  const inbox = await post(`${a.baseUrl}/__dsh_a2a/cli-deposit`, { action: 'inbox', handle: ids[1] })
+  const forgedRow = (inbox.body.mail as Array<Record<string, unknown>>).find(m => m.task_id === 'direct-gh122000002')
+  return { a, state, query: query.body, evil: ids[1], forged: forged.body, forgedRow }
 }
 
 describe('#114 S4 settlement authorization (real host)', () => {
   it('observe: the forged receipt settles, but is marked off-chain and rung as would-refuse', async () => {
-    const { a, state, evil, forged } = await forgedReceiptHost('observe')
+    const { a, state, evil, forged, forgedRow } = await forgedReceiptHost('observe')
     try {
+      // #881 v2 B2: observe settles the ledger row, but an off-chain settler is no positive verdict for the team.
+      expect(forgedRow).toMatchObject({ receipt_for: 'direct-gh122000001', settlement: 'none', settlement_reason: 'settler-off-chain' })
       // #139: observe refuses nothing, so the sender is told nothing.
       expect(forged.settlement).toBeUndefined()
       expect(state.tasks.find(t => t.taskId === 'direct-gh122000001')).toBeUndefined()
@@ -66,8 +71,10 @@ describe('#114 S4 settlement authorization (real host)', () => {
   }, 60_000)
 
   it('enforce: the row stays owed, the refusal is recorded, and /a2a/query does not answer with the forged line', async () => {
-    const { a, state, query, forged } = await forgedReceiptHost('enforce')
+    const { a, state, query, forged, forgedRow } = await forgedReceiptHost('enforce')
     try {
+      // #881 v2 B2: the refusal reaches the row the team reads, not only the sender's wire response.
+      expect(forgedRow).toMatchObject({ receipt_for: 'direct-gh122000001', settlement: 'refused', settlement_reason: 'settler-off-chain' })
       // #139 (design §4.4): the sender reads the refusal on its own wire response; the delivery itself still lands.
       expect(forged.settlement).toEqual({ status: 'refused', reason: 'settler-off-chain', task_id: 'direct-gh122000001' })
       expect(forged.delivered).toBe(true)

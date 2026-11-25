@@ -4,7 +4,7 @@
  * here through the same host route as the DSH right bar, and whether the person is the owner is the host's call alone.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { ATTACH_MAX, STAGE_REUSE_MS, CARD_ID, cardOf, createDecisionsGroup, decisionLink, fileHref, oneClick, refusalText, type DecisionCard } from '../src/wb-decisions.ts'
+import { ATTACH_MAX, STAGE_REUSE_MS, CARD_ID, cardOf, inputMet, inputOf, recommendedNeedsInput, createDecisionsGroup, decisionLink, fileHref, oneClick, refusalText, type DecisionCard } from '../src/wb-decisions.ts'
 import { createSuperagentPane } from '../src/wb-superagent.ts'
 
 const XSS = '<img src=x onerror="window.__pwned=1">'
@@ -395,3 +395,78 @@ describe('in the 团队 tab', () => {
 })
 
 export type { DecisionCard }
+
+describe('#888 D4: options that need the owner to fill something in', () => {
+  const plain = (over: Record<string, unknown> = {}) => row({ level: 'P2', options: ['甲', '乙'], recommended: '甲', files: [], address: 'dsh/canvas/team', ...over })
+  it('inputs are read as data: unknown options, kinds or prompts are dropped; a ticket card is listed only with inputs', () => {
+    const card = cardOf(plain({ inputs: { 乙: { kind: 'text', prompt: '写原因' }, 丙: { kind: 'text', prompt: 'p' }, 甲: { kind: 'image', prompt: 'p' } } }))!
+    expect(card.inputs).toEqual({ 乙: { kind: 'text', prompt: '写原因' } })
+    expect(cardOf(plain({ inputs: [] }))!.inputs).toEqual({})
+    expect(cardOf(plain({ source: 'ticket' }))).toBeUndefined()
+    expect(cardOf(plain({ source: 'ticket', inputs: { 乙: { kind: 'file', prompt: 'p' } } }))).toBeDefined()
+    expect(cardOf(plain({ source: 'health', inputs: { 乙: { kind: 'file', prompt: 'p' } } }))).toBeUndefined()
+  })
+  it('no one-click when the recommendation needs input', () => {
+    const card = cardOf(plain({ inputs: { 甲: { kind: 'text', prompt: 'p' } } }))!
+    expect(recommendedNeedsInput(card)).toBe(true)
+    expect(oneClick(card)).toBe(false)
+    expect(oneClick(cardOf(plain({ inputs: { 乙: { kind: 'text', prompt: 'p' } } }))!)).toBe(true)
+  })
+  it('marks the option with its prompt; confirming waits for the words', async () => {
+    const m = mount(() => [plain({ inputs: { 乙: { kind: 'text', prompt: '写下原因' } } })])
+    await m.group.refresh()
+    const card = document.querySelector('[data-card="d-1"]')!
+    expect(card.textContent).toContain('需你填写')
+    expect(card.textContent).toContain('写下原因')
+    const radio = Array.from(card.querySelectorAll<HTMLInputElement>('input[type=radio]'))[1]!
+    radio.checked = true; radio.dispatchEvent(new Event('change'))
+    const confirm = card.querySelector<HTMLButtonElement>('.wb-sa-confirm')!
+    expect(confirm.disabled).toBe(true)
+    const words = card.querySelector<HTMLTextAreaElement>('.wb-sa-decision-note')!
+    words.value = '太贵'; words.dispatchEvent(new Event('input'))
+    expect(confirm.disabled).toBe(false)
+  })
+  it('a file option this page cannot attach to says why', async () => {
+    const m = mount(() => [plain({ inputs: { 乙: { kind: 'file', prompt: '附合同' } } })])
+    await m.group.refresh()
+    const card = document.querySelector('[data-card="d-1"]')!
+    const radio = Array.from(card.querySelectorAll<HTMLInputElement>('input[type=radio]'))[1]!
+    radio.checked = true; radio.dispatchEvent(new Event('change'))
+    const why = card.querySelector<HTMLElement>('.wb-sa-input-why')!
+    expect(why.hidden).toBe(false)
+    expect(card.querySelector<HTMLButtonElement>('.wb-sa-confirm')!.disabled).toBe(true)
+  })
+  it('the count splits by whether the recommendation needs input', async () => {
+    const m = mount(() => [plain({ id: 'a', inputs: { 甲: { kind: 'text', prompt: 'p' } } }), plain({ id: 'b' })])
+    await m.group.refresh()
+    expect(document.querySelector('.wb-led-group-hint')!.textContent).toBe('2（需填写 1 · 可直接定 1）')
+  })
+  it('inputMet: text needs words, file needs a file, text+file both', () => {
+    const card = cardOf(plain({ options: ['a', 'b', 'c'], recommended: 'a', inputs: { a: { kind: 'text', prompt: 'p' }, b: { kind: 'file', prompt: 'p' }, c: { kind: 'text+file', prompt: 'p' } } }))!
+    expect([inputMet(card, 'a', ' ', 1), inputMet(card, 'a', 'x', 0), inputMet(card, 'b', 'x', 0), inputMet(card, 'b', '', 1), inputMet(card, 'c', 'x', 0), inputMet(card, 'c', 'x', 1)]).toEqual([false, true, false, true, false, true])
+  })
+})
+
+describe('#888 D5: a card the host took automatically', () => {
+  it('says so, is not counted as waiting, and can still be decided', async () => {
+    const plain = (over: Record<string, unknown> = {}) => row({ level: 'P3', options: ['甲', '乙'], recommended: '甲', files: [], ...over })
+    const m = mount(() => [plain({ id: 'a', autoApproved: { at: '2026-11-24T10:30:00.000Z', minutes: 30 } }), plain({ id: 'b' })])
+    await m.group.refresh()
+    expect(document.querySelector('[data-card="a"] .wb-sa-auto-approved')?.textContent).toContain('不是你本人的决定')
+    expect(document.querySelector('[data-card="b"] .wb-sa-auto-approved')).toBeNull()
+    expect(m.group.waiting()).toBe(1)
+    expect(document.querySelector('.wb-led-group-hint')!.textContent).toBe('1')
+    expect(cardOf(plain({ autoApproved: { at: 1 } }))!.autoApproved).toBeUndefined()
+  })
+})
+
+describe('#892 review follow-up: inputs are read as own keys only', () => {
+  it('a recommended option called constructor keeps one click and has no inherited input', () => {
+    const card = cardOf(row({ level: 'P2', options: ['constructor', '乙'], recommended: 'constructor', files: [], inputs: { 乙: { kind: 'text', prompt: 'p' } } }))!
+    expect(inputOf(card, 'constructor')).toBeUndefined()
+    expect(inputOf(card, 'toString')).toBeUndefined()
+    expect(recommendedNeedsInput(card)).toBe(false)
+    expect(oneClick(card)).toBe(true)
+    expect(inputOf(card, '乙')).toEqual({ kind: 'text', prompt: 'p' })
+  })
+})

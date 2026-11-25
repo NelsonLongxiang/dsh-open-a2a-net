@@ -263,6 +263,7 @@ Files do not go through session messages: use the file channel below, never JPFI
   back the `next` you received. It prints one JSON object
   `{handle, epoch, after, next, mail, lost, epochChanged}` with `mail` oldest
   first, and never reads or moves the local `inbox.cursor`:
+  - A receipt row carries `settlement`, the network ledger's verdict on it: `settled`, `held`, `refused`, `none` or `pending` (with `settlement_reason` for the non-positive ones). Only `settled` (a final receipt) and `held` (an interim one) are positive. A reader that keeps its own cursor waits at a `pending` receipt for a few minutes before taking it as it is.
   - `lost` counts mail the cap pushed out before this window. It is `null`,
     meaning unknown, when the host's store restarted (`epochChanged: true`);
     the read then returns every row it still has.
@@ -468,6 +469,10 @@ state face (key-gated on a keyed host). `--json` prints raw rows for
 ## The superagent team (owner)
 
 `a2a-net superagent request <text…> [--thread ID] [--json]` sends a request to the team's workbench Source. Sent from the terminal it is an ordinary message, not a person's: the router judges it against the team's rules. `a2a-net superagent reevaluate <trigger id> [--json]` asks the router to judge a stored message again (refused for an A2A message whose sender already has its outcome). `a2a-net superagent state [--json]` prints the team state: router, accept mode, tickets with their stage, and replies. These commands apply only on a home with `superagent: true`.
+
+`a2a-net user …` is the control API's user scope: it acts as the owner on `--home` with the owner delegate saved for that home in `~/.a2a/owner-delegates.json` (mode 0600, tokens never printed). `user issue [--name N] [--days D] [--dsh-home DIR]` issues a delegate on this machine's node by writing `<dsh-home>/a2a/owner-delegates.json` and saves the token for `--home`; a remote node's owner issues one there and the agent runs `user import --token-file F --home URL`. `user nodes` lists the saved homes, `user list` and `user revoke <id>` manage the home's delegates. `user teams`, `user state --team ID`, `user decisions`, `user decide <card id> --approve` or `user decide <card id> --option O [--note T]`, `user request --team ID <text…>` and `user answer --team ID <ticket id> <text…>` drive the superagent teams as the owner; `user api <GET|POST> <path> [--data JSON|@file]` calls any control route the same way. Every command takes `--json`.
+
+`a2a-net user node …` runs node operations on `--home` (`/__dsh_a2a/node-ops`): `user node status [--all]` reads one node, or every saved home; `user node install <package.tgz> [--restart] [--force-deps]` replaces that node's copy of this plugin (sha256 checked by the node, previous copy kept as a backup); `user node rollback [backup id] [--restart]` puts a backup back; `user node restart` restarts the node. With a restart the command waits (`--timeout` seconds, default 120) until the node answers from a new process and prints its version. One node per call.
 
 Both ride the home's **owner** control credential (`$A2A_KEY`, plus the pocket cookie behind dsh-pocket), not this CLI's identity. The credential makes the request land, not the person: sent from the terminal it is an ordinary message — the router judges it against the team's rules like an agent's, never as an explicit request or a stop (owner ruling 2026-11-08; only the workbench GUI's owner action is a person's).
 

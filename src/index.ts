@@ -47,7 +47,8 @@ import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
 import { applyOwnerSettings, loadSeatNames, writeHomeA2a, type OwnerSettings } from './owner-settings.ts'
-import { CLI_HANDLE_RE, CliDepositStore, remoteCliTarget } from './cli-deposit.ts'
+import { CLI_HANDLE_RE, CliDepositStore, markReturnedReceipt, remoteCliTarget, type ReceiptSettlement } from './cli-deposit.ts'
+import { archivedBySameReceipt } from './task-ledger-rows.ts'
 import { cliHomeChoices, decideCliHome } from './cli-home.ts'
 import { forwardScope, outboundScope, type OutboundScopeRecords } from './outbound-scope.ts'
 import { createDirectForward, ForwardBirths, receiptBypassLimitsFrom } from './direct-forward.ts'
@@ -154,8 +155,9 @@ import { defaultGh } from './superagent/host/pr-follow.ts'
 import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
-import { browserOwnerProof, touchesRules } from './superagent/host/owner-proof.ts'
-import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, startWhenYglKnown, yglCapabilities, yglSettled } from './superagent/host/teams.ts'
+import { browserOwnerProof, configureOwnerDelegates, touchesRules } from './superagent/host/owner-proof.ts'
+import { OwnerDelegates } from './superagent/host/owner-delegate.ts'
+import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, exportYglBin, startWhenYglKnown, yglCapabilities, yglSettled } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { IntakeOrigins } from './intake-origins.ts'
 import { redeliverLost, TaskBodies } from './task-bodies.ts'
@@ -168,6 +170,8 @@ import {RequestRecoveryStore} from './request-recovery.ts'
 import { restrictDirToCurrentUser } from './windows-private-dir.ts'
 import {RequestRecoveryRuntime} from './request-recovery-runtime.ts'
 import {registerRequestRecoveryFace} from './faces/request-recovery.ts'
+import { registerNodeOpsFace } from './faces/node-ops.ts'
+import { NodeOps, ownPackageRoot } from './superagent/host/node-ops.ts'
 import {registerReceiptCapacityFace} from './faces/receipt-capacity.ts'
 import { SidebarSends } from './sidebar-sends.ts'
 import { PI_PLATFORM, piDeliverable, piSeatAdmission } from './superagent/platforms/pi.ts'
@@ -429,7 +433,8 @@ export function apply(ctx: Context, config: Config): void {
     if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') return false
     let connection: unknown
     try { connection = ctx.get('connection') } catch { return false }
-    return browserOwnerProof(connection, req).ok
+    // A delegate token never stands in for the control key: only a real browser login opens the route without it.
+    return browserOwnerProof(connection, req, { delegate: false }).ok
   }
 
   /**
@@ -607,6 +612,8 @@ export function apply(ctx: Context, config: Config): void {
   // #731: Windows ignores the 0600 every journal here is created with; give the a2a directory an owner-only ACL.
   const a2aDirPrivacy = restrictDirToCurrentUser(join(home, 'a2a'))
   if (a2aDirPrivacy.mode === 'windows-acl' && !a2aDirPrivacy.ok) logger.warn('a2a: could not restrict the a2a directory to the current user (%s); its journals keep the inherited ACL', a2aDirPrivacy.error)
+  // The control API's user scope: tokens the owner issued with `a2a-net user issue` stand in for the browser owner.
+  configureOwnerDelegates(new OwnerDelegates(join(home, 'a2a', 'owner-delegates.json'), join(home, 'a2a', 'owner-delegates-audit.jsonl')))
   const peerStore = new PeerStore(config.peers, join(home, 'a2a', 'peers.json'))
   // Node identity (docs/design/node-identity.md, N1): human-named nodes and their prompt versions.
   const nodeStore = new NodeStore(join(home, 'a2a'))
@@ -840,6 +847,15 @@ export function apply(ctx: Context, config: Config): void {
     if (receipt !== null) await forwardingBirths.wait(receipt.taskId)
   }
   function settleAndAnnounce(message: string, settler?: Settler): SettlementRefusal | undefined {
+    return settleWithVerdict(message, settler).refusal
+  }
+
+  /**
+   * #881 v2 B2: settle a receipt and say what the ledger did with it, as a positive verdict a mailbox row can carry:
+   * `settled` only when this receipt resolved an owed row, `held` only when an interim one marked it. Silence is never
+   * a verdict: a receipt that settled nothing it may (another identity's row, a task not owed here, an echo) is `none`.
+   */
+  function settleWithVerdict(message: string, settler?: Settler): ReceiptSettlement & { readonly refusal?: SettlementRefusal } {
     const parsedForJudge = parseReceipt(message)
     const judge = settlementJudgeFor(settler, parsedForJudge)
     // W7 slice-2 hook 3: a receipt that correlates an id THIS node's
@@ -859,11 +875,13 @@ export function apply(ctx: Context, config: Config): void {
     // p1-mailbox-owes (S33, a): a row owed by a CLI identity on this host (the inbound row an owing deposit keeps, or a
     // same-host caller's local row) is answered by that identity alone — keyed on the row, so it holds after the deposit
     // lapses too. A receipt header from anyone else names it without touching it: no settlement, no echo, no outcome.
-    if (owedRow !== undefined && (owedRow.direction === 'inbound' || owedRow.peer === 'local') && CLI_HANDLE_RE.test(owedRow.team) && settler?.caller !== owedRow.team) return undefined
+    if (owedRow !== undefined && (owedRow.direction === 'inbound' || owedRow.peer === 'local') && CLI_HANDLE_RE.test(owedRow.team) && settler?.caller !== owedRow.team) return { settlement: 'none', reason: 'not-payer' }
     const owedByHeader = owedRow !== undefined
     // #139 (design §4.4): an enforce refusal of the row the header names is
     // told to the sender on the wire response, not only in /state.
-    const headerVerdict = judge?.enforce === true && owedRow !== undefined ? judge.check(owedRow, false) : undefined
+    // #884 review B1: the judge's word on the owed row, in every mode (the ledger records it, but only enforce acts on it).
+    const rowVerdict = judge !== undefined && owedRow !== undefined ? judge.check(owedRow, false) : undefined
+    const headerVerdict = judge?.enforce === true ? rowVerdict : undefined
     // Capture authority while the owed row is still present; successful resolve archives it.
     const outcomeAllowed = judge?.enforce !== true || (owedRow !== undefined && headerVerdict?.ok === true)
     const resolved = taskLedger.resolveFromMessage(message, judge)
@@ -871,7 +889,11 @@ export function apply(ctx: Context, config: Config): void {
     // settlement seam is not told (its consumers treat a resolution as the end of the task).
     if (holdsRow(parsed?.envelope)) {
       if (resolved?.acknowledged === true) logger.info(`a2a: task ${resolved.taskId} ${parsed?.envelope?.disposition === 'attention' ? 'has a question from' : 'acknowledged by'} its target; it stays owed until the result`)
-      return undefined
+      // #884 review B1: an interim receipt is held only for a row owed here, by a settler the judge accepts. An off-chain
+      // one is refused under enforce (and the sender is told), and under observe marks the row but is no verdict.
+      if (owedRow === undefined) return { settlement: 'none', reason: 'not-owed' }
+      if (rowVerdict !== undefined && !rowVerdict.ok) return judge!.enforce ? { settlement: 'refused', reason: rowVerdict.reason, refusal: { status: 'refused', reason: rowVerdict.reason, task_id: parsed!.taskId } } : { settlement: 'none', reason: rowVerdict.reason }
+      return resolved?.acknowledged === true ? { settlement: 'held' } : { settlement: 'none', reason: 'not-resolved' }
     }
     if(resolved!==undefined)pruneReceiptWaiters()
     if (parsed !== null && parsed.taskId !== '') {
@@ -885,7 +907,7 @@ export function apply(ctx: Context, config: Config): void {
       }
     }
     if (resolved === undefined && owedByHeader) {
-      return headerVerdict !== undefined && !headerVerdict.ok ? { status: 'refused', reason: headerVerdict.reason, task_id: parsed!.taskId } : undefined
+      return headerVerdict !== undefined && !headerVerdict.ok ? { settlement: 'refused', reason: headerVerdict.reason, refusal: { status: 'refused', reason: headerVerdict.reason, task_id: parsed!.taskId } } : { settlement: 'none', reason: 'not-resolved' }
     }
     if (resolved === undefined) {
       // F5 (settlement integrity): the formal envelope missed — an inbound
@@ -900,14 +922,29 @@ export function apply(ctx: Context, config: Config): void {
         pruneReceiptWaiters()
         logger.info(`a2a: ${String(echoed.length)} pending task(s) settled by content echo (${echoed.join(', ')})`)
       }
-      return undefined
+      // An echo settles weakly and a receipt for a task not owed here settles nothing: neither is a verdict on this receipt.
+      return { settlement: 'none', reason: 'not-owed' }
     }
     try {
       ctx.emit('a2a/receipt-resolved', resolved)
     } catch (error) {
       logger.warn(`a2a: receipt-resolved listener rejected: ${String(error)}`)
     }
-    return undefined
+    // #884 review B2: resolved without an owed row means a late answer to a row already archived (abandoned, cancelled, or
+    // settled by another receipt): it settled nothing, so it is never a positive verdict. A dead-lettered row is still owed
+    // (the sweep only flips its status): its revival is `late` too, and is judged like any owed row below (#884 review B3).
+    if (!owedByHeader) {
+      const ended = taskLedger.archive().find(r => r.taskId === resolved.taskId)?.endedBy
+      return ended === 'cancelled' || ended === 'abandoned' ? { settlement: 'refused', reason: 'task-ended' } : { settlement: 'none', reason: ended === 'receipt' ? 'already-settled' : 'not-owed' }
+    }
+    // Under observe the ledger still settles an off-chain settler's receipt (and records it as would-refuse): that is not a
+    // positive verdict the team may take as an answer.
+    return offChainSettled(resolved.taskId) ? { settlement: 'none', reason: 'settler-off-chain' } : { settlement: 'settled' }
+  }
+
+  /** #881 v2 B2: whether the row a receipt just settled was settled by an off-chain settler (recorded by the judge). */
+  function offChainSettled(taskId: string): boolean {
+    return taskLedger.archive().find(r => r.taskId === taskId)?.settledBy?.chain_role === 'off-chain'
   }
 
   /**
@@ -2279,6 +2316,11 @@ export function apply(ctx: Context, config: Config): void {
     stageFiles: (id, paths, canvas) => stageCardFiles({ blobStore, from: originOf(ownCardUrl), cwd: (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd, team: `${config.team}/canvas/${canvas}`, by: id }, paths),
     memberTurn: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : memberTurnFrom(id, sessionEventsOf(agent), ctx.get('jobs' as never), message => logger.warn(message)) },
     teamSend: args => teamCanvasSend(args),
+    // #888 D3: a file input must still be on the file channel when the owner decides.
+    blobExists: sha256 => blobStore.list().some(grant => grant.sha256 === sha256),
+    // #881 v2: a body reaches a session only after it is durably marked restricted (and tainted).
+    restrict: id => nodeTaint.markRestricted(id),
+    restricted: id => nodeTaint.isRestricted(id),
     narrowRecovery:{identity:caller=>requestRecovery.identity(caller),proposal:binding=>requestRecovery.proposal(binding),transport:(permit,mode,current)=>requestRecovery.transport(permit,mode,current),receipt:(binding,caller,message)=>requestRecovery.receipt(binding,caller,message)},
     outboundOutcome: ({ sender, task, address, message }) => {
       const verdict = idempotencyStore.query(task, peerPayloadFingerprint({ caller: sender, team: homeCanvasTeam(address, ownCanvasFingerprint), message, noWait: true }))
@@ -2305,6 +2347,7 @@ export function apply(ctx: Context, config: Config): void {
   } as never)
   if (superagentTeams !== undefined) staffing = createStaffing({ path: join(home, 'a2a', 'superagent', 'staffing.json'), teams: superagentTeams, canvasStore, canvasNameReserved: name => canvasNameReserved(name, config.team, ownerAllowlist, teamMemberships),
     sessionValid: id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, presetOf: sessionPresetOf, memberForWrite: (id, peer) => canvasMemberForWrite(id, peer), cliHomeForAdd, a2aHome: home, a2aConfig: config as unknown as Record<string, unknown>, sessionOps: { join: id => { const agent = liveRoots.get(id); if (agent === undefined) return { ok: false, error: `no live local session ${id}` }; mountSessionNode(agent); joinedSessions.add(id); return { ok: true } }, leave: id => { try { revokeCanvasMember(id, 'leave') } catch { return false } sessionNodes.delete(id); joinedSessions.remove(id); teamMemberships.dropSession(id); return true }, joined: id => joinedSessions.has(id) }, seatNames: { read: () => ownerSeatNames, write: names => { const out = writeHomeA2a(home, { seatNames: names }, config as unknown as Record<string, unknown>, Config({} as never) as unknown as Record<string, unknown>, { exists: existsSync, read: p => readFileSync(p, 'utf8'), write: (p, s) => writeFileSync(p, s, 'utf8'), mkdir: p => { mkdirSync(p, { recursive: true }) } }); if (!out.ok) return { ok: false, error: out.error }; ownerSeatNames = names; return { ok: true } } },
+    sessionTitles: { read: id => { const agent = liveRoots.get(id); if (agent === undefined) return { live: false }; const title = ctx.get('sessionTitle')?.get(agent.session)?.title; return title !== undefined ? { live: true, title } : { live: true } }, rename: (id, title) => { const agent = liveRoots.get(id), titles = ctx.get('sessionTitle'); if (agent === undefined || titles === undefined) return { ok: false, error: `no live local session ${id} or no session-title service` }; try { return { ok: true, title: titles.rename(agent.session, title).title } } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } } }, reset: async id => { const agent = liveRoots.get(id), titles = ctx.get('sessionTitle'); if (agent === undefined || titles === undefined) return false; try { await titles.refresh(agent.session) } catch { return false } return titles.get(agent.session)?.source.kind !== 'user' }, available: () => ctx.get('sessionTitle') !== undefined },
     teamCanvasRefusal: (canvas, member) => superagentTeams.canvasMemberRefusal(canvas, member, sessionPresetOf), revokeCanvasMember: (id, reason, name) => revokeCanvasMember(id, reason, name), logger })
   const superagentHost: SuperagentHost | undefined = superagentTeams?.primary
   // PR-D: the router and the members call only their role's tools — a host guard, whatever preset the session runs.
@@ -2318,6 +2361,7 @@ export function apply(ctx: Context, config: Config): void {
   let superagentHomeUrl: string | undefined
   if (superagentHost !== undefined) {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
+    exportYglBin() // #900: the host's own ygl-trees runs (db init, --version) use this node directly on Windows
     ctx.effect(() => {
       void ensureTeamYglHome({ logger })
       // Design Y1d (#739 review R1): the engines start at boot, as before #739 (a late start's recovery restarted assignments
@@ -2851,11 +2895,8 @@ export function apply(ctx: Context, config: Config): void {
       return fail(result.code===-32002?'RECEIPT_PAYLOAD_CONFLICT':'RECEIPT_DELIVERY_REFUSED',false)
     },
     settle:record=>{
-      const row=taskLedger.find(record.taskId)
-      if(!row)return taskLedger.archive().some(r=>r.taskId===record.taskId&&r.endedBy==='receipt')
-      if(row.direction==='inbound')return settleOwnInbound(record.text,record.target,{caller:record.payer,proof:'in-process',ingress:'local'})&&taskLedger.find(record.taskId)===undefined
-      const judge=settlementJudgeFor({caller:record.payer,proof:'in-process',ingress:'local'},parseReceipt(record.text),true)
-      return taskLedger.resolveFromMessage(record.text,judge)!==undefined
+      // #881 v2 B2: a receipt returned into a local CLI mailbox was stored before this settlement; its row gets the verdict now.
+      return markReturnedReceipt(cliDeposits,record,settleOutboxReceipt(record),message=>{logger.warn(message)})
     },
     notify:record=>{logger.warn('a2a: receipt delivery blocked ref=%s; retained original return only',nudgeRef(record.taskId));requestReminderScan()},
     schedule:ms=>{
@@ -2865,6 +2906,26 @@ export function apply(ctx: Context, config: Config): void {
     warn:code=>logger.warn('a2a: receipt outbox %s',code),
   })
   ctx.effect(()=>{const timer=ctx.timer.interval(()=>{void receiptOutbox.scan()},REMINDER_SCAN_MS);queueMicrotask(()=>{void receiptOutbox.scan()});return ()=>{receiptOutbox.stop();timer();for(const stop of receiptTimers)stop();receiptTimers.clear();receiptValidationStamps.clear()}},'a2a: durable original receipt return')
+  /** The original-receipt return's settlement, with the verdict its local mailbox row carries (#881 v2 B2). */
+  function settleOutboxReceipt(record:ReceiptOutboxRecord):{ok:boolean;settlement:ReceiptSettlement} {
+    const parsed=parseReceipt(record.text),positive:ReceiptSettlement=holdsRow(parsed?.envelope)?{settlement:'held'}:{settlement:'settled'}
+    const row=taskLedger.find(record.taskId)
+    if(!row) {
+      const archived=taskLedger.archive().find(r=>r.taskId===record.taskId&&r.endedBy==='receipt')
+      if(archived===undefined)return {ok:false,settlement:{settlement:'none',reason:'not-owed'}}
+      return {ok:true,settlement:archivedBySameReceipt(archived,record.payer,parsed?.summary??'')?positive:{settlement:'none',reason:'already-settled'}}
+    }
+    if(row.direction==='inbound') {
+      const ok=settleOwnInbound(record.text,record.target,{caller:record.payer,proof:'in-process',ingress:'local'})&&taskLedger.find(record.taskId)===undefined
+      return {ok,settlement:ok?positive:{settlement:'none',reason:'not-resolved'}}
+    }
+    const judge=settlementJudgeFor({caller:record.payer,proof:'in-process',ingress:'local'},parsed,true)
+    // #884 review B1: an interim return is held only for a settler the judge accepts (an archived row cannot show it).
+    const check=judge?.check(row,false)
+    const ok=taskLedger.resolveFromMessage(record.text,judge)!==undefined
+    if(ok&&check!==undefined&&!check.ok)return {ok,settlement:{settlement:'none',reason:check.reason}}
+    return {ok,settlement:!ok?{settlement:'none',reason:'not-resolved'}:offChainSettled(record.taskId)?{settlement:'none',reason:'settler-off-chain'}:positive}
+  }
   async function deliverRetainedReceipt(record:ReceiptOutboxRecord):Promise<Record<string,JsonValue>> {
     try {
       const result=await receiptOutbox.send(record.taskId)
@@ -3632,6 +3693,8 @@ export function apply(ctx: Context, config: Config): void {
       observeAuthorization,
       scanSessionLogList,
       readSessionLogTail,
+      // #881 v2: sessions that received an outbound result body are not served to peers.
+      restrictedSession: id => nodeTaint.isRestricted(id),
       taskLedger,
       receiptReplayAllowed:(message,caller,team,claim)=>{
         const parsed=parseReceipt(message);if(!parsed||!claim.bound||claim.bodyBound!==true||!claimCovers(caller,claim.caller)||!isRootOriginUrl(claim.callerUrl))return false
@@ -3643,7 +3706,7 @@ export function apply(ctx: Context, config: Config): void {
       },
       refuseIfFlooded,
       refuseIfQueueFull,
-      settleAndAnnounce, waitForForwardBirth,
+      settleAndAnnounce, settleWithVerdict, waitForForwardBirth,
       touchWakeDemand: () => { lastWakeDemandAt = Date.now() },
       session,
       resolveAgentForTeam,
@@ -3874,6 +3937,7 @@ export function apply(ctx: Context, config: Config): void {
   // superagent's HTTP faces live in src/faces/superagent.ts (#570 line ratchet); registered after cardCache exists: whenWebServerSettled may run its callback at once.
   if (superagentHost !== undefined && superagentTeams !== undefined) whenWebServerSettled((webServer) => {
     registerSuperagentFaces(webServer, {
+      ownerDelegatesPath: join(home, 'a2a', 'owner-delegates.json'),
       sidebarSends,
       ctx, config, superagentHost, superagentTeams, controlRoute, readJsonBody, recordActivity, routeTrunk,
       sessionNodes, sessionPresetOf, sessionTeamOf, joinedSessions, archivedSessionFilter, verifyOriginClaim, fetchPeerCard, peerStore, cardCache,
@@ -3882,6 +3946,7 @@ export function apply(ctx: Context, config: Config): void {
     })
   })
   whenWebServerSettled(webServer=>registerRequestRecoveryFace(webServer,{ctx,controlRoute,readJsonBody,recovery:requestRecovery}))
+  { const root = ownPackageRoot(fileURLToPath(import.meta.url)); if (root !== undefined) { const ops = new NodeOps({ root, dir: join(home, 'a2a', 'node-ops') }); whenWebServerSettled(webServer => registerNodeOpsFace(webServer, { ctx, controlRoute, readJsonBody, ops })) } }
   whenWebServerSettled(webServer=>registerReceiptCapacityFace(webServer,{ctx,controlRoute,readJsonBody:readJsonBody as never,ledger:taskLedger,logger}))
   const cardCacheInFlight = new Map<string, Promise<A2aPeerCard | undefined>>()
   // #114 S6: the change hooks and the boot observation start only once every
@@ -4730,13 +4795,15 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
       // #114 S4 (design §4.5): a receipt dropped into a local CLI mailbox is
       // exactly the settlement a CLI-originated task waits for — settle it,
       // as the wire face settles before ITS mailbox split.
-      settleAndAnnounce(message, localSettler)
+      // #881 v2 B2: the verdict rides on the row, so the team reading it can tell a settled answer from a refused one.
+      const verdict = settleWithVerdict(message, localSettler)
       const answered = parseReceipt(message)
       const disposition = answered?.envelope?.disposition
       // p1-mail-admission: the same-host admission this delivery passed (a joined face's rule, else local-exempt).
       const localAdmission = localCandidateAdmission(admissionRecords, callerSession, mailTeam)
       const evicted = cliDeposits.mail(mailTeam, callerSession ?? 'unknown', message, undefined, { taskId: taskIdFromCaller, contextId, proof: 'in-process', ...(answered !== null ? { receiptFor: answered.taskId } : {}), ...(disposition !== undefined ? { disposition } : {}),
-        ...(localAdmission.ok ? { admission: localAdmission.rule } : {}) })
+        ...(localAdmission.ok ? { admission: localAdmission.rule } : {}),
+        ...(answered !== null ? { settlement: verdict.settlement, ...(verdict.reason !== undefined ? { settlementReason: verdict.reason } : {}) } : {}) })
       // p1-mailbox-owes (D-5): a row the cap pushed out takes its owed inbound row with it.
       for (const gone of evicted) if (gone.task_id !== undefined) taskLedger.evictInbound(gone.task_id, taskLedger.find(gone.task_id)?.team ?? mailTeam)
       recordActivity('in', team, callerSession ?? 'peer', true)
