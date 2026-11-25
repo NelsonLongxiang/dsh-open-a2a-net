@@ -465,3 +465,5 @@ body{background:var(--n-bg);color:var(--n-ink);font:13px/1.45 system-ui,"Segoe U
 .wb-sa-attach{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .wb-sa-attach-file{display:inline-flex;gap:4px;align-items:center;max-width:100%;font-size:11.5px;overflow-wrap:anywhere}
 .wb-sa-decision-card.is-dragging{outline:2px dashed var(--n-accent);outline-offset:2px}
+.wb-sa-casts .wb-sa-check{display:block;margin:2px 0}
+.wb-sa-cast-member{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:4px 0}

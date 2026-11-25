@@ -58,6 +58,7 @@ user:     user issue [--name N] [--days D] [--dsh-home DIR] · user import --tok
           · user teams · user state --team ID · user decisions · user decide <card id> (--approve | --option O) [--note T]
           · user request --team ID <text…> · user answer --team ID <ticket id> <text…> · user api <GET|POST> <path> [--data JSON|@file]
           · user node status [--all] · user node install <tgz> [--restart] [--force-deps] · user node rollback [backup id] [--restart] · user node restart
+          · user builder inventory [--all] · user builder list [--all]   (the team builders, read-only)
           (the control API's user scope: acts as the owner on --home, with the owner delegate saved for that home)
 pi 席位:  publish --pi-seat · publish --renew (keeps the last publish's declarations) · ticket read|idle [--text T] [--ticket ID --event ID] · ticket ack|handback --trigger ID -- <text> · ticket report --ticket ID --state S [--question Q --options A|B --recommended A [--level P1]] -- <summary>
           · ticket error [--transient] -- <what failed> · pi install [--dir DIR] [--force]   (docs/design/superagent-pi-platform.md)
@@ -894,6 +895,61 @@ async function cmdUserNode(words) {
   usage('usage: a2a user node status [--all] · node install <tgz> [--restart] [--force-deps] · node rollback [backup id] [--restart] · node restart')
 }
 
+// #903 S1: the team builders of a node, read-only — the inventory a builder sees and the builder sessions. --all reads
+// every home that has a saved owner delegate; a home that cannot answer is named with why, never left out.
+/**
+ * #906 review B1: one node's read for a multi-node command. Never exits the process: a refusal (401 included), a node
+ * with no saved delegate, a network failure or a body that is not JSON each become `{ ok: false, home, code, error }`,
+ * so the remaining nodes are still read.
+ */
+async function userReadNode(path, base) {
+  const saved = readDelegates().homes[base]
+  if (saved === undefined || typeof saved.token !== 'string') return { ok: false, home: base, code: 'no-delegate', error: `no owner delegate saved for ${base}` }
+  let res
+  try {
+    const key = typeof saved.key === 'string' && flag('--key') === undefined && envValue('A2A_KEY') === undefined ? { 'X-API-Key': saved.key } : {}
+    res = await homeFetch(`${base}${path}`, { method: 'GET', headers: { ...keyHeaders(), ...key, 'X-DSH-Owner-Delegate': saved.token } })
+  } catch (error) { return { ok: false, home: base, code: 'unreachable', error: `unreachable: ${String(error?.message ?? error)}` } }
+  let out
+  try { out = await res.json() } catch { return { ok: false, home: base, code: 'bad-reply', status: res.status, error: `HTTP ${String(res.status)}: not a JSON reply` } }
+  if (res.status === 401) return { ok: false, home: base, code: 'unauthorized', status: 401, error: String(out?.error ?? 'the node refused the delegate (401): issue or import a fresh one') }
+  if (res.status >= 400 || out?.ok !== true) return { ok: false, home: base, code: String(out?.code ?? `http-${String(res.status)}`), status: res.status, error: String(out?.error ?? `HTTP ${String(res.status)}`) }
+  return { home: base, ...out, ok: true }
+}
+
+async function cmdUserBuilder(words) {
+  const [op] = words
+  const PATH = '/__dsh_a2a/superagent/builder'
+  if (op !== 'inventory' && op !== 'list') usage('usage: a2a user builder inventory [--all] · user builder list [--all]   (read-only, #903 S1)')
+  const bases = has('--all') ? Object.keys(readDelegates().homes) : [homeKey()]
+  if (bases.length === 0) die('[user] no owner delegate saved for any node')
+  // #906 review B1: every node is read and reported; the exit code is 0 only when every node answered, 1 otherwise.
+  const results = []
+  for (const base of bases) results.push(await userReadNode(`${PATH}?view=${op === 'inventory' ? 'inventory' : 'builders'}`, base))
+  const failed = results.filter(r => r.ok !== true).length
+  if (failed > 0) process.exitCode = 1
+  if (has('--json')) { console.log(JSON.stringify({ ok: failed === 0, nodes: results.length, failed, results })); return }
+  for (const out of results) {
+    const base = out.home
+    if (out.ok !== true) { console.log(`${base}  FAILED ${String(out.code)}: ${String(out.error)}`); continue }
+    if (op === 'list') {
+      const rows = out.builders ?? []
+      if (rows.length === 0) console.log(`${base}  no team builder session`)
+      for (const b of rows) console.log(`${base}  ${String(b.session)}  ${String(b.name)}  ${b.live ? 'live' : 'not loaded'}${b.joined ? '' : ' (not joined)'}  awaiting ${String(b.awaiting)} / drafted ${String(b.recent)}`)
+      continue
+    }
+    console.log(`== ${base}`)
+    for (const t of out.teams ?? []) {
+      console.log(`  team ${String(t.team)}  canvas ${String(t.canvas)}  accept ${String(t.acceptMode)}  rules r${String(t.rules?.teamRevision)} dispatch r${String(t.rules?.dispatchRevision)}`)
+      if (t.router) console.log(`    router  ${String(t.router.name)}  (${String(t.router.session)})`)
+      for (const m of t.members ?? []) console.log(`    ${String(m.kind).padEnd(8)} ${String(m.seatId ?? '-').padEnd(10)} ${String(m.name)}${m.role ? `  · ${String(m.role).slice(0, 60)}` : ''}  r${String(m.revision)}`)
+    }
+    if ((out.candidates ?? []).length > 0) console.log(`  on no team: ${(out.candidates ?? []).map(c => String(c.name)).join('、')}`)
+    const waiting = (out.staffing ?? []).filter(e => e.state === 'awaiting')
+    if (waiting.length > 0) console.log(`  blueprints awaiting the owner: ${waiting.map(e => `${String(e.id)} ${String(e.summary ?? '')}`.trim()).join('; ')}`)
+  }
+}
+
 async function cmdUser() {
   const [sub, ...words] = positionals()
   if (sub === 'issue') {
@@ -929,6 +985,7 @@ async function cmdUser() {
   if (sub === 'list') { printOut(await userCall('GET', '/__dsh_a2a/owner-delegates'), out => { for (const r of out.delegates ?? []) console.log(`${String(r.id)}  ${String(r.name)}  ${r.revokedAt !== null ? `revoked ${String(r.revokedAt)}` : r.expiresAt === null ? 'no end' : `until ${String(r.expiresAt)}`}`) }); return }
   if (sub === 'revoke') { const [id] = words; if (id === undefined) usage('usage: a2a user revoke <id>'); printOut(await userCall('POST', '/__dsh_a2a/owner-delegates', { action: 'revoke', id }), out => console.log(out.ok ? `[user] ${id} revoked` : `[user] no live delegate ${id}`)); return }
   if (sub === 'node') { await cmdUserNode(words); return }
+  if (sub === 'builder') { await cmdUserBuilder(words); return }
   if (sub === 'teams') { printOut(await userCall('GET', '/__dsh_a2a/superagent/teams'), out => { for (const t of out.teams ?? []) console.log(`${String(t.id || '(primary)').padEnd(24)} ${String(t.address ?? '')}  ${t.open ? 'open' : 'closed'}`) }); return }
   const team = flag('--team')
   if (sub === 'state') { printOut(await userCall('GET', `/__dsh_a2a/superagent${team !== undefined ? `?teamId=${encodeURIComponent(team)}` : ''}`), out => { for (const t of out.tickets ?? []) if (!t.ended) console.log(`${String(t.id)}  ${String(t.stage?.stage ?? '?')}${t.attention ? ' [question]' : ''}  ${String(t.title)}`) }); return }
@@ -952,7 +1009,7 @@ async function cmdUser() {
     printOut(await userCall(method.toUpperCase(), path, body))
     return
   }
-  usage('usage: a2a user issue|import|nodes|node|list|revoke|teams|state|decisions|decide|request|answer|api … (see a2a help)')
+  usage('usage: a2a user issue|import|nodes|node|builder|list|revoke|teams|state|decisions|decide|request|answer|api … (see a2a help)')
 }
 
 async function cmdSuperagent() {

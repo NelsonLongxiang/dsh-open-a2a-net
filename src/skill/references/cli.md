@@ -474,6 +474,8 @@ state face (key-gated on a keyed host). `--json` prints raw rows for
 
 `a2a-net user node …` runs node operations on `--home` (`/__dsh_a2a/node-ops`): `user node status [--all]` reads one node, or every saved home; `user node install <package.tgz> [--restart] [--force-deps]` replaces that node's copy of this plugin (sha256 checked by the node, previous copy kept as a backup); `user node rollback [backup id] [--restart]` puts a backup back; `user node restart` restarts the node. With a restart the command waits (`--timeout` seconds, default 120) until the node answers from a new process and prints its version. One node per call.
 
+`a2a-net user builder inventory [--all]` reads a node's teams as its team builder sees them (router and members by seat, roles, rule revisions, sessions on no team, blueprints awaiting the owner); `user builder list [--all]` lists the node's team builder sessions. Both are read-only (#903 S1); `--all` reads every saved home and names any that cannot answer.
+
 Both ride the home's **owner** control credential (`$A2A_KEY`, plus the pocket cookie behind dsh-pocket), not this CLI's identity. The credential makes the request land, not the person: sent from the terminal it is an ordinary message — the router judges it against the team's rules like an agent's, never as an explicit request or a stop (owner ruling 2026-11-08; only the workbench GUI's owner action is a person's).
 
 A message from a CLI identity (`route` to the team's A2A address) is an agent's message under superagent's definition. It can reach the team only through the A2A Source's bot list and accept mode; it is never an explicit request and never a stop. See [superagent.md](superagent.md).

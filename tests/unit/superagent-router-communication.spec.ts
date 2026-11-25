@@ -50,7 +50,9 @@ it('adds only the shared boundary to original worker personas and leaves the bui
   // #888 D6 adds one sentence on option inputs to each persona's owner-reporting line. Target next/0.8 78e077c; preserve its member-proposal text and original worker semantics. The member's prefix adds the R7b question
   // contract (four parts); the observer's is D19's
   // rewrite (workbench-market 18: takes no tickets, tags and counts stuck points, sees health problems first — R7a).
-  const originalPrefixes = { member: '6b97b2cfdf0f8bf830d821d12791920dba51c1ae045feaab7e0ba28c30b5acbd', observer: '0ee83435bdccd922ba485ca45bc5f79ea5b60c56024a63c63349cb0a631b38f3' }
+  // #902 S1: the observer's card line names the basis, the card kinds and a2a_card_queue; S2 adds a2a_card_draft.
+  // Owner 2026-11-25 (forward personas): each rule now leads with the action or allowed path, keeping its force; router, member and observer gain one wrap-up line.
+  const originalPrefixes = { member: '56985b61d5f68398c14a8121d85e8ff123abd237c6327a3c52babcebcd9a8624', observer: '9d4995720c428698c534f8a2e6603acac2a5311bb234dc310379da214c41e812' }
   for (const [role, sha] of Object.entries(originalPrefixes)) {
     const original = readFileSync(new URL('src/superagent/prompts/' + role + '.md', root), 'utf8')
     expect(digest(original)).toBe(sha)
@@ -64,7 +66,8 @@ it('adds only the shared boundary to original worker personas and leaves the bui
   // #83 (owner-approved minimal fix) added one sentence to the builder's persona: a loaded skill is guidance to read and
   // grants no tool. Pin the new text as #791 did.
   expect(builder).toContain('A skill is guidance you read: it gives you no tool')
-  expect(digest(builder)).toBe('75fdb142fd195418120f9597aa41c59ce429445211f7e04d5fd3d57ddd096d40')
+  // Owner 2026-11-25 (forward personas): the builder's rules lead with the allowed path; the pinned clauses above are unchanged.
+  expect(digest(builder)).toBe('5ac7ace8c82506d373d1576312b5fc7a1d9156677469f347e23990f9866dd2a6')
 })
 
 it('retains upstream member initiative as a proposal, never a self-assignment or an external send', () => {
