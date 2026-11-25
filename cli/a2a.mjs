@@ -57,6 +57,7 @@ superagent: superagent request <text…> [--thread ID] · superagent reevaluate 
 user:     user issue [--name N] [--days D] [--dsh-home DIR] · user import --token-file F · user list · user revoke <id> · user nodes
           · user teams · user state --team ID · user decisions · user decide <card id> (--approve | --option O) [--note T]
           · user request --team ID <text…> · user answer --team ID <ticket id> <text…> · user api <GET|POST> <path> [--data JSON|@file]
+          · user node status [--all] · user node install <tgz> [--restart] [--force-deps] · user node rollback [backup id] [--restart] · user node restart
           (the control API's user scope: acts as the owner on --home, with the owner delegate saved for that home)
 pi 席位:  publish --pi-seat · publish --renew (keeps the last publish's declarations) · ticket read|idle [--text T] [--ticket ID --event ID] · ticket ack|handback --trigger ID -- <text> · ticket report --ticket ID --state S [--question Q --options A|B --recommended A [--level P1]] -- <summary>
           · ticket error [--transient] -- <what failed> · pi install [--dir DIR] [--force]   (docs/design/superagent-pi-platform.md)
@@ -119,7 +120,7 @@ admission: admission <caller> [--local] [--json]   how <caller> would be admitte
 // piSeat: docs/design/superagent-pi-platform.md P1 — this identity is a Pi seat (it may join a superagent team as a member).
 const DECLARABLE = ['progressReceipts', 'teamRoster', 'directedSeats', 'reworkReturns', 'piSeat']
 const VALUE_FLAGS = new Set(['--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir', '--recommended', '--level', '--event', '--run', '--name', '--days', '--dsh-home', '--team', '--option', '--data', '--token-file'])
-const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class', '--pi-seat', '--transient', '--approve'])
+const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class', '--pi-seat', '--transient', '--approve', '--restart', '--all', '--force-deps'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
 const HOOK_MODE = process.argv.includes('--hook')
@@ -832,22 +833,66 @@ const DELEGATES = join(IDENTITY_DIR, 'owner-delegates.json')
 const readDelegates = () => { try { const v = JSON.parse(readFileSync(DELEGATES, 'utf8')); return v !== null && typeof v === 'object' && v.homes !== null && typeof v.homes === 'object' ? v : { homes: {} } } catch { return { homes: {} } } }
 const writeDelegates = (book) => { mkdirSync(IDENTITY_DIR, { recursive: true }); const tmp = `${DELEGATES}.${process.pid}.tmp`; writeFileSync(tmp, `${JSON.stringify(book, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 }); renameSync(tmp, DELEGATES) }
 const homeKey = () => home().replace(/\/+$/, '')
-const userHeaders = () => {
-  const saved = readDelegates().homes[homeKey()]
-  if (saved === undefined || typeof saved.token !== 'string') die(`[user] no owner delegate saved for ${homeKey()}: run 'a2a-net user issue' on that node (or 'user import --token-file F --home ${homeKey()}')`)
+const userHeaders = (base = homeKey()) => {
+  const saved = readDelegates().homes[base]
+  if (saved === undefined || typeof saved.token !== 'string') die(`[user] no owner delegate saved for ${base}: run 'a2a-net user issue' on that node (or 'user import --token-file F --home ${base}')`)
   const key = typeof saved.key === 'string' && flag('--key') === undefined && envValue('A2A_KEY') === undefined ? { 'X-API-Key': saved.key } : {}
   return { ...keyHeaders(), ...key, 'X-DSH-Owner-Delegate': saved.token }
 }
 const dshHome = () => flag('--dsh-home') ?? envValue('DSH_HOME') ?? join(homedir(), '.dsh')
 
-async function userCall(method, path, body) {
-  const res = await homeFetch(`${homeKey()}${path}`, { method, headers: { ...userHeaders(), ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) })
+async function userCall(method, path, body, base = homeKey()) {
+  const res = await homeFetch(`${base}${path}`, { method, headers: { ...userHeaders(base), ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) })
   const out = await replyOf(res)
   if (res.status === 401) die(keyHint(401))
   return out
 }
 
 const printOut = (out, line) => { if (has('--json') || line === undefined) { console.log(JSON.stringify(out, null, has('--json') ? 0 : 2)); if (out.ok === false) process.exitCode = 1; return } if (out.ok === false || (out.error !== undefined && out.ok !== true)) die(`[user] ${String(out.error ?? out.code ?? 'refused')}`); line(out) }
+
+// Node operations (/__dsh_a2a/node-ops): update this plugin on a node, roll it back, restart it. One node per call
+// (status --all reads every saved node); a restart is waited for until the node answers with a new process.
+async function cmdUserNode(words) {
+  const [op, arg] = words
+  const PATH = '/__dsh_a2a/node-ops'
+  const line = (base, s) => `${base}  ${String(s.version)}  pid ${String(s.pid)}  up since ${String(s.startedAt)}  ${String(s.platform)} node ${String(s.node)}${s.installed ? '' : '  (source checkout: no install)'}${s.busy ? '  BUSY' : ''}  backups ${String((s.backups ?? []).map(b => b.version).join(',') || '-')}`
+  const waitRestarted = async (pid) => {
+    const until = Date.now() + Number(flag('--timeout') ?? '120') * 1000
+    while (Date.now() < until) {
+      await new Promise(r => setTimeout(r, 2000))
+      try { const s = await userCall('GET', PATH); if (s.ok === true && s.pid !== pid) return s } catch { /* still restarting */ }
+    }
+    return undefined
+  }
+  const finish = async (out, before) => {
+    if (out.restart === undefined && op !== 'restart') { printOut(out, o => console.log(`[node] ${homeKey()}: ${String(o.from)} → ${String(o.to)}${o.backup ? ` (backup ${String(o.backup)})` : ''}; restart to load it`)); return }
+    const answer = op === 'restart' ? out : out.restart
+    if (answer.ok !== true) { if (op !== 'restart') console.log(`[node] ${homeKey()}: ${String(out.from)} → ${String(out.to)} swapped`); die(`[node] restart refused: ${String(answer.error ?? answer.code ?? answer.status)}`) }
+    const after = await waitRestarted(before.pid)
+    if (after === undefined) die(`[node] ${homeKey()} did not come back within the timeout (old pid ${String(before.pid)})`)
+    console.log(`[node] ${line(homeKey(), after)}`)
+  }
+  if (op === 'status') {
+    const bases = has('--all') ? Object.keys(readDelegates().homes) : [homeKey()]
+    for (const base of bases) {
+      try { const s = await userCall('GET', PATH, undefined, base); console.log(s.ok === true ? line(base, s) : `${base}  ${String(s.error ?? s.code ?? 'no node-ops route (older plugin)')}`) } catch (error) { console.log(`${base}  unreachable: ${String(error?.message ?? error)}`) }
+    }
+    return
+  }
+  const before = await userCall('GET', PATH)
+  if (before.ok !== true) die(`[node] ${homeKey()} has no node operations: ${String(before.error ?? 'older plugin')}`)
+  if (op === 'install') {
+    if (arg === undefined) usage('usage: a2a user node install <package.tgz> [--restart] [--force-deps]')
+    const tgz = readFileSync(arg)
+    const sha256 = createHash('sha256').update(tgz).digest('hex')
+    console.error(`[node] ${homeKey()}: installing ${basename(arg)} sha256 ${sha256} over ${String(before.version)}`)
+    await finish(await userCall('POST', PATH, { action: 'install', sha256, tgz: tgz.toString('base64'), restart: has('--restart'), forceDeps: has('--force-deps') }), before)
+    return
+  }
+  if (op === 'rollback') { await finish(await userCall('POST', PATH, { action: 'rollback', ...(arg !== undefined ? { id: arg } : {}), restart: has('--restart') }), before); return }
+  if (op === 'restart') { await finish(await userCall('POST', PATH, { action: 'restart' }), before); return }
+  usage('usage: a2a user node status [--all] · node install <tgz> [--restart] [--force-deps] · node rollback [backup id] [--restart] · node restart')
+}
 
 async function cmdUser() {
   const [sub, ...words] = positionals()
@@ -883,6 +928,7 @@ async function cmdUser() {
   }
   if (sub === 'list') { printOut(await userCall('GET', '/__dsh_a2a/owner-delegates'), out => { for (const r of out.delegates ?? []) console.log(`${String(r.id)}  ${String(r.name)}  ${r.revokedAt !== null ? `revoked ${String(r.revokedAt)}` : r.expiresAt === null ? 'no end' : `until ${String(r.expiresAt)}`}`) }); return }
   if (sub === 'revoke') { const [id] = words; if (id === undefined) usage('usage: a2a user revoke <id>'); printOut(await userCall('POST', '/__dsh_a2a/owner-delegates', { action: 'revoke', id }), out => console.log(out.ok ? `[user] ${id} revoked` : `[user] no live delegate ${id}`)); return }
+  if (sub === 'node') { await cmdUserNode(words); return }
   if (sub === 'teams') { printOut(await userCall('GET', '/__dsh_a2a/superagent/teams'), out => { for (const t of out.teams ?? []) console.log(`${String(t.id || '(primary)').padEnd(24)} ${String(t.address ?? '')}  ${t.open ? 'open' : 'closed'}`) }); return }
   const team = flag('--team')
   if (sub === 'state') { printOut(await userCall('GET', `/__dsh_a2a/superagent${team !== undefined ? `?teamId=${encodeURIComponent(team)}` : ''}`), out => { for (const t of out.tickets ?? []) if (!t.ended) console.log(`${String(t.id)}  ${String(t.stage?.stage ?? '?')}${t.attention ? ' [question]' : ''}  ${String(t.title)}`) }); return }
@@ -906,7 +952,7 @@ async function cmdUser() {
     printOut(await userCall(method.toUpperCase(), path, body))
     return
   }
-  usage('usage: a2a user issue|import|nodes|list|revoke|teams|state|decisions|decide|request|answer|api … (see a2a help)')
+  usage('usage: a2a user issue|import|nodes|node|list|revoke|teams|state|decisions|decide|request|answer|api … (see a2a help)')
 }
 
 async function cmdSuperagent() {
