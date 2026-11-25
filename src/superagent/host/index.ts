@@ -39,7 +39,7 @@ import { SettingsHistory } from './settings-history.ts'
 import { HealthReminders, HEALTH_TICK_MS, cleanName, type HealthProblem } from './health-reminders.ts'
 import { DecisionPush, PUSH_TICK_MS } from './decision-push.ts'
 import { QuestionGate, questionToken } from './question-gate.ts'
-import { DECISION_FILES_MAX, DecisionBook, decisionFiles, DECISION_NOTE_MAX, inputFor, needsInput, recommendedNeedsInput, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
+import { DECISION_FILES_MAX, DecisionBook, decisionFiles, DECISION_NOTE_MAX, inputFor, needsInput, recommendedNeedsInput, oneClick, parseDecision, resolveOption, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
@@ -1953,9 +1953,11 @@ export class SuperagentHost {
       if (recommendedNeedsInput(card)) return { ok: false, code: 'needs-input', error: 'the recommended option needs you to fill something in: choose it and fill it in' }
       chosen = card.recommended
     } else if (how === 'choose') {
-      if (typeof option === 'string' && card.options.includes(option)) chosen = option
+      // #923: the option by its exact text, its id (o2) or its number (2).
+      const named = resolveOption(card.options, option)
+      if (named !== undefined) chosen = named
       else if (option === undefined || option === null || option === '') { if (words === '') return { ok: false, code: 'choice', error: 'choose an option, or write your decision' }; chosen = '' }
-      else return { ok: false, code: 'choice', error: 'that is not one of the options' }
+      else return { ok: false, code: 'choice', error: `that is not one of the options: give its text, its id (o1..o${String(card.options.length)}) or its number (1..${String(card.options.length)})` }
     } else return { ok: false, code: 'how', error: 'how must be approve or choose' }
     // #888 D3: an option that needs input is chosen only with it (the owner's own free-text decision, no option, stays open).
     const required = chosen === '' ? undefined : inputFor(card, chosen)
