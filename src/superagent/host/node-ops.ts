@@ -211,7 +211,9 @@ export class NodeOps {
 
   /** #937 review 4: the declaration's status, plus the drift an install left on purpose (changed dependencies). */
   private declarationWithMarker(version: string): Record<string, unknown> {
-    const status = declarationStatus(this.profile, version)
+    let names: string[] | undefined
+    try { names = (JSON.parse(readPackage(this.paths.root).dependencies) as [string, unknown][]).map(([name]) => name) } catch { /* unreadable: not compared */ }
+    const status = declarationStatus(this.profile, version, names)
     let marker: { version?: unknown; why?: unknown } | undefined
     try { marker = JSON.parse(readFileSync(this.staleMarker, 'utf8')) as typeof marker } catch { /* none */ }
     if (marker === undefined || marker.version !== version) return status
@@ -302,7 +304,7 @@ export class NodeOps {
         const running = readPackage(this.paths.root)
         if (incoming.dependencies !== running.dependencies && !forceDeps) return { ok: false, code: 'deps-changed', error: 'the tarball\'s dependencies differ from the running package; an unpack-only install cannot add them (forceDeps overrides)' }
         const backup = this.swap(next, running.version)
-        return { ok: true, from: running.version, to: incoming.version, backup, declaration: this.declareInstalled(backup, tgz, digest, incoming.version, declare, incoming.dependencies !== running.dependencies) }
+        return { ok: true, from: running.version, to: incoming.version, backup, declaration: this.declareInstalled(backup, tgz, digest, incoming.version, declare, incoming.dependencies !== running.dependencies, (JSON.parse(incoming.dependencies) as [string, unknown][]).map(([name]) => name)) }
       } finally {
         rmSync(stage, { recursive: true, force: true })
       }
@@ -314,7 +316,7 @@ export class NodeOps {
    * first; the new one is worked out in full and only then written. Changed dependencies (forceDeps) leave the lockfile's
    * view of them stale, so the declaration is left alone then, and status shows the drift.
    */
-  private declareInstalled(backup: string, tgz: Buffer, digest: string, version: string, as: DeclareAs, depsChanged: boolean): Record<string, unknown> {
+  private declareInstalled(backup: string, tgz: Buffer, digest: string, version: string, as: DeclareAs, depsChanged: boolean, dependencyNames: readonly string[] = []): Record<string, unknown> {
     const profile = this.profile
     if (profile === undefined) return { updated: false, why: 'not installed under a profile' }
     try {
@@ -333,7 +335,7 @@ export class NodeOps {
         const kept = existsSync(tarball) && createHash('sha256').update(readFileSync(tarball)).digest('hex') === digest
         if (!kept) { const part = `${tarball}.${randomUUID().slice(0, 8)}.part`; writeFileSync(part, tgz); renameSync(part, tarball) }
       }
-      const plan = planDeclaration(profile, as, version, integrityOf(tgz), tarball)
+      const plan = planDeclaration(profile, as, version, integrityOf(tgz), tarball, dependencyNames)
       if (!plan.ok) return { updated: false, why: plan.why }
       this.writeProfile({ 'package.json': plan.plan.manifest, 'pnpm-lock.yaml': plan.plan.lock })
       rmSync(this.staleMarker, { force: true })

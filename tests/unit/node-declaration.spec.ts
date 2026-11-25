@@ -12,7 +12,7 @@ vi.mock('node:fs', async importOriginal => {
   return { ...fs, renameSync: vi.fn(fs.renameSync) }
 })
 import { NodeOps, OWN_PACKAGE } from '../../src/superagent/host/node-ops.ts'
-import { declarationStatus, integrityOf, profileDirOf, rewriteLock, rewriteManifest } from '../../src/superagent/host/node-declaration.ts'
+import { declarationStatus, integrityOf, lockedDependencies, profileDirOf, rewriteLock, rewriteManifest } from '../../src/superagent/host/node-declaration.ts'
 
 const OTHER = `      '@example/other-plugin':
         specifier: 0.24.0
@@ -163,5 +163,29 @@ describe('#937 review: node-ops boundaries', () => {
     expect(new NodeOps({ root, dir }, clock).install(tgz, sha(tgz), 'owner', true)).toMatchObject({ ok: true, to: '0.8.1', declaration: { updated: false } })
     expect({ manifest: read('package.json'), lock: read('pnpm-lock.yaml') }).toEqual(before)
     expect(new NodeOps({ root, dir }, clock).status().declaration).toMatchObject({ drift: true, why: expect.arrayContaining([expect.stringContaining('dependencies changed')]) })
+  })
+})
+
+describe('#937 re-review: carry-over boundaries', () => {
+  it('B2 carry-over: reinstalling the forced package does not clear the drift while the lockfile lacks its dependency', () => {
+    const forced = tarball('0.8.2', { extra: '1.0.0' })
+    const ops = new NodeOps({ root, dir }, clock)
+    expect(ops.install(forced, sha(forced), 'owner', true)).toMatchObject({ ok: true, declaration: { updated: false } })
+    const before = { manifest: read('package.json'), lock: read('pnpm-lock.yaml') }
+    // An ordinary reinstall of the same package: the dependencies equal the running ones now, but the lock never saw them.
+    expect(ops.install(forced, sha(forced), 'owner')).toMatchObject({ ok: true, declaration: { updated: false, why: expect.stringContaining('run pnpm install') } })
+    expect({ manifest: read('package.json'), lock: read('pnpm-lock.yaml') }).toEqual(before)
+    expect(ops.status().declaration).toMatchObject({ drift: true, why: expect.arrayContaining([expect.stringContaining('[extra]')]) })
+  })
+  it('status reads the lockfile\'s dependency list directly, with no marker', () => {
+    expect(declarationStatus(profile, '0.8.1', ['extra'])).toMatchObject({ drift: true })
+    expect(declarationStatus(profile, '0.8.1', [])).toMatchObject({ drift: false })
+    const withDeps = lock('0.8.1', '0.8.1', 'sha512-OLD==', '0.8.1').replace(`  '${OWN_PACKAGE}@0.8.1': {}`, `  '${OWN_PACKAGE}@0.8.1':\n    dependencies:\n      extra: 1.0.0\n      '@example/scoped': 2.0.0`)
+    expect(lockedDependencies(withDeps, '0.8.1')).toEqual(['@example/scoped', 'extra'])
+    expect(lockedDependencies(withDeps, '9.9.9')).toBeUndefined()
+  })
+  it('B4 carry-over: a target key written as an inline mapping is refused, not doubled', () => {
+    const inline = lock('0.8.1', '0.8.1', 'sha512-OLD==', '0.8.1').replace('snapshots:', `  '${OWN_PACKAGE}@0.8.2': {resolution: {integrity: sha512-X==}}\n\nsnapshots:`)
+    expect(rewriteLock(inline, '0.8.2', '0.8.2', 'sha512-N==', '0.8.2')).toMatchObject({ ok: false, why: expect.stringContaining('already has entries') })
   })
 })

@@ -66,7 +66,8 @@ export function rewriteLock(text: string, spec: string, ref: string, integrity: 
   if (spec0 === null || ref0 === null) return { ok: false, why: 'the importer entry is not specifier then version' }
   const oldKey = `  '${OWN}@${ref0[1]}':`, newKey = `  '${OWN}@${ref}':`
   // #937 review 2: entries for the new package already there would be doubled; refuse rather than merge.
-  if (newKey !== oldKey && lines.some(line => line === newKey || line === `${newKey} {}`)) return { ok: false, why: `the lockfile already has entries for ${ref}` }
+  // #937 re-review: in any form — an entry block, `{}`, or an inline mapping on the key's own line.
+  if (newKey !== oldKey && lines.some(line => line.startsWith(newKey))) return { ok: false, why: `the lockfile already has entries for ${ref}` }
   const keyed = lines.flatMap((line, i) => line === oldKey || line === `${oldKey} {}` ? [i] : [])
   if (keyed.length !== 2) return { ok: false, why: `the lockfile has ${String(keyed.length)} package and snapshot entries for ${ref0[1]}, not 2` }
   const pkgAt = keyed.find(i => lines[i] === oldKey && (lines[i + 1] ?? '').startsWith('    resolution: {'))
@@ -87,6 +88,31 @@ export function rewriteLock(text: string, spec: string, ref: string, integrity: 
 }
 
 /**
+ * #937 re-review: the dependency names the lockfile's `snapshots` entry lists for this plugin at `ref`, or undefined when
+ * there is no such entry. Only the `dependencies` block counts.
+ */
+export function lockedDependencies(text: string, ref: string): string[] | undefined {
+  const lines = text.split('\n')
+  const from = lines.indexOf('snapshots:')
+  if (from < 0) return undefined
+  const key = `  '${OWN}@${ref}':`
+  const at = lines.findIndex((line, i) => i > from && (line === key || line === `${key} {}`))
+  if (at < 0) return undefined
+  if (lines[at] === `${key} {}`) return []
+  const names: string[] = []
+  let inDeps = false
+  for (let i = at + 1; i < lines.length && lines[i]!.startsWith('    '); i++) {
+    const line = lines[i]!
+    if (/^    \S/.test(line)) { inDeps = line === '    dependencies:'; continue }
+    const m = /^      '?([^':]+(?:\/[^':]+)?)'?:/.exec(line)
+    if (inDeps && m !== null) names.push(m[1]!)
+  }
+  return names.sort()
+}
+
+const sameNames = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && [...a].sort().every((name, i) => name === [...b].sort()[i])
+
+/**
  * The new declaration for a package just installed, worked out in full before anything is written.
  * @param profile - the profile directory.
  * @param as - npm version or file:.
@@ -95,7 +121,7 @@ export function rewriteLock(text: string, spec: string, ref: string, integrity: 
  * @param tarball - for `file`: where the installed tarball is kept.
  * @returns both texts (the lockfile only when the profile has one), or why the declaration is left as it is.
  */
-export function planDeclaration(profile: string, as: DeclareAs, version: string, integrity: string, tarball?: string): { ok: true; plan: Declaration } | { ok: false; why: string } {
+export function planDeclaration(profile: string, as: DeclareAs, version: string, integrity: string, tarball?: string, dependencies?: readonly string[]): { ok: true; plan: Declaration } | { ok: false; why: string } {
   const manifestPath = join(profile, 'package.json'), lockPath = join(profile, 'pnpm-lock.yaml')
   if (!existsSync(manifestPath)) return { ok: false, why: 'the profile has no package.json' }
   if (as === 'file' && tarball === undefined) return { ok: false, why: 'no kept tarball to declare' }
@@ -104,7 +130,15 @@ export function planDeclaration(profile: string, as: DeclareAs, version: string,
   if (!manifest.ok) return manifest
   if (!existsSync(lockPath)) return { ok: true, plan: { spec, manifest: manifest.text } }
   const ref = as === 'npm' ? version : `file:${relative(profile, tarball!).split(sep).join('/')}`
-  const lock = rewriteLock(readFileSync(lockPath, 'utf8'), spec, ref, integrity, version)
+  const lockText = readFileSync(lockPath, 'utf8')
+  // #937 re-review: only a lockfile that already lists this package's dependencies may be moved to it; otherwise the lock
+  // would claim a package whose dependencies it never resolved (pnpm install in the profile does that).
+  if (dependencies !== undefined) {
+    const oldRef = /^        version: (.+)$/.exec(lockText.split('\n')[lockText.split('\n').indexOf(IMPORTER) + 2] ?? '')?.[1]
+    const listed = oldRef === undefined ? undefined : lockedDependencies(lockText, oldRef)
+    if (listed !== undefined && !sameNames(listed, dependencies)) return { ok: false, why: `the lockfile lists dependencies [${listed.join(', ')}], the package has [${[...dependencies].sort().join(', ')}]: run pnpm install in the profile, then node status` }
+  }
+  const lock = rewriteLock(lockText, spec, ref, integrity, version)
   return lock.ok ? { ok: true, plan: { spec, manifest: manifest.text, lock: lock.text } } : lock
 }
 
@@ -114,26 +148,31 @@ export function planDeclaration(profile: string, as: DeclareAs, version: string,
  * @param installed - the version node_modules holds.
  * @returns what each says, and `drift` with the reasons when they disagree.
  */
-export function declarationStatus(profile: string | undefined, installed: string): Record<string, unknown> {
+export function declarationStatus(profile: string | undefined, installed: string, dependencies?: readonly string[]): Record<string, unknown> {
   if (profile === undefined) return { drift: false, why: ['not installed under a profile'] }
   const why: string[] = []
   let spec: string | undefined
   try { spec = (JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8')) as { dependencies?: Record<string, string> }).dependencies?.[OWN] } catch { why.push('the profile package.json cannot be read') }
   if (spec === undefined && why.length === 0) why.push(`the profile package.json does not declare ${OWN}`)
   let lock: { specifier?: string; version?: string; packageVersion?: string } | undefined
+  let listed: string[] | undefined
   try {
-    const lines = readFileSync(join(profile, 'pnpm-lock.yaml'), 'utf8').split('\n')
+    const text = readFileSync(join(profile, 'pnpm-lock.yaml'), 'utf8')
+    const lines = text.split('\n')
     const at = lines.indexOf(IMPORTER)
     if (at < 0) why.push(`the lockfile does not name ${OWN}`)
     else {
       lock = { specifier: /^        specifier: (.+)$/.exec(lines[at + 1] ?? '')?.[1], version: /^        version: (.+)$/.exec(lines[at + 2] ?? '')?.[1] }
       const key = lines.indexOf(`  '${OWN}@${lock.version ?? ''}':`)
       for (let i = key + 1; key >= 0 && i < lines.length && lines[i]!.startsWith('    '); i++) { const m = /^    version: (.+)$/.exec(lines[i]!); if (m !== null) lock.packageVersion = m[1] }
+      if (lock.version !== undefined) listed = lockedDependencies(text, lock.version)
     }
   } catch { /* no lockfile: nothing to compare */ }
   if (spec !== undefined && lock?.specifier !== undefined && lock.specifier !== spec) why.push('the lockfile was written for another declaration')
   if (spec !== undefined && !spec.startsWith('file:') && spec !== installed) why.push(`package.json declares ${spec}, node_modules holds ${installed}`)
   const locked = lock?.version !== undefined && !lock.version.startsWith('file:') ? lock.version : lock?.packageVersion
   if (locked !== undefined && locked !== installed) why.push(`the lockfile pins ${locked}, node_modules holds ${installed}`)
+  // #937 re-review: the lockfile has to know the installed package's dependencies, whatever marker an install left.
+  if (dependencies !== undefined && listed !== undefined && !sameNames(listed, dependencies)) why.push(`the lockfile lists dependencies [${listed.join(', ')}], node_modules holds a package with [${[...dependencies].sort().join(', ')}]: run pnpm install in the profile`)
   return { ...(spec !== undefined ? { declared: spec } : {}), ...(lock !== undefined ? { lock } : {}), installed, drift: why.length > 0, ...(why.length > 0 ? { why } : {}) }
 }
