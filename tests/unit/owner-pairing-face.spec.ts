@@ -49,6 +49,8 @@ describe('#933 pairing routes', () => {
     const approved = await call(DELEGATES, 'POST', { action: 'pair-approve', id }, owner)
     expect(approved).toMatchObject({ status: 200, body: { ok: true } })
     expect(approved.text).not.toContain('dshod_')
+    // Nothing is issued on allow: the store is written only when the terminal collects.
+    expect(() => readFileSync(store, 'utf8')).toThrow()
     const collected = await call(PAIR, 'POST', { action: 'poll', id, secret })
     expect(collected.body).toMatchObject({ state: 'approved', token: expect.stringMatching(/^dshod_/) })
     expect(collected.headers['Cache-Control']).toBe('no-store')

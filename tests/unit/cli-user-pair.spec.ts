@@ -41,7 +41,7 @@ function run(home: string, args: string[]): Promise<{ code: number; stdout: stri
 
 describe('#933 user pair', () => {
   it('waits, then saves the token once to the book; prints the code and never the token', async () => {
-    const n = await node([{ state: 'waiting' }, { state: 'approved', token: TOKEN, delegateId: 'd-9' }])
+    const n = await node([{ state: 'waiting' }, { state: 'retry', error: 'disk full' }, { state: 'approved', token: TOKEN, delegateId: 'd-9' }])
     const home = mkdtempSync(join(tmpdir(), 'cli-pair-'))
     try {
       const out = await run(home, ['user', 'pair', '--home', n.url, '--name', 'laptop', '--days', '7', '--poll-ms', '200'])

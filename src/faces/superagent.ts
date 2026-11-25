@@ -416,7 +416,7 @@ export function registerOwnerDelegateFaces(webServer: WebServer, d: Pick<Superag
       const out = issueOwnerDelegate(delegatesPath, name, days, { read, write, random: () => ({ token: `dshod_${randomBytes(32).toString('base64url')}`, id: randomUUID() }), now: () => new Date() })
       return { token: out.token, id: out.record.id }
     }
-    const sweepPairings = (): void => { for (const id of pairings.sweep()) revokeOwnerDelegate(delegatesPath, id, { read, write, now: () => new Date() }) }
+    const sweepPairings = (): void => { pairings.sweep() }
     ctx.effect(() => webServer.register({
       kind: 'exact',
       path: '/__dsh_a2a/owner-delegates',
@@ -454,7 +454,7 @@ export function registerOwnerDelegateFaces(webServer: WebServer, d: Pick<Superag
             sweepPairings()
             const id = typeof fields.id === 'string' ? fields.id : ''
             if (fields.action === 'pair-deny') { send(200, pairings.deny(id)); return }
-            const approved = pairings.approve(id, issueFor)
+            const approved = pairings.approve(id)
             send(approved.ok ? 200 : 404, approved)
             return
           }
@@ -475,7 +475,7 @@ export function registerOwnerDelegateFaces(webServer: WebServer, d: Pick<Superag
           const fields = body as { action?: unknown; name?: unknown; days?: unknown; id?: unknown; secret?: unknown }
           sweepPairings()
           if (fields.action === 'start') { const out = pairings.start(req.socket.remoteAddress ?? '', fields.name, fields.days); send(out.ok ? 200 : out.code === 'input' ? 400 : 429, out); return }
-          if (fields.action === 'poll') { send(200, pairings.poll(fields.id, fields.secret)); return }
+          if (fields.action === 'poll') { const answer = pairings.poll(fields.id, fields.secret, issueFor); send(answer.state === 'retry' ? 503 : 200, answer); return }
           send(400, { ok: false, error: 'action must be start or poll' })
         })
       },

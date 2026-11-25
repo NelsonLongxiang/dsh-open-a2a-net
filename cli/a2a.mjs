@@ -54,7 +54,7 @@ CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) 
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
 文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR] · file grants · file revoke <sha256> <to>   (#91: bytes never ride a message)
 superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
-user:     user issue [--name N] [--days D] [--dsh-home DIR] · user import --token-file F · user list · user revoke <id> · user nodes
+user:     user issue [--name N] [--days D] [--dsh-home DIR] · user import --token-file F · user pair [--name N] [--days D] · user list · user revoke <id> · user nodes
           · user teams · user state --team ID · user decisions · user decide <card id> (--approve | --option O) [--note T]
           · user request --team ID <text…> · user answer --team ID <ticket id> <text…> · user api <GET|POST> <path> [--data JSON|@file]
           · user node status [--all] · user node install <tgz> [--restart] [--force-deps] · user node rollback [backup id] [--restart] · user node restart
@@ -836,7 +836,7 @@ const writeDelegates = (book) => { mkdirSync(IDENTITY_DIR, { recursive: true });
 const homeKey = () => home().replace(/\/+$/, '')
 const userHeaders = (base = homeKey()) => {
   const saved = readDelegates().homes[base]
-  if (saved === undefined || typeof saved.token !== 'string') die(`[user] no owner delegate saved for ${base}: run 'a2a-net user issue' on that node (or 'user import --token-file F --home ${base}')`)
+  if (saved === undefined || typeof saved.token !== 'string') die(`[user] no owner delegate saved for ${base}: run 'a2a-net user pair --home ${base}' (or 'user issue' on that node, or 'user import --token-file F --home ${base}')`)
   const key = typeof saved.key === 'string' && flag('--key') === undefined && envValue('A2A_KEY') === undefined ? { 'X-API-Key': saved.key } : {}
   return { ...keyHeaders(), ...key, 'X-DSH-Owner-Delegate': saved.token }
 }
@@ -994,11 +994,16 @@ async function cmdUser() {
       await new Promise(r => setTimeout(r, pollMs))
       let poll
       try { poll = await post({ action: 'poll', id: started.id, secret: started.secret }) } catch { continue }
-      if (poll.state === 'waiting') continue
+      if (poll.state === 'waiting' || poll.state === 'retry') continue
       if (poll.state === 'approved' && typeof poll.token === 'string' && /^dshod_[A-Za-z0-9_-]{20,}$/.test(poll.token)) {
-        const book = readDelegates()
-        book.homes[homeKey()] = { ...(book.homes[homeKey()] ?? {}), token: poll.token, id: String(poll.delegateId ?? ''), name }
-        writeDelegates(book)
+        try {
+          const book = readDelegates()
+          book.homes[homeKey()] = { ...(book.homes[homeKey()] ?? {}), token: poll.token, id: String(poll.delegateId ?? ''), name }
+          writeDelegates(book)
+        } catch (error) {
+          // The token is spent and cannot be shown; the delegate is live on the node: name it so the owner can revoke it.
+          die(`[user] paired with ${homeKey()}, but the token could not be saved to ${DELEGATES} (${String(error?.message ?? error)}); revoke delegate ${String(poll.delegateId)} on that node and pair again`)
+        }
         console.log(`[user] paired with ${homeKey()}: delegate ${String(poll.delegateId)} (${name}); token saved to ${DELEGATES}`)
         return
       }
@@ -1038,7 +1043,7 @@ async function cmdUser() {
     printOut(await userCall(method.toUpperCase(), path, body))
     return
   }
-  usage('usage: a2a user issue|import|nodes|node|builder|list|revoke|teams|state|decisions|decide|request|answer|api … (see a2a help)')
+  usage('usage: a2a user issue|import|pair|nodes|node|builder|list|revoke|teams|state|decisions|decide|request|answer|api … (see a2a help)')
 }
 
 async function cmdSuperagent() {

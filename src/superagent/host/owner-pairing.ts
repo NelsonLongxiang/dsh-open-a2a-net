@@ -4,8 +4,8 @@
  * logged in on that node's page, checks the code and allows it; the node then issues the delegate and hands its token once
  * to whoever polls with the secret. Nothing here is authenticated by itself — starting and polling are open by nature — so
  * the limits are: few pending at once, a short life, a per-address start budget, the owner matching the code, and a secret
- * compared in constant time with one answer for "unknown" and "wrong secret". A delegate issued for a pairing nobody
- * collected in time is handed back for revocation, so no live credential is left behind.
+ * compared in constant time with one answer for "unknown" and "wrong secret". The delegate is issued only when the terminal
+ * collects it: an approved pairing that is never collected (it expired, or the node restarted) leaves no credential behind.
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/owner-pairing
  */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
@@ -23,11 +23,11 @@ export interface PairingView { readonly id: string; readonly code: string; reado
 
 interface Pairing {
   readonly id: string; readonly code: string; readonly name: string; readonly days: number; readonly at: number; readonly expires: number
-  readonly secretHash: Buffer; state: 'waiting' | 'approved' | 'denied'; token?: string; delegateId?: string
+  readonly secretHash: Buffer; state: 'waiting' | 'approved' | 'denied'
 }
 
 /** A poll's answer. `not-found` covers an unknown id and a wrong secret alike. */
-export type PairingPoll = { readonly state: 'waiting'; readonly expiresAt: string } | { readonly state: 'approved'; readonly token: string; readonly delegateId: string } | { readonly state: 'denied' | 'expired' | 'not-found' }
+export type PairingPoll = { readonly state: 'waiting'; readonly expiresAt: string } | { readonly state: 'approved'; readonly token: string; readonly delegateId: string } | { readonly state: 'retry'; readonly error: string } | { readonly state: 'denied' | 'expired' | 'not-found' }
 
 const hash = (secret: string): Buffer => createHash('sha256').update(secret, 'utf8').digest()
 
@@ -48,15 +48,11 @@ export class OwnerPairings {
    */
   constructor(private readonly now: () => number = () => Date.now(), private readonly random: () => { readonly id: string; readonly secret: string; readonly code: string } = () => ({ id: randomUUID(), secret: randomBytes(32).toString('base64url'), code: pairingCode() })) {}
 
-  /**
-   * Expire what is old. A pairing approved but not collected in time gives back its delegate id, to be revoked.
-   * @returns the delegate ids to revoke.
-   */
-  sweep(): string[] {
-    const at = this.now(), revoke: string[] = []
-    for (const [id, p] of this.pairings) if (p.expires <= at) { if (p.state === 'approved' && p.delegateId !== undefined) revoke.push(p.delegateId); this.pairings.delete(id) }
+  /** Expire what is old (an approved pairing never collected issued nothing, so nothing needs revoking). */
+  sweep(): void {
+    const at = this.now()
+    for (const [id, p] of this.pairings) if (p.expires <= at) this.pairings.delete(id)
     for (const [address, times] of this.starts) { const kept = times.filter(t => t > at - PAIRING_START_WINDOW_MS); if (kept.length === 0) this.starts.delete(address); else this.starts.set(address, kept) }
-    return revoke
   }
 
   /**
@@ -89,15 +85,14 @@ export class OwnerPairings {
   }
 
   /**
-   * The owner allows a waiting pairing; `issue` makes the delegate and returns its token and id.
-   * @returns the delegate's id, or why not.
+   * The owner allows a waiting pairing. Nothing is issued yet: the delegate is made when the terminal collects it.
+   * @returns ok, or why not.
    */
-  approve(id: string, issue: (name: string, days: number) => { readonly token: string; readonly id: string }): { ok: true; delegateId: string } | { ok: false; code: string; error: string } {
+  approve(id: string): { ok: true } | { ok: false; code: string; error: string } {
     const p = this.pairings.get(id)
     if (p === undefined || p.expires <= this.now() || p.state !== 'waiting') return { ok: false, code: 'not-found', error: 'no waiting pairing with that id (it expired, was answered, or never existed)' }
-    const issued = issue(p.name, p.days)
-    p.state = 'approved'; p.token = issued.token; p.delegateId = issued.id
-    return { ok: true, delegateId: issued.id }
+    p.state = 'approved'
+    return { ok: true }
   }
 
   /** The owner refuses a waiting pairing. */
@@ -109,10 +104,11 @@ export class OwnerPairings {
   }
 
   /**
-   * The terminal asks how its pairing stands. An approved token is handed out once; a refusal is said once; after that,
-   * and for any unknown id or wrong secret, the answer is `not-found`.
+   * The terminal asks how its pairing stands. An approved pairing is collected once: `issue` makes the delegate then, and
+   * its token is answered; if issuing fails the pairing stays approved and the answer is `retry`. A refusal is said once;
+   * after that, and for any unknown id or wrong secret, the answer is `not-found`.
    */
-  poll(id: unknown, secret: unknown): PairingPoll {
+  poll(id: unknown, secret: unknown, issue: (name: string, days: number) => { readonly token: string; readonly id: string }): PairingPoll {
     if (typeof id !== 'string' || typeof secret !== 'string') return { state: 'not-found' }
     const p = this.pairings.get(id)
     if (p === undefined) return { state: 'not-found' }
@@ -120,7 +116,12 @@ export class OwnerPairings {
     if (given.length !== p.secretHash.length || !timingSafeEqual(given, p.secretHash)) return { state: 'not-found' }
     if (p.expires <= this.now()) { this.pairings.delete(id); return { state: 'expired' } }
     if (p.state === 'denied') { this.pairings.delete(id); return { state: 'denied' } }
-    if (p.state === 'approved') { this.pairings.delete(id); return { state: 'approved', token: p.token!, delegateId: p.delegateId! } }
+    if (p.state === 'approved') {
+      let issued: { readonly token: string; readonly id: string }
+      try { issued = issue(p.name, p.days) } catch (error) { return { state: 'retry', error: String((error as Error).message ?? error) } }
+      this.pairings.delete(id)
+      return { state: 'approved', token: issued.token, delegateId: issued.id }
+    }
     return { state: 'waiting', expiresAt: new Date(p.expires).toISOString() }
   }
 }
