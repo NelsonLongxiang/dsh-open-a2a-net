@@ -4,12 +4,17 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, parse } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { KEEP_BACKUPS, NodeOps, OWN_PACKAGE, ownPackageRoot } from '../../src/superagent/host/node-ops.ts'
 import { registerNodeOpsFace } from '../../src/faces/node-ops.ts'
 import { OWNER_DELEGATE_HEADER, OwnerDelegates, issueOwnerDelegate } from '../../src/superagent/host/owner-delegate.ts'
 import { configureOwnerDelegates } from '../../src/superagent/host/owner-proof.ts'
+
+vi.mock('node:fs', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs')>()
+  return { ...fs, readFileSync: vi.fn(fs.readFileSync) }
+})
 
 let base = ''
 let root = ''
@@ -46,8 +51,21 @@ afterEach(() => { configureOwnerDelegates(undefined); rmSync(base, { recursive: 
 describe('node operations', () => {
   it('finds the package root of a file inside it', () => {
     mkdirSync(join(root, 'lib'), { recursive: true })
+    writeFileSync(join(base, 'package.json'), pkg('0.0.0'))
     expect(ownPackageRoot(join(root, 'lib', 'index.js'))).toBe(root)
-    expect(ownPackageRoot(join(base, 'elsewhere.js'))).toBeUndefined()
+    expect(ownPackageRoot(join(base, 'elsewhere.js'))).toBe(base)
+  })
+
+  it('returns undefined at the filesystem root without a matching package', () => {
+    // A temp directory can be inside the checkout. Control the manifest at the actual lookup boundary.
+    const volumeRoot = parse(base).root
+    const readPackage = vi.mocked(readFileSync)
+    readPackage.mockClear()
+    readPackage.mockReturnValue(JSON.stringify({ name: 'another-package' }))
+    try {
+      expect(ownPackageRoot(join(volumeRoot, 'elsewhere.js'))).toBeUndefined()
+      expect(readPackage).toHaveBeenCalledExactlyOnceWith(join(volumeRoot, 'package.json'), 'utf8')
+    } finally { readPackage.mockReset() }
   })
 
   it('install swaps the package, carries its node_modules across, keeps a backup and logs', () => {
