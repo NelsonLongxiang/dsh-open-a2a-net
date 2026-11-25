@@ -157,7 +157,7 @@ import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
 import { browserOwnerProof, configureOwnerDelegates, touchesRules } from './superagent/host/owner-proof.ts'
 import { OwnerDelegates } from './superagent/host/owner-delegate.ts'
-import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, startWhenYglKnown, yglCapabilities, yglSettled } from './superagent/host/teams.ts'
+import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, exportYglBin, startWhenYglKnown, yglCapabilities, yglSettled } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { IntakeOrigins } from './intake-origins.ts'
 import { redeliverLost, TaskBodies } from './task-bodies.ts'
@@ -170,6 +170,8 @@ import {RequestRecoveryStore} from './request-recovery.ts'
 import { restrictDirToCurrentUser } from './windows-private-dir.ts'
 import {RequestRecoveryRuntime} from './request-recovery-runtime.ts'
 import {registerRequestRecoveryFace} from './faces/request-recovery.ts'
+import { registerNodeOpsFace } from './faces/node-ops.ts'
+import { NodeOps, ownPackageRoot } from './superagent/host/node-ops.ts'
 import {registerReceiptCapacityFace} from './faces/receipt-capacity.ts'
 import { SidebarSends } from './sidebar-sends.ts'
 import { PI_PLATFORM, piDeliverable, piSeatAdmission } from './superagent/platforms/pi.ts'
@@ -2359,6 +2361,7 @@ export function apply(ctx: Context, config: Config): void {
   let superagentHomeUrl: string | undefined
   if (superagentHost !== undefined) {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
+    exportYglBin() // #900: the host's own ygl-trees runs (db init, --version) use this node directly on Windows
     ctx.effect(() => {
       void ensureTeamYglHome({ logger })
       // Design Y1d (#739 review R1): the engines start at boot, as before #739 (a late start's recovery restarted assignments
@@ -3943,6 +3946,7 @@ export function apply(ctx: Context, config: Config): void {
     })
   })
   whenWebServerSettled(webServer=>registerRequestRecoveryFace(webServer,{ctx,controlRoute,readJsonBody,recovery:requestRecovery}))
+  { const root = ownPackageRoot(fileURLToPath(import.meta.url)); if (root !== undefined) { const ops = new NodeOps({ root, dir: join(home, 'a2a', 'node-ops') }); whenWebServerSettled(webServer => registerNodeOpsFace(webServer, { ctx, controlRoute, readJsonBody, ops })) } }
   whenWebServerSettled(webServer=>registerReceiptCapacityFace(webServer,{ctx,controlRoute,readJsonBody:readJsonBody as never,ledger:taskLedger,logger}))
   const cardCacheInFlight = new Map<string, Promise<A2aPeerCard | undefined>>()
   // #114 S6: the change hooks and the boot observation start only once every
