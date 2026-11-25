@@ -124,7 +124,7 @@ export interface SaState {
 export interface SaCasts {
   readonly on: boolean; readonly draft: boolean; readonly triggerRouter: boolean; readonly off: readonly string[]
   readonly available?: boolean
-  readonly waiting?: ReadonlyArray<{ id: string; session_id: string; name?: string; reason?: string; basis?: string | null; at?: string; mode?: string }>
+  readonly waiting?: ReadonlyArray<{ id: string; session_id: string; name?: string; reason?: string; basis?: string | null; at?: string; mode?: string; requested?: string | null; legacy?: boolean }>
   readonly releases?: ReadonlyArray<{ id: string; session_id: string; template_id: string; reason?: string; basis?: string; when: string; then: string; expiresAt: string }>
 }
 
@@ -759,7 +759,8 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       const card = el('div', 'wb-led-card')
       kv(card, '排给', sessionName(w.session_id))
       kv(card, '卡', w.name ?? w.id)
-      kv(card, '方式', CAST_MODE[w.mode ?? 'insert'] ?? String(w.mode))
+      const asked = w.requested ?? w.mode ?? 'insert'
+      kv(card, '方式', `${CAST_MODE[asked] ?? asked}${w.legacy === true ? '（早期投卡，未记来源）' : ''}`)
       if (w.reason !== undefined && w.reason !== '') kv(card, '原因', w.reason)
       if (typeof w.basis === 'string') kv(card, '依据', w.basis)
       if (w.at !== undefined) kv(card, '投于', ago(w.at, now))

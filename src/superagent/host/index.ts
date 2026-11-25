@@ -155,12 +155,14 @@ export interface CardRelease {
   readonly armedAt: string
   readonly expiresAt: string
   quietSince?: string
-  state: 'armed' | 'released' | 'expired' | 'withdrawn' | 'failed'
+  /** #910 review B2: `releasing` is written before the cast goes to the plugin, so a restart in between is reconciled, not repeated. */
+  state: 'armed' | 'releasing' | 'released' | 'expired' | 'withdrawn' | 'failed'
+  attemptAt?: string
   endedAt?: string
   result?: string
 }
 /** #902 S2: one card of the observer's own, as kept in the team's observer-cards.json. */
-interface ObserverCard { readonly name: string; readonly for: readonly string[] | 'team'; readonly scene: string; readonly from?: string; readonly at: string; readonly sha256: string }
+interface ObserverCard { readonly name: string; readonly for: readonly string[] | 'team'; readonly scene: string; readonly from?: string; readonly at: string; readonly sha256: string; /** #908 review: the observer session that wrote it (absent on cards written before). */ readonly author?: string }
 
 export class SuperagentHost {
   readonly store: JsonRepositories
@@ -1301,13 +1303,16 @@ export class SuperagentHost {
    * the team's observer (by the session calling, never a parameter), into a session of this team other than itself, while
    * the owner has turned observerCast on. The target is woken so the card goes in at its next step.
    */
-  castCard(observer: string, input: { session_id?: unknown; template_id?: unknown; reason?: unknown; basis?: unknown; mode?: unknown; when?: unknown; then?: unknown; expires_hours?: unknown }): Record<string, unknown> {
+  castCard(observer: string, input: { session_id?: unknown; template_id?: unknown; reason?: unknown; basis?: unknown; mode?: unknown; when?: unknown; then?: unknown; expires_hours?: unknown }, release?: string): Record<string, unknown> {
     const checked = this.castCheck(observer, input)
     if ('refusal' in checked) return checked.refusal
     const { target, templateId, reason, basis, draft } = checked
     // #902 S3: how the card goes in — insert (next step, woken), queue (its next turn, not woken), trigger (only while
     // idle: queued and woken now), or release (armed now, cast later when its condition holds).
     const mode = input.mode === undefined || input.mode === null || input.mode === '' ? 'insert' : String(input.mode)
+    if (mode !== 'insert' && mode !== 'queue' && mode !== 'trigger' && mode !== 'release') return { ok: false, code: 'mode', error: 'mode is insert, queue, trigger or release' }
+    // #902 review (#910 B1): an older plugin may ignore a mode it does not know, so only insert goes to one that does not declare queue.
+    if (mode !== 'insert' && !this.castModes().includes('queue')) return { ok: true, available: false, reason: `this host's dsh-prompt-templates does not declare the queue mode (needs #89+): ${mode} is off here; cast insert` }
     if (mode === 'release') return this.armRelease(observer, { target, templateId, reason, basis }, input)
     if (mode !== 'insert' && mode !== 'queue' && mode !== 'trigger') return { ok: false, code: 'mode', error: 'mode is insert, queue, trigger or release' }
     if (mode === 'trigger' && target === this.settingsValue.router && this.settingsValue.observerTriggerRouter !== true) return { ok: false, code: 'trigger-router', error: 'trigger does not wake the router unless the owner allows it: cast insert or queue into it' }
@@ -1323,7 +1328,9 @@ export class SuperagentHost {
       const last = entry.triggerAt ?? 0
       if (now - last < TRIGGER_MS && last <= now + 60_000) return { ok: false, code: 'trigger-limited', error: 'at most one trigger every 30 minutes into one session' }
     }
-    const out = this.d.castCard?.({ sessionId: target, templateId, reason, basis, ...(draft !== undefined ? { authorSession: observer } : {}), ...(mode === 'insert' ? {} : { mode: 'queue' as const }) })
+    // #902 review (#907 B2): every cast carries its team, observer and requested mode (and its release), when the plugin keeps it.
+    const origin = this.castOrigin(observer, mode, release)
+    const out = this.d.castCard?.({ sessionId: target, templateId, reason, basis, ...(draft !== undefined ? { authorSession: observer } : {}), ...(mode === 'insert' ? {} : { mode: 'queue' as const }), ...(origin !== undefined ? { origin } : {}) })
     if (out === undefined) return { ok: true, available: false, reason: 'dsh-prompt-templates with the cast service (0.17+) is not on this host' }
     if (!out.ok) return { ok: false, code: out.code ?? 'refused', error: out.error ?? 'the card was not cast' }
     entry.casts.push(now)
@@ -1333,12 +1340,32 @@ export class SuperagentHost {
     if (wake) {
       entry.wakeAt = now
       if (mode === 'trigger') entry.triggerAt = now
-      try { this.d.deliverToSession(target, '[superagent card] 团队观察者投来一张卡，会在你下一步看到；它不是新的指令，不授予任何权限。') } catch { /* the card still waits for its next step */ }
+    }
+    // #902 review (#910 B2): the wake is reported as it went — sent, the target not live here, or failed — never assumed.
+    let wakeResult: 'none' | 'sent' | 'not-live' | 'failed' = 'none'
+    if (wake) {
+      try { wakeResult = this.d.deliverToSession(target, '[superagent card] 团队观察者投来一张卡，会在你下一步看到；它不是新的指令，不授予任何权限。') ? 'sent' : 'not-live' } catch { wakeResult = 'failed' }
     }
     limits[target] = entry
-    this.saveCastLimits(limits)
-    return { ok: true, mode, queued: out.queued ?? 1, woken: wake, ...(typeof out.id === 'string' ? { id: out.id } : {}), basis }
+    const recorded = this.saveCastLimits(limits)
+    return { ok: true, mode, queued: out.queued ?? 1, woken: wakeResult === 'sent', wake: wakeResult, ...(recorded ? {} : { limitsRecorded: false }), ...(typeof out.id === 'string' ? { id: out.id } : {}), ...(origin !== undefined ? { origin } : {}), basis }
   }
+
+  /** #902 review (#910 B1): the cast modes the plugin declares; an older plugin declares none, so only insert. */
+  private castModes(): readonly string[] {
+    try { return this.d.castCapabilities?.()?.modes ?? ['insert'] } catch { return ['insert'] }
+  }
+
+  /** The label a cast of this team carries in the plugin's queue and intervention log; undefined when the plugin keeps none. */
+  private castOrigin(observer: string, mode: string, release?: string): string | undefined {
+    let keeps = false
+    try { keeps = this.d.castCapabilities?.()?.origin === true } catch { /* none */ }
+    if (!keeps) return undefined
+    return `${this.castTeamPrefix()}observer:${observer}|mode:${mode}${release !== undefined ? `|release:${release}` : ''}`
+  }
+
+  /** The prefix of every origin this team writes: the plugin, the team (its canvas), then the fields. */
+  private castTeamPrefix(): string { return `a2a|team:${this.settingsValue.canvas ?? 'primary'}|` }
 
   /**
    * #902 S4: the team page's 待投卡 group: the switches, the members the owner turned casting off for, the casts still
@@ -1350,7 +1377,7 @@ export class SuperagentHost {
     try {
       const out = this.ownerCastQueue({ state: 'waiting' })
       if (out.ok !== true || out.available === false) return { ...base, available: false }
-      return { ...base, available: true, waiting: out.items, releases: (out.releases as CardRelease[]).filter(r => r.state === 'armed') }
+      return { ...base, available: true, waiting: out.items, releases: (out.releases as CardRelease[]).filter(r => r.state === 'armed' || r.state === 'releasing') }
     } catch { return { ...base, available: false } }
   }
 
@@ -1372,6 +1399,8 @@ export class SuperagentHost {
     if (typeof basis !== 'string') return { refusal: basis }
     // #902 S2: the observer's own card goes only to the members it was written for.
     const draft = this.observerCards()[templateId]
+    // #908 review: an observer's own card is cast by the observer that wrote it (after a handover the new one writes its own).
+    if (draft !== undefined && draft.author !== undefined && draft.author !== observer) return no('not-yours', 'that card was written by another observer session; write your own with a2a_card_draft')
     if (draft !== undefined && draft.for !== 'team' && !draft.for.includes(target)) return no('not-for', 'that card of yours is written for other members; edit its for list with a2a_card_draft')
     return { target, templateId, reason, basis, draft }
   }
@@ -1395,10 +1424,11 @@ export class SuperagentHost {
     if (typeof when !== 'string') return when
     if (then === 'trigger' && when.startsWith('idle:') === false && this.d.sessionBusy === undefined) return no('then', 'this host cannot tell whether a session is idle, so it does not trigger')
     const releases = this.releases()
-    if (releases.filter(r => r.state === 'armed' && r.session_id === cast.target).length >= RELEASES_MAX) return no('full', `at most ${String(RELEASES_MAX)} armed releases per session: withdraw one with a2a_card_queue`)
+    if (releases.filter(r => (r.state === 'armed' || r.state === 'releasing') && r.session_id === cast.target).length >= RELEASES_MAX) return no('full', `at most ${String(RELEASES_MAX)} armed releases per session: withdraw one with a2a_card_queue`)
     const release: CardRelease = { id: `r-${randomUUID().replace(/-/g, '').slice(0, 12)}`, observer, session_id: cast.target, template_id: cast.templateId, reason: cast.reason, basis: cast.basis, when, then: then as CardRelease['then'], armedAt: new Date(now).toISOString(), expiresAt: new Date(expiresAt).toISOString(), state: 'armed' }
     releases.push(release)
-    this.saveReleases(releases)
+    // #910 review B2: armed only once it is on disk; otherwise nothing is armed and the caller hears so.
+    if (!this.saveReleases(releases)) return no('not-saved', 'the release could not be written to disk, so nothing was armed')
     return { ok: true, mode: 'release', release: release.id, when, then, expiresAt: release.expiresAt, basis: cast.basis }
   }
 
@@ -1406,6 +1436,7 @@ export class SuperagentHost {
   private releaseWhen(raw: unknown, now: number, expiresAt: number): string | Record<string, unknown> {
     const text = String(raw ?? '').replace(/\s+/g, ' ').trim()
     const no = (error: string): Record<string, unknown> => ({ ok: false, code: 'when', error })
+    if (/^event[:\s]/.test(text)) return no('event conditions are not available yet (#902 S3 defers them): use ticket:, idle: or at:')
     const help = 'when is ticket:<id> <person|person:<action>|working|idle|ended>, idle:<minutes 10..1440>, or at:<ISO time 5 minutes..7 days ahead>'
     let m = /^ticket:(\S+) (person(?::(?:delivery|answer|review|blocked|failed))?|working|idle|ended)$/.exec(text)
     if (m !== null) {
@@ -1437,10 +1468,20 @@ export class SuperagentHost {
    */
   releaseTick(): void {
     const releases = this.releases()
-    if (!releases.some(r => r.state === 'armed')) return
+    if (!releases.some(r => r.state === 'armed' || r.state === 'releasing')) return
     const now = Date.parse(this.now())
     const at = new Date(now).toISOString()
     let changed = false
+    // #910 review B2: a release left `releasing` (the host stopped between writing it and hearing the plugin) is settled
+    // from the plugin's queue: its row there (origin names the release) means it went; none means it did not, and it is
+    // looked at again. A plugin that keeps no origin cannot tell, so it ends failed as uncertain rather than cast twice.
+    for (const r of releases) {
+      if (r.state !== 'releasing') continue
+      const found = this.releaseRow(r)
+      if (found === 'unknown') { r.state = 'failed'; r.endedAt = at; r.result = 'uncertain: the host stopped while releasing and the plugin keeps no origin to check'; changed = true }
+      else if (found !== undefined) { r.state = 'released'; r.endedAt = at; r.result = `reconciled ${found}`; changed = true }
+      else { r.state = 'armed'; delete r.attemptAt; changed = true }
+    }
     for (const r of releases) {
       if (r.state !== 'armed') continue
       if (now >= Date.parse(r.expiresAt)) { r.state = 'expired'; r.endedAt = at; changed = true; continue }
@@ -1460,10 +1501,13 @@ export class SuperagentHost {
         }
       }
       if (!ready) continue
+      // Written as releasing first: if that cannot be saved, nothing is cast this time.
+      r.state = 'releasing'; r.attemptAt = at
+      if (!this.saveReleases(releases)) { r.state = 'armed'; delete r.attemptAt; continue }
       // A trigger released by an idle condition finds the session idle; one released otherwise may find it busy, and then
       // the card is queued for its next turn instead of being refused.
-      let out = this.castCard(r.observer, { session_id: r.session_id, template_id: r.template_id, reason: r.reason, basis: r.basis, mode: r.then })
-      if (r.then === 'trigger' && out.ok === false && (out.code === 'busy' || out.code === 'trigger-limited')) out = this.castCard(r.observer, { session_id: r.session_id, template_id: r.template_id, reason: r.reason, basis: r.basis, mode: 'queue' })
+      let out = this.castCard(r.observer, { session_id: r.session_id, template_id: r.template_id, reason: r.reason, basis: r.basis, mode: r.then }, r.id)
+      if (r.then === 'trigger' && out.ok === false && (out.code === 'busy' || out.code === 'trigger-limited')) out = this.castCard(r.observer, { session_id: r.session_id, template_id: r.template_id, reason: r.reason, basis: r.basis, mode: 'queue' }, r.id)
       r.state = out.ok === true && out.available !== false ? 'released' : 'failed'
       r.endedAt = at
       r.result = out.ok === true ? (out.available === false ? String(out.reason ?? 'unavailable') : `${String(out.mode)}${typeof out.id === 'string' ? ` ${out.id}` : ''}`) : `${String(out.code)}: ${String(out.error ?? '')}`.slice(0, 300)
@@ -1472,19 +1516,34 @@ export class SuperagentHost {
     if (changed) this.saveReleases(releases)
   }
 
+  /** The plugin queue row a release produced (its id), none (undefined), or 'unknown' when the plugin keeps no origin. */
+  private releaseRow(r: CardRelease): string | undefined | 'unknown' {
+    let keeps = false
+    try { keeps = this.d.castCapabilities?.()?.origin === true } catch { /* none */ }
+    const svc = this.d.castQueue?.()
+    if (!keeps || svc === undefined) return 'unknown'
+    const out = svc.list({ sessionId: r.session_id, limit: 100 })
+    if (out.ok !== true || !Array.isArray(out.items)) return 'unknown'
+    const row = (out.items as Array<{ id?: unknown; origin?: unknown }>).find(item => typeof item.origin === 'string' && item.origin.startsWith(this.castTeamPrefix()) && item.origin.endsWith(`|release:${r.id}`))
+    return row === undefined ? undefined : String(row.id)
+  }
+
   /** #902 S3: the team's releases (armed and the latest ended), in observer-releases.json. */
   private releasesPath(): string { return join(this.stateDir, 'observer-releases.json') }
   private releases(): CardRelease[] {
     try { const v = JSON.parse(readFileSync(this.releasesPath(), 'utf8')) as { releases?: CardRelease[] }; return Array.isArray(v.releases) ? v.releases : [] } catch { return [] }
   }
-  private saveReleases(releases: CardRelease[]): void {
-    // Armed ones are all kept; of the ended, the newest 50.
-    const ended = releases.filter(r => r.state !== 'armed').slice(-50)
-    const kept = releases.filter(r => r.state === 'armed' || ended.includes(r))
+  /** @returns whether the releases reached the disk. */
+  private saveReleases(releases: CardRelease[]): boolean {
+    // Armed and releasing ones are all kept; of the ended, the newest 50.
+    const open = (r: CardRelease): boolean => r.state === 'armed' || r.state === 'releasing'
+    const ended = releases.filter(r => !open(r)).slice(-50)
+    const kept = releases.filter(r => open(r) || ended.includes(r))
     try {
       const path = this.releasesPath(), temporary = `${path}.tmp-${String(process.pid)}`
       mkdirSync(this.stateDir, { recursive: true }); writeFileSync(temporary, `${JSON.stringify({ releases: kept }, null, 2)}\n`, { mode: 0o600 }); renameSync(temporary, path)
-    } catch (error) { this.d.logger.warn('superagent: releases not saved: %s', String(error)) }
+      return true
+    } catch (error) { this.d.logger.warn('superagent: releases not saved: %s', String(error)); return false }
   }
 
   /**
@@ -1498,7 +1557,15 @@ export class SuperagentHost {
     if (text === '' || text.length > 200) return refuse('give a basis: ticket:<id> of this team, event:<id>, or none: <why>; one line, at most 200 characters')
     const m = /^(ticket|event|none):\s*(.+)$/.exec(text)
     if (m === null) return refuse('basis must start with ticket:, event: or none:')
-    if (m[1] !== 'ticket') return `${m[1]}: ${m[2]!.trim()}`.replace(/^event: /, 'event:')
+    if (m[1] === 'none') return `none: ${m[2]!.trim()}`
+    // #907 review B1: an event basis names an event this team recorded (a trigger in its own store: a request, an
+    // A2A or GitHub message it took in). Anything else has no record here to check, so it is refused and the observer
+    // says what it saw with none: <sentence> instead.
+    if (m[1] === 'event') {
+      const id = m[2]!.trim()
+      if (this.store.triggers.get(id) === undefined) return refuse('event: must name an event this team recorded (a trigger id from its state); for anything else write none: <what you saw>')
+      return `event:${id}`
+    }
     const key = m[2]!.trim()
     const hits = key.length >= 8 ? this.store.tickets.list().filter(t => t.id === key || t.id.startsWith(key)) : []
     if (hits.length !== 1) return refuse('ticket: must name one ticket of this team (its id, or a prefix of at least 8 characters)')
@@ -1510,10 +1577,13 @@ export class SuperagentHost {
   private observerCards(): Record<string, ObserverCard> {
     try { const v = JSON.parse(readFileSync(this.observerCardsPath(), 'utf8')) as { cards?: Record<string, ObserverCard> }; return v.cards ?? {} } catch { return {} }
   }
-  private saveObserverCards(cards: Record<string, ObserverCard>): void {
-    const path = this.observerCardsPath()
-    writeFileSync(`${path}.tmp`, `${JSON.stringify({ cards }, null, 2)}\n`, 'utf8')
-    renameSync(`${path}.tmp`, path)
+  /** @returns whether the cards reached the disk (#908 review: a failed write is reported, never taken as saved). */
+  private saveObserverCards(cards: Record<string, ObserverCard>): boolean {
+    try {
+      const path = this.observerCardsPath(), temporary = `${path}.tmp-${String(process.pid)}`
+      mkdirSync(this.stateDir, { recursive: true }); writeFileSync(temporary, `${JSON.stringify({ cards }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 }); renameSync(temporary, path)
+      return true
+    } catch (error) { this.d.logger.warn('superagent: observer cards not saved: %s', String(error)); return false }
   }
 
   /**
@@ -1526,18 +1596,24 @@ export class SuperagentHost {
     if (!this.isObserver(observer)) return { ok: false, code: 'not-observer', error: 'a2a_card_draft serves only the team\'s observer' }
     const cards = this.observerCards()
     const action = String(input.action ?? 'list')
-    if (action === 'list') return { ok: true, on: this.settingsValue.observerCardDraft === true, cards: Object.entries(cards).map(([id, c]) => ({ id, ...c })) }
+    if (action === 'list') return { ok: true, on: this.settingsValue.observerCardDraft === true, cards: Object.entries(cards).map(([id, { author, ...c }]) => ({ id, ...c, mine: author === undefined || author === observer })) }
     if (this.settingsValue.observerCardDraft !== true) return { ok: false, code: 'off', error: 'writing your own cards is off for this team (the owner turns on observerCardDraft)' }
     const svc = this.d.cardDrafts?.()
     if (svc === undefined) return { ok: true, available: false, reason: 'dsh-prompt-templates with author-session cards (#87) is not on this host' }
     const id = String(input.id ?? '').trim()
+    // #908 review B1: a card is changed only by the observer that wrote it (a card from before authors were kept counts as
+    // the current observer's, and the plugin still checks the template belongs to the calling session).
+    if ((action === 'delete' || action === 'update') && cards[id] !== undefined && cards[id]!.author !== undefined && cards[id]!.author !== observer) return { ok: false, code: 'not-yours', error: 'that card was written by another observer session' }
     if (action === 'delete') {
       if (cards[id] === undefined) return { ok: false, code: 'card', error: 'no card of yours with that id' }
       const out = svc.remove({ authorSession: observer, id })
       if (!out.ok) return out as Record<string, unknown>
+      // The host's record goes only when the template is gone: deleted now, or already gone from the session.
+      if (out.deleted !== true && svc.has(observer, id)) return { ok: false, code: 'not-deleted', error: 'the plugin kept that card (it is not your session\'s template); nothing was removed' }
+      const before = cards[id]!
       delete cards[id]
-      this.saveObserverCards(cards)
-      return { ok: true, deleted: out.deleted === true }
+      if (!this.saveObserverCards(cards)) { cards[id] = before; return { ok: false, code: 'not-saved', error: 'the card was deleted but the team record could not be written; it will show until the next save' } }
+      return { ok: true, deleted: out.deleted === true, ...(out.deleted !== true ? { reconciled: true } : {}) }
     }
     if (action !== 'create' && action !== 'update') return { ok: false, code: 'input', error: 'action is list, create, update or delete' }
     if (action === 'update' && cards[id] === undefined) return { ok: false, code: 'card', error: 'no card of yours with that id' }
@@ -1553,9 +1629,13 @@ export class SuperagentHost {
     const description = `for: ${forList === 'team' ? 'team' : forList.join(', ')} · scene: ${scene}${from !== undefined ? ` · from: ${from}` : ''}`.slice(0, 512)
     const out = svc.draft({ authorSession: observer, ...(action === 'update' ? { id } : {}), name: String(input.name ?? ''), content: String(input.content ?? ''), description })
     if (!out.ok || typeof out.id !== 'string') return out as Record<string, unknown>
-    cards[out.id] = { name: String(out.name ?? input.name ?? ''), for: forList, scene, ...(from !== undefined ? { from } : {}), at: this.now(), sha256: String(out.content_sha256 ?? '') }
-    this.saveObserverCards(cards)
-    return { ok: true, id: out.id, created: out.created === true, for: forList, scene }
+    cards[out.id] = { name: String(out.name ?? input.name ?? ''), for: forList, scene, ...(from !== undefined ? { from } : {}), at: this.now(), sha256: String(out.content_sha256 ?? ''), author: observer }
+    if (!this.saveObserverCards(cards)) {
+      // A new card the team record cannot hold is taken back, so the plugin and the record agree; an edit is reported.
+      if (out.created === true) { try { svc.remove({ authorSession: observer, id: out.id }) } catch { /* reported below */ } }
+      return { ok: false, code: 'not-saved', error: out.created === true ? 'the team record could not be written, so the new card was taken back' : 'the card text changed but the team record could not be written; save again' }
+    }
+    return { ok: true, id: out.id, created: out.created === true, for: forList, scene, sha256: String(out.content_sha256 ?? '') }
   }
 
   /**
@@ -1564,7 +1644,7 @@ export class SuperagentHost {
    */
   cardQueue(observer: string, input: { action?: unknown; session_id?: unknown; id?: unknown; state?: unknown }): Record<string, unknown> {
     if (!this.isObserver(observer)) return { ok: false, code: 'not-observer', error: 'a2a_card_queue serves only the team\'s observer' }
-    return this.ownerCastQueue(input)
+    return this.castQueueView(input, observer)
   }
 
   /**
@@ -1572,11 +1652,32 @@ export class SuperagentHost {
    * in the plugin's queue for this team's sessions, and this team's releases.
    */
   ownerCastQueue(input: { action?: unknown; session_id?: unknown; id?: unknown; state?: unknown }): Record<string, unknown> {
+    return this.castQueueView(input, undefined)
+  }
+
+  /**
+   * #907 review B2: rows are attributed by the origin each cast carried (this team's prefix, the observer, the requested
+   * mode, the release), not by who the target is now. A row of another team is never shown or touched, even for a
+   * session both teams share. A row cast before origins (`legacy: true`) is shown for this team's sessions, and only the
+   * owner withdraws it. The observer withdraws only what it cast itself; the owner, anything of this team. No row shows
+   * the observer's session id: the observer sees `mine`.
+   */
+  private castQueueView(input: { action?: unknown; session_id?: unknown; id?: unknown; state?: unknown }, observer: string | undefined): Record<string, unknown> {
     const team = new Set([this.settings.router, ...this.settings.members].filter((id): id is string => typeof id === 'string'))
     const session = String(input.session_id ?? '').trim()
     if (session !== '' && !team.has(session)) return { ok: false, code: 'not-in-team', error: 'that session is not on this team' }
     const svc = this.d.castQueue?.()
     if (svc === undefined) return { ok: true, available: false, reason: 'dsh-prompt-templates with the durable cast queue (#902 S1) is not on this host' }
+    const prefix = this.castTeamPrefix()
+    const field = (origin: string, name: string): string | undefined => origin.split('|').find(part => part.startsWith(`${name}:`))?.slice(name.length + 1)
+    type Row = { id?: unknown; session_id?: unknown; origin?: unknown; [k: string]: unknown }
+    const ours = (row: Row): 'team' | 'legacy' | undefined => typeof row.origin === 'string' ? (row.origin.startsWith(prefix) ? 'team' : undefined) : (team.has(String(row.session_id)) ? 'legacy' : undefined)
+    const view = (row: Row): Record<string, unknown> => {
+      const { origin, ...rest } = row
+      if (typeof origin !== 'string') return { ...rest, legacy: true }
+      const release = field(origin, 'release')
+      return { ...rest, requested: field(origin, 'mode') ?? null, ...(release !== undefined ? { release } : {}), ...(observer !== undefined ? { mine: field(origin, 'observer') === observer } : {}) }
+    }
     if (input.action === 'withdraw') {
       const id = String(input.id ?? '').trim()
       // #902 S3: an armed release is withdrawn here, before it ever reaches the plugin.
@@ -1584,19 +1685,26 @@ export class SuperagentHost {
         const releases = this.releases()
         const r = releases.find(x => x.id === id && team.has(x.session_id))
         if (r === undefined) return { ok: false, code: 'release', error: 'no release of this team with that id' }
+        if (observer !== undefined && r.observer !== observer) return { ok: false, code: 'not-yours', error: 'that release was armed by another observer session; the owner can withdraw it' }
         if (r.state !== 'armed') return { ok: true, withdrawn: false, state: r.state }
         r.state = 'withdrawn'; r.endedAt = this.now()
-        this.saveReleases(releases)
+        if (!this.saveReleases(releases)) return { ok: false, code: 'not-saved', error: 'the withdrawal could not be written to disk; the release stays armed' }
         return { ok: true, withdrawn: true }
       }
       if (session === '' || id === '') return { ok: false, code: 'input', error: 'withdraw takes session_id and id' }
-      return svc.withdraw({ sessionId: session, id }) as Record<string, unknown>
+      const listed = svc.list({ sessionId: session, limit: 500 })
+      const row = listed.ok === true && Array.isArray(listed.items) ? (listed.items as Row[]).find(item => item.id === id) : undefined
+      const kind = row === undefined ? undefined : ours(row)
+      if (row === undefined || kind === undefined) return { ok: false, code: 'cast', error: 'no cast of this team with that id for that session' }
+      if (observer !== undefined && kind === 'legacy') return { ok: false, code: 'legacy', error: 'that card was cast before casts carried their team; the owner can withdraw it' }
+      if (observer !== undefined && field(String(row.origin), 'observer') !== observer) return { ok: false, code: 'not-yours', error: 'that card was cast by another observer session; the owner can withdraw it' }
+      return svc.withdraw({ sessionId: session, id, ...(typeof row.origin === 'string' ? { origin: row.origin } : {}) }) as Record<string, unknown>
     }
     const state = input.state === undefined ? undefined : String(input.state)
     const out = svc.list({ ...(session !== '' ? { sessionId: session } : {}), ...(state !== undefined ? { state } : {}), limit: 100 })
     if (out.ok !== true || !Array.isArray(out.items)) return out as Record<string, unknown>
-    const releases = this.releases().filter(r => team.has(r.session_id) && (session === '' || r.session_id === session)).reverse().map(({ observer: _o, ...r }) => r)
-    return { ok: true, items: (out.items as Array<{ session_id?: unknown }>).filter(row => team.has(String(row.session_id))), releases }
+    const releases = this.releases().filter(r => team.has(r.session_id) && (session === '' || r.session_id === session)).reverse().map(({ observer: by, ...r }) => ({ ...r, ...(observer !== undefined ? { mine: by === observer } : {}) }))
+    return { ok: true, items: (out.items as Row[]).filter(row => ours(row) !== undefined).map(view), releases }
   }
 
   /** #764 review: the per-target cast limits, kept in the team's observer-casts.json. */
@@ -1611,11 +1719,13 @@ export class SuperagentHost {
       return out
     } catch { return {} }
   }
-  private saveCastLimits(limits: Record<string, { casts: number[]; wakeAt: number; triggerAt?: number }>): void {
+  /** @returns whether the limits reached the disk. */
+  private saveCastLimits(limits: Record<string, { casts: number[]; wakeAt: number; triggerAt?: number }>): boolean {
     try {
       const path = this.castLimitsPath(), temporary = `${path}.tmp-${String(process.pid)}`
       mkdirSync(this.stateDir, { recursive: true }); writeFileSync(temporary, JSON.stringify(limits), { mode: 0o600 }); renameSync(temporary, path)
-    } catch (error) { this.d.logger.warn('superagent: cast limits not saved: %s', String(error)) }
+      return true
+    } catch (error) { this.d.logger.warn('superagent: cast limits not saved: %s', String(error)); return false }
   }
 
   /** R7b: what the observer holds now (for the team state). */

@@ -50,7 +50,7 @@ describe('T5-A: a2a_card_cast', () => {
     expect(await m.cast('session-o', { session_id: 'session-elsewhere', template_id: 't', reason: 'r', basis: 'none: test' })).toMatchObject({ ok: false, code: 'not-in-team' })
     expect(await m.cast('session-o', { session_id: 'session-o', template_id: 't', reason: 'r', basis: 'none: test' })).toMatchObject({ ok: false, code: 'not-in-team' })
     expect(await m.cast('session-o', { session_id: 'session-m', template_id: '', reason: 'r', basis: 'none: test' })).toMatchObject({ ok: false, code: 'template' })
-    expect(await m.cast('session-o', { session_id: 'session-m', template_id: 'atelier-action-review', reason: '卡在验收', basis: 'none: test' })).toEqual({ ok: true, mode: 'insert', queued: 1, woken: true, basis: 'none: test' })
+    expect(await m.cast('session-o', { session_id: 'session-m', template_id: 'atelier-action-review', reason: '卡在验收', basis: 'none: test' })).toEqual({ ok: true, mode: 'insert', queued: 1, woken: true, wake: 'sent', basis: 'none: test' })
     expect(m.casts).toEqual([{ sessionId: 'session-m', templateId: 'atelier-action-review', reason: '卡在验收', basis: 'none: test' }])
     expect(m.sent.some(([id, text]) => id === 'session-m' && text.startsWith('[superagent card]'))).toBe(true)
     // The plugin's refusal comes back as is, and no wake follows it.
@@ -69,9 +69,9 @@ describe('T5-A: a2a_card_cast', () => {
     const clock = { ms: Date.parse('2026-11-20T00:00:00Z') }
     const m = await team({ observerCast: true, home, clock })
     const wakes = () => m.sent.filter(([id, t]) => id === 'session-m' && t.startsWith('[superagent card]')).length
-    expect(await m.cast('session-o', { session_id: 'session-m', template_id: 'a', reason: 'r', basis: 'none: test' })).toEqual({ ok: true, mode: 'insert', queued: 1, woken: true, basis: 'none: test' })
+    expect(await m.cast('session-o', { session_id: 'session-m', template_id: 'a', reason: 'r', basis: 'none: test' })).toEqual({ ok: true, mode: 'insert', queued: 1, woken: true, wake: 'sent', basis: 'none: test' })
     clock.ms += 5 * 60_000
-    expect(await m.cast('session-o', { session_id: 'session-m', template_id: 'b', reason: 'r', basis: 'none: test' })).toEqual({ ok: true, mode: 'insert', queued: 1, woken: false, basis: 'none: test' })
+    expect(await m.cast('session-o', { session_id: 'session-m', template_id: 'b', reason: 'r', basis: 'none: test' })).toEqual({ ok: true, mode: 'insert', queued: 1, woken: false, wake: 'none', basis: 'none: test' })
     expect(wakes()).toBe(1)
     await m.h.stop()
     // Restart: the counts carry on.
@@ -98,6 +98,9 @@ describe('T5-A: a2a_card_cast', () => {
     expect(await go('ticket:abcdef01')).toMatchObject({ ok: false, code: 'basis' }) // two tickets start so
     expect(await go(`none: ${'x'.repeat(200)}`)).toMatchObject({ ok: false, code: 'basis' })
     expect(await go('ticket: 99887766')).toMatchObject({ ok: true, basis: 'ticket:99887766aabbccdd' })
+    // #907 review B1: an event basis names a trigger this team recorded; an unknown one is refused.
+    ;(m.h as unknown as { store: { triggers: { get: (id: string) => unknown } } }).store.triggers.get = (id: string) => (id === 'ev-42' ? { id } : undefined)
+    expect(await go('event:ev-unknown')).toMatchObject({ ok: false, code: 'basis' })
     expect(await go('event:ev-42')).toMatchObject({ ok: true, basis: 'event:ev-42' })
     expect(await go('none:\n浏览中发现卡在验收')).toMatchObject({ ok: true, basis: 'none: 浏览中发现卡在验收' })
     expect(m.casts.map(c => c.basis)).toEqual(['ticket:99887766aabbccdd', 'event:ev-42', 'none: 浏览中发现卡在验收'])
@@ -107,10 +110,12 @@ describe('T5-A: a2a_card_cast', () => {
     const m = await team({ observerCast: true, queue: true })
     expect(await m.queue('session-m', {})).toMatchObject({ ok: false, code: 'not-observer' })
     const all = await m.queue('session-o', {})
-    expect(all).toEqual({ ok: true, items: [{ id: 'q1', session_id: 'session-m', state: 'waiting', basis: 'none: a' }], releases: [] })
+    expect(all).toEqual({ ok: true, items: [{ id: 'q1', session_id: 'session-m', state: 'waiting', basis: 'none: a', legacy: true }], releases: [] })
     expect(await m.queue('session-o', { session_id: 'session-elsewhere' })).toMatchObject({ ok: false, code: 'not-in-team' })
     expect(await m.queue('session-o', { action: 'withdraw', session_id: 'session-m' })).toMatchObject({ ok: false, code: 'input' })
-    expect(await m.queue('session-o', { action: 'withdraw', session_id: 'session-m', id: 'q1' })).toEqual({ ok: true, withdrawn: true })
+    // #907 review B2: a row from before origins is the owner's to withdraw, not the observer's.
+    expect(await m.queue('session-o', { action: 'withdraw', session_id: 'session-m', id: 'q1' })).toMatchObject({ ok: false, code: 'legacy' })
+    expect(m.h.ownerCastQueue({ action: 'withdraw', session_id: 'session-m', id: 'q1' })).toEqual({ ok: true, withdrawn: true })
     expect(m.withdrawn).toEqual([{ sessionId: 'session-m', id: 'q1' }])
     await m.h.stop()
     const old = await team({ observerCast: true })

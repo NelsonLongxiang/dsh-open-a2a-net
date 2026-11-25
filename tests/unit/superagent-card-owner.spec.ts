@@ -17,6 +17,7 @@ async function team(o: { queue?: boolean } = {}) {
     canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', 'session-m', 'session-o'], remote: [] } : undefined, home: mkdtempSync(join(tmpdir(), 'sa-own-')), logger: { info: () => {}, warn: () => {} },
     deliverToSession: () => true, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id, presetOf: (id: string) => presets[id],
     now: () => new Date(clock.ms).toISOString(), sessionBusy: () => false,
+    castCapabilities: () => ({ modes: ['insert', 'queue'], origin: true, confirmedDelivery: true }),
     castCard: (input: { sessionId: string }) => { casts.push(input); return { ok: true, queued: 1 } },
     ...(o.queue === false ? {} : { castQueue: () => ({
       list: () => ({ ok: true, items: [{ id: 'q1', session_id: 'session-m', state: 'waiting', name: 'c', basis: 'none: a', mode: 'queue' }, { id: 'q2', session_id: 'session-elsewhere', state: 'waiting' }] }),

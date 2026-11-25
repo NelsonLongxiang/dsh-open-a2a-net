@@ -15,9 +15,11 @@ interface BuilderFaceDeps {
   readonly ctx: Context
   readonly controlRoute: (fn: (req: IncomingMessage, res: ServerResponse) => void) => (req: IncomingMessage, res: ServerResponse) => void
   readonly inventory: () => InventoryInput
-  /** Every local session the host knows: live ones and joined ones. */
-  readonly sessions: () => ReadonlyArray<{ readonly id: string; readonly live: boolean; readonly joined: boolean }>
-  readonly isBuilder: (session: string) => boolean
+  /**
+   * #906 review B2: the builder sessions — loaded ones running the builder preset, and the ones the host noted earlier
+   * that are not loaded now (`live: false`); a session holding a team role is never one.
+   */
+  readonly roster: () => ReadonlyArray<{ readonly id: string; readonly live: boolean; readonly joined: boolean; readonly seenAt?: string }>
 }
 
 /**
@@ -40,7 +42,9 @@ export function registerBuilderFace(server: WebServer, d: BuilderFaceDeps): void
       if (view === 'inventory') { send(200, { ok: true, ...orgInventory(d.inventory()) }); return }
       if (view === 'builders') {
         const inventory = d.inventory()
-        send(200, { ok: true, builders: builderSessions({ sessions: d.sessions(), isBuilder: d.isBuilder, nameOf: inventory.nameOf, staffing: inventory.staffing as never }) })
+        const roster = d.roster()
+        const seen = new Map(roster.map(row => [row.id, row.seenAt]))
+        send(200, { ok: true, builders: builderSessions({ sessions: roster, isBuilder: () => true, nameOf: inventory.nameOf, staffing: inventory.staffing as never }).map(row => ({ ...row, ...(seen.get(row.session) !== undefined ? { seenAt: seen.get(row.session) } : {}) })) })
         return
       }
       send(400, { ok: false, code: 'view', error: 'view must be inventory or builders' })
