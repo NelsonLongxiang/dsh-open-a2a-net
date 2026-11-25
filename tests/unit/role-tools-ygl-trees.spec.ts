@@ -61,3 +61,14 @@ describe('#897 review', () => {
     expect(roleToolRefusal('router', YGL_TREES, { domain: 'kb', action: 'search', params: { query: 'q' } })).toBeUndefined()
   })
 })
+
+describe('#897 re-review', () => {
+  it('B2: a domain or action that is not a string is refused with a reason, never a throw (even one whose toString is not a function)', () => {
+    const bad = { toString: 1 }
+    for (const call of [{ domain: bad, action: 'search' }, { domain: 'kb', action: bad }, { action: bad }, { domain: bad, action: 'help' }, { domain: 'kb', action: 7 }, { domain: ['kb'], action: 'search' }]) {
+      let reason: string | undefined
+      expect(() => { reason = roleToolRefusal('router', YGL_TREES, call) }, JSON.stringify(Object.keys(call))).not.toThrow()
+      expect(reason).toMatch(/is not a string/)
+    }
+  })
+})

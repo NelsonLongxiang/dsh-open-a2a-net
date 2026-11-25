@@ -86,14 +86,16 @@ export function yglTreesReadRefusal(args: unknown): string | undefined {
   if (extra !== undefined) return refuse(`an unknown field ${JSON.stringify(extra)}`)
   if (Object.prototype.hasOwnProperty.call(args, 'params') && !plainObject(args.params)) return refuse('params that are not an object')
   const { domain, action } = args as { domain?: unknown; action?: unknown }
+  // #897 re-review B2: the selectors are checked before any of them goes into the refusal's text, so no value can throw there.
+  if (action !== undefined && typeof action !== 'string') return refuse('an action that is not a string')
+  if (domain !== undefined && typeof domain !== 'string') return refuse('a domain that is not a string')
   if (action === 'help') {
     const helpExtra = plainObject(args.params) ? Object.keys(args.params).find(k => k !== 'action') : undefined
-    if (helpExtra !== undefined) return refuse(`help with params.${helpExtra}`)
-    if (domain !== undefined && typeof domain !== 'string') return refuse('help on a domain that is not a string')
+    if (helpExtra !== undefined) return refuse(`help with params.${JSON.stringify(helpExtra)}`)
     return undefined
   }
   if (typeof domain === 'string' && typeof action === 'string' && Object.prototype.hasOwnProperty.call(YGL_TREES_READ_ROUTES, domain) && YGL_TREES_READ_ROUTES[domain]!.includes(action)) return undefined
-  return refuse(`${String(domain ?? '?')}/${String(action ?? '?')}`)
+  return refuse(`${domain ?? '?'}/${action ?? '?'}`)
 }
 export const YGL_READ_TOOLS: readonly string[] = ['mcp__ygl__read', YGL_TREES]
 export const YGL_WORK_TOOLS: readonly string[] = [...YGL_READ_TOOLS, 'mcp__ygl__write', 'mcp__ygl__verify', 'mcp__ygl__doctor']
