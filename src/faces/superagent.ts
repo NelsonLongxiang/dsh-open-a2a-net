@@ -392,8 +392,19 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
       }),
     }), 'a2a: superagent teams face')
   }
+  if (d.ownerDelegatesPath !== undefined) registerOwnerDelegateFaces(webServer, { ctx, controlRoute, readJsonBody, ownerDelegatesPath: d.ownerDelegatesPath })
+}
+
+/**
+ * The owner-delegate faces: list, issue and revoke on the control route, and (#933) terminal pairing — the owner allows or
+ * refuses a pairing there, while the terminal starts and polls on its own open route.
+ * @param webServer - the host's web server.
+ * @param d - the context, the control-route guard, the body reader and the delegate store.
+ */
+export function registerOwnerDelegateFaces(webServer: WebServer, d: Pick<SuperagentFaceDeps, 'ctx' | 'controlRoute' | 'readJsonBody'> & { readonly ownerDelegatesPath: string }): void {
+  const { ctx, controlRoute, readJsonBody } = d
   const delegatesPath = d.ownerDelegatesPath
-  if (delegatesPath !== undefined) {
+  {
     // The control API's user scope (owner-delegate.ts): list for the control key; issue and revoke for the browser owner
     // only, so a remote node's owner can hand its agent a delegate without a shell on that node.
     const read = (path: string): string | undefined => { try { return readFileSync(path, 'utf8') } catch { return undefined } }
