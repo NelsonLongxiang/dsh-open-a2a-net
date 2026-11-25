@@ -54,7 +54,7 @@ describe('the preset decides', () => {
 
 describe('the tool list', () => {
   it('is a member\'s and two more (cards, and notes on tickets since R7b); since #717 a plain member may request too, the router has not got it', () => {
-    expect(OBSERVER_TOOLS).toEqual([...MEMBER_TOOLS, 'a2a_decision_propose', 'a2a_ticket_note', 'a2a_card_cast'])
+    expect(OBSERVER_TOOLS).toEqual([...MEMBER_TOOLS, 'a2a_decision_propose', 'a2a_ticket_note', 'a2a_card_cast', 'a2a_card_queue'])
     expect(roleToolRefusal('member', 'a2a_card_cast')).toContain('a2a_card_cast')
     expect(roleToolRefusal('member', 'a2a_ticket_note')).toContain('a2a_ticket_note')
     expect(roleToolRefusal('router', 'a2a_ticket_note')).toContain('a2a_ticket_note')
