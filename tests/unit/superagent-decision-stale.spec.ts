@@ -4,7 +4,7 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import type { DecisionSpec } from '../../src/superagent/host/decisions.ts'
+import { AUTO_ACK_TEXT, ticketCardId, type DecisionSpec } from '../../src/superagent/host/decisions.ts'
 
 const spec = (level: DecisionSpec['level'] = 'P2'): DecisionSpec => ({ level, options: ['甲', '乙'], recommended: '甲' })
 
@@ -57,7 +57,7 @@ describe('#934 a card no longer waiting', () => {
     const { id } = m.h.proposeDecision('router', 'session-r', '问', spec()) as { id: string }
     expect(m.h.decide(id, 'approve')).toMatchObject({ ok: true })
     const out = m.h.decide(id, 'choose', '乙')
-    expect(out).toMatchObject({ ok: false, code: 'stale', now: { decided: { by: 'owner', text: '决定：甲' } } })
+    expect(out).toMatchObject({ ok: false, code: 'stale', now: { decided: { by: 'owner', at: m.h.decisions.get(id)!.decided!.at, text: '决定：甲' } } })
     expect(String(out.error)).toContain('决定：甲')
     await m.h.stop()
   })
@@ -72,10 +72,53 @@ describe('#934 a card no longer waiting', () => {
     const m = await team()
     const { id } = m.h.proposeDecision('router', 'session-r', '凭据访问', spec()) as { id: string }
     // Closed by the host two days ago: past the day such cards stay listed.
-    expect(m.h.decisions.autoAcknowledge(id, new Date(Date.now() - 48 * 3_600_000).toISOString(), 15)).toBe(true)
+    const at = new Date(Date.now() - 48 * 3_600_000).toISOString()
+    expect(m.h.decisions.autoAcknowledge(id, at, 15)).toBe(true)
     const out = m.h.decide(id, 'approve')
-    expect(out).toMatchObject({ ok: false, code: 'stale', now: { decided: { by: 'host' } } })
+    expect(out).toMatchObject({ ok: false, code: 'stale', now: { decided: { by: 'host', at, text: AUTO_ACK_TEXT } } })
     expect(String(out.error)).toContain('by the host')
+    await m.h.stop()
+  })
+  it('#938 review B1 boundary: the owner deciding an auto-acked card again, in the same millisecond, stays the owner', async () => {
+    const m = await team()
+    const { id } = m.h.proposeDecision('router', 'session-r', '凭据访问', spec()) as { id: string }
+    const at = new Date(Date.now() - 48 * 3_600_000).toISOString()
+    expect(m.h.decisions.autoAcknowledge(id, at, 15)).toBe(true)
+    // The owner's own decision replaces the host's, at the very same time; the autoAck audit record stays.
+    m.h.decisions.decide(id, { at, text: '决定：乙\n说明：我看过了' })
+    expect(m.h.decisions.get(id)!.autoAck).toBeDefined()
+    const out = m.h.decide(id, 'approve')
+    expect(out).toMatchObject({ ok: false, code: 'stale', now: { decided: { by: 'owner', at, text: '决定：乙' } } })
+    expect(String(out.error)).not.toContain('by the host')
+    await m.h.stop()
+  })
+  it('a ticket question whose ticket ended reports ended with its outcome', async () => {
+    const m = await team()
+    const ticket = await m.openTicket()
+    m.h.report('session-m', { state: 'waiting', summary: '要定', question: '用哪个？', decision: spec('P3') }, ticket)
+    const [card] = m.h.decisionCards()
+    const real = m.h.store.tickets.get(ticket)!
+    m.h.report('session-m', { state: 'waiting', summary: '改问', question: '换个问法？', decision: spec('P3') }, ticket)
+    const spy = vi.spyOn(m.h.store.tickets, 'get').mockImplementation(((id: string) => id === ticket ? { ...real, ended: { outcome: 'dropped' } } : undefined) as never)
+    try {
+      const out = m.h.decide(card!.id, 'choose', '甲')
+      expect(out).toMatchObject({ ok: false, code: 'stale', now: { ticket: { id: ticket, stage: 'ended', outcome: 'dropped' } } })
+      expect(String(out.error)).toContain('ended (dropped)')
+    } finally { spy.mockRestore() }
+    await m.h.stop()
+  })
+  it('a ticket question whose ticket is no longer on the host reports gone', async () => {
+    const m = await team()
+    const ticket = await m.openTicket()
+    m.h.report('session-m', { state: 'waiting', summary: '要定', question: '还要吗？', decision: spec('P3') }, ticket)
+    const id = ticketCardId(ticket, '还要吗？')
+    m.h.report('session-m', { state: 'waiting', summary: '改问', question: '换个问法？', decision: spec('P3') }, ticket)
+    const spy = vi.spyOn(m.h.store.tickets, 'get').mockImplementation((() => undefined) as never)
+    try {
+      const out = m.h.decide(id, 'approve')
+      expect(out).toMatchObject({ ok: false, code: 'stale', now: { ticket: { id: ticket, stage: 'gone' } } })
+      expect(String(out.error)).toContain('no longer on this host')
+    } finally { spy.mockRestore() }
     await m.h.stop()
   })
 })

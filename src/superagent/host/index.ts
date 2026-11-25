@@ -39,7 +39,7 @@ import { SettingsHistory } from './settings-history.ts'
 import { HealthReminders, HEALTH_TICK_MS, cleanName, type HealthProblem } from './health-reminders.ts'
 import { DecisionPush, PUSH_TICK_MS } from './decision-push.ts'
 import { QuestionGate, questionToken } from './question-gate.ts'
-import { DECISION_FILES_MAX, DecisionBook, decisionFiles, DECISION_NOTE_MAX, inputFor, needsInput, recommendedNeedsInput, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
+import { AUTO_ACK_TEXT, DECISION_FILES_MAX, DecisionBook, decisionFiles, DECISION_NOTE_MAX, inputFor, needsInput, recommendedNeedsInput, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
@@ -2034,8 +2034,11 @@ export class SuperagentHost {
     let now: Record<string, unknown> | undefined
     let where = 'this host has no record of it'
     if (known?.decided !== undefined) {
-      // #938 review B1: a credential card the host closed on its timeout carries autoAck, not decided.by; it was not the owner.
-      const by = known.decided.by ?? (known.autoAck !== undefined ? 'host' : 'owner')
+      // #938 review B1: a credential card the host closed on its timeout carries autoAck and no decided.by. The autoAck record
+      // stays when the owner decides again, so the host is named only while the decision is still that auto-ack itself (same
+      // time, the host's fixed text); a later owner decision, even in the same millisecond, stays the owner's.
+      const hostAck = known.autoAck !== undefined && known.decided.at === known.autoAck.at && known.decided.text === AUTO_ACK_TEXT
+      const by = known.decided.by ?? (hostAck ? 'host' : 'owner')
       const first = known.decided.text.split('\n')[0] ?? ''
       now = { decided: { at: known.decided.at, by, text: first } }
       where = `it was decided at ${known.decided.at}${by === 'owner' ? '' : ` by the ${by}`}: ${first}`
