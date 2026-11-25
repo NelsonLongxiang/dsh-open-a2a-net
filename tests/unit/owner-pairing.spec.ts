@@ -19,7 +19,7 @@ describe('#933 owner pairing', () => {
   })
   it('start → approve → one poll with the secret hands the token once; then not-found', () => {
     const t = setup()
-    const s = started(t.p.start('10.0.0.1', 'laptop', 7))
+    const s = started(t.p.start('client-a', 'laptop', 7))
     expect(s.expiresAt).toBe(new Date(t.clock.ms + PAIRING_TTL_MS).toISOString())
     expect(t.p.poll(s.id, s.secret, t.issue)).toMatchObject({ state: 'waiting' })
     expect(t.p.list()).toEqual([expect.objectContaining({ id: s.id, code: s.code, name: 'laptop', days: 7, state: 'waiting' })])

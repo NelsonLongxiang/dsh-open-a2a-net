@@ -28,7 +28,7 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
 const call = (path: string, method: string, body?: Record<string, unknown>, headers: Record<string, string> = {}) => new Promise<{ status: number; body: Record<string, unknown>; text: string; headers: Record<string, unknown> }>((resolve) => {
   let status = 0, sent: Record<string, unknown> = {}
-  routes[path]!({ method, url: path, headers, body, socket: { remoteAddress: '10.0.0.9', localPort: 3080 } }, {
+  routes[path]!({ method, url: path, headers, body, socket: { remoteAddress: 'client-a', localPort: 3080 } }, {
     writeHead: (s: number, h: Record<string, unknown>) => { status = s; sent = h ?? {} },
     end: (text: string) => { resolve({ status, body: JSON.parse(text) as Record<string, unknown>, text, headers: sent }) },
   })
