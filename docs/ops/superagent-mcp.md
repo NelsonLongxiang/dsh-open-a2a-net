@@ -146,7 +146,12 @@ ygl-trees 的「当前项目」按 `YGL_SESSION` 分桶记录。DSH 启动 MCP �
 
 Windows 不要用 `cmd /c … ygl-trees mcp`：`windowsHide` 只隐藏直接启动的那一层，`cmd` 下面经 `.cmd` 垫片启动的 node.exe 会为每个会话弹出一个控制台窗口（#900）。入口脚本的位置取 `ygl-trees` 包 `package.json` 的 `bin` 字段，npm 全局目录可以用 `npm prefix -g` 查。
 
-团队预设在 Windows 上由宿主在启动时自动找这个入口脚本，找到就写进环境变量 `SUPERAGENT_YGL_BIN`，预设据此直接用 node 启动。依次找三个地方：PATH 上 `ygl-trees.cmd` 所在目录、运行 DSH 的 node 所在目录、`%APPDATA%\npm`。
+团队预设在 Windows 上会在这一行配置加载时自己找入口脚本，找到就直接用 node 启动。不由宿主在启动时预先设置，是因为团队会话在宿主插件启动之前就已唤醒。查找顺序：
+
+1. 环境变量 `SUPERAGENT_YGL_BIN`
+2. PATH 上 `ygl-trees.cmd` 所在目录
+3. 运行 DSH 的 node 所在目录
+4. `%APPDATA%\npm`
 
 - 自动找不到时，可以手动把 `SUPERAGENT_YGL_BIN` 设成入口脚本的绝对路径。
 - 都没有时退回 `cmd` 包装，功能照常，只是会弹窗。

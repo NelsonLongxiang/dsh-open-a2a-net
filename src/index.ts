@@ -2361,7 +2361,7 @@ export function apply(ctx: Context, config: Config): void {
   let superagentHomeUrl: string | undefined
   if (superagentHost !== undefined) {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
-    exportYglBin() // #900: Windows presets run ygl-trees with this node directly, before any team session loads
+    exportYglBin() // #900: the host's own ygl-trees runs (db init, --version) use this node directly on Windows
     ctx.effect(() => {
       void ensureTeamYglHome({ logger })
       // Design Y1d (#739 review R1): the engines start at boot, as before #739 (a late start's recovery restarted assignments

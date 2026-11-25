@@ -2,7 +2,7 @@
 /** #900: on Windows the team presets run ygl-trees with this node directly, so no console window opens per team session. */
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { delimiter, resolve } from 'node:path'
+import { delimiter, resolve, win32 } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { YGL_BIN_ENV, exportYglBin, resolveYglBin } from '../../src/superagent/host/ygl-home.ts'
 
@@ -77,12 +77,21 @@ describe('the Windows ygl MCP row of every team preset', () => {
     for (const preset of presets) expect(winRow(preset)).toBeDefined()
   })
 
-  it('with a resolved entry script: this node runs it directly, as node, under its own session name', () => {
-    const ctx = { process: { execPath: 'C:\\nodejs\\node.exe', env: { SUPERAGENT_YGL_BIN: 'C:\\npm\\node_modules\\ygl-trees\\dist\\bundle\\bin.cjs', USERPROFILE: 'C:\\Users\\o' } } }
+  /** A Windows host as the row sees it: path.win32, and a file system holding exactly these files. */
+  const host = (env: Record<string, string>, present: Record<string, string> = {}) => {
+    const win = win32
+    const has = (p: string) => win.resolve(p).toLowerCase() in Object.fromEntries(Object.entries(present).map(([k, v]) => [win.resolve(k).toLowerCase(), v]))
+    const fs = { existsSync: has, readFileSync: (p: string) => { const hit = Object.entries(present).find(([k]) => win.resolve(k).toLowerCase() === win.resolve(p).toLowerCase()); if (hit === undefined) throw Error('ENOENT'); return hit[1] } }
+    return { process: { execPath: 'C:\\nodejs\\node.exe', env, getBuiltinModule: (name: string) => name === 'node:path' ? win : name === 'node:fs' ? fs : undefined } }
+  }
+  const pkg = JSON.stringify({ name: 'ygl-trees', bin: { 'ygl-trees': './dist/bundle/bin.cjs' } })
+
+  it('finds the entry script itself when the row loads: beside ygl-trees.cmd on PATH, run by this node, as node, under its own session name', () => {
+    const ctx = host({ PATH: 'C:\\Windows;D:\\node-v24\\', USERPROFILE: 'C:\\Users\\o' }, { 'D:\\node-v24\\ygl-trees.cmd': '', 'D:\\node-v24\\node_modules\\ygl-trees\\package.json': pkg, 'D:\\node-v24\\node_modules\\ygl-trees\\dist\\bundle\\bin.cjs': '' })
     for (const preset of presets) {
       const config = winRow(preset).config!
       expect(value(config.command, ctx)).toBe('C:\\nodejs\\node.exe')
-      expect(value(config.args, ctx)).toEqual(['C:\\npm\\node_modules\\ygl-trees\\dist\\bundle\\bin.cjs', 'mcp'])
+      expect(value(config.args, ctx)).toEqual(['D:\\node-v24\\node_modules\\ygl-trees\\dist\\bundle\\bin.cjs', 'mcp'])
       expect(config.env.ELECTRON_RUN_AS_NODE).toBe('1')
       const a = value(config.env.YGL_SESSION, ctx), b = value(config.env.YGL_SESSION, ctx)
       expect(a).toMatch(/^superagent-[a-z0-9]+-[a-z0-9]+$/)
@@ -91,12 +100,28 @@ describe('the Windows ygl MCP row of every team preset', () => {
     }
   })
 
-  it('without one: the shell route exactly as before', () => {
-    const ctx = { process: { execPath: 'C:\\nodejs\\node.exe', env: {} } }
+  it('beside this node, or in %APPDATA%\\npm, when PATH has no shim; SUPERAGENT_YGL_BIN wins over both', () => {
+    const beside = host({ PATH: '' }, { 'C:\\nodejs\\node_modules\\ygl-trees\\package.json': pkg, 'C:\\nodejs\\node_modules\\ygl-trees\\dist\\bundle\\bin.cjs': '' })
+    const appdata = host({ PATH: '', APPDATA: 'C:\\Users\\o\\AppData\\Roaming' }, { 'C:\\Users\\o\\AppData\\Roaming\\npm\\node_modules\\ygl-trees\\package.json': pkg, 'C:\\Users\\o\\AppData\\Roaming\\npm\\node_modules\\ygl-trees\\dist\\bundle\\bin.cjs': '' })
+    const pinned = host({ PATH: '', SUPERAGENT_YGL_BIN: 'E:\\own\\bin.cjs' })
     for (const preset of presets) {
       const config = winRow(preset).config!
-      expect(value(config.command, ctx)).toBe('cmd')
-      expect(value(config.args, ctx)).toEqual(['/d', '/s', '/c', 'set "YGL_SESSION=superagent-%RANDOM%%RANDOM%" && ygl-trees mcp'])
+      expect(value(config.args, beside)).toEqual(['C:\\nodejs\\node_modules\\ygl-trees\\dist\\bundle\\bin.cjs', 'mcp'])
+      expect(value(config.args, appdata)).toEqual(['C:\\Users\\o\\AppData\\Roaming\\npm\\node_modules\\ygl-trees\\dist\\bundle\\bin.cjs', 'mcp'])
+      expect(value(config.command, pinned)).toBe('C:\\nodejs\\node.exe')
+      expect(value(config.args, pinned)).toEqual(['E:\\own\\bin.cjs', 'mcp'])
+    }
+  })
+
+  it('found nowhere (or the bin it names is missing): the shell route exactly as before', () => {
+    const none = host({ PATH: 'C:\\Windows' })
+    const broken = host({ PATH: '' }, { 'C:\\nodejs\\node_modules\\ygl-trees\\package.json': pkg })
+    for (const preset of presets) {
+      const config = winRow(preset).config!
+      for (const ctx of [none, broken]) {
+        expect(value(config.command, ctx)).toBe('cmd')
+        expect(value(config.args, ctx)).toEqual(['/d', '/s', '/c', 'set "YGL_SESSION=superagent-%RANDOM%%RANDOM%" && ygl-trees mcp'])
+      }
     }
   })
 
