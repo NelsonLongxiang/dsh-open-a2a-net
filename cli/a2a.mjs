@@ -875,7 +875,7 @@ async function cmdUserNode(words) {
   if (op === 'status') {
     const bases = has('--all') ? Object.keys(readDelegates().homes) : [homeKey()]
     for (const base of bases) {
-      try { const s = await userCall('GET', PATH, undefined, base); console.log(s.ok === true ? line(base, s) : `${base}  ${String(s.error ?? s.code ?? 'no node-ops route (older plugin)')}`) } catch (error) { console.log(`${base}  unreachable: ${String(error?.message ?? error)}`) }
+      try { const s = await userCall('GET', PATH, undefined, base); if (has('--json')) { console.log(JSON.stringify({ home: base, ...s })); continue } console.log(s.ok === true ? line(base, s) : `${base}  ${String(s.error ?? s.code ?? 'no node-ops route (older plugin)')}`) } catch (error) { console.log(`${base}  unreachable: ${String(error?.message ?? error)}`) }
     }
     return
   }
