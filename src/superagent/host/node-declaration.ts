@@ -65,6 +65,8 @@ export function rewriteLock(text: string, spec: string, ref: string, integrity: 
   const spec0 = /^        specifier: (.+)$/.exec(lines[at + 1] ?? ''), ref0 = /^        version: (.+)$/.exec(lines[at + 2] ?? '')
   if (spec0 === null || ref0 === null) return { ok: false, why: 'the importer entry is not specifier then version' }
   const oldKey = `  '${OWN}@${ref0[1]}':`, newKey = `  '${OWN}@${ref}':`
+  // #937 review 2: entries for the new package already there would be doubled; refuse rather than merge.
+  if (newKey !== oldKey && lines.some(line => line === newKey || line === `${newKey} {}`)) return { ok: false, why: `the lockfile already has entries for ${ref}` }
   const keyed = lines.flatMap((line, i) => line === oldKey || line === `${oldKey} {}` ? [i] : [])
   if (keyed.length !== 2) return { ok: false, why: `the lockfile has ${String(keyed.length)} package and snapshot entries for ${ref0[1]}, not 2` }
   const pkgAt = keyed.find(i => lines[i] === oldKey && (lines[i + 1] ?? '').startsWith('    resolution: {'))

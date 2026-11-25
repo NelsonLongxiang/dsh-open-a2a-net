@@ -142,19 +142,37 @@ export class NodeOps {
   /** #936: write files into the profile, each through a temporary file and a rename. */
   private writeProfile(files: Record<string, string | undefined>): void {
     const profile = this.profile!
-    for (const [name, text] of Object.entries(files)) {
-      if (text === undefined) continue
-      const temporary = join(profile, `.${name}.node-ops-${randomUUID().slice(0, 8)}`)
-      writeFileSync(temporary, text, 'utf8')
-      renameSync(temporary, join(profile, name))
+    const entries = Object.entries(files).filter((e): e is [string, string] => e[1] !== undefined)
+    // #937 review 1: both files or neither. Every new text is written first; if a rename fails, the files already
+    // replaced get their old text back before the error goes on, so the profile never holds one new and one old file.
+    const originals = new Map(entries.map(([name]) => [name, existsSync(join(profile, name)) ? readFileSync(join(profile, name), 'utf8') : undefined]))
+    const temporaries = entries.map(([name, text]) => { const temporary = join(profile, `.${name}.node-ops-${randomUUID().slice(0, 8)}`); writeFileSync(temporary, text, 'utf8'); return [name, temporary] as const })
+    const replaced: string[] = []
+    try {
+      for (const [name, temporary] of temporaries) { renameSync(temporary, join(profile, name)); replaced.push(name) }
+    } catch (error) {
+      for (const name of replaced) {
+        const old = originals.get(name)
+        if (old === undefined) { rmSync(join(profile, name), { force: true }); continue }
+        const undo = join(profile, `.${name}.node-ops-undo-${randomUUID().slice(0, 8)}`)
+        writeFileSync(undo, old, 'utf8')
+        renameSync(undo, join(profile, name))
+      }
+      throw error
+    } finally {
+      for (const [, temporary] of temporaries) rmSync(temporary, { force: true })
     }
   }
+
+  /** #937 review 4: a declaration left as it was because the dependencies changed, for status to report. */
+  private get staleMarker(): string { return join(this.paths.dir, 'declaration-stale.json') }
 
   /** #936: put a saved declaration back; a file the snapshot lacks is left as it is. */
   private restoreDeclaration(from: string): Record<string, unknown> {
     if (this.profile === undefined || !existsSync(from)) return { restored: false, why: 'no declaration was saved with that backup' }
     const read = (name: string): string | undefined => existsSync(join(from, name)) ? readFileSync(join(from, name), 'utf8') : undefined
     this.writeProfile({ 'package.json': read('package.json'), 'pnpm-lock.yaml': read('pnpm-lock.yaml') })
+    rmSync(this.staleMarker, { force: true })
     return { restored: true }
   }
 
@@ -187,8 +205,17 @@ export class NodeOps {
     return {
       ok: true, package: OWN_PACKAGE, version, installed: this.refusal() === undefined, pid: process.pid,
       startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(), node: process.version, platform: process.platform,
-      busy: this.busy, backups: this.listBackups(), last, declaration: declarationStatus(this.profile, version),
+      busy: this.busy, backups: this.listBackups(), last, declaration: this.declarationWithMarker(version),
     }
+  }
+
+  /** #937 review 4: the declaration's status, plus the drift an install left on purpose (changed dependencies). */
+  private declarationWithMarker(version: string): Record<string, unknown> {
+    const status = declarationStatus(this.profile, version)
+    let marker: { version?: unknown; why?: unknown } | undefined
+    try { marker = JSON.parse(readFileSync(this.staleMarker, 'utf8')) as typeof marker } catch { /* none */ }
+    if (marker === undefined || marker.version !== version) return status
+    return { ...status, drift: true, why: [...((status.why as string[] | undefined) ?? []), String(marker.why)] }
   }
 
   /** Why this node's package may not be replaced, or undefined when it may. */
@@ -292,16 +319,24 @@ export class NodeOps {
     if (profile === undefined) return { updated: false, why: 'not installed under a profile' }
     try {
       this.saveDeclaration(backup)
-      if (depsChanged) return { updated: false, why: 'the dependencies changed (forceDeps): run pnpm install in the profile, then node status' }
+      if (depsChanged) {
+        const why = 'the dependencies changed (forceDeps): the lockfile does not describe them; run pnpm install in the profile, then node status'
+        mkdirSync(this.paths.dir, { recursive: true })
+        writeFileSync(this.staleMarker, JSON.stringify({ at: this.now().toISOString(), version, why }), 'utf8')
+        return { updated: false, why }
+      }
       let tarball: string | undefined
       if (as === 'file') {
         mkdirSync(join(this.paths.dir, 'packages'), { recursive: true })
         tarball = join(this.paths.dir, 'packages', `nelsonlongxiang-dsh-open-a2a-net-${version}-${digest.slice(0, 8)}.tgz`)
-        if (!existsSync(tarball)) writeFileSync(tarball, tgz)
+        // #937 review 3: a kept copy is used only when its bytes are this tarball's; otherwise it is written again, atomically.
+        const kept = existsSync(tarball) && createHash('sha256').update(readFileSync(tarball)).digest('hex') === digest
+        if (!kept) { const part = `${tarball}.${randomUUID().slice(0, 8)}.part`; writeFileSync(part, tgz); renameSync(part, tarball) }
       }
       const plan = planDeclaration(profile, as, version, integrityOf(tgz), tarball)
       if (!plan.ok) return { updated: false, why: plan.why }
       this.writeProfile({ 'package.json': plan.plan.manifest, 'pnpm-lock.yaml': plan.plan.lock })
+      rmSync(this.staleMarker, { force: true })
       return { updated: true, spec: plan.plan.spec, lockfile: plan.plan.lock !== undefined ? 'updated' : 'absent' }
     } catch (error) {
       return { updated: false, why: String((error as Error).message ?? error) }
@@ -332,7 +367,9 @@ export class NodeOps {
         const backup = this.swap(next, running.version)
         let declaration: Record<string, unknown>
         try { this.saveDeclaration(backup); declaration = this.restoreDeclaration(saved) } catch (error) { declaration = { restored: false, why: String((error as Error).message ?? error) } }
-        rmSync(saved, { recursive: true, force: true })
+        // #937 review 1: the saved pair goes only once it is back in place; otherwise it is kept where it can be restored.
+        if (declaration.restored === true) rmSync(saved, { recursive: true, force: true })
+        else if (existsSync(saved)) { const kept = join(this.declarations, `unrestored-${target.id}`); mkdirSync(this.declarations, { recursive: true }); renameSync(saved, kept); declaration = { ...declaration, kept } }
         return { ok: true, from: running.version, to: target.version, backup, declaration }
       } catch (error) {
         if (existsSync(next)) { writeFileSync(join(next, '.node-ops-at'), `${target.at}\n`, 'utf8'); renameSync(next, join(this.backups, target.id)) }

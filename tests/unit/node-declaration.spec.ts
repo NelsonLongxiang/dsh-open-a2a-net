@@ -2,10 +2,15 @@
 /** #936: node install and rollback keep the profile's declaration of this plugin (package.json, pnpm-lock.yaml) in step. */
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('node:fs', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs')>()
+  return { ...fs, renameSync: vi.fn(fs.renameSync) }
+})
 import { NodeOps, OWN_PACKAGE } from '../../src/superagent/host/node-ops.ts'
 import { declarationStatus, integrityOf, profileDirOf, rewriteLock, rewriteManifest } from '../../src/superagent/host/node-declaration.ts'
 
@@ -118,5 +123,45 @@ describe('#936 node install, rollback and status', () => {
     const status = declarationStatus(profile, '0.8.1')
     expect(status).toMatchObject({ drift: true, declared: '0.8.0' })
     expect((status.why as string[]).join(' ')).toMatch(/another declaration|declares 0\.8\.0/)
+  })
+})
+
+describe('#937 review: node-ops boundaries', () => {
+  it('1: a rollback whose lockfile rename fails leaves the profile as it was and keeps the saved pair', async () => {
+    const real = (await vi.importActual<typeof import('node:fs')>('node:fs')).renameSync
+    const tgz = tarball('0.8.2')
+    const ops = new NodeOps({ root, dir }, clock)
+    ops.install(tgz, sha(tgz), 'owner')
+    const installed = { manifest: read('package.json'), lock: read('pnpm-lock.yaml') }
+    vi.mocked(renameSync).mockImplementation(((from: string, to: string) => {
+      if (String(to) === join(profile, 'pnpm-lock.yaml')) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+      return real(from, to)
+    }) as never)
+    try {
+      const out = ops.rollback('owner')
+      expect(out).toMatchObject({ ok: true, to: '0.8.1', declaration: { restored: false } })
+      expect({ manifest: read('package.json'), lock: read('pnpm-lock.yaml') }).toEqual(installed)
+      const kept = (out as { declaration: { kept: string } }).declaration.kept
+      expect(existsSync(join(kept, 'package.json')) && existsSync(join(kept, 'pnpm-lock.yaml'))).toBe(true)
+    } finally { vi.mocked(renameSync).mockImplementation(real as never) }
+  })
+  it('2: a lockfile that already has entries for the new package is refused, not doubled', () => {
+    const both = lock('0.8.1', '0.8.1', 'sha512-OLD==', '0.8.1').replace('snapshots:', `  '${OWN_PACKAGE}@0.8.2':\n    resolution: {integrity: sha512-X==}\n\nsnapshots:`).replace(`  '${OWN_PACKAGE}@0.8.1': {}`, `  '${OWN_PACKAGE}@0.8.1': {}\n\n  '${OWN_PACKAGE}@0.8.2': {}`)
+    expect(rewriteLock(both, '0.8.2', '0.8.2', 'sha512-N==', '0.8.2')).toMatchObject({ ok: false, why: expect.stringContaining('already has entries') })
+  })
+  it('3: a damaged kept tarball of the same name is written again', () => {
+    const tgz = tarball('0.8.2')
+    mkdirSync(join(dir, 'packages'), { recursive: true })
+    const kept = join(dir, 'packages', `nelsonlongxiang-dsh-open-a2a-net-0.8.2-${sha(tgz).slice(0, 8)}.tgz`)
+    writeFileSync(kept, 'truncated')
+    expect(new NodeOps({ root, dir }, clock).install(tgz, sha(tgz), 'owner')).toMatchObject({ ok: true, declaration: { updated: true } })
+    expect(readFileSync(kept)).toEqual(tgz)
+  })
+  it('4: same version with changed dependencies (forceDeps) keeps the files and status reports the drift', () => {
+    const before = { manifest: read('package.json'), lock: read('pnpm-lock.yaml') }
+    const tgz = tarball('0.8.1', { extra: '1.0.0' })
+    expect(new NodeOps({ root, dir }, clock).install(tgz, sha(tgz), 'owner', true)).toMatchObject({ ok: true, to: '0.8.1', declaration: { updated: false } })
+    expect({ manifest: read('package.json'), lock: read('pnpm-lock.yaml') }).toEqual(before)
+    expect(new NodeOps({ root, dir }, clock).status().declaration).toMatchObject({ drift: true, why: expect.arrayContaining([expect.stringContaining('dependencies changed')]) })
   })
 })
