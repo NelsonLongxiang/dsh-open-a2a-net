@@ -211,9 +211,9 @@ export class NodeOps {
 
   /** #937 review 4: the declaration's status, plus the drift an install left on purpose (changed dependencies). */
   private declarationWithMarker(version: string): Record<string, unknown> {
-    let names: string[] | undefined
-    try { names = (JSON.parse(readPackage(this.paths.root).dependencies) as [string, unknown][]).map(([name]) => name) } catch { /* unreadable: not compared */ }
-    const status = declarationStatus(this.profile, version, names)
+    let deps: [string, string][] | undefined
+    try { deps = (JSON.parse(readPackage(this.paths.root).dependencies) as [string, unknown][]).map(([name, spec]) => [name, String(spec)]) } catch { /* unreadable: not compared */ }
+    const status = declarationStatus(this.profile, version, deps)
     let marker: { version?: unknown; why?: unknown } | undefined
     try { marker = JSON.parse(readFileSync(this.staleMarker, 'utf8')) as typeof marker } catch { /* none */ }
     if (marker === undefined || marker.version !== version) return status
@@ -304,7 +304,7 @@ export class NodeOps {
         const running = readPackage(this.paths.root)
         if (incoming.dependencies !== running.dependencies && !forceDeps) return { ok: false, code: 'deps-changed', error: 'the tarball\'s dependencies differ from the running package; an unpack-only install cannot add them (forceDeps overrides)' }
         const backup = this.swap(next, running.version)
-        return { ok: true, from: running.version, to: incoming.version, backup, declaration: this.declareInstalled(backup, tgz, digest, incoming.version, declare, incoming.dependencies !== running.dependencies, (JSON.parse(incoming.dependencies) as [string, unknown][]).map(([name]) => name)) }
+        return { ok: true, from: running.version, to: incoming.version, backup, declaration: this.declareInstalled(backup, tgz, digest, incoming.version, declare, incoming.dependencies !== running.dependencies, (JSON.parse(incoming.dependencies) as [string, unknown][]).map(([name, spec]) => [name, String(spec)] as [string, string])) }
       } finally {
         rmSync(stage, { recursive: true, force: true })
       }
@@ -316,7 +316,7 @@ export class NodeOps {
    * first; the new one is worked out in full and only then written. Changed dependencies (forceDeps) leave the lockfile's
    * view of them stale, so the declaration is left alone then, and status shows the drift.
    */
-  private declareInstalled(backup: string, tgz: Buffer, digest: string, version: string, as: DeclareAs, depsChanged: boolean, dependencyNames: readonly string[] = []): Record<string, unknown> {
+  private declareInstalled(backup: string, tgz: Buffer, digest: string, version: string, as: DeclareAs, depsChanged: boolean, dependencyNames: readonly (readonly [string, string])[] = []): Record<string, unknown> {
     const profile = this.profile
     if (profile === undefined) return { updated: false, why: 'not installed under a profile' }
     try {

@@ -88,29 +88,67 @@ export function rewriteLock(text: string, spec: string, ref: string, integrity: 
 }
 
 /**
- * #937 re-review: the dependency names the lockfile's `snapshots` entry lists for this plugin at `ref`, or undefined when
- * there is no such entry. Only the `dependencies` block counts.
+ * #937 re-review: the dependencies the lockfile's `snapshots` entry lists for this plugin at `ref`, name to resolved
+ * version, or undefined when there is no such entry. Only the `dependencies` block counts; a peer suffix is dropped.
  */
-export function lockedDependencies(text: string, ref: string): string[] | undefined {
+export function lockedDependencies(text: string, ref: string): Record<string, string> | undefined {
   const lines = text.split('\n')
   const from = lines.indexOf('snapshots:')
   if (from < 0) return undefined
   const key = `  '${OWN}@${ref}':`
   const at = lines.findIndex((line, i) => i > from && (line === key || line === `${key} {}`))
   if (at < 0) return undefined
-  if (lines[at] === `${key} {}`) return []
-  const names: string[] = []
+  const found: Record<string, string> = {}
+  if (lines[at] === `${key} {}`) return found
   let inDeps = false
   for (let i = at + 1; i < lines.length && lines[i]!.startsWith('    '); i++) {
     const line = lines[i]!
     if (/^    \S/.test(line)) { inDeps = line === '    dependencies:'; continue }
-    const m = /^      '?([^':]+(?:\/[^':]+)?)'?:/.exec(line)
-    if (inDeps && m !== null) names.push(m[1]!)
+    const m = /^      '?([^':]+?)'?: '?([^'\s(]+)/.exec(line)
+    if (inDeps && m !== null) found[m[1]!] = m[2]!
   }
-  return names.sort()
+  return found
 }
 
-const sameNames = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && [...a].sort().every((name, i) => name === [...b].sort()[i])
+const plain = (v: string): number[] | undefined => { const m = /^v?=?(\d+)\.(\d+)\.(\d+)$/.exec(v.trim()); return m === null ? undefined : [Number(m[1]), Number(m[2]), Number(m[3])] }
+const atLeast = (v: number[], w: number[]): boolean => v[0]! !== w[0]! ? v[0]! > w[0]! : v[1]! !== w[1]! ? v[1]! > w[1]! : v[2]! >= w[2]!
+
+/**
+ * #937 re-review B4: whether a locked version satisfies a dependency's spec, for the plain forms only — an exact version,
+ * `^`, `~` and `*`. Anything else (other ranges, pre-releases, tags, URLs) is undefined: not confirmed, never guessed.
+ */
+export function versionSatisfies(version: string, spec: string): boolean | undefined {
+  const s = spec.trim()
+  const v = plain(version)
+  if (v === undefined) return undefined
+  if (s === '*' || s === '' || s === 'x') return true
+  const exact = plain(s)
+  if (exact !== undefined) return v.join('.') === exact.join('.')
+  const caret = /^\^(.+)$/.exec(s), tilde = /^~(.+)$/.exec(s)
+  const w = plain((caret ?? tilde)?.[1] ?? '')
+  if (w === undefined) return undefined
+  if (!atLeast(v, w)) return false
+  if (tilde !== null) return v[0] === w[0] && v[1] === w[1]
+  return w[0]! > 0 ? v[0] === w[0] : w[1]! > 0 ? v[0] === 0 && v[1] === w[1] : v.join('.') === w.join('.')
+}
+
+/**
+ * #937 re-review: why the lockfile does not describe a package's dependencies — a missing or extra name, a locked version
+ * outside the package's spec, or a spec that cannot be checked. Empty when it does.
+ */
+export function dependencyGaps(locked: Record<string, string>, dependencies: readonly (readonly [string, string])[]): string[] {
+  const gaps: string[] = []
+  const wanted = new Map(dependencies)
+  for (const [name, spec] of wanted) {
+    const at = locked[name]
+    if (at === undefined) { gaps.push(`${name} ${spec} is not in the lockfile`); continue }
+    const ok = versionSatisfies(at, spec)
+    if (ok === undefined) gaps.push(`${name}: cannot confirm that locked ${at} meets ${spec}`)
+    else if (!ok) gaps.push(`${name}: locked ${at} does not meet ${spec}`)
+  }
+  for (const name of Object.keys(locked)) if (!wanted.has(name)) gaps.push(`${name} is in the lockfile but not a dependency`)
+  return gaps
+}
 
 /**
  * The new declaration for a package just installed, worked out in full before anything is written.
@@ -121,7 +159,7 @@ const sameNames = (a: readonly string[], b: readonly string[]): boolean => a.len
  * @param tarball - for `file`: where the installed tarball is kept.
  * @returns both texts (the lockfile only when the profile has one), or why the declaration is left as it is.
  */
-export function planDeclaration(profile: string, as: DeclareAs, version: string, integrity: string, tarball?: string, dependencies?: readonly string[]): { ok: true; plan: Declaration } | { ok: false; why: string } {
+export function planDeclaration(profile: string, as: DeclareAs, version: string, integrity: string, tarball?: string, dependencies?: readonly (readonly [string, string])[]): { ok: true; plan: Declaration } | { ok: false; why: string } {
   const manifestPath = join(profile, 'package.json'), lockPath = join(profile, 'pnpm-lock.yaml')
   if (!existsSync(manifestPath)) return { ok: false, why: 'the profile has no package.json' }
   if (as === 'file' && tarball === undefined) return { ok: false, why: 'no kept tarball to declare' }
@@ -136,7 +174,8 @@ export function planDeclaration(profile: string, as: DeclareAs, version: string,
   if (dependencies !== undefined) {
     const oldRef = /^        version: (.+)$/.exec(lockText.split('\n')[lockText.split('\n').indexOf(IMPORTER) + 2] ?? '')?.[1]
     const listed = oldRef === undefined ? undefined : lockedDependencies(lockText, oldRef)
-    if (listed !== undefined && !sameNames(listed, dependencies)) return { ok: false, why: `the lockfile lists dependencies [${listed.join(', ')}], the package has [${[...dependencies].sort().join(', ')}]: run pnpm install in the profile, then node status` }
+    const gaps = listed === undefined ? [] : dependencyGaps(listed, dependencies)
+    if (gaps.length > 0) return { ok: false, why: `the lockfile does not describe this package's dependencies (${gaps.join('; ')}): run pnpm install in the profile, then node status` }
   }
   const lock = rewriteLock(lockText, spec, ref, integrity, version)
   return lock.ok ? { ok: true, plan: { spec, manifest: manifest.text, lock: lock.text } } : lock
@@ -148,14 +187,14 @@ export function planDeclaration(profile: string, as: DeclareAs, version: string,
  * @param installed - the version node_modules holds.
  * @returns what each says, and `drift` with the reasons when they disagree.
  */
-export function declarationStatus(profile: string | undefined, installed: string, dependencies?: readonly string[]): Record<string, unknown> {
+export function declarationStatus(profile: string | undefined, installed: string, dependencies?: readonly (readonly [string, string])[]): Record<string, unknown> {
   if (profile === undefined) return { drift: false, why: ['not installed under a profile'] }
   const why: string[] = []
   let spec: string | undefined
   try { spec = (JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8')) as { dependencies?: Record<string, string> }).dependencies?.[OWN] } catch { why.push('the profile package.json cannot be read') }
   if (spec === undefined && why.length === 0) why.push(`the profile package.json does not declare ${OWN}`)
   let lock: { specifier?: string; version?: string; packageVersion?: string } | undefined
-  let listed: string[] | undefined
+  let listed: Record<string, string> | undefined
   try {
     const text = readFileSync(join(profile, 'pnpm-lock.yaml'), 'utf8')
     const lines = text.split('\n')
@@ -173,6 +212,6 @@ export function declarationStatus(profile: string | undefined, installed: string
   const locked = lock?.version !== undefined && !lock.version.startsWith('file:') ? lock.version : lock?.packageVersion
   if (locked !== undefined && locked !== installed) why.push(`the lockfile pins ${locked}, node_modules holds ${installed}`)
   // #937 re-review: the lockfile has to know the installed package's dependencies, whatever marker an install left.
-  if (dependencies !== undefined && listed !== undefined && !sameNames(listed, dependencies)) why.push(`the lockfile lists dependencies [${listed.join(', ')}], node_modules holds a package with [${[...dependencies].sort().join(', ')}]: run pnpm install in the profile`)
+  if (dependencies !== undefined && listed !== undefined) for (const gap of dependencyGaps(listed, dependencies)) why.push(`the lockfile does not describe the installed package's dependencies: ${gap}; run pnpm install in the profile`)
   return { ...(spec !== undefined ? { declared: spec } : {}), ...(lock !== undefined ? { lock } : {}), installed, drift: why.length > 0, ...(why.length > 0 ? { why } : {}) }
 }

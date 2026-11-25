@@ -12,7 +12,7 @@ vi.mock('node:fs', async importOriginal => {
   return { ...fs, renameSync: vi.fn(fs.renameSync) }
 })
 import { NodeOps, OWN_PACKAGE } from '../../src/superagent/host/node-ops.ts'
-import { declarationStatus, integrityOf, lockedDependencies, profileDirOf, rewriteLock, rewriteManifest } from '../../src/superagent/host/node-declaration.ts'
+import { declarationStatus, dependencyGaps, integrityOf, lockedDependencies, versionSatisfies, profileDirOf, rewriteLock, rewriteManifest } from '../../src/superagent/host/node-declaration.ts'
 
 const OTHER = `      '@example/other-plugin':
         specifier: 0.24.0
@@ -175,13 +175,13 @@ describe('#937 re-review: carry-over boundaries', () => {
     // An ordinary reinstall of the same package: the dependencies equal the running ones now, but the lock never saw them.
     expect(ops.install(forced, sha(forced), 'owner')).toMatchObject({ ok: true, declaration: { updated: false, why: expect.stringContaining('run pnpm install') } })
     expect({ manifest: read('package.json'), lock: read('pnpm-lock.yaml') }).toEqual(before)
-    expect(ops.status().declaration).toMatchObject({ drift: true, why: expect.arrayContaining([expect.stringContaining('[extra]')]) })
+    expect(ops.status().declaration).toMatchObject({ drift: true, why: expect.arrayContaining([expect.stringContaining('extra 1.0.0 is not in the lockfile')]) })
   })
   it('status reads the lockfile\'s dependency list directly, with no marker', () => {
-    expect(declarationStatus(profile, '0.8.1', ['extra'])).toMatchObject({ drift: true })
+    expect(declarationStatus(profile, '0.8.1', [['extra', '1.0.0']])).toMatchObject({ drift: true })
     expect(declarationStatus(profile, '0.8.1', [])).toMatchObject({ drift: false })
     const withDeps = lock('0.8.1', '0.8.1', 'sha512-OLD==', '0.8.1').replace(`  '${OWN_PACKAGE}@0.8.1': {}`, `  '${OWN_PACKAGE}@0.8.1':\n    dependencies:\n      extra: 1.0.0\n      '@example/scoped': 2.0.0`)
-    expect(lockedDependencies(withDeps, '0.8.1')).toEqual(['@example/scoped', 'extra'])
+    expect(lockedDependencies(withDeps, '0.8.1')).toEqual({ extra: '1.0.0', '@example/scoped': '2.0.0' })
     expect(lockedDependencies(withDeps, '9.9.9')).toBeUndefined()
   })
   it('B4 carry-over: a target key written as an inline mapping is refused, not doubled', () => {
@@ -196,11 +196,55 @@ describe('#937 re-review: carry-over boundaries', () => {
     const before = { manifest: read('package.json'), lock: read('pnpm-lock.yaml') }
     expect(ops.install(forced, sha(forced), 'owner')).toMatchObject({ ok: true, declaration: { updated: false } })
     expect({ manifest: read('package.json'), lock: read('pnpm-lock.yaml') }).toEqual(before)
-    expect(lockedDependencies(read('pnpm-lock.yaml'), '0.8.1')).toEqual([])
-    expect(ops.status().declaration).toMatchObject({ drift: true, why: expect.arrayContaining([expect.stringContaining('[extra]')]) })
+    expect(lockedDependencies(read('pnpm-lock.yaml'), '0.8.1')).toEqual({})
+    expect(ops.status().declaration).toMatchObject({ drift: true, why: expect.arrayContaining([expect.stringContaining('extra 1.0.0 is not in the lockfile')]) })
   })
   it('B2 carry-over: a target entry inline in snapshots ({optional: true}) is refused too', () => {
     const inline = lock('0.8.1', '0.8.1', 'sha512-OLD==', '0.8.1').replace(`  '${OWN_PACKAGE}@0.8.1': {}`, `  '${OWN_PACKAGE}@0.8.1': {}\n\n  '${OWN_PACKAGE}@0.8.2': {optional: true}`)
     expect(rewriteLock(inline, '0.8.2', '0.8.2', 'sha512-N==', '0.8.2')).toMatchObject({ ok: false, why: expect.stringContaining('already has entries') })
+  })
+})
+
+describe('#937 second re-review B4: dependency versions, not only names', () => {
+  it('versionSatisfies: exact, ^, ~ and *; other forms are not confirmed', () => {
+    expect(versionSatisfies('1.0.0', '1.0.0')).toBe(true)
+    expect(versionSatisfies('1.0.0', '2.0.0')).toBe(false)
+    expect(versionSatisfies('1.4.2', '^1.2.0')).toBe(true)
+    expect(versionSatisfies('2.0.0', '^1.2.0')).toBe(false)
+    expect(versionSatisfies('1.1.0', '^1.2.0')).toBe(false)
+    expect(versionSatisfies('0.3.9', '^0.3.1')).toBe(true)
+    expect(versionSatisfies('0.4.0', '^0.3.1')).toBe(false)
+    expect(versionSatisfies('0.0.4', '^0.0.3')).toBe(false)
+    expect(versionSatisfies('1.2.9', '~1.2.3')).toBe(true)
+    expect(versionSatisfies('1.3.0', '~1.2.3')).toBe(false)
+    expect(versionSatisfies('9.9.9', '*')).toBe(true)
+    for (const spec of ['>=1 <2', '1.x', 'latest', 'file:../x.tgz', '^1.0.0-beta.1']) expect(versionSatisfies('1.0.0', spec)).toBeUndefined()
+    expect(versionSatisfies('1.0.0-beta.1', '1.0.0-beta.1')).toBeUndefined()
+  })
+  it('dependencyGaps names a missing, an extra, an out-of-spec and an unconfirmed dependency', () => {
+    expect(dependencyGaps({ extra: '1.0.0' }, [['extra', '^1.0.0']])).toEqual([])
+    expect(dependencyGaps({ extra: '1.0.0' }, [['extra', '2.0.0']])).toEqual(['extra: locked 1.0.0 does not meet 2.0.0'])
+    expect(dependencyGaps({}, [['extra', '1.0.0']])).toEqual(['extra 1.0.0 is not in the lockfile'])
+    expect(dependencyGaps({ old: '1.0.0' }, [])).toEqual(['old is in the lockfile but not a dependency'])
+    expect(dependencyGaps({ extra: '1.0.0' }, [['extra', '>=1']])[0]).toContain('cannot confirm')
+  })
+  it('the review\'s order: extra 1.0.0 → --force-deps 2.0.0 → ordinary reinstall keeps the files and status drifts', () => {
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: OWN_PACKAGE, version: '0.8.1', dependencies: { extra: '1.0.0' } }))
+    writeFileSync(join(profile, 'pnpm-lock.yaml'), lock('0.8.1', '0.8.1', 'sha512-OLD==', '0.8.1').replace(`  '${OWN_PACKAGE}@0.8.1': {}`, `  '${OWN_PACKAGE}@0.8.1':\n    dependencies:\n      extra: 1.0.0`))
+    const ops = new NodeOps({ root, dir }, clock)
+    expect(ops.status().declaration).toMatchObject({ drift: false })
+    const forced = tarball('0.8.1', { extra: '2.0.0' })
+    expect(ops.install(forced, sha(forced), 'owner', true)).toMatchObject({ ok: true, declaration: { updated: false } })
+    const before = { manifest: read('package.json'), lock: read('pnpm-lock.yaml') }
+    expect(ops.install(forced, sha(forced), 'owner')).toMatchObject({ ok: true, declaration: { updated: false, why: expect.stringContaining('locked 1.0.0 does not meet 2.0.0') } })
+    expect({ manifest: read('package.json'), lock: read('pnpm-lock.yaml') }).toEqual(before)
+    expect(ops.status().declaration).toMatchObject({ drift: true, why: expect.arrayContaining([expect.stringContaining('locked 1.0.0 does not meet 2.0.0')]) })
+  })
+  it('a lockfile that does describe the new dependency (within its range) lets the declaration move', () => {
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: OWN_PACKAGE, version: '0.8.1', dependencies: { extra: '^1.0.0' } }))
+    writeFileSync(join(profile, 'pnpm-lock.yaml'), lock('0.8.1', '0.8.1', 'sha512-OLD==', '0.8.1').replace(`  '${OWN_PACKAGE}@0.8.1': {}`, `  '${OWN_PACKAGE}@0.8.1':\n    dependencies:\n      extra: 1.4.0`))
+    const next = tarball('0.8.2', { extra: '^1.0.0' })
+    expect(new NodeOps({ root, dir }, clock).install(next, sha(next), 'owner')).toMatchObject({ ok: true, declaration: { updated: true } })
+    expect(new NodeOps({ root, dir }, clock).status().declaration).toMatchObject({ drift: false })
   })
 })
