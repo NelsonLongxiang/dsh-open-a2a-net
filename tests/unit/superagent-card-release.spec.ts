@@ -18,6 +18,7 @@ async function team(o: { home?: string; clock: { ms: number }; busy: Record<stri
     deliverToSession: (id: string, text: string) => { sent.push([id, text]); return true }, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id, presetOf: (id: string) => presets[id],
     now: () => new Date(o.clock.ms).toISOString(),
     ...(o.noBusy === true ? {} : { sessionBusy: (id: string) => o.busy[id] }),
+    castCapabilities: () => ({ modes: ['insert', 'queue'], origin: true, confirmedDelivery: true }),
     castCard: (input: { sessionId: string; templateId: string; mode?: string }) => { casts.push(input); return { ok: true, queued: 1, id: `c${String(casts.length)}` } },
     castQueue: () => ({ list: () => ({ ok: true, items: [] }), withdraw: () => ({ ok: true, withdrawn: false }) }),
   } as never)

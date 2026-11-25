@@ -20,6 +20,7 @@ async function team(o: { draft?: boolean; service?: boolean } = {}) {
     ...(o.service === false ? {} : { cardDrafts: () => ({
       draft: (i: Record<string, unknown>) => { drafts.push(i); const id = typeof i.id === 'string' ? i.id : `card-${String(++next)}`; return { ok: true, id, name: i.name, content_sha256: 'sha', created: i.id === undefined } },
       remove: (i: { id: string }) => ({ ok: true, deleted: i.id.startsWith('card-') }),
+      has: () => false,
     }) }),
   } as never)
   expect(h.saveSettings({ canvas: 'team', router: 'session-r', observerCast: true, ...(o.draft === true ? { observerCardDraft: true } : {}) }, () => true, id => presets[id])).toMatchObject({ ok: true })
@@ -56,7 +57,7 @@ describe('#902 S2: a2a_card_draft', () => {
     expect(await m.draft('session-o', { ...card, for: ['session-o'] })).toMatchObject({ ok: false, code: 'for' })
     expect(await m.draft('session-o', { ...card, scene: '' })).toMatchObject({ ok: false, code: 'scene' })
     const made = await m.draft('session-o', card)
-    expect(made).toEqual({ ok: true, id: 'card-1', created: true, for: ['session-m'], scene: '月结对账卡在原证' })
+    expect(made).toEqual({ ok: true, id: 'card-1', created: true, for: ['session-m'], scene: '月结对账卡在原证', sha256: 'sha' })
     expect(m.drafts[0]).toMatchObject({ authorSession: 'session-o', name: '对账前自查', content: '先核 {{session}} 的原证', description: 'for: session-m · scene: 月结对账卡在原证 · from: atelier-action-review' })
     expect((await m.draft('session-o', {})).cards).toEqual([expect.objectContaining({ id: 'card-1', for: ['session-m'], scene: '月结对账卡在原证', from: 'atelier-action-review' })])
     await m.h.stop()
