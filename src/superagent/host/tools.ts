@@ -546,19 +546,67 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
   // Observer phase 2 (T5-A): the observer casts a card into one of its team's sessions; off unless the owner turns it on.
   ctx.tools.register(defineTool({
     name: 'a2a_card_cast',
-    description: 'Team observer only: cast one card from this host\'s prompt-template library into another session of your team. It goes in at that session\'s next step as a visible message naming you and your reason; it is not an instruction and grants nothing. Pick the card with a2a_ticket_read kind library or templates. Works only while the owner has turned observerCast on and the host has dsh-prompt-templates with the cast service; one copy of a card waits per session. Record each cast in ygl-trees.',
+    description: 'Team observer only: cast one card from this host\'s prompt-template library into another session of your team. It goes in at that session\'s next step as a visible message naming you, your reason and its basis; it is not an instruction and grants nothing. Pick the card with a2a_ticket_read kind library or templates (each card says kind workshop or template). Name what the cast rests on in basis: ticket:<id> of this team, event:<id>, or none: <why>. Works only while the owner has turned observerCast on and the host has dsh-prompt-templates with the cast service; one copy of a card waits per session, and a queued card survives a restart. How it goes in (mode): insert (default: at the session\'s next step, waking it), queue (at the first step of its next turn, without waking it), trigger (only into an idle member, never the router: queued and woken now; at most once every 30 minutes per session), or release (armed now and cast later, once, when its condition holds: when ticket:<id> <person|person:<action>|working|idle|ended>, idle:<minutes 10..1440>, or at:<ISO time>; then says how it goes in; it expires after expires_hours, default 24; at most 5 armed per session). See or withdraw what waits, and the releases, with a2a_card_queue. Record each cast in ygl-trees.',
     parameters: {
       session_id: { type: 'string', required: true, description: 'The team session to cast into.' },
       template_id: { type: 'string', required: true, description: 'The card id, from kind library or templates.' },
       reason: { type: 'string', required: true, description: 'Why this card, why now: one line, at most 500 characters.' },
+      basis: { type: 'string', required: true, description: 'What it rests on: ticket:<id> (a ticket of this team; a prefix of 8+ characters is enough), event:<id>, or none: <one sentence>. At most 200 characters.' },
+      mode: { type: 'string', description: 'insert (default), queue, trigger or release.' },
+      when: { type: 'string', description: 'For release: ticket:<id> <stage>, idle:<minutes>, or at:<ISO time>.' },
+      then: { type: 'string', description: 'For release: insert (default), queue or trigger once released.' },
+      expires_hours: { type: 'number', description: 'For release: hours until an unreleased card expires, 1..168 (default 24).' },
     },
     output: { ...anyProps, render: (_args, value) => said('a2a_card_cast', value) },
     presentCall: args => ({ card: 'generic', title: `a2a_card_cast ${String(args.template_id)} → ${String(args.session_id)}`, kind: 'other', rawInput: { session_id: args.session_id, template_id: args.template_id } }),
-    execute: async (args: { session_id?: string; template_id?: string; reason?: string }, exec): Promise<Record<string, JsonValue>> => {
+    execute: async (args: { session_id?: string; template_id?: string; reason?: string; basis?: string; mode?: string; when?: string; then?: string; expires_hours?: number }, exec): Promise<Record<string, JsonValue>> => {
       const h = host(exec)
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
       if (h === undefined || me === undefined) return { ok: false, code: 'not-observer', error: 'a2a_card_cast serves only the team\'s observer' }
       return json(h.castCard(me, args)) as Record<string, JsonValue>
+    },
+  }))
+
+  // #902 S2: the observer writes its own cards for named members of its team.
+  ctx.tools.register(defineTool({
+    name: 'a2a_card_draft',
+    description: 'Team observer only: write your own cards for your team — for a business situation a library card does not fit, adapt one (from) or write it fresh. A card is a template of your own session, written for named members of your team (for: a list of their sessions, or ["team"]), with a one-line scene. Cast it with a2a_card_cast like a library card; it goes only to the members it is for, marked 定制. Actions: list (default), create (name, content, for, scene, from?), update (id and the same fields), delete (id). Works only while the owner has turned observerCardDraft on; at most 50 cards of your own per team. A card is guidance, never a grant: do not write one that asks for a tool, a credential or an action outside the member\'s rules.',
+    parameters: {
+      action: { type: 'string', description: 'list (default), create, update or delete.' },
+      id: { type: 'string', description: 'The card, for update or delete.' },
+      name: { type: 'string', description: 'The card\'s name, one line, at most 128 characters.' },
+      content: { type: 'string', description: 'The card\'s text, at most 8000 characters; {{session}} and the date variables expand when it goes in.' },
+      for: { type: 'array', items: { type: 'string' }, description: 'The team sessions it is written for (not you); ["team"] for the whole team.' },
+      scene: { type: 'string', description: 'The business situation it is for, one line, at most 200 characters.' },
+      from: { type: 'string', description: 'The library card it adapts, if any (its id).' },
+    },
+    output: { ...anyProps, render: (_args, value) => said('a2a_card_draft', value) },
+    presentCall: args => ({ card: 'generic', title: `a2a_card_draft ${String(args.action ?? 'list')}${args.name !== undefined ? ` ${String(args.name)}` : ''}`, kind: 'other', rawInput: { action: args.action, id: args.id, for: args.for } }),
+    execute: async (args: { action?: string; id?: string; name?: string; content?: string; for?: unknown; scene?: string; from?: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host(exec)
+      const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
+      if (h === undefined || me === undefined) return { ok: false, code: 'not-observer', error: 'a2a_card_draft serves only the team\'s observer' }
+      return json(h.cardDraft(me, args)) as Record<string, JsonValue>
+    },
+  }))
+
+  // #902 S1: the observer sees, and may withdraw, the cards waiting for its own team's sessions.
+  ctx.tools.register(defineTool({
+    name: 'a2a_card_queue',
+    description: 'Team observer only: list the cards cast into your team\'s sessions — waiting, delivered, withdrawn or expired, newest first, with the reason and basis but not the text — or withdraw one that still waits (action withdraw, with its session_id and id). Also lists your releases (armed, released, expired, withdrawn or failed, with the result); withdraw an armed one by its id (r-…). A withdrawn card never goes in. Only your own team\'s sessions are shown or touched.',
+    parameters: {
+      action: { type: 'string', description: 'list (default) or withdraw.' },
+      session_id: { type: 'string', description: 'One team session; required to withdraw.' },
+      id: { type: 'string', description: 'The queued cast to withdraw (from list).' },
+      state: { type: 'string', description: 'List only waiting, delivered, withdrawn or expired.' },
+    },
+    output: { ...anyProps, render: (_args, value) => said('a2a_card_queue', value) },
+    presentCall: args => ({ card: 'generic', title: `a2a_card_queue ${String(args.action ?? 'list')}${args.session_id !== undefined ? ` ${String(args.session_id)}` : ''}`, kind: 'other', rawInput: { action: args.action, session_id: args.session_id } }),
+    execute: async (args: { action?: string; session_id?: string; id?: string; state?: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host(exec)
+      const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
+      if (h === undefined || me === undefined) return { ok: false, code: 'not-observer', error: 'a2a_card_queue serves only the team\'s observer' }
+      return json(h.cardQueue(me, args)) as Record<string, JsonValue>
     },
   }))
 

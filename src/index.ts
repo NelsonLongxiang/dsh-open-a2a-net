@@ -150,7 +150,8 @@ import { createNodeBinder, NodeBindings } from './node-bind.ts'
 import { NodeTasks, settledReminder } from './node-tasks.ts'
 import { githubProbe } from './node-github.ts'
 import { NEUTRAL_SOURCES, NodeReviewQueue, SessionTaint, localRoute, toolTaint } from './node-self.ts'
-import { registerBuilderIssueTools, registerBuilderTools } from './superagent/host/builder-tools.ts'
+import { registerBuilderIssueTools, registerBuilderTools, type InventoryInput } from './superagent/host/builder-tools.ts'
+import { registerBuilderFace } from './faces/builder.ts'
 import { defaultGh } from './superagent/host/pr-follow.ts'
 import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
@@ -2238,10 +2239,22 @@ export function apply(ctx: Context, config: Config): void {
     homeUrl: () => superagentHomeUrl,
     // T5-B: the idle sweep reads the same host's prompt-template self-check log, and only while that check is on.
     selfChecksOf: sessionId => readSelfChecks(ctx.get('promptTemplates' as never), sessionId),
+    // #902 S3: whether a local session is in a turn now, for trigger and idle releases.
+    sessionBusy: id => { const agent = sessionNodes.get(id); if (agent === undefined) return undefined; try { return agent.status === 'running' } catch { return undefined } },
     // T5-A: dsh-prompt-templates' cast, reached through this plugin's own context so the plugin recognizes the caller.
     castCard: input => {
-      const svc = ctx.get('promptTemplates' as never) as { cast?: (i: typeof input) => { ok: boolean; code?: string; error?: string; queued?: number } } | undefined
+      const svc = ctx.get('promptTemplates' as never) as { cast?: (i: typeof input) => { ok: boolean; code?: string; error?: string; queued?: number; id?: string } } | undefined
       return typeof svc?.cast === 'function' ? svc.cast(input) : undefined
+    },
+    // #902 S2: the same plugin's author-session cards (write and delete), only when the service has them.
+    cardDrafts: () => {
+      const svc = ctx.get('promptTemplates' as never) as { draftCard?: (i: object) => { ok: boolean }; draftDelete?: (i: object) => { ok: boolean } } | undefined
+      return typeof svc?.draftCard === 'function' && typeof svc.draftDelete === 'function' ? { draft: i => svc.draftCard!(i), remove: i => svc.draftDelete!(i) } : undefined
+    },
+    // #902 S1: the durable cast queue of the same plugin (0.23.1+): list and withdraw, only when the service has them.
+    castQueue: () => {
+      const svc = ctx.get('promptTemplates' as never) as { castQueue?: (f: object) => { ok: boolean; items?: unknown[] }; castWithdraw?: (i: object) => { ok: boolean; withdrawn?: boolean } } | undefined
+      return typeof svc?.castQueue === 'function' && typeof svc.castWithdraw === 'function' ? { list: f => svc.castQueue!(f), withdraw: i => svc.castWithdraw!(i) } : undefined
     },
     claimAudience: () => (ownCardUrl !== '' ? originOf(ownCardUrl) : undefined),
     apiKey: () => config.apiKey,
@@ -2373,10 +2386,14 @@ export function apply(ctx: Context, config: Config): void {
     }, 'a2a: superagent engine passes')
     registerSuperagentTools(ctx, id => superagentTeams!.ofSession(id))
     // superagent-builder BS1: the team builder's inventory and rule templates (read-only).
-    registerBuilderTools(ctx, id => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET, () => ({
+    const isBuilderSession = (id: string): boolean => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET
+    const builderInventory = (): InventoryInput => ({
       teams: superagentTeams!.all().map(team => ({ ref: (id => id === '' ? 'primary' : id ?? '?')(superagentTeams!.idOf(team)), settings: team.settings, revisions: team.ruleChanges.view().revisions, seatOf: (session: string) => team.named.seatIdOf(session), children: team.settings.canvas !== undefined ? canvasStore.childrenOf(team.settings.canvas) : [] })),
       sessions: joinedSessions.list().filter(id => sessionNodes.has(id)), nameOf: id => { const agent = sessionNodes.get(id); return agent === undefined ? id : nodeMetadataOf(agent).name }, presetOf: sessionPresetOf, staffing: staffing?.list() ?? [],
-    }), { staffing: () => staffing, personMessage: id => { const agent = ctx.get('agents')?.get(SessionId(id)) as Agent | undefined; return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
+    })
+    // #903 S1: the owner's user scope reads the same inventory and lists the builder sessions (read-only).
+    whenWebServerSettled(webServer => registerBuilderFace(webServer, { ctx, controlRoute, inventory: builderInventory, isBuilder: isBuilderSession, sessions: () => [...new Set([...sessionNodes.keys(), ...joinedSessions.list()])].map(id => ({ id, live: sessionNodes.has(id), joined: joinedSessions.has(id) })) }))
+    registerBuilderTools(ctx, isBuilderSession, builderInventory, { staffing: () => staffing, personMessage: id => { const agent = ctx.get('agents')?.get(SessionId(id)) as Agent | undefined; return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
       teamRules: ref => { const team = superagentTeams!.get(ref === 'primary' ? '' : ref); return team === undefined || (ref === '' ) ? undefined : { ...(team.settings.canvas !== undefined ? { canvas: team.settings.canvas } : {}), rules: team.settings.rules, dispatch: team.settings.dispatch } } })
     // #791: the builder drafts an issue; the host files it with the operator's gh after the owner's own typed message.
     registerBuilderIssueTools(ctx, id => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET, {

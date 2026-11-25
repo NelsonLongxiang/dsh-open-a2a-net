@@ -285,6 +285,29 @@ describe('mutation-run: restore and accounting', () => {
     }
   }, 45_000)
 
+  it('after a timeout, a test process that ignores SIGTERM is killed as the runner finishes, before the grace period', async () => {
+    // #863 review (Q6): one hanging mutation, so the runner ends right after the 1.5 s timeout, long before the 5 s grace.
+    // Only the SIGKILL the runner sends for its pending stops as it finishes can kill the test process under wrap.mjs.
+    const pidDir = mkdtempSync('mutation-run-pid-'), pidFile = join(pidDir, 'pid')
+    const repo = fixture({ 'tests/slow.t': `ignoretermif src/lib.js SLOW\npidfileif src/lib.js SLOW ${pidFile}\nsleepif src/lib.js SLOW 60000\ncontains src/lib.js NAME\n` })
+    try {
+      const started = Date.now()
+      const r = cli(repo, { ...base, command: [process.execPath, 'wrap.mjs'], timeoutMs: 1500, narrow: ['tests/slow.t'], mutations: [{ id: 'hang', file: 'src/lib.js', find: 'LIMIT = 3', replace: 'SLOW = 3' }] })
+      expect(r.code, r.stderr).toBe(0)
+      expect(r.json.results[0]).toMatchObject({ narrow: 'RED', verdict: 'killed', timedOut: true })
+      expect(Date.now() - started, 'the runner finished before the 5 s grace period could fire').toBeLessThan(5000)
+      const grandchild = Number(readFileSync(pidFile, 'utf8'))
+      expect(grandchild).toBeGreaterThan(0)
+      expect(await gone(grandchild), 'killed by the SIGKILL sent as the runner finished').toBe(true)
+      expect(lib(repo)).toBe(LIB)
+    } finally {
+      if (existsSync(pidFile)) {
+        const pid = Number(readFileSync(pidFile, 'utf8'))
+        if (Number.isSafeInteger(pid) && pid > 0 && alive(pid)) process.kill(pid, 'SIGKILL')
+      }
+    }
+  }, T)
+
   it('a fast test run with a long timeoutMs finishes without waiting for the timeout', () => {
     const repo = fixture()
     const started = Date.now()
