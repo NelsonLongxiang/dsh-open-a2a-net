@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { NodeOps, OWN_PACKAGE } from '../../src/superagent/host/node-ops.ts'
 import { declarationStatus, integrityOf, profileDirOf, rewriteLock, rewriteManifest } from '../../src/superagent/host/node-declaration.ts'
 
-const OTHER = `      '@nelsonlongxiang/dsh-prompt-templates':
+const OTHER = `      '@example/other-plugin':
         specifier: 0.24.0
         version: 0.24.0`
 const peers = `    engines: {pnpm: '>=11.24 <12'}
@@ -22,10 +22,10 @@ function lock(spec: string, ref: string, integrity: string, version: string): st
   return [`lockfileVersion: '9.0'`, '', 'settings:', '  autoInstallPeers: false', '', 'importers:', '', '  .:', '    dependencies:',
     `      '${OWN_PACKAGE}':`, `        specifier: ${spec}`, `        version: ${ref}`, OTHER, '', 'packages:', '',
     `  '${OWN_PACKAGE}@${ref}':`, file ? `    resolution: {integrity: ${integrity}, tarball: ${ref}}` : `    resolution: {integrity: ${integrity}}`,
-    ...(file ? [`    version: ${version}`] : []), peers, '', `  '@nelsonlongxiang/dsh-prompt-templates@0.24.0':`, '    resolution: {integrity: sha512-OTHER==}', '',
-    'snapshots:', '', `  '${OWN_PACKAGE}@${ref}': {}`, '', `  '@nelsonlongxiang/dsh-prompt-templates@0.24.0': {}`, ''].join('\n')
+    ...(file ? [`    version: ${version}`] : []), peers, '', `  '@example/other-plugin@0.24.0':`, '    resolution: {integrity: sha512-OTHER==}', '',
+    'snapshots:', '', `  '${OWN_PACKAGE}@${ref}': {}`, '', `  '@example/other-plugin@0.24.0': {}`, ''].join('\n')
 }
-const manifest = (spec: string) => JSON.stringify({ name: 'dsh-profile-web', private: true, dependencies: { [OWN_PACKAGE]: spec, '@nelsonlongxiang/dsh-prompt-templates': '0.24.0' } }, null, 2) + '\n'
+const manifest = (spec: string) => JSON.stringify({ name: 'dsh-profile-web', private: true, dependencies: { [OWN_PACKAGE]: spec, '@example/other-plugin': '0.24.0' } }, null, 2) + '\n'
 
 let base = '', profile = '', root = '', dir = ''
 let tick = 0
@@ -88,7 +88,7 @@ describe('#936 node install, rollback and status', () => {
     expect(readFileSync(spec.slice('file:'.length))).toEqual(tgz)
     expect(read('pnpm-lock.yaml')).toContain(`integrity: ${integrityOf(tgz)}`)
     expect(read('pnpm-lock.yaml')).toContain(OTHER)
-    expect((JSON.parse(read('package.json')) as { dependencies: Record<string, string> }).dependencies['@nelsonlongxiang/dsh-prompt-templates']).toBe('0.24.0')
+    expect((JSON.parse(read('package.json')) as { dependencies: Record<string, string> }).dependencies['@example/other-plugin']).toBe('0.24.0')
     expect(new NodeOps({ root, dir }, clock).status().declaration).toMatchObject({ drift: false, installed: '0.8.2' })
   })
   it('install as npm declares the version', () => {
