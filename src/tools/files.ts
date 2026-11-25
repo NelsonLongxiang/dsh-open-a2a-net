@@ -68,6 +68,11 @@ const workspaceOf = (agent: Agent | undefined): string => {
 }
 
 export function createFileTools(d: FileToolsDeps): { registerFileSend: () => void; registerFileFetch: () => void; registerFileGrants: () => void; registerFileRevoke: () => void } {
+  // #854 review B2: per (sha256, to, by) stage generation and in-flight count. A send rolls back only a grant no
+  // other send has staged since its own stage() — a concurrent send that re-staged the key may already have delivered
+  // a reference to it. The entry is dropped once no send holds the key, so the map stays bounded.
+  const stageGens = new Map<string, { gen: number; inflight: number }>()
+  const genKey = (sha: string, to: string, by: string): string => `${sha}\u0000${to}\u0000${by}`
   const { ctx, config, blobStore } = d
 
   function registerFileSend(): void {
@@ -93,7 +98,7 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
           ? value.grants === 'rolled-back'
             ? `File send refused before anything left this host: ${String(value.error)} — ${String(value.rolled_back)} grant(s) from this send revoked, nothing was delivered.`
             : value.grants === 'live'
-              ? `File send refused beyond this host (delivery may already have happened): ${String(value.error)} — the grants from this send are STILL LIVE until they expire (files[].expiresAt); revoke unwanted ones with a2a_file_revoke.`
+              ? `File send refused beyond this host (delivery may already have happened): ${String(value.error)} — the grants from this send are STILL LIVE until they expire (files[].expiresAt); revoke unwanted ones with a2a_file_revoke { sha256, to }.`
               : `File send refused: ${String(value.error)}`
           : value.grant_only === true
             ? `Granted ${String((value.files as unknown[]).length)} file(s) to ${String(value.team)} for pull; nothing was sent — hand these reference lines over yourself:\n${(value.refs as string[]).join('\n')}`
@@ -121,32 +126,38 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
         // Rollback safety: only grants THIS call creates may be revoked on a local refusal. A grant that already
         // existed for the same (sha256, to, by) is a prior legitimate send — stage() only extended its expiry.
         const preExisting = new Set(blobStore.grantsBy(by).filter(g => g.to === team).map(g => g.sha256))
+        const mine = new Map<string, number>() // sha256 → the stage generation this call wrote
+        try {
         const staged: Array<{ sha256: string; size: number; name: string; expiresAt: number }> = []
         // Nothing has left this host while the loop below runs: a failure part-way through (a missing or
         // oversized file, a full store) rolls this call's NEW grants back — a partial send must not leave
         // grants the result never hands a reference for. Pre-existing keys are kept (only their expiry moved).
-        const rollBackFresh = (): { rolled: number; kept: number } => {
+        const rollBackFresh = (): { rolled: number; kept: number; concurrent: number } => {
           const shas = [...new Set(staged.map(f => f.sha256))]
-          const fresh = shas.filter(sha => !preExisting.has(sha))
+          const ours = shas.filter(sha => !preExisting.has(sha))
+          // Another send re-staged the key after this call did (its generation moved on): it may have delivered a reference, keep it.
+          const fresh = ours.filter(sha => stageGens.get(genKey(sha, team, by))?.gen === mine.get(sha))
           for (const sha of fresh) blobStore.revoke(sha, team, by)
-          return { rolled: fresh.length, kept: shas.length - fresh.length }
+          return { rolled: fresh.length, kept: shas.length - ours.length, concurrent: ours.length - fresh.length }
         }
 
         for (const p of paths) {
           const abs = isAbsolute(p) ? p : cwd !== '' ? resolve(cwd, p) : ''
-          if (abs === '') { const r = rollBackFresh(); return { ok: false, error: `relative path ${p} needs a session workspace`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept } }
+          if (abs === '') { const r = rollBackFresh(); return { ok: false, error: `relative path ${p} needs a session workspace`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept, kept_concurrent: r.concurrent } }
           let bytes: Uint8Array
           try {
             const st = statSync(abs)
-            if (!st.isFile()) { const r = rollBackFresh(); return { ok: false, error: `${p} is not a file`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept } }
-            if (st.size > BLOB_FILE_MAX) { const r = rollBackFresh(); return { ok: false, error: `${p} is ${String(st.size)} bytes; the file channel takes at most ${String(BLOB_FILE_MAX)}`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept } }
+            if (!st.isFile()) { const r = rollBackFresh(); return { ok: false, error: `${p} is not a file`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept, kept_concurrent: r.concurrent } }
+            if (st.size > BLOB_FILE_MAX) { const r = rollBackFresh(); return { ok: false, error: `${p} is ${String(st.size)} bytes; the file channel takes at most ${String(BLOB_FILE_MAX)}`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept, kept_concurrent: r.concurrent } }
             bytes = readFileSync(abs)
           } catch (error) {
-            { const r = rollBackFresh(); return { ok: false, error: `cannot read ${p}: ${error instanceof Error ? error.message : String(error)}`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept } }
+            { const r = rollBackFresh(); return { ok: false, error: `cannot read ${p}: ${error instanceof Error ? error.message : String(error)}`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept, kept_concurrent: r.concurrent } }
           }
           const out = blobStore.stage(bytes, { name: abs.split(/[\\/]/).pop() ?? p, to: team, by, ...(taskId !== undefined ? { taskId } : {}) })
-          if (!out.ok) { const r = rollBackFresh(); return { ok: false, error: `${p}: ${out.error}`, code: out.code, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept } }
+          if (!out.ok) { const r = rollBackFresh(); return { ok: false, error: `${p}: ${out.error}`, code: out.code, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept, kept_concurrent: r.concurrent } }
           staged.push({ sha256: out.sha256, size: out.size, name: out.name, expiresAt: out.expiresAt })
+          { const k = genKey(out.sha256, team, by); const e = stageGens.get(k); const gen = (e?.gen ?? 0) + 1
+            stageGens.set(k, { gen, inflight: (e?.inflight ?? 0) + (mine.has(out.sha256) ? 0 : 1) }); mine.set(out.sha256, gen) }
         }
         const note = typeof args.note === 'string' ? args.note.trim() : ''
         const refs = staged.map(f => formatFileRef({ ...f, from }))
@@ -160,9 +171,11 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
         const { [LOCAL_ROUTE]: local, ...routed } = await d.routeTrunk({ team, message, async: true }, agent, exec.signal) as Record<string, JsonValue> & { [LOCAL_ROUTE]?: true }
         if (routed.ok !== true) {
           // A local-route refusal is host-deterministic: nothing left this host, so nothing was delivered.
-          if (local === true) {
+          // #854 review B1: the trunk also marks an UNKNOWN acceptance as local (the reference may already sit in a local
+          // session's queue). Only a refusal that proves nothing left this host rolls back; an unknown outcome stays live.
+          if (local === true && routed.acceptance !== 'unknown') {
             const r = rollBackFresh()
-            return { ...routed, ok: false, team, files: staged, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept, peer_content: false }
+            return { ...routed, ok: false, team, files: staged, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept, kept_concurrent: r.concurrent, peer_content: false }
           }
           // Beyond this host (a peer's refusal, or an outcome we cannot know): a delivered reference may exist,
           // so revoking would break it. The grants stay live and the result says so, with the exact revoke entry.
@@ -171,6 +184,12 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
         // The grants remember the task they went out in (unless the caller named one).
         if (taskId === undefined && typeof routed.task_id === 'string') for (const f of staged) blobStore.tagTask(f.sha256, team, by, routed.task_id)
         return { ...routed, ok: true, team, files: staged, peer_content: local !== true }
+        } finally {
+          for (const sha of mine.keys()) {
+            const k = genKey(sha, team, by); const e = stageGens.get(k)
+            if (e !== undefined) { if (e.inflight <= 1) stageGens.delete(k); else stageGens.set(k, { gen: e.gen, inflight: e.inflight - 1 }) }
+          }
+        }
       },
     }))
   }

@@ -107,4 +107,39 @@ describe('a2a_file_send refusal consistency', () => {
     expect(h.store.grantFor(sha('好件'), ['peer/bbbb2222'])).toBeDefined()
     expect(h.routed).toHaveLength(1)
   })
+
+  it('an UNKNOWN acceptance marked local revokes nothing: the grants stay live (#854 review B1)', async () => {
+    const h = harness({ routeTrunk: async () => localRoute({ ok: false, acceptance: 'unknown', error: 'the local delivery outcome is unknown', code: -32000 }) as never })
+    writeFileSync(join(h.ws, 'maybe.txt'), '结果未知的合成件')
+    const out = await h.run({ paths: ['maybe.txt'], team: 'peer/bbbb2222' })
+    expect(out.ok).toBe(false)
+    expect(out.grants).toBe('live')
+    expect(h.store.grantsBy('session-aaaa1111').some(g => g.sha256 === sha('结果未知的合成件') && g.to === 'peer/bbbb2222')).toBe(true)
+  })
+
+  it('a local refusal does not revoke a grant a concurrent send re-staged and delivered (#854 review B2)', async () => {
+    let releaseA: () => void = () => {}
+    const aHeld = new Promise<void>(r => { releaseA = r })
+    let aEntered: () => void = () => {}
+    const aInTrunk = new Promise<void>(r => { aEntered = r })
+    let calls = 0
+    const h = harness({
+      routeTrunk: async () => {
+        calls += 1
+        if (calls === 1) { aEntered(); await aHeld; return localRoute({ ok: false, error: 'refused on this host', code: -32000 }) as never }
+        return localRoute({ ok: true, team: 'peer/bbbb2222', task_id: 'direct-b' }) as never
+      },
+    })
+    writeFileSync(join(h.ws, 'shared.txt'), '并发同一文件')
+    const a = h.run({ paths: ['shared.txt'], team: 'peer/bbbb2222' })
+    await aInTrunk
+    const b = await h.run({ paths: ['shared.txt'], team: 'peer/bbbb2222' })
+    expect(b.ok).toBe(true)
+    releaseA()
+    const outA = await a
+    expect(outA.grants).toBe('rolled-back')
+    expect(outA.rolled_back).toBe(0)
+    expect(outA.kept_concurrent).toBe(1)
+    expect(h.store.grantsBy('session-aaaa1111').some(g => g.sha256 === sha('并发同一文件') && g.to === 'peer/bbbb2222')).toBe(true)
+  })
 })
