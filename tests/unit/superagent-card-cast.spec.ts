@@ -17,7 +17,7 @@ async function team(o: { observerCast?: boolean; service?: boolean; queue?: bool
     deliverToSession: (id: string, text: string) => { sent.push([id, text]); return true }, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id, presetOf: (id: string) => presets[id],
     ...(o.clock !== undefined ? { now: () => new Date(o.clock!.ms).toISOString() } : {}),
     ...(o.queue === true ? { castQueue: () => ({
-      list: (f: { sessionId?: string }) => ({ ok: true, items: [{ id: 'q1', session_id: 'session-m', state: 'waiting', basis: 'none: a' }, { id: 'q2', session_id: 'session-elsewhere', state: 'waiting', basis: 'none: b' }].filter(r => f.sessionId === undefined || r.session_id === f.sessionId) }),
+      list: (f: { sessionId?: string }) => ({ ok: true, items: [{ id: 'q1', session_id: 'session-m', state: 'waiting', basis: 'none: a', origin: 'a2a|team:team|observer:session-o|mode:insert' }, { id: 'q0', session_id: 'session-m', state: 'waiting', basis: 'none: old' }, { id: 'q2', session_id: 'session-elsewhere', state: 'waiting', basis: 'none: b' }].filter(r => f.sessionId === undefined || r.session_id === f.sessionId) }),
       withdraw: (i: { sessionId: string; id: string }) => { withdrawn.push(i); return { ok: true, withdrawn: i.id === 'q1' && i.sessionId === 'session-m' } },
     }) } : {}),
     ...(o.service === false ? {} : { castCard: (input: { sessionId: string; templateId: string; reason: string }) => { casts.push(input); return input.templateId === 'dup' ? { ok: false, code: 'already-queued', error: 'x' } : { ok: true, queued: 1 } } }),
@@ -110,13 +110,15 @@ describe('T5-A: a2a_card_cast', () => {
     const m = await team({ observerCast: true, queue: true })
     expect(await m.queue('session-m', {})).toMatchObject({ ok: false, code: 'not-observer' })
     const all = await m.queue('session-o', {})
-    expect(all).toEqual({ ok: true, items: [{ id: 'q1', session_id: 'session-m', state: 'waiting', basis: 'none: a', legacy: true }], releases: [] })
+    // #913 review: a row without an origin (q0) has no team evidence and is not listed.
+    expect(all).toEqual({ ok: true, items: [{ id: 'q1', session_id: 'session-m', state: 'waiting', basis: 'none: a', requested: 'insert', mine: true }], releases: [] })
     expect(await m.queue('session-o', { session_id: 'session-elsewhere' })).toMatchObject({ ok: false, code: 'not-in-team' })
     expect(await m.queue('session-o', { action: 'withdraw', session_id: 'session-m' })).toMatchObject({ ok: false, code: 'input' })
-    // #907 review B2: a row from before origins is the owner's to withdraw, not the observer's.
-    expect(await m.queue('session-o', { action: 'withdraw', session_id: 'session-m', id: 'q1' })).toMatchObject({ ok: false, code: 'legacy' })
-    expect(m.h.ownerCastQueue({ action: 'withdraw', session_id: 'session-m', id: 'q1' })).toEqual({ ok: true, withdrawn: true })
-    expect(m.withdrawn).toEqual([{ sessionId: 'session-m', id: 'q1' }])
+    // #913 review: a row without an origin is withdrawn by nobody here; the observer withdraws its own row.
+    expect(await m.queue('session-o', { action: 'withdraw', session_id: 'session-m', id: 'q0' })).toMatchObject({ ok: false, code: 'cast' })
+    expect(m.h.ownerCastQueue({ action: 'withdraw', session_id: 'session-m', id: 'q0' })).toMatchObject({ ok: false, code: 'cast' })
+    expect(await m.queue('session-o', { action: 'withdraw', session_id: 'session-m', id: 'q1' })).toEqual({ ok: true, withdrawn: true })
+    expect(m.withdrawn).toEqual([{ sessionId: 'session-m', id: 'q1', origin: 'a2a|team:team|observer:session-o|mode:insert' }])
     await m.h.stop()
     const old = await team({ observerCast: true })
     expect(await old.queue('session-o', {})).toMatchObject({ ok: true, available: false })

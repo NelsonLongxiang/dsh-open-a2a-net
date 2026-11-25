@@ -162,7 +162,7 @@ export interface CardRelease {
   result?: string
 }
 /** #902 S2: one card of the observer's own, as kept in the team's observer-cards.json. */
-interface ObserverCard { readonly name: string; readonly for: readonly string[] | 'team'; readonly scene: string; readonly from?: string; readonly at: string; readonly sha256: string; /** #908 review: the observer session that wrote it (absent on cards written before). */ readonly author?: string }
+interface ObserverCard { readonly name: string; readonly for: readonly string[] | 'team'; readonly scene: string; readonly from?: string; readonly at: string; readonly sha256: string; /** #908 review: the observer session that wrote it (absent on cards written before). */ readonly author?: string; /** #913 review: an edit is under way or did not finish; the card is not cast until a save completes it. */ readonly pending?: true }
 
 export class SuperagentHost {
   readonly store: JsonRepositories
@@ -1368,20 +1368,28 @@ export class SuperagentHost {
    * #911 review: withdraw this team's waiting casts and armed releases for the given sessions (the owner turned casting
    * off for them). Rows of other teams and rows from before origins are left alone; the owner withdraws those by hand.
    */
-  private withdrawCastsFor(sessions: readonly string[]): void {
-    try {
-      const svc = this.d.castQueue?.()
-      for (const session of sessions) {
-        const listed = svc?.list({ sessionId: session, state: 'waiting', limit: 500 })
-        for (const row of (listed?.ok === true && Array.isArray(listed.items) ? listed.items : []) as Array<{ id?: unknown; origin?: unknown }>) {
-          if (typeof row.origin === 'string' && row.origin.startsWith(this.castTeamPrefix())) svc!.withdraw({ sessionId: session, id: String(row.id), origin: row.origin })
-        }
+  private withdrawCastsFor(sessions: readonly string[]): { withdrawn: number; notWithdrawn: string[]; releasesWithdrawn: number; releasesSaved: boolean } {
+    // #913 review: each withdrawal's answer is kept. A card already handed to a step (sent, not yet confirmed) or one the
+    // plugin refuses is reported as not withdrawn: it is not claimed back here, and no new card goes to the member.
+    const out = { withdrawn: 0, notWithdrawn: [] as string[], releasesWithdrawn: 0, releasesSaved: true }
+    const svc = this.d.castQueue?.()
+    for (const session of sessions) {
+      let listed: { ok: boolean; items?: unknown[] } | undefined
+      try { listed = svc?.list({ sessionId: session, state: 'waiting', limit: 500 }) } catch { listed = undefined }
+      if (svc !== undefined && listed?.ok !== true) { out.notWithdrawn.push(`${session}:list-failed`); continue }
+      for (const row of (Array.isArray(listed?.items) ? listed!.items : []) as Array<{ id?: unknown; origin?: unknown }>) {
+        if (typeof row.origin !== 'string' || !row.origin.startsWith(this.castTeamPrefix())) continue
+        let answer: { ok: boolean; withdrawn?: boolean } | undefined
+        try { answer = svc!.withdraw({ sessionId: session, id: String(row.id), origin: row.origin }) } catch { answer = undefined }
+        if (answer?.ok === true && answer.withdrawn === true) out.withdrawn += 1
+        else out.notWithdrawn.push(String(row.id))
       }
-      const releases = this.releases()
-      let changed = false
-      for (const r of releases) if (r.state === 'armed' && sessions.includes(r.session_id)) { r.state = 'withdrawn'; r.endedAt = this.now(); r.result = 'member-off'; changed = true }
-      if (changed && !this.saveReleases(releases)) this.d.logger.warn('superagent: releases for members turned off not saved; they fail member-off when due')
-    } catch (error) { this.d.logger.warn('superagent: casts for members turned off not withdrawn: %s', String(error)) }
+    }
+    const releases = this.releases()
+    for (const r of releases) if (r.state === 'armed' && sessions.includes(r.session_id)) { r.state = 'withdrawn'; r.endedAt = this.now(); r.result = 'member-off'; out.releasesWithdrawn += 1 }
+    if (out.releasesWithdrawn > 0) out.releasesSaved = this.saveReleases(releases)
+    if (out.notWithdrawn.length > 0 || !out.releasesSaved) this.d.logger.warn('superagent: casting off %s left %d cast(s) not withdrawn; releases saved: %s', sessions.join(','), out.notWithdrawn.length, String(out.releasesSaved))
+    return out
   }
 
   /** The prefix of every origin this team writes: the plugin, the team (its canvas), then the fields. */
@@ -1421,6 +1429,7 @@ export class SuperagentHost {
     const draft = this.observerCards()[templateId]
     // #908 review: an observer's own card is cast by the observer that wrote it (after a handover the new one writes its own).
     if (draft !== undefined && draft.author !== undefined && draft.author !== observer) return no('not-yours', 'that card was written by another observer session; write your own with a2a_card_draft')
+    if (draft?.pending === true) return no('pending', 'an edit of that card did not finish; save it again with a2a_card_draft before casting it')
     if (draft !== undefined && draft.for !== 'team' && !draft.for.includes(target)) return no('not-for', 'that card of yours is written for other members; edit its for list with a2a_card_draft')
     return { target, templateId, reason, basis, draft }
   }
@@ -1542,10 +1551,15 @@ export class SuperagentHost {
     try { keeps = this.d.castCapabilities?.()?.origin === true } catch { /* none */ }
     const svc = this.d.castQueue?.()
     if (!keeps || svc === undefined) return 'unknown'
-    const out = svc.list({ sessionId: r.session_id, limit: 100 })
-    if (out.ok !== true || !Array.isArray(out.items)) return 'unknown'
-    const row = (out.items as Array<{ id?: unknown; origin?: unknown }>).find(item => typeof item.origin === 'string' && item.origin.startsWith(this.castTeamPrefix()) && item.origin.endsWith(`|release:${r.id}`))
-    return row === undefined ? undefined : String(row.id)
+    // #913 review: ask for the exact origins this release could have cast with (its then mode, or queue when a trigger
+    // found the target busy), so "none" is proven by the plugin's own filter, not by a window of recent rows.
+    for (const mode of [...new Set([r.then, 'queue'])]) {
+      const out = svc.list({ sessionId: r.session_id, origin: this.castOrigin(r.observer, mode, r.id), limit: 500 })
+      if (out.ok !== true || !Array.isArray(out.items)) return 'unknown'
+      const row = (out.items as Array<{ id?: unknown }>)[0]
+      if (row !== undefined) return String(row.id)
+    }
+    return undefined
   }
 
   /** #902 S3: the team's releases (armed and the latest ended), in observer-releases.json. */
@@ -1647,13 +1661,26 @@ export class SuperagentHost {
     if (scene === '' || scene.length > 200) return { ok: false, code: 'scene', error: 'scene is one line of 1..200 characters: the business situation this card is for' }
     const from = input.from === undefined || input.from === null || String(input.from).trim() === '' ? undefined : String(input.from).trim().slice(0, 100)
     const description = `for: ${forList === 'team' ? 'team' : forList.join(', ')} · scene: ${scene}${from !== undefined ? ` · from: ${from}` : ''}`.slice(0, 512)
+    // #913 review: an edit is marked pending on disk before the plugin's text changes, so a stop or a failed write between
+    // the two never leaves new text under the old audience: a pending card is not cast until a save completes it.
+    const before = action === 'update' ? cards[id] : undefined
+    if (before !== undefined) {
+      cards[id] = { ...before, pending: true }
+      if (!this.saveObserverCards(cards)) return { ok: false, code: 'not-saved', error: 'the team record could not be written, so nothing was changed' }
+    }
     const out = svc.draft({ authorSession: observer, ...(action === 'update' ? { id } : {}), name: String(input.name ?? ''), content: String(input.content ?? ''), description })
-    if (!out.ok || typeof out.id !== 'string') return out as Record<string, unknown>
+    if (!out.ok || typeof out.id !== 'string') {
+      if (before !== undefined) { cards[id] = before; if (!this.saveObserverCards(cards)) return { ...(out as Record<string, unknown>), pending: true } }
+      return out as Record<string, unknown>
+    }
     cards[out.id] = { name: String(out.name ?? input.name ?? ''), for: forList, scene, ...(from !== undefined ? { from } : {}), at: this.now(), sha256: String(out.content_sha256 ?? ''), author: observer }
     if (!this.saveObserverCards(cards)) {
-      // A new card the team record cannot hold is taken back, so the plugin and the record agree; an edit is reported.
-      if (out.created === true) { try { svc.remove({ authorSession: observer, id: out.id }) } catch { /* reported below */ } }
-      return { ok: false, code: 'not-saved', error: out.created === true ? 'the team record could not be written, so the new card was taken back' : 'the card text changed but the team record could not be written; save again' }
+      if (out.created !== true) return { ok: false, code: 'not-saved', pending: true, error: 'the card text changed but the team record could not be finished; the card stays pending (not cast) until you save it again' }
+      // A new card the team record cannot hold is taken back, and whether that worked is said.
+      let removed: { ok: boolean; deleted?: boolean } | undefined
+      try { removed = svc.remove({ authorSession: observer, id: out.id }) } catch { removed = undefined }
+      if (removed?.ok === true && removed.deleted === true) return { ok: false, code: 'not-saved', error: 'the team record could not be written, so the new card was taken back' }
+      return { ok: false, code: 'not-saved', orphan: out.id, error: `the team record could not be written and the new card ${out.id} could not be taken back: delete it from your session's templates` }
     }
     return { ok: true, id: out.id, created: out.created === true, for: forList, scene, sha256: String(out.content_sha256 ?? '') }
   }
@@ -1693,7 +1720,9 @@ export class SuperagentHost {
     const prefix = this.castTeamPrefix()
     const field = (origin: string, name: string): string | undefined => origin.split('|').find(part => part.startsWith(`${name}:`))?.slice(name.length + 1)
     type Row = { id?: unknown; session_id?: unknown; origin?: unknown; [k: string]: unknown }
-    const ours = (row: Row): 'team' | 'legacy' | undefined => typeof row.origin === 'string' ? (row.origin.startsWith(prefix) ? 'team' : undefined) : (team.has(String(row.session_id)) ? 'legacy' : undefined)
+    // #913 review: a row without an origin has no evidence of which team cast it, so no team view lists or withdraws it.
+    // Such rows were cast before origins and end within the plugin's wait limit (an hour) on their own.
+    const ours = (row: Row): 'team' | 'legacy' | undefined => typeof row.origin === 'string' && row.origin.startsWith(prefix) ? 'team' : undefined
     // #911 review: only these fields of a plugin row leave this host's state and tools, whatever the plugin adds later.
     const FIELDS = ['id', 'session_id', 'template_id', 'name', 'version', 'caller', 'reason', 'basis', 'at', 'state', 'ended_at', 'mode', 'sent_at'] as const
     const view = (row: Row): Record<string, unknown> => {
@@ -1724,7 +1753,6 @@ export class SuperagentHost {
       const row = listed.ok === true && Array.isArray(listed.items) ? (listed.items as Row[]).find(item => item.id === id) : undefined
       const kind = row === undefined ? undefined : ours(row)
       if (row === undefined || kind === undefined) return { ok: false, code: 'cast', error: 'no cast of this team with that id for that session' }
-      if (observer !== undefined && kind === 'legacy') return { ok: false, code: 'legacy', error: 'that card was cast before casts carried their team; the owner can withdraw it' }
       if (observer !== undefined && field(String(row.origin), 'observer') !== observer) return { ok: false, code: 'not-yours', error: 'that card was cast by another observer session; the owner can withdraw it' }
       return svc.withdraw({ sessionId: session, id, ...(typeof row.origin === 'string' ? { origin: row.origin } : {}) }) as Record<string, unknown>
     }
@@ -2595,7 +2623,7 @@ export class SuperagentHost {
     }
   }
 
-  saveSettings(raw: unknown, sessionValid: (id: string) => boolean, presetOf: (id: string) => string | undefined = () => undefined, by = 'owner'): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
+  saveSettings(raw: unknown, sessionValid: (id: string) => boolean, presetOf: (id: string) => string | undefined = () => undefined, by = 'owner'): { ok: true; settings: TeamSettings; castOff?: { withdrawn: number; notWithdrawn: string[]; releasesWithdrawn: number; releasesSaved: boolean } } | { ok: false; error: string } {
     // Repositories are checked against the pool this write leads to: the canvas and router it names, or the current ones.
     const fields = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
     const pick = <K extends 'canvas' | 'router'>(key: K): string | undefined => key in fields ? (typeof fields[key] === 'string' && fields[key] !== '' ? fields[key] as string : undefined) : this.settingsValue[key]
@@ -2644,10 +2672,10 @@ export class SuperagentHost {
     this.mcpReadAt = 0
     // #911 review: turning casting off for a member also takes back what already waits for it (this team's casts).
     const turnedOff = (parsed.settings.castOff ?? []).filter(id => !(previous.castOff ?? []).includes(id))
-    if (turnedOff.length > 0) this.withdrawCastsFor(turnedOff)
+    const castOff = turnedOff.length > 0 ? this.withdrawCastsFor(turnedOff) : undefined
     this.executor.launch()
     this.pass()
-    return { ok: true, settings: this.settings }
+    return { ok: true, settings: this.settings, ...(castOff !== undefined ? { castOff } : {}) }
   }
 
   /**

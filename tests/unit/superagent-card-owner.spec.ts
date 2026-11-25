@@ -20,7 +20,7 @@ async function team(o: { queue?: boolean } = {}) {
     castCapabilities: () => ({ modes: ['insert', 'queue'], origin: true, confirmedDelivery: true }),
     castCard: (input: { sessionId: string }) => { casts.push(input); return { ok: true, queued: 1 } },
     ...(o.queue === false ? {} : { castQueue: () => ({
-      list: () => ({ ok: true, items: [{ id: 'q1', session_id: 'session-m', state: 'waiting', name: 'c', basis: 'none: a', mode: 'queue' }, { id: 'q2', session_id: 'session-elsewhere', state: 'waiting' }] }),
+      list: () => ({ ok: true, items: [{ id: 'q1', session_id: 'session-m', state: 'waiting', name: 'c', basis: 'none: a', mode: 'queue', origin: 'a2a|team:team|observer:session-o|mode:queue' }, { id: 'q2', session_id: 'session-elsewhere', state: 'waiting' }] }),
       withdraw: (i: { sessionId: string; id: string }) => { withdrawn.push(i); return { ok: true, withdrawn: true } },
     }) }),
   } as never)
@@ -81,7 +81,7 @@ describe('#902 S4', () => {
     const m = await team()
     const armed = await m.cast({ session_id: 'session-m', mode: 'release', when: 'idle:10' })
     expect(m.h.ownerCastQueue({ action: 'withdraw', session_id: 'session-m', id: 'q1' })).toEqual({ ok: true, withdrawn: true })
-    expect(m.withdrawn).toEqual([{ sessionId: 'session-m', id: 'q1' }])
+    expect(m.withdrawn).toEqual([{ sessionId: 'session-m', id: 'q1', origin: 'a2a|team:team|observer:session-o|mode:queue' }])
     expect(m.h.ownerCastQueue({ action: 'withdraw', session_id: 'session-elsewhere', id: 'q2' })).toMatchObject({ ok: false, code: 'cast' })
     expect(m.h.ownerCastQueue({ action: 'withdraw', id: String(armed.release) })).toEqual({ ok: true, withdrawn: true })
     expect((m.h.state().casts as { releases: unknown[] }).releases).toEqual([])

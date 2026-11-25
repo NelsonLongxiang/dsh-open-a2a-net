@@ -27,7 +27,7 @@ async function team(o: { caps?: boolean; origin?: boolean; rows?: Row[]; deliver
     ...(o.caps === false ? {} : { castCapabilities: () => ({ modes: ['insert', 'queue'], origin: o.origin !== false, confirmedDelivery: true }) }),
     castCard: (input: Record<string, unknown>) => { casts.push(input); const id = `q${String(casts.length)}`; rows.push({ id, session_id: String(input.sessionId), state: 'waiting', origin: (input.origin as string | undefined) ?? null }); return { ok: true, queued: 1, id } },
     castQueue: () => ({
-      list: (f: { sessionId?: string }) => ({ ok: true, items: rows.filter(r => f.sessionId === undefined || r.session_id === f.sessionId) }),
+      list: (f: { sessionId?: string; origin?: string; state?: string }) => ({ ok: true, items: rows.filter(r => (f.sessionId === undefined || r.session_id === f.sessionId) && (f.origin === undefined || r.origin === f.origin) && (f.state === undefined || r.state === f.state)) }),
       withdraw: (i: Record<string, unknown>) => { withdrawn.push(i); return { ok: true, withdrawn: true } },
     }),
     cardDrafts: () => ({
@@ -221,9 +221,64 @@ describe('#911 review: S4 boundaries', () => {
     ]
     const m = await team({ rows })
     const armed = await m.cast({ mode: 'release', when: 'idle:10' })
-    expect(m.h.saveSettings({ castOff: ['session-m'] }, () => true)).toMatchObject({ ok: true })
+    expect(m.h.saveSettings({ castOff: ['session-m'] }, () => true)).toMatchObject({ ok: true, castOff: { withdrawn: 1, notWithdrawn: [], releasesWithdrawn: 1, releasesSaved: true } })
     expect(m.withdrawn.map(w => w.id)).toEqual(['o1'])
     expect(((await m.queue({})).releases as Array<{ id: string; state: string; result?: string }>).find(r => r.id === armed.release)).toMatchObject({ state: 'withdrawn', result: 'member-off' })
+    await m.h.stop()
+  })
+})
+
+describe('#913 review: what is left open is said, not assumed', () => {
+  it('casting a member off reports each cast the plugin did not withdraw', async () => {
+    const rows: Row[] = [{ id: 's1', session_id: 'session-m', state: 'waiting', origin: 'a2a|team:team|observer:session-o|mode:queue' }]
+    const m = await team({ rows })
+    const svc = (m.h as unknown as { d: { castQueue: () => { withdraw: (i: unknown) => unknown } } }).d
+    const real = svc.castQueue
+    svc.castQueue = () => ({ ...real(), withdraw: () => ({ ok: true, withdrawn: false }) })
+    expect(m.h.saveSettings({ castOff: ['session-m'] }, () => true)).toMatchObject({ ok: true, castOff: { withdrawn: 0, notWithdrawn: ['s1'] } })
+    await m.h.stop()
+  })
+  it('a release is matched by its exact origin, however many newer rows the target has', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-rev-home-'))
+    const rows: Row[] = []
+    const m = await team({ home, rows })
+    const a = (await m.cast({ mode: 'release', when: 'idle:10', then: 'queue' })).release as string
+    await m.h.stop()
+    const file = join(home, ...findReleases(home))
+    const saved = JSON.parse(readFileSync(file, 'utf8')) as { releases: Array<{ state: string }> }
+    saved.releases[0]!.state = 'releasing'
+    writeFileSync(file, JSON.stringify(saved))
+    rows.push({ id: 'old', session_id: 'session-m', state: 'delivered', origin: `a2a|team:team|observer:session-o|mode:queue|release:${a}` })
+    for (let i = 0; i < 300; i++) rows.push({ id: `n${String(i)}`, session_id: 'session-m', state: 'waiting', origin: 'a2a|team:team|observer:session-o|mode:insert' })
+    const n = await team({ home, rows })
+    n.h.releaseTick()
+    expect(((await n.queue({})).releases as Array<{ id: string; state: string; result: string }>)[0]).toMatchObject({ id: a, state: 'released', result: 'reconciled old' })
+    expect(n.casts).toEqual([])
+    await n.h.stop()
+  })
+  it('an edit whose record cannot be finished leaves the card pending and uncastable; a create that cannot be taken back names the orphan', async () => {
+    const m = await team()
+    const made = await m.draft({ action: 'create', name: '卡', content: '正文', for: ['session-m'], scene: '场景' })
+    const saver = m.h as unknown as { saveObserverCards: (c: unknown) => boolean }
+    const real = saver.saveObserverCards.bind(m.h)
+    // Pending can be written, the final record cannot.
+    let calls = 0
+    saver.saveObserverCards = (c: unknown) => (++calls === 1 ? real(c) : false)
+    expect(await m.draft({ action: 'update', id: made.id, name: '卡', content: '新正文', for: ['session-m'], scene: '场景' })).toMatchObject({ ok: false, code: 'not-saved', pending: true })
+    saver.saveObserverCards = real
+    expect(await m.cast({ template_id: made.id })).toMatchObject({ ok: false, code: 'pending' })
+    expect(((await m.draft({})).cards as Array<{ pending?: boolean }>)[0]!.pending).toBe(true)
+    expect(await m.draft({ action: 'update', id: made.id, name: '卡', content: '新正文', for: ['session-m'], scene: '场景' })).toMatchObject({ ok: true })
+    expect(await m.cast({ template_id: made.id })).toMatchObject({ ok: true })
+    // The pending mark itself cannot be written: nothing changes, the plugin is not called.
+    saver.saveObserverCards = () => false
+    expect(await m.draft({ action: 'update', id: made.id, name: '卡', content: '再改', for: ['session-m'], scene: '场景' })).toMatchObject({ ok: false, code: 'not-saved' })
+    // A create the record cannot hold, and the plugin will not take back: the orphan is named.
+    const d = (m.h as unknown as { d: { cardDrafts: () => Record<string, unknown> } }).d
+    const realDrafts = d.cardDrafts
+    d.cardDrafts = () => ({ ...realDrafts(), remove: () => ({ ok: true, deleted: false }) })
+    const lost = await m.draft({ action: 'create', name: '卡2', content: 'x', for: ['session-m'], scene: '场景' })
+    expect(lost).toMatchObject({ ok: false, code: 'not-saved', orphan: expect.stringMatching(/^card-/) })
     await m.h.stop()
   })
 })
