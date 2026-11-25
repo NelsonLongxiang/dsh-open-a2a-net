@@ -138,6 +138,27 @@ const INTERVENTIONS_READ_DEFAULT = 100, INTERVENTIONS_READ_MAX = 500
 const CAST_PER_HOUR = 3, CAST_WAKE_MS = 15 * 60_000
 /** #902 S2: the observer's own cards kept per team, at most. */
 const OBSERVER_CARDS_MAX = 50
+/** #902 S3: a trigger wakes one target at most once per TRIGGER_MS; a target holds at most RELEASES_MAX armed releases. */
+const TRIGGER_MS = 30 * 60_000, RELEASES_MAX = 5, RELEASE_TICK_MS = 60_000
+/** #902 S3: a release's default and longest life, and how near and far an `at` time may be. */
+const RELEASE_HOURS = 24, RELEASE_HOURS_MAX = 168, AT_MIN_MS = 5 * 60_000, AT_MAX_MS = 7 * 24 * 3_600_000
+/** #902 S3: a release the observer armed: the cast it holds, when it goes, and how it ended. */
+export interface CardRelease {
+  readonly id: string
+  readonly observer: string
+  readonly session_id: string
+  readonly template_id: string
+  readonly reason: string
+  readonly basis: string
+  readonly when: string
+  readonly then: 'insert' | 'queue' | 'trigger'
+  readonly armedAt: string
+  readonly expiresAt: string
+  quietSince?: string
+  state: 'armed' | 'released' | 'expired' | 'withdrawn' | 'failed'
+  endedAt?: string
+  result?: string
+}
 /** #902 S2: one card of the observer's own, as kept in the team's observer-cards.json. */
 interface ObserverCard { readonly name: string; readonly for: readonly string[] | 'team'; readonly scene: string; readonly from?: string; readonly at: string; readonly sha256: string }
 
@@ -164,6 +185,8 @@ export class SuperagentHost {
   readonly ruleChanges: RuleChanges
   private disposeTimer: (() => void) | undefined
   private healthTimer: (() => void) | undefined
+  /** #902 S3: the release look (once a minute). */
+  private releaseTimer: (() => void) | undefined
   /** The router's latest failed turn (its model refused: a quota, an outage), until it decides again. In memory only. */
   private routerFailure: { at: string; error: string } | undefined
   /** The A2A executor (PR-C1): the owner's fixed member pool, one worker slot each. */
@@ -429,6 +452,7 @@ export class SuperagentHost {
       this.questionTick()
     }, HEALTH_TICK_MS)
     this.roster.start(this.d.interval)
+    this.releaseTimer ??= this.d.interval(() => { try { this.releaseTick() } catch (error) { this.d.logger.warn('superagent: release look skipped: %s', String(error)) } }, RELEASE_TICK_MS)
     this.pushTimer ??= this.d.interval(() => { void this.decisionPush.tick().catch((error: unknown) => { this.d.logger.warn('superagent: decision push skipped: %s', String(error)) }) }, PUSH_TICK_MS)
     // Defer: start() may run while the plugin's apply() still executes, when the canvas lookups it touches are not
     // initialized yet (a TDZ crash took the plugin down on hosts with models set - review of #566). A microtask runs
@@ -441,7 +465,7 @@ export class SuperagentHost {
     this.pass()
   }
 
-  stop(): Promise<void> { this.executor.close(); this.roster.close(); this.disposeTimer?.(); this.disposeTimer = undefined; this.healthTimer?.(); this.healthTimer = undefined; this.pushTimer?.(); this.pushTimer = undefined; this.started = false; return this.a2a.stop() }
+  stop(): Promise<void> { this.executor.close(); this.roster.close(); this.disposeTimer?.(); this.disposeTimer = undefined; this.healthTimer?.(); this.healthTimer = undefined; this.pushTimer?.(); this.pushTimer = undefined; this.releaseTimer?.(); this.releaseTimer = undefined; this.started = false; return this.a2a.stop() }
 
   /** Run the A2A Source's mailbox loop exactly while its Source is on. */
   private syncA2a(): void {
@@ -1277,40 +1301,174 @@ export class SuperagentHost {
    * the team's observer (by the session calling, never a parameter), into a session of this team other than itself, while
    * the owner has turned observerCast on. The target is woken so the card goes in at its next step.
    */
-  castCard(observer: string, input: { session_id?: unknown; template_id?: unknown; reason?: unknown; basis?: unknown }): Record<string, unknown> {
-    if (!this.isObserver(observer)) return { ok: false, code: 'not-observer', error: 'a2a_card_cast serves only the team\'s observer' }
-    if (this.settingsValue.observerCast !== true) return { ok: false, code: 'off', error: 'casting cards is off for this team (the owner turns on observerCast)' }
-    const target = String(input.session_id ?? '').trim()
-    const team = new Set([this.settings.router, ...this.settings.members].filter((id): id is string => typeof id === 'string'))
-    if (target === '' || !team.has(target) || target === observer) return { ok: false, code: 'not-in-team', error: 'cast only into another session of this team' }
-    const templateId = String(input.template_id ?? '').trim()
-    const reason = String(input.reason ?? '')
-    if (templateId === '') return { ok: false, code: 'template', error: 'name the card (template_id from a2a_ticket_read kind library or templates)' }
-    // #902 S1: every cast names what it rests on — a ticket of this team, an event, or none with a sentence.
-    const basis = this.castBasis(input.basis)
-    if (typeof basis !== 'string') return basis
+  castCard(observer: string, input: { session_id?: unknown; template_id?: unknown; reason?: unknown; basis?: unknown; mode?: unknown; when?: unknown; then?: unknown; expires_hours?: unknown }): Record<string, unknown> {
+    const checked = this.castCheck(observer, input)
+    if ('refusal' in checked) return checked.refusal
+    const { target, templateId, reason, basis, draft } = checked
+    // #902 S3: how the card goes in — insert (next step, woken), queue (its next turn, not woken), trigger (only while
+    // idle: queued and woken now), or release (armed now, cast later when its condition holds).
+    const mode = input.mode === undefined || input.mode === null || input.mode === '' ? 'insert' : String(input.mode)
+    if (mode === 'release') return this.armRelease(observer, { target, templateId, reason, basis }, input)
+    if (mode !== 'insert' && mode !== 'queue' && mode !== 'trigger') return { ok: false, code: 'mode', error: 'mode is insert, queue, trigger or release' }
+    if (mode === 'trigger' && target === this.settingsValue.router) return { ok: false, code: 'trigger-router', error: 'trigger never wakes the router: cast insert or queue into it' }
     // #764 review: per target, at most CAST_PER_HOUR casts an hour and one wake per CAST_WAKE_MS; kept across restarts.
     const now = Date.parse(this.now())
     const limits = this.castLimits()
     const entry = limits[target] ?? { casts: [], wakeAt: 0 }
     entry.casts = entry.casts.filter(at => now - at < 3_600_000 && at <= now + 60_000)
     if (entry.casts.length >= CAST_PER_HOUR) return { ok: false, code: 'rate-limited', error: `at most ${String(CAST_PER_HOUR)} casts an hour into one session` }
-    // #902 S2: the observer's own card goes only to the members it was written for.
-    const draft = this.observerCards()[templateId]
-    if (draft !== undefined && draft.for !== 'team' && !draft.for.includes(target)) return { ok: false, code: 'not-for', error: 'that card of yours is written for other members; edit its for list with a2a_card_draft' }
-    const out = this.d.castCard?.({ sessionId: target, templateId, reason, basis, ...(draft !== undefined ? { authorSession: observer } : {}) })
+    if (mode === 'trigger') {
+      if (this.d.sessionBusy === undefined) return { ok: true, available: false, reason: 'this host cannot tell whether a session is idle, so it does not trigger' }
+      if (this.d.sessionBusy(target) !== false) return { ok: false, code: 'busy', error: 'trigger only into an idle session: it is in a turn now (cast queue, or arm a release with when idle:<minutes>)' }
+      const last = entry.triggerAt ?? 0
+      if (now - last < TRIGGER_MS && last <= now + 60_000) return { ok: false, code: 'trigger-limited', error: 'at most one trigger every 30 minutes into one session' }
+    }
+    const out = this.d.castCard?.({ sessionId: target, templateId, reason, basis, ...(draft !== undefined ? { authorSession: observer } : {}), ...(mode === 'insert' ? {} : { mode: 'queue' as const }) })
     if (out === undefined) return { ok: true, available: false, reason: 'dsh-prompt-templates with the cast service (0.17+) is not on this host' }
     if (!out.ok) return { ok: false, code: out.code ?? 'refused', error: out.error ?? 'the card was not cast' }
     entry.casts.push(now)
-    // Wake the target so the card goes in at its next step (a wake carries no instruction of its own), at most once per window.
-    const wake = now - entry.wakeAt >= CAST_WAKE_MS || entry.wakeAt > now + 60_000
+    // Wake the target so the card goes in at its next step (a wake carries no instruction of its own): insert at most
+    // once per window; trigger always (its own limit above); queue never — it waits for the target's next turn.
+    const wake = mode === 'trigger' || (mode === 'insert' && (now - entry.wakeAt >= CAST_WAKE_MS || entry.wakeAt > now + 60_000))
     if (wake) {
       entry.wakeAt = now
+      if (mode === 'trigger') entry.triggerAt = now
       try { this.d.deliverToSession(target, '[superagent card] 团队观察者投来一张卡，会在你下一步看到；它不是新的指令，不授予任何权限。') } catch { /* the card still waits for its next step */ }
     }
     limits[target] = entry
     this.saveCastLimits(limits)
-    return { ok: true, queued: out.queued ?? 1, woken: wake, ...(typeof out.id === 'string' ? { id: out.id } : {}), basis }
+    return { ok: true, mode, queued: out.queued ?? 1, woken: wake, ...(typeof out.id === 'string' ? { id: out.id } : {}), basis }
+  }
+
+  /** Who may cast what into whom (shared by casting now and arming a release). */
+  private castCheck(observer: string, input: { session_id?: unknown; template_id?: unknown; reason?: unknown; basis?: unknown }): { refusal: Record<string, unknown> } | { target: string; templateId: string; reason: string; basis: string; draft: ObserverCard | undefined } {
+    const no = (code: string, error: string) => ({ refusal: { ok: false, code, error } })
+    if (!this.isObserver(observer)) return no('not-observer', 'a2a_card_cast serves only the team\'s observer')
+    if (this.settingsValue.observerCast !== true) return no('off', 'casting cards is off for this team (the owner turns on observerCast)')
+    const target = String(input.session_id ?? '').trim()
+    const team = new Set([this.settings.router, ...this.settings.members].filter((id): id is string => typeof id === 'string'))
+    if (target === '' || !team.has(target) || target === observer) return no('not-in-team', 'cast only into another session of this team')
+    const templateId = String(input.template_id ?? '').trim()
+    const reason = String(input.reason ?? '')
+    if (templateId === '') return no('template', 'name the card (template_id from a2a_ticket_read kind library or templates)')
+    // #902 S1: every cast names what it rests on — a ticket of this team, an event, or none with a sentence.
+    const basis = this.castBasis(input.basis)
+    if (typeof basis !== 'string') return { refusal: basis }
+    // #902 S2: the observer's own card goes only to the members it was written for.
+    const draft = this.observerCards()[templateId]
+    if (draft !== undefined && draft.for !== 'team' && !draft.for.includes(target)) return no('not-for', 'that card of yours is written for other members; edit its for list with a2a_card_draft')
+    return { target, templateId, reason, basis, draft }
+  }
+
+  /**
+   * #902 S3: arm a release — the cast waits here (not in the plugin) until its condition holds, then goes in the `then`
+   * way through castCard, with every check and limit of a cast made at that moment. Conditions: `ticket:<id> <stage>`
+   * (the ticket reaches person, person:<action>, working, idle or ended), `idle:<minutes>` (the target stays idle that
+   * long, 10..1440), `at:<ISO time>` (5 minutes to 7 days ahead). It expires after expires_hours (default 24, at most 168).
+   */
+  private armRelease(observer: string, cast: { target: string; templateId: string; reason: string; basis: string }, input: { when?: unknown; then?: unknown; expires_hours?: unknown }): Record<string, unknown> {
+    const no = (code: string, error: string): Record<string, unknown> => ({ ok: false, code, error })
+    const now = Date.parse(this.now())
+    const then = input.then === undefined || input.then === null || input.then === '' ? 'insert' : String(input.then)
+    if (then !== 'insert' && then !== 'queue' && then !== 'trigger') return no('then', 'then is insert, queue or trigger: how the card goes in once released')
+    if (then === 'trigger' && cast.target === this.settingsValue.router) return no('trigger-router', 'trigger never wakes the router')
+    const hours = input.expires_hours === undefined || input.expires_hours === null || input.expires_hours === '' ? RELEASE_HOURS : Number(input.expires_hours)
+    if (!Number.isFinite(hours) || hours <= 0 || hours > RELEASE_HOURS_MAX) return no('expires', `expires_hours is 1..${String(RELEASE_HOURS_MAX)} (default ${String(RELEASE_HOURS)})`)
+    const expiresAt = now + hours * 3_600_000
+    const when = this.releaseWhen(input.when, now, expiresAt)
+    if (typeof when !== 'string') return when
+    if (then === 'trigger' && when.startsWith('idle:') === false && this.d.sessionBusy === undefined) return no('then', 'this host cannot tell whether a session is idle, so it does not trigger')
+    const releases = this.releases()
+    if (releases.filter(r => r.state === 'armed' && r.session_id === cast.target).length >= RELEASES_MAX) return no('full', `at most ${String(RELEASES_MAX)} armed releases per session: withdraw one with a2a_card_queue`)
+    const release: CardRelease = { id: `r-${randomUUID().replace(/-/g, '').slice(0, 12)}`, observer, session_id: cast.target, template_id: cast.templateId, reason: cast.reason, basis: cast.basis, when, then: then as CardRelease['then'], armedAt: new Date(now).toISOString(), expiresAt: new Date(expiresAt).toISOString(), state: 'armed' }
+    releases.push(release)
+    this.saveReleases(releases)
+    return { ok: true, mode: 'release', release: release.id, when, then, expiresAt: release.expiresAt, basis: cast.basis }
+  }
+
+  /** #902 S3: a release condition, normalized; or the refusal. */
+  private releaseWhen(raw: unknown, now: number, expiresAt: number): string | Record<string, unknown> {
+    const text = String(raw ?? '').replace(/\s+/g, ' ').trim()
+    const no = (error: string): Record<string, unknown> => ({ ok: false, code: 'when', error })
+    const help = 'when is ticket:<id> <person|person:<action>|working|idle|ended>, idle:<minutes 10..1440>, or at:<ISO time 5 minutes..7 days ahead>'
+    let m = /^ticket:(\S+) (person(?::(?:delivery|answer|review|blocked|failed))?|working|idle|ended)$/.exec(text)
+    if (m !== null) {
+      const key = m[1]!
+      const hits = key.length >= 8 ? this.store.tickets.list().filter(t => t.id === key || t.id.startsWith(key)) : []
+      if (hits.length !== 1) return no('ticket: must name one ticket of this team (its id, or a prefix of at least 8 characters)')
+      return `ticket:${hits[0]!.id} ${m[2]!}`
+    }
+    m = /^idle:(\d+)$/.exec(text)
+    if (m !== null) {
+      const minutes = Number(m[1])
+      if (minutes < 10 || minutes > 1440) return no('idle: is 10..1440 minutes')
+      return `idle:${String(minutes)}`
+    }
+    m = /^at:(.+)$/.exec(text)
+    if (m !== null) {
+      const at = Date.parse(m[1]!)
+      if (!Number.isFinite(at) || at - now < AT_MIN_MS || at - now > AT_MAX_MS) return no('at: is an ISO time 5 minutes to 7 days ahead')
+      if (at >= expiresAt) return no('at: falls after the release expires: raise expires_hours')
+      return `at:${new Date(at).toISOString()}`
+    }
+    return no(help)
+  }
+
+  /**
+   * #902 S3: the release look, once a minute. An armed release whose condition holds goes in once, through castCard (so
+   * the switch, the team, the card and the limits are checked again now); one past its time expires. A release whose
+   * cast is refused ends failed, with the refusal kept, and is not tried again.
+   */
+  releaseTick(): void {
+    const releases = this.releases()
+    if (!releases.some(r => r.state === 'armed')) return
+    const now = Date.parse(this.now())
+    const at = new Date(now).toISOString()
+    let changed = false
+    for (const r of releases) {
+      if (r.state !== 'armed') continue
+      if (now >= Date.parse(r.expiresAt)) { r.state = 'expired'; r.endedAt = at; changed = true; continue }
+      let ready = false
+      if (r.when.startsWith('at:')) ready = now >= Date.parse(r.when.slice(3))
+      else if (r.when.startsWith('idle:')) {
+        const busy = this.d.sessionBusy?.(r.session_id)
+        if (busy !== false) { if (r.quietSince !== undefined) { delete r.quietSince; changed = true } }
+        else if (r.quietSince === undefined) { r.quietSince = at; changed = true }
+        else ready = now - Date.parse(r.quietSince) >= Number(r.when.slice(5)) * 60_000
+      } else {
+        const [ticketPart, want] = r.when.split(' ')
+        const ticket = this.store.tickets.get(ticketPart!.slice(7))
+        if (ticket !== undefined) {
+          const s = ticket.ended ? { stage: 'ended' as const } : ticketStage(ticket)
+          ready = want === s.stage || want === `${s.stage}:${'action' in s ? String(s.action) : ''}`
+        }
+      }
+      if (!ready) continue
+      // A trigger released by an idle condition finds the session idle; one released otherwise may find it busy, and then
+      // the card is queued for its next turn instead of being refused.
+      let out = this.castCard(r.observer, { session_id: r.session_id, template_id: r.template_id, reason: r.reason, basis: r.basis, mode: r.then })
+      if (r.then === 'trigger' && out.ok === false && (out.code === 'busy' || out.code === 'trigger-limited')) out = this.castCard(r.observer, { session_id: r.session_id, template_id: r.template_id, reason: r.reason, basis: r.basis, mode: 'queue' })
+      r.state = out.ok === true && out.available !== false ? 'released' : 'failed'
+      r.endedAt = at
+      r.result = out.ok === true ? (out.available === false ? String(out.reason ?? 'unavailable') : `${String(out.mode)}${typeof out.id === 'string' ? ` ${out.id}` : ''}`) : `${String(out.code)}: ${String(out.error ?? '')}`.slice(0, 300)
+      changed = true
+    }
+    if (changed) this.saveReleases(releases)
+  }
+
+  /** #902 S3: the team's releases (armed and the latest ended), in observer-releases.json. */
+  private releasesPath(): string { return join(this.stateDir, 'observer-releases.json') }
+  private releases(): CardRelease[] {
+    try { const v = JSON.parse(readFileSync(this.releasesPath(), 'utf8')) as { releases?: CardRelease[] }; return Array.isArray(v.releases) ? v.releases : [] } catch { return [] }
+  }
+  private saveReleases(releases: CardRelease[]): void {
+    // Armed ones are all kept; of the ended, the newest 50.
+    const ended = releases.filter(r => r.state !== 'armed').slice(-50)
+    const kept = releases.filter(r => r.state === 'armed' || ended.includes(r))
+    try {
+      const path = this.releasesPath(), temporary = `${path}.tmp-${String(process.pid)}`
+      mkdirSync(this.stateDir, { recursive: true }); writeFileSync(temporary, `${JSON.stringify({ releases: kept }, null, 2)}\n`, { mode: 0o600 }); renameSync(temporary, path)
+    } catch (error) { this.d.logger.warn('superagent: releases not saved: %s', String(error)) }
   }
 
   /**
@@ -1397,28 +1555,39 @@ export class SuperagentHost {
     if (svc === undefined) return { ok: true, available: false, reason: 'dsh-prompt-templates with the durable cast queue (#902 S1) is not on this host' }
     if (input.action === 'withdraw') {
       const id = String(input.id ?? '').trim()
+      // #902 S3: an armed release is withdrawn here, before it ever reaches the plugin.
+      if (id.startsWith('r-')) {
+        const releases = this.releases()
+        const r = releases.find(x => x.id === id && team.has(x.session_id))
+        if (r === undefined) return { ok: false, code: 'release', error: 'no release of this team with that id' }
+        if (r.state !== 'armed') return { ok: true, withdrawn: false, state: r.state }
+        r.state = 'withdrawn'; r.endedAt = this.now()
+        this.saveReleases(releases)
+        return { ok: true, withdrawn: true }
+      }
       if (session === '' || id === '') return { ok: false, code: 'input', error: 'withdraw takes session_id and id' }
       return svc.withdraw({ sessionId: session, id }) as Record<string, unknown>
     }
     const state = input.state === undefined ? undefined : String(input.state)
     const out = svc.list({ ...(session !== '' ? { sessionId: session } : {}), ...(state !== undefined ? { state } : {}), limit: 100 })
     if (out.ok !== true || !Array.isArray(out.items)) return out as Record<string, unknown>
-    return { ok: true, items: (out.items as Array<{ session_id?: unknown }>).filter(row => team.has(String(row.session_id))) }
+    const releases = this.releases().filter(r => team.has(r.session_id) && (session === '' || r.session_id === session)).reverse().map(({ observer: _o, ...r }) => r)
+    return { ok: true, items: (out.items as Array<{ session_id?: unknown }>).filter(row => team.has(String(row.session_id))), releases }
   }
 
   /** #764 review: the per-target cast limits, kept in the team's observer-casts.json. */
   private castLimitsPath(): string { return join(this.stateDir, 'observer-casts.json') }
-  private castLimits(): Record<string, { casts: number[]; wakeAt: number }> {
+  private castLimits(): Record<string, { casts: number[]; wakeAt: number; triggerAt?: number }> {
     try {
       const path = this.castLimitsPath()
       if (!existsSync(path)) return {}
       const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, { casts?: unknown; wakeAt?: unknown }>
-      const out: Record<string, { casts: number[]; wakeAt: number }> = {}
-      for (const [k, v] of Object.entries(raw ?? {})) out[k] = { casts: Array.isArray(v?.casts) ? v.casts.filter((n): n is number => typeof n === 'number' && Number.isFinite(n)) : [], wakeAt: typeof v?.wakeAt === 'number' ? v.wakeAt : 0 }
+      const out: Record<string, { casts: number[]; wakeAt: number; triggerAt?: number }> = {}
+      for (const [k, v] of Object.entries(raw ?? {})) out[k] = { casts: Array.isArray(v?.casts) ? v.casts.filter((n): n is number => typeof n === 'number' && Number.isFinite(n)) : [], wakeAt: typeof v?.wakeAt === 'number' ? v.wakeAt : 0, ...(typeof (v as { triggerAt?: unknown })?.triggerAt === 'number' ? { triggerAt: (v as { triggerAt: number }).triggerAt } : {}) }
       return out
     } catch { return {} }
   }
-  private saveCastLimits(limits: Record<string, { casts: number[]; wakeAt: number }>): void {
+  private saveCastLimits(limits: Record<string, { casts: number[]; wakeAt: number; triggerAt?: number }>): void {
     try {
       const path = this.castLimitsPath(), temporary = `${path}.tmp-${String(process.pid)}`
       mkdirSync(this.stateDir, { recursive: true }); writeFileSync(temporary, JSON.stringify(limits), { mode: 0o600 }); renameSync(temporary, path)
