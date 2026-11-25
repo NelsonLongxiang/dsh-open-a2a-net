@@ -50,7 +50,7 @@ describe('T5-A: a2a_card_cast', () => {
     expect(await m.cast('session-o', { session_id: 'session-elsewhere', template_id: 't', reason: 'r', basis: 'none: test' })).toMatchObject({ ok: false, code: 'not-in-team' })
     expect(await m.cast('session-o', { session_id: 'session-o', template_id: 't', reason: 'r', basis: 'none: test' })).toMatchObject({ ok: false, code: 'not-in-team' })
     expect(await m.cast('session-o', { session_id: 'session-m', template_id: '', reason: 'r', basis: 'none: test' })).toMatchObject({ ok: false, code: 'template' })
-    expect(await m.cast('session-o', { session_id: 'session-m', template_id: 'atelier-action-review', reason: '卡在验收', basis: 'none: test' })).toEqual({ ok: true, queued: 1, woken: true, basis: 'none: test' })
+    expect(await m.cast('session-o', { session_id: 'session-m', template_id: 'atelier-action-review', reason: '卡在验收', basis: 'none: test' })).toEqual({ ok: true, mode: 'insert', queued: 1, woken: true, basis: 'none: test' })
     expect(m.casts).toEqual([{ sessionId: 'session-m', templateId: 'atelier-action-review', reason: '卡在验收', basis: 'none: test' }])
     expect(m.sent.some(([id, text]) => id === 'session-m' && text.startsWith('[superagent card]'))).toBe(true)
     // The plugin's refusal comes back as is, and no wake follows it.
@@ -69,9 +69,9 @@ describe('T5-A: a2a_card_cast', () => {
     const clock = { ms: Date.parse('2026-11-20T00:00:00Z') }
     const m = await team({ observerCast: true, home, clock })
     const wakes = () => m.sent.filter(([id, t]) => id === 'session-m' && t.startsWith('[superagent card]')).length
-    expect(await m.cast('session-o', { session_id: 'session-m', template_id: 'a', reason: 'r', basis: 'none: test' })).toEqual({ ok: true, queued: 1, woken: true, basis: 'none: test' })
+    expect(await m.cast('session-o', { session_id: 'session-m', template_id: 'a', reason: 'r', basis: 'none: test' })).toEqual({ ok: true, mode: 'insert', queued: 1, woken: true, basis: 'none: test' })
     clock.ms += 5 * 60_000
-    expect(await m.cast('session-o', { session_id: 'session-m', template_id: 'b', reason: 'r', basis: 'none: test' })).toEqual({ ok: true, queued: 1, woken: false, basis: 'none: test' })
+    expect(await m.cast('session-o', { session_id: 'session-m', template_id: 'b', reason: 'r', basis: 'none: test' })).toEqual({ ok: true, mode: 'insert', queued: 1, woken: false, basis: 'none: test' })
     expect(wakes()).toBe(1)
     await m.h.stop()
     // Restart: the counts carry on.
@@ -107,7 +107,7 @@ describe('T5-A: a2a_card_cast', () => {
     const m = await team({ observerCast: true, queue: true })
     expect(await m.queue('session-m', {})).toMatchObject({ ok: false, code: 'not-observer' })
     const all = await m.queue('session-o', {})
-    expect(all).toEqual({ ok: true, items: [{ id: 'q1', session_id: 'session-m', state: 'waiting', basis: 'none: a' }] })
+    expect(all).toEqual({ ok: true, items: [{ id: 'q1', session_id: 'session-m', state: 'waiting', basis: 'none: a' }], releases: [] })
     expect(await m.queue('session-o', { session_id: 'session-elsewhere' })).toMatchObject({ ok: false, code: 'not-in-team' })
     expect(await m.queue('session-o', { action: 'withdraw', session_id: 'session-m' })).toMatchObject({ ok: false, code: 'input' })
     expect(await m.queue('session-o', { action: 'withdraw', session_id: 'session-m', id: 'q1' })).toEqual({ ok: true, withdrawn: true })

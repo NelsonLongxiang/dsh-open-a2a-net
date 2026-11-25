@@ -104,7 +104,9 @@ export interface SuperagentHostDeps {
    * Undefined when the plugin, or a version with the service, is not on this host. The plugin recognizes the caller as
    * this a2a plugin; who may ask (the team's observer, into its own team's sessions) is checked here, before this call.
    */
-  readonly castCard?: (input: { sessionId: string; templateId: string; reason: string; basis?: string; authorSession?: string }) => { ok: boolean; code?: string; error?: string; queued?: number; id?: string } | undefined
+  /** #902 S3: whether a local session is in a turn now (true), idle (false), or unknown here (undefined). */
+  readonly sessionBusy?: (sessionId: string) => boolean | undefined
+  readonly castCard?: (input: { sessionId: string; templateId: string; reason: string; basis?: string; authorSession?: string; mode?: 'queue' }) => { ok: boolean; code?: string; error?: string; queued?: number; id?: string } | undefined
   /**
    * #902 S1: the same plugin's durable cast queue — list (no text) and withdraw. Undefined when the plugin, or a version
    * with the queue, is not on this host.

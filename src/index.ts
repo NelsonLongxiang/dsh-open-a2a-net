@@ -2239,6 +2239,8 @@ export function apply(ctx: Context, config: Config): void {
     homeUrl: () => superagentHomeUrl,
     // T5-B: the idle sweep reads the same host's prompt-template self-check log, and only while that check is on.
     selfChecksOf: sessionId => readSelfChecks(ctx.get('promptTemplates' as never), sessionId),
+    // #902 S3: whether a local session is in a turn now, for trigger and idle releases.
+    sessionBusy: id => { const agent = sessionNodes.get(id); if (agent === undefined) return undefined; try { return agent.status === 'running' } catch { return undefined } },
     // T5-A: dsh-prompt-templates' cast, reached through this plugin's own context so the plugin recognizes the caller.
     castCard: input => {
       const svc = ctx.get('promptTemplates' as never) as { cast?: (i: typeof input) => { ok: boolean; code?: string; error?: string; queued?: number; id?: string } } | undefined
