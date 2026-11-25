@@ -188,4 +188,19 @@ describe('#937 re-review: carry-over boundaries', () => {
     const inline = lock('0.8.1', '0.8.1', 'sha512-OLD==', '0.8.1').replace('snapshots:', `  '${OWN_PACKAGE}@0.8.2': {resolution: {integrity: sha512-X==}}\n\nsnapshots:`)
     expect(rewriteLock(inline, '0.8.2', '0.8.2', 'sha512-N==', '0.8.2')).toMatchObject({ ok: false, why: expect.stringContaining('already has entries') })
   })
+  it('B4 carry-over, the review\'s exact order: same-version force install, then an ordinary reinstall of the same archive', () => {
+    const forced = tarball('0.8.1', { extra: '1.0.0' })
+    const ops = new NodeOps({ root, dir }, clock)
+    expect(ops.install(forced, sha(forced), 'owner', true)).toMatchObject({ ok: true, to: '0.8.1', declaration: { updated: false } })
+    expect(ops.status().declaration).toMatchObject({ drift: true })
+    const before = { manifest: read('package.json'), lock: read('pnpm-lock.yaml') }
+    expect(ops.install(forced, sha(forced), 'owner')).toMatchObject({ ok: true, declaration: { updated: false } })
+    expect({ manifest: read('package.json'), lock: read('pnpm-lock.yaml') }).toEqual(before)
+    expect(lockedDependencies(read('pnpm-lock.yaml'), '0.8.1')).toEqual([])
+    expect(ops.status().declaration).toMatchObject({ drift: true, why: expect.arrayContaining([expect.stringContaining('[extra]')]) })
+  })
+  it('B2 carry-over: a target entry inline in snapshots ({optional: true}) is refused too', () => {
+    const inline = lock('0.8.1', '0.8.1', 'sha512-OLD==', '0.8.1').replace(`  '${OWN_PACKAGE}@0.8.1': {}`, `  '${OWN_PACKAGE}@0.8.1': {}\n\n  '${OWN_PACKAGE}@0.8.2': {optional: true}`)
+    expect(rewriteLock(inline, '0.8.2', '0.8.2', 'sha512-N==', '0.8.2')).toMatchObject({ ok: false, why: expect.stringContaining('already has entries') })
+  })
 })
