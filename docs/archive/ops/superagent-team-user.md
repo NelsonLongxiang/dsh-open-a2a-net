@@ -114,7 +114,7 @@ sudo -u dsh-member -i "<dsh>" plugin --profile member add @nelsonlongxiang/dsh-o
 
 ```bash
 sudo -u dsh-team -i "<dsh>" --profile team --no-open
-sudo -u dsh-member -i env SUPERAGENT_YGL_HOME=/Users/alice/dsh-team-ygl "<dsh>" --profile member --no-open
+sudo -u dsh-member -i env SUPERAGENT_YGL_HOME=/home/alice/dsh-team-ygl "<dsh>" --profile member --no-open
 ```
 
 **成员的 shell 会继承什么**（2026-11-11 在测试宿主实测一次，只看变量名不看值）：成员的 shell 继承启动 DSH 那个进程的环境。测试宿主是从属主的终端起的：名字里带 key/token/secret/pass 的变量一个都没有，但有 `SSH_AUTH_SOCK`（能用属主的 ssh-agent）和几项启动终端带进来的变量。所以：
@@ -130,7 +130,7 @@ sudo -u dsh-member -i env SUPERAGENT_YGL_HOME=/Users/alice/dsh-team-ygl "<dsh>" 
 sudo dseditgroup -o create dsh-share
 sudo dseditgroup -o edit -a dsh-team -t user dsh-share
 sudo dseditgroup -o edit -a dsh-member -t user dsh-share
-sudo mkdir -p /Users/alice/dsh-team-ygl && sudo chown dsh-member:dsh-share /Users/alice/dsh-team-ygl && sudo chmod 2770 /Users/alice/dsh-team-ygl
+sudo mkdir -p /home/alice/dsh-team-ygl && sudo chown dsh-member:dsh-share /home/alice/dsh-team-ygl && sudo chmod 2770 /home/alice/dsh-team-ygl
 ```
 
 两个实例都把 `SUPERAGENT_YGL_HOME` 设成这个目录（上面成员实例的启动命令已带上；团队宿主同样加上）。

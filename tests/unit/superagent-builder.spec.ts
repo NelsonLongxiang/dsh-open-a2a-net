@@ -101,7 +101,7 @@ describe('the inventory', () => {
       profiles: { [M]: { role: '写文档', rules: [{ name: 'own-repo', text: '只接 acme/docs' }] } },
       repos: { [M]: 'acme/docs' }, acceptMode: 'auto',
       // W3 fields the host's settings carry; the inventory must never show them.
-      ...({ bots: { a2a: ['market/0123456789abcdef'] }, allowed: { workbench: ['owner'], a2a: ['x/0123456789abcdef'], github: ['someone'] }, mcp: [{ name: 'market', url: 'http://127.0.0.1:9890/mcp' }], prepare: { command: '/Users/alice/prep.sh', timeoutMs: 1 }, extraTools: { member: ['bash'] }, blockedTools: ['web_fetch'], github: { repos: ['acme/docs'] }, approvers: [M] } as object),
+      ...({ bots: { a2a: ['market/0123456789abcdef'] }, allowed: { workbench: ['owner'], a2a: ['x/0123456789abcdef'], github: ['someone'] }, mcp: [{ name: 'market', url: 'http://127.0.0.1:9890/mcp' }], prepare: { command: '/home/alice/prep.sh', timeoutMs: 1 }, extraTools: { member: ['bash'] }, blockedTools: ['web_fetch'], github: { repos: ['acme/docs'] }, approvers: [M] } as object),
     } as never,
     revisions: { team: 3, dispatch: 1, [`member:${M}`]: 2 },
     seatOf: session => session === M ? 'seat-0000abcd' : undefined,
@@ -126,7 +126,7 @@ describe('the inventory', () => {
     // The note names the kinds it leaves out; the data itself must carry none of them.
     const { note: _note, ...data } = out
     const text = JSON.stringify(data)
-    for (const leak of ['bots', 'allowed', 'mcp', '9890', 'prepare', '/Users/alice', 'extraTools', 'blockedTools', 'github', 'approvers', 'someone', 'market/0123456789abcdef']) expect(text, leak).not.toContain(leak)
+    for (const leak of ['bots', 'allowed', 'mcp', '9890', 'prepare', '/home/alice', 'extraTools', 'blockedTools', 'github', 'approvers', 'someone', 'market/0123456789abcdef']) expect(text, leak).not.toContain(leak)
   })
 })
 
