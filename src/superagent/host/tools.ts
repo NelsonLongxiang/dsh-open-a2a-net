@@ -76,7 +76,8 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
         return { ok: false, trigger_id: triggerId, code: 'repo', error: `no member works in ${repo}; the team's repositories: ${known.length > 0 ? known.join(', ') : '(none — accept without repo)'}` }
       }
       if (memberName !== undefined && member === undefined) return { ok: false, trigger_id: triggerId, code: 'member', error: `no such member: ${memberName}. ${host.memberListLine()}` }
-      if (memberName === undefined && named === undefined && host.membersProfiled()) return { ok: false, trigger_id: triggerId, code: 'member', error: `this team's members have roles and rules: name the one this work fits as member. ${host.memberListLine()}` }
+      // #921: a split's coordinating parent is held from members (splitHeld), so it names none; only an ordinary accept must.
+      if (memberName === undefined && named === undefined && host.membersProfiled() && !host.splits.isSplitting(triggerId)) return { ok: false, trigger_id: triggerId, code: 'member', error: `this team's members have roles and rules: name the one this work fits as member. ${host.memberListLine()}` }
       const acknowledgement = str(item.acknowledgement), name = str(item.name), note = str(item.note)
       outcome = { kind: 'accept', title, scope, reason, ...(acknowledgement !== undefined ? { acknowledgement } : {}), ...(name !== undefined ? { name } : {}), ...(note !== undefined ? { note } : {}), ...(rules.length > 0 ? { rules } : {}) }
     } else if (kind === 'ignore') outcome = candidate?.strength === 'inferred' && rules.length === 0 && item.rules !== undefined
