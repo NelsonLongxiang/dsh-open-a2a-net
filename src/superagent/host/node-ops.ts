@@ -3,7 +3,9 @@
  * rolls it back, and restarts the node, through one control route instead of a shell on that node.
  *
  * Scope is deliberately narrow:
- * - only this plugin's own package directory is replaced, never the profile, its lockfile or another plugin;
+ * - only this plugin's own package directory is replaced, never another plugin; #936: the profile's declaration of this
+ *   plugin (its package.json dependency and its own pnpm-lock.yaml entries) follows the install and the rollback, saved
+ *   with each backup, and is left alone and reported as drift when its shape is not recognised;
  * - a tarball whose `dependencies` differ from the running package is refused (an unpack-only install cannot add a
  *   dependency) unless the caller says `forceDeps`;
  * - a source checkout is never overwritten: the running package must live under a `node_modules` directory;
@@ -17,7 +19,8 @@
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { declarationStatus, integrityOf, planDeclaration, profileDirOf, type DeclareAs } from './node-declaration.ts'
 import { dirname, join, resolve, sep } from 'node:path'
 
 /** This package's name: the only package node operations replace. */
@@ -31,7 +34,7 @@ export interface NodeOpsBackup { readonly id: string; readonly version: string; 
 
 /** What an operation answered. */
 export type NodeOpsResult =
-  | { readonly ok: true; readonly from: string; readonly to: string; readonly backup?: string }
+  | { readonly ok: true; readonly from: string; readonly to: string; readonly backup?: string; readonly declaration?: Record<string, unknown> }
   | { readonly ok: false; readonly code: string; readonly error: string }
 
 /** Everything node operations touch, so the tests can point them at a scratch tree. */
@@ -40,6 +43,8 @@ export interface NodeOpsPaths {
   readonly root: string
   /** `<dsh-home>/a2a/node-ops`: stage, backups and the log. */
   readonly dir: string
+  /** #936: the profile whose package.json and lockfile declare the package; by default the directory above node_modules. */
+  readonly profile?: string
 }
 
 /**
@@ -121,6 +126,37 @@ export class NodeOps {
   constructor(private readonly paths: NodeOpsPaths, private readonly now: () => Date = () => new Date()) {}
 
   private get backups(): string { return join(this.paths.dir, 'backups') }
+  /** #936: the profile declaration saved with each backup, by backup id. */
+  private get declarations(): string { return join(this.paths.dir, 'declarations') }
+  private get profile(): string | undefined { return this.paths.profile ?? profileDirOf(this.paths.root) }
+
+  /** #936: keep the profile's package.json and lockfile as they are now, with the backup `id`. */
+  private saveDeclaration(id: string): void {
+    const profile = this.profile
+    if (profile === undefined) return
+    const to = join(this.declarations, id)
+    mkdirSync(to, { recursive: true })
+    for (const name of ['package.json', 'pnpm-lock.yaml']) if (existsSync(join(profile, name))) copyFileSync(join(profile, name), join(to, name))
+  }
+
+  /** #936: write files into the profile, each through a temporary file and a rename. */
+  private writeProfile(files: Record<string, string | undefined>): void {
+    const profile = this.profile!
+    for (const [name, text] of Object.entries(files)) {
+      if (text === undefined) continue
+      const temporary = join(profile, `.${name}.node-ops-${randomUUID().slice(0, 8)}`)
+      writeFileSync(temporary, text, 'utf8')
+      renameSync(temporary, join(profile, name))
+    }
+  }
+
+  /** #936: put a saved declaration back; a file the snapshot lacks is left as it is. */
+  private restoreDeclaration(from: string): Record<string, unknown> {
+    if (this.profile === undefined || !existsSync(from)) return { restored: false, why: 'no declaration was saved with that backup' }
+    const read = (name: string): string | undefined => existsSync(join(from, name)) ? readFileSync(join(from, name), 'utf8') : undefined
+    this.writeProfile({ 'package.json': read('package.json'), 'pnpm-lock.yaml': read('pnpm-lock.yaml') })
+    return { restored: true }
+  }
 
   /**
    * The kept backups, newest first.
@@ -151,7 +187,7 @@ export class NodeOps {
     return {
       ok: true, package: OWN_PACKAGE, version, installed: this.refusal() === undefined, pid: process.pid,
       startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(), node: process.version, platform: process.platform,
-      busy: this.busy, backups: this.listBackups(), last,
+      busy: this.busy, backups: this.listBackups(), last, declaration: declarationStatus(this.profile, version),
     }
   }
 
@@ -200,7 +236,7 @@ export class NodeOps {
       throw error
     }
     writeFileSync(join(backup, '.node-ops-at'), `${this.now().toISOString()}\n`, 'utf8')
-    for (const old of this.listBackups().slice(KEEP_BACKUPS)) rmSync(join(this.backups, old.id), { recursive: true, force: true })
+    for (const old of this.listBackups().slice(KEEP_BACKUPS)) { rmSync(join(this.backups, old.id), { recursive: true, force: true }); rmSync(join(this.declarations, old.id), { recursive: true, force: true }) }
     return id
   }
 
@@ -210,9 +246,10 @@ export class NodeOps {
    * @param sha256 - its expected digest (hex); a mismatch refuses.
    * @param who - the caller, for the log.
    * @param forceDeps - accept a tarball whose dependencies differ.
+   * @param declare - #936: declare it in the profile as its npm version or as `file:` the kept tarball.
    * @returns what happened.
    */
-  install(tgz: Buffer, sha256: string, who: string, forceDeps = false): NodeOpsResult {
+  install(tgz: Buffer, sha256: string, who: string, forceDeps = false, declare: DeclareAs = 'file'): NodeOpsResult {
     return this.exclusive('install', who, () => {
       const refused = this.refusal()
       if (refused !== undefined) return refused
@@ -238,11 +275,37 @@ export class NodeOps {
         const running = readPackage(this.paths.root)
         if (incoming.dependencies !== running.dependencies && !forceDeps) return { ok: false, code: 'deps-changed', error: 'the tarball\'s dependencies differ from the running package; an unpack-only install cannot add them (forceDeps overrides)' }
         const backup = this.swap(next, running.version)
-        return { ok: true, from: running.version, to: incoming.version, backup }
+        return { ok: true, from: running.version, to: incoming.version, backup, declaration: this.declareInstalled(backup, tgz, digest, incoming.version, declare, incoming.dependencies !== running.dependencies) }
       } finally {
         rmSync(stage, { recursive: true, force: true })
       }
     })
+  }
+
+  /**
+   * #936: after an install, make the profile declare what was installed. The old declaration is saved with the backup
+   * first; the new one is worked out in full and only then written. Changed dependencies (forceDeps) leave the lockfile's
+   * view of them stale, so the declaration is left alone then, and status shows the drift.
+   */
+  private declareInstalled(backup: string, tgz: Buffer, digest: string, version: string, as: DeclareAs, depsChanged: boolean): Record<string, unknown> {
+    const profile = this.profile
+    if (profile === undefined) return { updated: false, why: 'not installed under a profile' }
+    try {
+      this.saveDeclaration(backup)
+      if (depsChanged) return { updated: false, why: 'the dependencies changed (forceDeps): run pnpm install in the profile, then node status' }
+      let tarball: string | undefined
+      if (as === 'file') {
+        mkdirSync(join(this.paths.dir, 'packages'), { recursive: true })
+        tarball = join(this.paths.dir, 'packages', `nelsonlongxiang-dsh-open-a2a-net-${version}-${digest.slice(0, 8)}.tgz`)
+        if (!existsSync(tarball)) writeFileSync(tarball, tgz)
+      }
+      const plan = planDeclaration(profile, as, version, integrityOf(tgz), tarball)
+      if (!plan.ok) return { updated: false, why: plan.why }
+      this.writeProfile({ 'package.json': plan.plan.manifest, 'pnpm-lock.yaml': plan.plan.lock })
+      return { updated: true, spec: plan.plan.spec, lockfile: plan.plan.lock !== undefined ? 'updated' : 'absent' }
+    } catch (error) {
+      return { updated: false, why: String((error as Error).message ?? error) }
+    }
   }
 
   /**
@@ -260,13 +323,20 @@ export class NodeOps {
       const running = readPackage(this.paths.root)
       // Out of the backups directory first, so pruning after the swap can never pick the directory being restored.
       const next = join(this.paths.dir, `restore-${randomUUID()}`)
+      // #936: the target's saved declaration moves out too, so pruning after the swap cannot remove it.
+      const saved = join(this.paths.dir, `restore-declaration-${randomUUID()}`)
+      if (existsSync(join(this.declarations, target.id))) renameSync(join(this.declarations, target.id), saved)
       renameSync(join(this.backups, target.id), next)
       rmSync(join(next, '.node-ops-at'), { force: true })
       try {
         const backup = this.swap(next, running.version)
-        return { ok: true, from: running.version, to: target.version, backup }
+        let declaration: Record<string, unknown>
+        try { this.saveDeclaration(backup); declaration = this.restoreDeclaration(saved) } catch (error) { declaration = { restored: false, why: String((error as Error).message ?? error) } }
+        rmSync(saved, { recursive: true, force: true })
+        return { ok: true, from: running.version, to: target.version, backup, declaration }
       } catch (error) {
         if (existsSync(next)) { writeFileSync(join(next, '.node-ops-at'), `${target.at}\n`, 'utf8'); renameSync(next, join(this.backups, target.id)) }
+        if (existsSync(saved)) { mkdirSync(this.declarations, { recursive: true }); renameSync(saved, join(this.declarations, target.id)) }
         throw error
       }
     })

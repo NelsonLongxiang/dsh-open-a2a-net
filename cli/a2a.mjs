@@ -23,6 +23,7 @@
  * Runs on the SDK subpaths only — no @deepseek-ai/* imports.
  */
 import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign as edSign, createPrivateKey } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -886,13 +887,31 @@ async function cmdUserNode(words) {
     if (arg === undefined) usage('usage: a2a user node install <package.tgz> [--restart] [--force-deps]')
     const tgz = readFileSync(arg)
     const sha256 = createHash('sha256').update(tgz).digest('hex')
-    console.error(`[node] ${homeKey()}: installing ${basename(arg)} sha256 ${sha256} over ${String(before.version)}`)
-    await finish(await userCall('POST', PATH, { action: 'install', sha256, tgz: tgz.toString('base64'), restart: has('--restart'), forceDeps: has('--force-deps') }), before)
+    const declare = npmDeclaration(arg, tgz)
+    console.error(`[node] ${homeKey()}: installing ${basename(arg)} sha256 ${sha256} over ${String(before.version)}; the profile will declare it ${declare === 'npm' ? 'by its npm version' : 'as file: the kept tarball'}`)
+    await finish(await userCall('POST', PATH, { action: 'install', sha256, tgz: tgz.toString('base64'), restart: has('--restart'), forceDeps: has('--force-deps'), declare }), before)
     return
   }
   if (op === 'rollback') { await finish(await userCall('POST', PATH, { action: 'rollback', ...(arg !== undefined ? { id: arg } : {}), restart: has('--restart') }), before); return }
   if (op === 'restart') { await finish(await userCall('POST', PATH, { action: 'restart' }), before); return }
   usage('usage: a2a user node status [--all] · node install <tgz> [--restart] [--force-deps] · node rollback [backup id] [--restart] · node restart')
+}
+
+/**
+ * #936: how the node's profile should declare a tarball being installed: `npm` when it is byte for byte the registry's
+ * own package for its version (same sha512 integrity), else `file`. Any failure on the way (no tar, no network, a version
+ * npm does not have) answers `file`, which always matches what is installed.
+ */
+function npmDeclaration(path, tgz) {
+  try {
+    const manifest = JSON.parse(execFileSync('tar', ['-xzOf', path, 'package/package.json'], { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'ignore'] }))
+    if (manifest.name !== '@nelsonlongxiang/dsh-open-a2a-net' || typeof manifest.version !== 'string' || !/^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/.test(manifest.version)) return 'file'
+    const published = execFileSync('npm', ['view', `${manifest.name}@${manifest.version}`, 'dist.integrity'], { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    return published === `sha512-${createHash('sha512').update(tgz).digest('base64')}` ? 'npm' : 'file'
+  } catch {
+    console.error('[node] could not compare the tarball with the npm registry; the profile will declare it as file:')
+    return 'file'
+  }
 }
 
 // #903 S1: the team builders of a node, read-only — the inventory a builder sees and the builder sessions. --all reads
