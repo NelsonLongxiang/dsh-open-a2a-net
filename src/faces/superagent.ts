@@ -145,6 +145,10 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
               }
               void sa.recoverOutbound(fields.card_id, fields.task_id, fields.action === 'outbound-retry').then(result => send(200, result)).catch(() => send(503, { ok: false, code: 'outbound-unavailable', error: '恢复服务不可用，未确认再次发送；请按原 task 对账。' }))
               return
+            } else if (fields.action === 'cast-withdraw') {
+              // #902 S4: the owner withdraws a card waiting for one of this team's sessions, or an armed release.
+              if (!requireBrowserOwner(req, send)) return
+              send(200, sa.ownerCastQueue({ action: 'withdraw', session_id: typeof fields.session_id === 'string' ? fields.session_id : '', id: typeof fields.id === 'string' ? fields.id : '' }))
             } else if (fields.action === 'request') {
               send(200, sa.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined, fields.via === 'cli' ? 'cli' : undefined))
             } else if (fields.action === 'answer') {
@@ -204,7 +208,7 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
                 : sa.engine.retryTicket(ticketId)
               sa.pass()
               send(200, { ok: true, ticket })
-            } else send(200, { ok: false, error: 'action must be settings, request, answer, serve, move-seat, admit-root, stop, retry, outbound-reconcile, outbound-retry or reevaluate' })
+            } else send(200, { ok: false, error: 'action must be settings, request, answer, serve, move-seat, admit-root, stop, retry, cast-withdraw, outbound-reconcile, outbound-retry or reevaluate' })
           } catch (error) { send(200, { ok: false, error: error instanceof Error ? error.message : String(error) }) }
         }, 64_000)
       }),

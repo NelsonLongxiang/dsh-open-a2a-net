@@ -1310,7 +1310,7 @@ export class SuperagentHost {
     const mode = input.mode === undefined || input.mode === null || input.mode === '' ? 'insert' : String(input.mode)
     if (mode === 'release') return this.armRelease(observer, { target, templateId, reason, basis }, input)
     if (mode !== 'insert' && mode !== 'queue' && mode !== 'trigger') return { ok: false, code: 'mode', error: 'mode is insert, queue, trigger or release' }
-    if (mode === 'trigger' && target === this.settingsValue.router) return { ok: false, code: 'trigger-router', error: 'trigger never wakes the router: cast insert or queue into it' }
+    if (mode === 'trigger' && target === this.settingsValue.router && this.settingsValue.observerTriggerRouter !== true) return { ok: false, code: 'trigger-router', error: 'trigger does not wake the router unless the owner allows it: cast insert or queue into it' }
     // #764 review: per target, at most CAST_PER_HOUR casts an hour and one wake per CAST_WAKE_MS; kept across restarts.
     const now = Date.parse(this.now())
     const limits = this.castLimits()
@@ -1340,6 +1340,20 @@ export class SuperagentHost {
     return { ok: true, mode, queued: out.queued ?? 1, woken: wake, ...(typeof out.id === 'string' ? { id: out.id } : {}), basis }
   }
 
+  /**
+   * #902 S4: the team page's 待投卡 group: the switches, the members the owner turned casting off for, the casts still
+   * waiting and the armed releases (no card text). Never throws: a fault reads as unavailable.
+   */
+  private castsView(): Record<string, unknown> {
+    const s = this.settingsValue
+    const base = { on: s.observerCast === true, draft: s.observerCardDraft === true, triggerRouter: s.observerTriggerRouter === true, off: [...(s.castOff ?? [])] }
+    try {
+      const out = this.ownerCastQueue({ state: 'waiting' })
+      if (out.ok !== true || out.available === false) return { ...base, available: false }
+      return { ...base, available: true, waiting: out.items, releases: (out.releases as CardRelease[]).filter(r => r.state === 'armed') }
+    } catch { return { ...base, available: false } }
+  }
+
   /** Who may cast what into whom (shared by casting now and arming a release). */
   private castCheck(observer: string, input: { session_id?: unknown; template_id?: unknown; reason?: unknown; basis?: unknown }): { refusal: Record<string, unknown> } | { target: string; templateId: string; reason: string; basis: string; draft: ObserverCard | undefined } {
     const no = (code: string, error: string) => ({ refusal: { ok: false, code, error } })
@@ -1348,6 +1362,8 @@ export class SuperagentHost {
     const target = String(input.session_id ?? '').trim()
     const team = new Set([this.settings.router, ...this.settings.members].filter((id): id is string => typeof id === 'string'))
     if (target === '' || !team.has(target) || target === observer) return no('not-in-team', 'cast only into another session of this team')
+    // #902 S4: the owner turned casting off for this member.
+    if (this.settingsValue.castOff?.includes(target) === true) return no('member-off', 'the owner turned casting off for that member')
     const templateId = String(input.template_id ?? '').trim()
     const reason = String(input.reason ?? '')
     if (templateId === '') return no('template', 'name the card (template_id from a2a_ticket_read kind library or templates)')
@@ -1371,7 +1387,7 @@ export class SuperagentHost {
     const now = Date.parse(this.now())
     const then = input.then === undefined || input.then === null || input.then === '' ? 'insert' : String(input.then)
     if (then !== 'insert' && then !== 'queue' && then !== 'trigger') return no('then', 'then is insert, queue or trigger: how the card goes in once released')
-    if (then === 'trigger' && cast.target === this.settingsValue.router) return no('trigger-router', 'trigger never wakes the router')
+    if (then === 'trigger' && cast.target === this.settingsValue.router && this.settingsValue.observerTriggerRouter !== true) return no('trigger-router', 'trigger does not wake the router unless the owner allows it')
     const hours = input.expires_hours === undefined || input.expires_hours === null || input.expires_hours === '' ? RELEASE_HOURS : Number(input.expires_hours)
     if (!Number.isFinite(hours) || hours <= 0 || hours > RELEASE_HOURS_MAX) return no('expires', `expires_hours is 1..${String(RELEASE_HOURS_MAX)} (default ${String(RELEASE_HOURS)})`)
     const expiresAt = now + hours * 3_600_000
@@ -1548,6 +1564,14 @@ export class SuperagentHost {
    */
   cardQueue(observer: string, input: { action?: unknown; session_id?: unknown; id?: unknown; state?: unknown }): Record<string, unknown> {
     if (!this.isObserver(observer)) return { ok: false, code: 'not-observer', error: 'a2a_card_queue serves only the team\'s observer' }
+    return this.ownerCastQueue(input)
+  }
+
+  /**
+   * #902 S4: the same list and withdraw for the owner's team page (the face checks the owner's browser proof): what waits
+   * in the plugin's queue for this team's sessions, and this team's releases.
+   */
+  ownerCastQueue(input: { action?: unknown; session_id?: unknown; id?: unknown; state?: unknown }): Record<string, unknown> {
     const team = new Set([this.settings.router, ...this.settings.members].filter((id): id is string => typeof id === 'string'))
     const session = String(input.session_id ?? '').trim()
     if (session !== '' && !team.has(session)) return { ok: false, code: 'not-in-team', error: 'that session is not on this team' }
@@ -2651,6 +2675,7 @@ export class SuperagentHost {
       credentialAudit: [...this.credentialHits],
       mcp: { servers: this.mcp.status(), calls: this.mcp.calls().slice(-50) },
       settingsHistory: this.settingsHistory.list(),
+      casts: this.castsView(),
       modelResults: Object.fromEntries(this.modelResults),
       ...(this.prs.problem !== undefined ? { pullRequestProblem: this.prs.problem } : {}),
       ...(this.issues.problem !== undefined ? { githubIssuesProblem: this.issues.problem } : {}),

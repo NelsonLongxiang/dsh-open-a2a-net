@@ -110,6 +110,8 @@ export interface SaState {
   readonly outbound?: ReadonlyArray<Omit<RecoveryOutbound, 'task'> & { task?: string; error?: string; approval?: unknown; attempts?: ReadonlyArray<{ task: string; delivery: string; error?: string }> }>
   /** v5 acceptance F4: why a session this host serves another team with cannot take work (wrong preset). */
   readonly servesProblem?: string
+  /** #902 S4: the observer's casts — the switches, members turned off, what waits and the armed releases (no card text). */
+  readonly casts?: SaCasts
   readonly canvases?: readonly string[]
   readonly a2a: { enabled: boolean; address: string | null; health: Record<string, { state: string; detail?: string }> }
   readonly executor: { bindings: ReadonlyArray<{ member: string; ticketId: string; at: string }> }
@@ -118,6 +120,25 @@ export interface SaState {
   /** The team's recent settings saves (the 设置 view shows them): who, when, which fields changed. */
   readonly settingsHistory?: ReadonlyArray<{ id: string; at: string; by: string; changes: ReadonlyArray<{ field: string; from: string; to: string }> }>
 }
+/** #902 S4: the 待投卡 group's data. */
+export interface SaCasts {
+  readonly on: boolean; readonly draft: boolean; readonly triggerRouter: boolean; readonly off: readonly string[]
+  readonly available?: boolean
+  readonly waiting?: ReadonlyArray<{ id: string; session_id: string; name?: string; reason?: string; basis?: string | null; at?: string; mode?: string }>
+  readonly releases?: ReadonlyArray<{ id: string; session_id: string; template_id: string; reason?: string; basis?: string; when: string; then: string; expiresAt: string }>
+}
+
+const CAST_MODE: Readonly<Record<string, string>> = { insert: '插入（下一步）', queue: '排队（下一轮开头）', trigger: '触发（空闲时立即开一轮）' }
+
+/** #902 S4: a release condition in the owner's words. */
+export function releaseWhenText(when: string, ticketTitle: (id: string) => string = id => id.slice(0, 8)): string {
+  if (when.startsWith('idle:')) return `空闲满 ${when.slice(5)} 分钟`
+  if (when.startsWith('at:')) return `到 ${new Date(when.slice(3)).toLocaleString()}`
+  const m = /^ticket:(\S+) (\S+)$/.exec(when)
+  if (m !== null) return `工单「${ticketTitle(m[1]!)}」进入 ${m[2]!}`
+  return when
+}
+
 /** A local session the pickers offer (the workbench's /state rows). */
 export interface SaSession { readonly id: string; readonly name?: string; readonly joined?: boolean }
 
@@ -673,6 +694,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     const members = s.members.map(m => { const c = el('div', 'wb-led-card'); kv(c, s.observers?.includes(m) === true ? '观察者' : '成员', sessionName(m)); profile(m, c); repo(m, c); kv(c, '槽位', slot(m)); return c })
     const remote = s.remoteMembers.map(r => { const c = el('div', 'wb-led-card'); kv(c, '远端成员', r.ref); profile(r.ref, c); repo(r.ref, c); kv(c, '主机', r.url); kv(c, '钉住公钥', fingerprint(r.key)); kv(c, '槽位', slot(r.ref)); return c })
     body.appendChild(group('成员池', '', [...members, ...remote], '没有成员'))
+    if (state.casts !== undefined) body.appendChild(castsGroup(state, state.casts))
     const teamRules = el('div', 'wb-led-card')
     for (const rule of s.rules ?? []) kv(teamRules, `规则 ${rule.name}${rule.enabled ? '' : '（停用）'}`, rule.text)
     change('team', teamRules)
@@ -691,6 +713,74 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       kv(c, '本机成员', s.serves.members.map(sessionName).join('、') || '无')
       body.appendChild(group('本机为别的团队干活', '', [c]))
     }
+  }
+
+  /**
+   * #902 S4: 待投卡 — the observer's casts as the owner sees them: three switches, each member's casting on or off, the
+   * cards still waiting and the armed releases, each with 撤回. Every change here needs the owner's login (rule fields).
+   */
+  function castsGroup(state: SaState, c: SaCasts): HTMLElement {
+    const s = state.settings
+    const save = (settings: Json, okText: string): void => { void send({ action: 'settings', settings }, undefined, okText) }
+    const head = el('div', 'wb-led-card wb-sa-casts')
+    const toggle = (label: string, on: boolean, field: string): void => {
+      const row = el('label', 'wb-sa-check')
+      const box = el('input', '')
+      box.type = 'checkbox'
+      box.checked = on
+      box.addEventListener('change', () => { save({ [field]: box.checked }, `${label}：${box.checked ? '已打开' : '已关闭'}`) })
+      row.append(box, document.createTextNode(` ${label}`))
+      head.appendChild(row)
+    }
+    toggle('允许观察者投卡', c.on, 'observerCast')
+    toggle('允许观察者写定制卡', c.draft, 'observerCardDraft')
+    toggle('允许观察者「触发」总工', c.triggerRouter, 'observerTriggerRouter')
+    const targets = [s.router, ...s.members].filter((id): id is string => typeof id === 'string' && s.observers?.includes(id) !== true)
+    for (const id of targets) {
+      const row = el('div', 'wb-sa-cast-member')
+      const off = c.off.includes(id)
+      row.appendChild(el('span', '', `${sessionName(id)}${id === s.router ? '（总工）' : ''}：${off ? '已停用投卡' : '可投卡'}`))
+      const button = el('button', 'wb-btn', off ? '恢复投卡' : '停用投卡')
+      button.type = 'button'
+      button.addEventListener('click', () => { save({ castOff: off ? c.off.filter(x => x !== id) : [...c.off, id] }, `${sessionName(id)}：${off ? '已恢复投卡' : '已停用投卡'}`) })
+      row.appendChild(button)
+      head.appendChild(row)
+    }
+    head.appendChild(el('div', 'wb-sa-hint', '观察者按业务场景给本队会话投工坊卡或模板卡；卡只是提示，不是指令，也不授予权限。这里的开关和停用需要在已登录的界面里改。'))
+    const cards: HTMLElement[] = [head]
+    if (c.available === false) cards.push(el('div', 'wb-sa-hint', '这台主机的提示词模板插件还不支持投卡队列，看不到排着的卡。'))
+    const withdraw = (card: HTMLElement, session: string, id: string): void => {
+      const button = el('button', 'wb-btn', '撤回')
+      button.type = 'button'
+      button.addEventListener('click', () => { void send({ action: 'cast-withdraw', session_id: session, id }, undefined, '已撤回') })
+      card.appendChild(button)
+    }
+    for (const w of c.waiting ?? []) {
+      const card = el('div', 'wb-led-card')
+      kv(card, '排给', sessionName(w.session_id))
+      kv(card, '卡', w.name ?? w.id)
+      kv(card, '方式', CAST_MODE[w.mode ?? 'insert'] ?? String(w.mode))
+      if (w.reason !== undefined && w.reason !== '') kv(card, '原因', w.reason)
+      if (typeof w.basis === 'string') kv(card, '依据', w.basis)
+      if (w.at !== undefined) kv(card, '投于', ago(w.at, now))
+      withdraw(card, w.session_id, w.id)
+      cards.push(card)
+    }
+    const title = (id: string): string => state.tickets.find(t => t.id === id)?.title ?? id.slice(0, 8)
+    for (const r of c.releases ?? []) {
+      const card = el('div', 'wb-led-card')
+      kv(card, '挂给', sessionName(r.session_id))
+      kv(card, '卡', r.template_id)
+      kv(card, '条件', releaseWhenText(r.when, title))
+      kv(card, '放出方式', CAST_MODE[r.then] ?? r.then)
+      if (r.reason !== undefined && r.reason !== '') kv(card, '原因', r.reason)
+      if (r.basis !== undefined) kv(card, '依据', r.basis)
+      kv(card, '过期', new Date(r.expiresAt).toLocaleString())
+      withdraw(card, r.session_id, r.id)
+      cards.push(card)
+    }
+    if (cards.length === 1 && c.available !== false) cards.push(el('div', 'wb-sa-hint', '没有排着或挂着的卡'))
+    return group('待投卡', '', cards)
   }
 
   function renderSettings(state: SaState): void {
