@@ -81,10 +81,16 @@
             config:
               serverName: ygl
               transport: stdio
-              command: cmd
-              args: ['/d', '/s', '/c', 'set "YGL_SESSION=superagent-%RANDOM%%RANDOM%" && ygl-trees mcp']
+              # #900: this node runs the ygl-trees entry script, so no `cmd` and no `.cmd` shim sit in between and no console window
+              # opens. The script is found here, when the row loads (team sessions wake before the host could set anything):
+              # SUPERAGENT_YGL_BIN if set, else beside a ygl-trees.cmd on PATH, beside this node, or in %APPDATA%\npm (the `bin`
+              # of ygl-trees' package.json). Found nowhere: the shell route as before.
+              command: !!js '(process.env.SUPERAGENT_YGL_BIN || ((e, fs, p) => [...(e.PATH || e.Path || "").split(p.delimiter).filter(d => d && fs.existsSync(p.join(d, "ygl-trees.cmd"))), p.dirname(process.execPath), ...(e.APPDATA ? [p.join(e.APPDATA, "npm")] : [])].map(d => p.join(d, "node_modules", "ygl-trees")).map(d => { try { const b = JSON.parse(fs.readFileSync(p.join(d, "package.json"), "utf8")).bin; const r = typeof b === "string" ? b : b && b["ygl-trees"]; return typeof r === "string" && fs.existsSync(p.join(d, r)) ? p.resolve(d, r) : "" } catch { return "" } }).find(Boolean))(process.env, process.getBuiltinModule("node:fs"), process.getBuiltinModule("node:path"))) ? process.execPath : "cmd"'
+              args: !!js '(b => b ? [b, "mcp"] : ["/d", "/s", "/c", `set "YGL_SESSION=superagent-%RANDOM%%RANDOM%" && ygl-trees mcp`])((process.env.SUPERAGENT_YGL_BIN || ((e, fs, p) => [...(e.PATH || e.Path || "").split(p.delimiter).filter(d => d && fs.existsSync(p.join(d, "ygl-trees.cmd"))), p.dirname(process.execPath), ...(e.APPDATA ? [p.join(e.APPDATA, "npm")] : [])].map(d => p.join(d, "node_modules", "ygl-trees")).map(d => { try { const b = JSON.parse(fs.readFileSync(p.join(d, "package.json"), "utf8")).bin; const r = typeof b === "string" ? b : b && b["ygl-trees"]; return typeof r === "string" && fs.existsSync(p.join(d, r)) ? p.resolve(d, r) : "" } catch { return "" } }).find(Boolean))(process.env, process.getBuiltinModule("node:fs"), process.getBuiltinModule("node:path"))))'
               env:
                 YGL_HOME: !!js process.env.SUPERAGENT_YGL_HOME ?? `${process.env.HOME ?? process.env.USERPROFILE}/.ygl-trees-superagent`
+                YGL_SESSION: !!js '`superagent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`'
+                ELECTRON_RUN_AS_NODE: '1'
           - id: compaction
             name: cordis:group
             group: true
@@ -192,10 +198,16 @@
             config:
               serverName: ygl
               transport: stdio
-              command: cmd
-              args: ['/d', '/s', '/c', 'set "YGL_SESSION=superagent-%RANDOM%%RANDOM%" && ygl-trees mcp']
+              # #900: this node runs the ygl-trees entry script, so no `cmd` and no `.cmd` shim sit in between and no console window
+              # opens. The script is found here, when the row loads (team sessions wake before the host could set anything):
+              # SUPERAGENT_YGL_BIN if set, else beside a ygl-trees.cmd on PATH, beside this node, or in %APPDATA%\npm (the `bin`
+              # of ygl-trees' package.json). Found nowhere: the shell route as before.
+              command: !!js '(process.env.SUPERAGENT_YGL_BIN || ((e, fs, p) => [...(e.PATH || e.Path || "").split(p.delimiter).filter(d => d && fs.existsSync(p.join(d, "ygl-trees.cmd"))), p.dirname(process.execPath), ...(e.APPDATA ? [p.join(e.APPDATA, "npm")] : [])].map(d => p.join(d, "node_modules", "ygl-trees")).map(d => { try { const b = JSON.parse(fs.readFileSync(p.join(d, "package.json"), "utf8")).bin; const r = typeof b === "string" ? b : b && b["ygl-trees"]; return typeof r === "string" && fs.existsSync(p.join(d, r)) ? p.resolve(d, r) : "" } catch { return "" } }).find(Boolean))(process.env, process.getBuiltinModule("node:fs"), process.getBuiltinModule("node:path"))) ? process.execPath : "cmd"'
+              args: !!js '(b => b ? [b, "mcp"] : ["/d", "/s", "/c", `set "YGL_SESSION=superagent-%RANDOM%%RANDOM%" && ygl-trees mcp`])((process.env.SUPERAGENT_YGL_BIN || ((e, fs, p) => [...(e.PATH || e.Path || "").split(p.delimiter).filter(d => d && fs.existsSync(p.join(d, "ygl-trees.cmd"))), p.dirname(process.execPath), ...(e.APPDATA ? [p.join(e.APPDATA, "npm")] : [])].map(d => p.join(d, "node_modules", "ygl-trees")).map(d => { try { const b = JSON.parse(fs.readFileSync(p.join(d, "package.json"), "utf8")).bin; const r = typeof b === "string" ? b : b && b["ygl-trees"]; return typeof r === "string" && fs.existsSync(p.join(d, r)) ? p.resolve(d, r) : "" } catch { return "" } }).find(Boolean))(process.env, process.getBuiltinModule("node:fs"), process.getBuiltinModule("node:path"))))'
               env:
                 YGL_HOME: !!js process.env.SUPERAGENT_YGL_HOME ?? `${process.env.HOME ?? process.env.USERPROFILE}/.ygl-trees-superagent`
+                YGL_SESSION: !!js '`superagent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`'
+                ELECTRON_RUN_AS_NODE: '1'
           - id: compaction
             name: cordis:group
             group: true
@@ -319,10 +331,16 @@
             config:
               serverName: ygl
               transport: stdio
-              command: cmd
-              args: ['/d', '/s', '/c', 'set "YGL_SESSION=superagent-%RANDOM%%RANDOM%" && ygl-trees mcp']
+              # #900: this node runs the ygl-trees entry script, so no `cmd` and no `.cmd` shim sit in between and no console window
+              # opens. The script is found here, when the row loads (team sessions wake before the host could set anything):
+              # SUPERAGENT_YGL_BIN if set, else beside a ygl-trees.cmd on PATH, beside this node, or in %APPDATA%\npm (the `bin`
+              # of ygl-trees' package.json). Found nowhere: the shell route as before.
+              command: !!js '(process.env.SUPERAGENT_YGL_BIN || ((e, fs, p) => [...(e.PATH || e.Path || "").split(p.delimiter).filter(d => d && fs.existsSync(p.join(d, "ygl-trees.cmd"))), p.dirname(process.execPath), ...(e.APPDATA ? [p.join(e.APPDATA, "npm")] : [])].map(d => p.join(d, "node_modules", "ygl-trees")).map(d => { try { const b = JSON.parse(fs.readFileSync(p.join(d, "package.json"), "utf8")).bin; const r = typeof b === "string" ? b : b && b["ygl-trees"]; return typeof r === "string" && fs.existsSync(p.join(d, r)) ? p.resolve(d, r) : "" } catch { return "" } }).find(Boolean))(process.env, process.getBuiltinModule("node:fs"), process.getBuiltinModule("node:path"))) ? process.execPath : "cmd"'
+              args: !!js '(b => b ? [b, "mcp"] : ["/d", "/s", "/c", `set "YGL_SESSION=superagent-%RANDOM%%RANDOM%" && ygl-trees mcp`])((process.env.SUPERAGENT_YGL_BIN || ((e, fs, p) => [...(e.PATH || e.Path || "").split(p.delimiter).filter(d => d && fs.existsSync(p.join(d, "ygl-trees.cmd"))), p.dirname(process.execPath), ...(e.APPDATA ? [p.join(e.APPDATA, "npm")] : [])].map(d => p.join(d, "node_modules", "ygl-trees")).map(d => { try { const b = JSON.parse(fs.readFileSync(p.join(d, "package.json"), "utf8")).bin; const r = typeof b === "string" ? b : b && b["ygl-trees"]; return typeof r === "string" && fs.existsSync(p.join(d, r)) ? p.resolve(d, r) : "" } catch { return "" } }).find(Boolean))(process.env, process.getBuiltinModule("node:fs"), process.getBuiltinModule("node:path"))))'
               env:
                 YGL_HOME: !!js process.env.SUPERAGENT_YGL_HOME ?? `${process.env.HOME ?? process.env.USERPROFILE}/.ygl-trees-superagent`
+                YGL_SESSION: !!js '`superagent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`'
+                ELECTRON_RUN_AS_NODE: '1'
           - id: compaction
             name: cordis:group
             group: true

@@ -152,6 +152,13 @@ describe('#83 the builder preset carries the skill tool, and still no way to act
   it('the router, member and observer presets are not touched by this change', () => {
     const shipped = JSON.parse(readFileSync(new URL('./__fixtures__/issue-83-presets-at-810dab3c.json', import.meta.url), 'utf8')) as Record<string, string>
     // SHA-256 of each block at next/0.8 810dab3c: the fixture holds no preset text (the push gate's privacy scan reads fixtures too).
-    for (const id of ['superagent-router', 'superagent-member', 'superagent-observer']) expect(createHash('sha256').update(block(id)).digest('hex'), id).toBe(shipped[id])
+    // #900 later changed only the Windows ygl MCP row of these three presets; put that row back as it was at 810dab3c, so the
+    // check still proves #83 left them alone and that nothing else moved since.
+    const before900 = (text: string): string => text
+      .replace(/ {14}# #900: this node runs the ygl-trees entry script[^\n]*\n( {14}# [^\n]*\n){3}/g, '')
+      .replace(/ {14}command: !!js '\(process\.env\.SUPERAGENT_YGL_BIN[^\n]*\n/g, '              command: cmd\n')
+      .replace(/ {14}args: !!js '\(b => b \? \[b, "mcp"\] : \[[^\n]*\n/g, "              args: ['/d', '/s', '/c', 'set \"YGL_SESSION=superagent-%RANDOM%%RANDOM%\" && ygl-trees mcp']\n")
+      .replace(/ {16}YGL_SESSION: !!js '`superagent-\$\{Date\.now\(\)\.toString\(36\)\}-\$\{Math\.random\(\)\.toString\(36\)\.slice\(2, 8\)\}`'\n {16}ELECTRON_RUN_AS_NODE: '1'\n/g, '')
+    for (const id of ['superagent-router', 'superagent-member', 'superagent-observer']) expect(createHash('sha256').update(before900(block(id))).digest('hex'), id).toBe(shipped[id])
   })
 })

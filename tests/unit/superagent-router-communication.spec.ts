@@ -31,10 +31,11 @@ it('ships generated inline router text without changing preset ids or compositio
   expect(presets.map(row => row.config!.id)).toEqual(['superagent-router', 'superagent-member', 'superagent-observer', 'superagent-builder'])
   expect(prompt).toBe(presetPrompt('router'))
   const expectedComposition = {
-    'superagent-router': '0b7ca64fa013e3e8295f5bb7c963d25b757e7a3abbff26828dd679f0cde1d814',
+    // #900: the Windows ygl MCP row runs this node on the resolved entry script (router, member, observer).
+    'superagent-router': 'f12ec5d5dc39720854535dce63a9ea7906bfddf93500c4af4f3bc525e637fcb0',
     // Owner 2026-11-19: members and observers gain the PTC executor (code mode by default); router and builder unchanged.
-    'superagent-member': '37e7d7d7e52ce01c9c79c32f2c330515c29054f2b582a97ac67350a9f8f9577a',
-    'superagent-observer': '37e7d7d7e52ce01c9c79c32f2c330515c29054f2b582a97ac67350a9f8f9577a',
+    'superagent-member': 'cf8a0b18e2dc9ff834a8b0b3e5de626684f01255414d25660aa2276876e4a884',
+    'superagent-observer': 'cf8a0b18e2dc9ff834a8b0b3e5de626684f01255414d25660aa2276876e4a884',
     // #83: the builder gains the read-only search and skill rows, so its composition digest moves with them.
     'superagent-builder': '4e36bbf212a2b60b8f677618d92f2b3450d48a6e61f328d3d2d25d6f1c961775',
   }
