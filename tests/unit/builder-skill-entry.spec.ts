@@ -151,7 +151,7 @@ describe('#83 the builder preset carries the skill tool, and still no way to act
 
   it('the router, member and observer presets are not touched by this change', () => {
     const shipped = JSON.parse(readFileSync(new URL('./__fixtures__/issue-83-presets-untouched.json', import.meta.url), 'utf8')) as Record<string, string>
-    // SHA-256 of each block as shipped (re-taken when the ygl-trees single tool changed the three role prompts, again after merging #900's Windows ygl row, and for the observer after #902 S1's and S2's card lines): the fixture holds no preset text (the push gate's privacy scan reads fixtures too).
+    // SHA-256 of each block as shipped (re-taken when the ygl-trees single tool changed the three role prompts, again after merging #900's Windows ygl row, for the observer after #902 S1's and S2's card lines, and for all three after the 2026-11-25 forward-persona rewrite): the fixture holds no preset text (the push gate's privacy scan reads fixtures too).
     for (const id of ['superagent-router', 'superagent-member', 'superagent-observer']) expect(createHash('sha256').update(block(id)).digest('hex'), id).toBe(shipped[id])
   })
 })
