@@ -2244,6 +2244,11 @@ export function apply(ctx: Context, config: Config): void {
       const svc = ctx.get('promptTemplates' as never) as { cast?: (i: typeof input) => { ok: boolean; code?: string; error?: string; queued?: number; id?: string } } | undefined
       return typeof svc?.cast === 'function' ? svc.cast(input) : undefined
     },
+    // #902 S2: the same plugin's author-session cards (write and delete), only when the service has them.
+    cardDrafts: () => {
+      const svc = ctx.get('promptTemplates' as never) as { draftCard?: (i: object) => { ok: boolean }; draftDelete?: (i: object) => { ok: boolean } } | undefined
+      return typeof svc?.draftCard === 'function' && typeof svc.draftDelete === 'function' ? { draft: i => svc.draftCard!(i), remove: i => svc.draftDelete!(i) } : undefined
+    },
     // #902 S1: the durable cast queue of the same plugin (0.23.1+): list and withdraw, only when the service has them.
     castQueue: () => {
       const svc = ctx.get('promptTemplates' as never) as { castQueue?: (f: object) => { ok: boolean; items?: unknown[] }; castWithdraw?: (i: object) => { ok: boolean; withdrawn?: boolean } } | undefined

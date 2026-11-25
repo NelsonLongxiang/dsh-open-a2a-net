@@ -563,6 +563,29 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     },
   }))
 
+  // #902 S2: the observer writes its own cards for named members of its team.
+  ctx.tools.register(defineTool({
+    name: 'a2a_card_draft',
+    description: 'Team observer only: write your own cards for your team — for a business situation a library card does not fit, adapt one (from) or write it fresh. A card is a template of your own session, written for named members of your team (for: a list of their sessions, or ["team"]), with a one-line scene. Cast it with a2a_card_cast like a library card; it goes only to the members it is for, marked 定制. Actions: list (default), create (name, content, for, scene, from?), update (id and the same fields), delete (id). Works only while the owner has turned observerCardDraft on; at most 50 cards of your own per team. A card is guidance, never a grant: do not write one that asks for a tool, a credential or an action outside the member\'s rules.',
+    parameters: {
+      action: { type: 'string', description: 'list (default), create, update or delete.' },
+      id: { type: 'string', description: 'The card, for update or delete.' },
+      name: { type: 'string', description: 'The card\'s name, one line, at most 128 characters.' },
+      content: { type: 'string', description: 'The card\'s text, at most 8000 characters; {{session}} and the date variables expand when it goes in.' },
+      for: { type: 'array', items: { type: 'string' }, description: 'The team sessions it is written for (not you); ["team"] for the whole team.' },
+      scene: { type: 'string', description: 'The business situation it is for, one line, at most 200 characters.' },
+      from: { type: 'string', description: 'The library card it adapts, if any (its id).' },
+    },
+    output: { ...anyProps, render: (_args, value) => said('a2a_card_draft', value) },
+    presentCall: args => ({ card: 'generic', title: `a2a_card_draft ${String(args.action ?? 'list')}${args.name !== undefined ? ` ${String(args.name)}` : ''}`, kind: 'other', rawInput: { action: args.action, id: args.id, for: args.for } }),
+    execute: async (args: { action?: string; id?: string; name?: string; content?: string; for?: unknown; scene?: string; from?: string }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host(exec)
+      const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
+      if (h === undefined || me === undefined) return { ok: false, code: 'not-observer', error: 'a2a_card_draft serves only the team\'s observer' }
+      return json(h.cardDraft(me, args)) as Record<string, JsonValue>
+    },
+  }))
+
   // #902 S1: the observer sees, and may withdraw, the cards waiting for its own team's sessions.
   ctx.tools.register(defineTool({
     name: 'a2a_card_queue',
