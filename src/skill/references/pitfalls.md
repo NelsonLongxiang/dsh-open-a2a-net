@@ -12,6 +12,7 @@
 ## Files
 
 - **Files do not go through session messages.** Use `a2a_file_send { paths, team }` (up to 16 files, 64 MiB each), then `a2a_file_fetch { ref }` on the received `[A2A file] v1 …` reference. CLI: `a2a-net file send <path…> <team>` and `a2a-net file fetch "<reference line>"`. Do not base64/chunk files into JPFILE-PART messages. Every JPFILE-PART message is refused with `-32008` / `file-channel-required` and `advice.reason: use-file-channel`; switch to the file channel, do not resend parts.
+- **A member seat cannot be direct-messaged a file.** A send whose target IS a member session is refused `[superagent-member-inbound]` (members take work only as assignments). Grant without notifying instead: `a2a_file_send { paths, team, grant_only: true }` stages the grants and sends nothing; hand the returned reference lines to the member through an admitted channel, never by re-targeting the member.
 
 ## Routing
 
