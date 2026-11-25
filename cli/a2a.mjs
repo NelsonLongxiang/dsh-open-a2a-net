@@ -897,16 +897,41 @@ async function cmdUserNode(words) {
 
 // #903 S1: the team builders of a node, read-only — the inventory a builder sees and the builder sessions. --all reads
 // every home that has a saved owner delegate; a home that cannot answer is named with why, never left out.
+/**
+ * #906 review B1: one node's read for a multi-node command. Never exits the process: a refusal (401 included), a node
+ * with no saved delegate, a network failure or a body that is not JSON each become `{ ok: false, home, code, error }`,
+ * so the remaining nodes are still read.
+ */
+async function userReadNode(path, base) {
+  const saved = readDelegates().homes[base]
+  if (saved === undefined || typeof saved.token !== 'string') return { ok: false, home: base, code: 'no-delegate', error: `no owner delegate saved for ${base}` }
+  let res
+  try {
+    const key = typeof saved.key === 'string' && flag('--key') === undefined && envValue('A2A_KEY') === undefined ? { 'X-API-Key': saved.key } : {}
+    res = await homeFetch(`${base}${path}`, { method: 'GET', headers: { ...keyHeaders(), ...key, 'X-DSH-Owner-Delegate': saved.token } })
+  } catch (error) { return { ok: false, home: base, code: 'unreachable', error: `unreachable: ${String(error?.message ?? error)}` } }
+  let out
+  try { out = await res.json() } catch { return { ok: false, home: base, code: 'bad-reply', status: res.status, error: `HTTP ${String(res.status)}: not a JSON reply` } }
+  if (res.status === 401) return { ok: false, home: base, code: 'unauthorized', status: 401, error: String(out?.error ?? 'the node refused the delegate (401): issue or import a fresh one') }
+  if (res.status >= 400 || out?.ok !== true) return { ok: false, home: base, code: String(out?.code ?? `http-${String(res.status)}`), status: res.status, error: String(out?.error ?? `HTTP ${String(res.status)}`) }
+  return { home: base, ...out, ok: true }
+}
+
 async function cmdUserBuilder(words) {
   const [op] = words
   const PATH = '/__dsh_a2a/superagent/builder'
   if (op !== 'inventory' && op !== 'list') usage('usage: a2a user builder inventory [--all] · user builder list [--all]   (read-only, #903 S1)')
   const bases = has('--all') ? Object.keys(readDelegates().homes) : [homeKey()]
-  for (const base of bases) {
-    let out
-    try { out = await userCall('GET', `${PATH}?view=${op === 'inventory' ? 'inventory' : 'builders'}`, undefined, base) } catch (error) { out = { ok: false, error: `unreachable: ${String(error?.message ?? error)}` } }
-    if (has('--json')) { console.log(JSON.stringify({ home: base, ...out })); continue }
-    if (out.ok !== true) { console.log(`${base}  ${String(out.error ?? out.code ?? 'no builder route (older plugin)')}`); continue }
+  if (bases.length === 0) die('[user] no owner delegate saved for any node')
+  // #906 review B1: every node is read and reported; the exit code is 0 only when every node answered, 1 otherwise.
+  const results = []
+  for (const base of bases) results.push(await userReadNode(`${PATH}?view=${op === 'inventory' ? 'inventory' : 'builders'}`, base))
+  const failed = results.filter(r => r.ok !== true).length
+  if (failed > 0) process.exitCode = 1
+  if (has('--json')) { console.log(JSON.stringify({ ok: failed === 0, nodes: results.length, failed, results })); return }
+  for (const out of results) {
+    const base = out.home
+    if (out.ok !== true) { console.log(`${base}  FAILED ${String(out.code)}: ${String(out.error)}`); continue }
     if (op === 'list') {
       const rows = out.builders ?? []
       if (rows.length === 0) console.log(`${base}  no team builder session`)

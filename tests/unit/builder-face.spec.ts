@@ -69,8 +69,7 @@ describe('/__dsh_a2a/superagent/builder', () => {
       ctx: { effect: (fn: () => unknown) => fn(), get: () => ({ browserPeer: { id: 'owner' }, admit: () => ({ rejection: 401 }) }) } as never,
       controlRoute: fn => fn,
       inventory,
-      sessions: () => [{ id: 'r1', live: true, joined: true }, { id: 'm1', live: true, joined: true }, { id: 'b1', live: true, joined: false }],
-      isBuilder: s => s === 'b1',
+      roster: () => [{ id: 'b1', live: true, joined: false }],
     })
   })
   afterEach(() => { configureOwnerDelegates(undefined); rmSync(dir, { recursive: true, force: true }) })
