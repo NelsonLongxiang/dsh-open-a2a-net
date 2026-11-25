@@ -92,7 +92,11 @@ describe('#923 long options', () => {
 
 describe('#935 review B1: a decided option that holds line breaks', () => {
   it('reads the whole option from the decision, longest first, old one-line decisions as before', () => {
-    expect(decidedOption('决定：甲\n乙', ['甲', '甲\n乙'])).toBe('甲\n乙')
+    // #935 re-review: an older record whose text two options fit is not guessed at (the host now records the position).
+    expect(decidedOption('决定：甲\n乙', ['甲', '甲\n乙'])).toBe('')
+    expect(decidedOption('决定：甲\n乙', ['甲\n乙', '丙'])).toBe('甲\n乙')
+    // Words only begin with 说明：; a mention of 决定： inside them names nothing.
+    expect(decidedOption('说明：我想了想，决定：甲', ['甲', '乙'])).toBe('')
     expect(decidedOption('决定：甲\n说明：想清楚了', ['甲', '甲\n乙'])).toBe('甲')
     expect(decidedOption('决定：乙', ['甲', '乙'])).toBe('乙')
     expect(decidedOption('说明：都不要', ['甲', '乙'])).toBe('')
@@ -107,6 +111,38 @@ describe('#935 review B1: a decided option that holds line breaks', () => {
     const sent = body('created').options[0]
     expect(sent.length).toBeLessThanOrEqual(PUSH_OPTION_MAX)
     expect(body('decided').decided_option).toBe(sent)
+    await m.h.stop()
+  })
+})
+
+describe('#935 re-review: the decided option is the one chosen, recorded by position', () => {
+  const body = (stored: unknown, event: 'created' | 'decided') => JSON.parse((decisionCardText(event, 1, 't', stored as never) as { text: string }).text.split('\n').slice(1).join('\n')).card
+  it('B1: a short option chosen with a note that reads like a longer option stays the short one', async () => {
+    const m = await team()
+    const raised = m.h.proposeDecision('router', 'session-r', '选哪个？', { level: 'P1', options: ['甲', '甲\n说明：看过了'], recommended: '甲' }) as { id: string }
+    expect(m.h.decide(raised.id, 'choose', 'o1', '看过了')).toMatchObject({ ok: true })
+    const stored = m.h.decisions.get(raised.id)!
+    expect(stored.decided).toMatchObject({ text: '决定：甲\n说明：看过了', option: 0 })
+    expect(body(stored, 'decided').decided_option).toBe('甲')
+    await m.h.stop()
+  })
+  it('B2: a decision in words that mentions 决定： chooses nothing', async () => {
+    const m = await team()
+    const raised = m.h.proposeDecision('router', 'session-r', '选哪个？', { level: 'P1', options: ['甲', '乙'], recommended: '甲' }) as { id: string }
+    expect(m.h.decide(raised.id, 'choose', undefined, '我想了想，决定：甲，但先别动')).toMatchObject({ ok: true })
+    const stored = m.h.decisions.get(raised.id)!
+    expect(stored.decided!.option).toBeUndefined()
+    expect(body(stored, 'decided').decided_option).toBeNull()
+    await m.h.stop()
+  })
+  it('the host taking the recommendation records its position too', async () => {
+    const m = await team()
+    const raised = m.h.proposeDecision('router', 'session-r', '选哪个？', { level: 'P3', options: ['甲', '乙'], recommended: '乙' }) as { id: string }
+    expect(m.h.decisions.autoApproveRecord(raised.id, new Date().toISOString(), 5, 'delivery-1')).toBe(true)
+    expect(m.h.decisions.autoApproveDecide(raised.id)).toBe(true)
+    const stored = m.h.decisions.get(raised.id)!
+    expect(stored.decided).toMatchObject({ by: 'host', option: 1 })
+    expect(body(stored, 'decided').decided_option).toBe('乙')
     await m.h.stop()
   })
 })

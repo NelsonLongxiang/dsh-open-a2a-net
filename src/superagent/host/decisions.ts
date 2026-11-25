@@ -88,7 +88,7 @@ export interface StoredCard extends DecisionSpec {
   /** Files the proposer put on the card (C8). */
   readonly files?: readonly DecisionFile[]
   /** `by: 'host'` only on the host's automatic decision (#888 D5); the owner's own decision never carries it. */
-  readonly decided?: { readonly at: string; readonly text: string; readonly triggerId?: string; readonly files?: readonly DecisionFile[]; readonly by?: 'host' }
+  readonly decided?: { readonly at: string; readonly text: string; readonly triggerId?: string; readonly files?: readonly DecisionFile[]; readonly by?: 'host'; /** #935 review: the chosen option's position in `options`, recorded when an option was chosen (absent for words only, and on older records). */ readonly option?: number }
   /** The host closed this card as 「知道了」 on a timeout (owner 2026-11-23): the audit record; it stays when the owner decides again. */
   readonly autoAck?: { readonly at: string; readonly by: 'host'; readonly rule: 'credential-ack-timeout'; readonly minutes: number }
   /**
@@ -254,7 +254,7 @@ export class DecisionBook {
   autoApproveDecide(id: string): boolean {
     const card = this.cards.find(c => c.id === id && c.decided === undefined && c.autoApproved !== undefined)
     if (card === undefined) return false
-    this.cards = this.cards.map(c => c.id === id ? { ...c, decided: { at: card.autoApproved!.at, text: autoApprovedText(card.recommended), by: 'host' } } : c)
+    this.cards = this.cards.map(c => c.id === id ? { ...c, decided: { at: card.autoApproved!.at, text: autoApprovedText(card.recommended), by: 'host', ...(card.options.indexOf(card.recommended) >= 0 ? { option: card.options.indexOf(card.recommended) } : {}) } } : c)
     this.save()
     this.changed('decided', this.get(id))
     return true

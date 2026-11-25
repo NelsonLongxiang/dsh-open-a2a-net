@@ -78,7 +78,7 @@ export function decisionCardText(event: PushEvent, rev: number, team: string, ca
       recommended, ...(card.reason !== undefined ? { reason: cut(card.reason, PUSH_REASON_MAX) } : {}),
       files: files.map(f => ({ name: cut(f.name, PUSH_FILE_NAME_MAX), size: f.size, sha256: f.sha256 })), created_at: card.at,
       // A decision in words only (no option chosen) is null: the market takes null or one of the options, never ''.
-      ...(event === 'decided' && card.decided !== undefined ? { decided_at: card.decided.at, decided_option: options[raw.indexOf(decidedOption(card.decided.text, raw))] ?? null } : {}),
+      ...(event === 'decided' && card.decided !== undefined ? { decided_at: card.decided.at, decided_option: (typeof card.decided.option === 'number' && Number.isInteger(card.decided.option) ? options[card.decided.option] : options[raw.indexOf(decidedOption(card.decided.text, raw))]) ?? null } : {}),
     },
   }
   const text = `${DECISION_CARD_HEADER}\n${JSON.stringify(body)}`
@@ -86,17 +86,19 @@ export function decisionCardText(event: PushEvent, rev: number, team: string, ca
   return { ok: true, text }
 }
 
-/** The option a decision chose, read from its stored text (`决定：<option>`); empty when it was words only. */
+/**
+ * The option an older decision chose, read from its stored text, for records made before the host recorded the option's
+ * position (`decided.option`). Only a text that begins with `决定：` names an option — words only begin with `说明：` and
+ * may mention anything. An option may hold line breaks, so whole options are matched, each ending at the end of the text
+ * or at a line break; when more than one fits (a note can read like a longer option), the answer is empty rather than a
+ * guess (#935 review B1/B2).
+ * @returns the option, or empty.
+ */
 export function decidedOption(text: string, options: readonly string[]): string {
-  const at = text.indexOf('决定：')
-  if (at < 0) return ''
-  const rest = text.slice(at + '决定：'.length)
-  // #935 review B1: an option may hold line breaks (up to 1,000 characters), so the decision is not read from its first
-  // line. Whole options are matched, each ending at the end of the text or at a line break; the longest wins, so a short
-  // option that begins a longer one never takes its place.
-  let chosen = ''
-  for (const option of options) if ((rest === option || rest.startsWith(`${option}\n`)) && option.length > chosen.length) chosen = option
-  return chosen
+  if (!text.startsWith('决定：')) return ''
+  const rest = text.slice('决定：'.length)
+  const fits = options.filter(option => rest === option || rest.startsWith(`${option}\n`))
+  return fits.length === 1 ? fits[0]! : ''
 }
 
 /**
