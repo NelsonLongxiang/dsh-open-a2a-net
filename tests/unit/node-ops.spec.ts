@@ -152,6 +152,16 @@ describe('node operations', () => {
     for (const v of ['1.1.0', '1.2.0']) { const tgz = tarball(pkg(v)); expect(ops.install(tgz, sha(tgz), 'owner').ok).toBe(true) }
     expect(readdirSync(join(dir, 'backups'))).toHaveLength(2)
   })
+  it('replacing the same version twice in the same millisecond keeps two different backups (ATT7b, #914 review)', () => {
+    // Time and version are equal for both backups, so only the random part of the name keeps them apart.
+    const fixed = () => new Date(at.getTime())
+    const ops = new NodeOps({ root, dir }, fixed)
+    for (let i = 0; i < 2; i++) { const tgz = tarball(pkg('1.0.0')); expect(ops.install(tgz, sha(tgz), 'owner')).toMatchObject({ ok: true, from: '1.0.0', to: '1.0.0' }) }
+    const kept = readdirSync(join(dir, 'backups'))
+    expect(kept).toHaveLength(2)
+    expect(kept.every(name => name.includes('-1.0.0-'))).toBe(true)
+    expect(version()).toBe('1.0.0')
+  })
   it('the listing check refuses absolute, .. and outside paths and any non-plain entry', () => {
     const ok = ['package/', 'package/package.json']
     expect(tarballListingRefusal(ok, ['drwxr-xr-x  0 a b 0 Nov 25 00:00 package/', '-rw-r--r--  0 a b 9 Nov 25 00:00 package/package.json'])).toBeUndefined()
