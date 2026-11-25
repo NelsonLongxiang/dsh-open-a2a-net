@@ -157,7 +157,7 @@ import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
 import { browserOwnerProof, configureOwnerDelegates, touchesRules } from './superagent/host/owner-proof.ts'
 import { OwnerDelegates } from './superagent/host/owner-delegate.ts'
-import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, startWhenYglKnown, yglCapabilities, yglSettled } from './superagent/host/teams.ts'
+import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, exportYglBin, startWhenYglKnown, yglCapabilities, yglSettled } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
 import { IntakeOrigins } from './intake-origins.ts'
 import { redeliverLost, TaskBodies } from './task-bodies.ts'
@@ -2361,6 +2361,7 @@ export function apply(ctx: Context, config: Config): void {
   let superagentHomeUrl: string | undefined
   if (superagentHost !== undefined) {
     whenWebServerSettled(webServer => { superagentHomeUrl = `http://127.0.0.1:${String((webServer as { port: number }).port)}` })
+    exportYglBin() // #900: Windows presets run ygl-trees with this node directly, before any team session loads
     ctx.effect(() => {
       void ensureTeamYglHome({ logger })
       // Design Y1d (#739 review R1): the engines start at boot, as before #739 (a late start's recovery restarted assignments

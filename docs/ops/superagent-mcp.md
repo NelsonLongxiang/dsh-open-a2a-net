@@ -133,13 +133,25 @@ ygl-trees 的「当前项目」按 `YGL_SESSION` 分桶记录。DSH 启动 MCP �
   config:
     serverName: ygl
     transport: stdio
-    command: cmd
-    args: ['/d', '/s', '/c', 'set "YGL_SESSION=superagent-%RANDOM%%RANDOM%" && ygl-trees mcp']
+    # 直接用运行 DSH 的 node 跑 ygl-trees 的入口脚本（#900）：中间不经过 cmd 和 .cmd 垫片，不会弹控制台窗口
+    command: !!js process.execPath
+    args: ['<npm 全局目录>\\node_modules\\ygl-trees\\dist\\bundle\\bin.cjs', 'mcp']
     env:
       YGL_HOME: <team-ygl-home>
+      YGL_SESSION: !!js '`superagent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`'
+      ELECTRON_RUN_AS_NODE: '1'
 ```
 
-`$$` 是 shell 的进程号，`exec` 之后就是 ygl-trees 自己的进程号；Windows 没有现成的进程号，用两个 `%RANDOM%` 拼一个足够少碰撞的名字。前缀 `superagent-` 只是惯例，可换成本宿主自己的名字，关键是每个进程不同。
+`$$` 是 shell 的进程号，`exec` 之后就是 ygl-trees 自己的进程号。Windows 上每次加载配置时用时间加随机数生成会话名。前缀 `superagent-` 只是惯例，可换成本宿主自己的名字，关键是每个进程不同。
+
+Windows 不要用 `cmd /c … ygl-trees mcp`：`windowsHide` 只隐藏直接启动的那一层，`cmd` 下面经 `.cmd` 垫片启动的 node.exe 会为每个会话弹出一个控制台窗口（#900）。入口脚本的位置取 `ygl-trees` 包 `package.json` 的 `bin` 字段，npm 全局目录可以用 `npm prefix -g` 查。
+
+团队预设在 Windows 上由宿主在启动时自动找这个入口脚本，找到就写进环境变量 `SUPERAGENT_YGL_BIN`，预设据此直接用 node 启动。依次找三个地方：PATH 上 `ygl-trees.cmd` 所在目录、运行 DSH 的 node 所在目录、`%APPDATA%\npm`。
+
+- 自动找不到时，可以手动把 `SUPERAGENT_YGL_BIN` 设成入口脚本的绝对路径。
+- 都没有时退回 `cmd` 包装，功能照常，只是会弹窗。
+
+`ELECTRON_RUN_AS_NODE=1` 让桌面版 DSH 的 `process.execPath` 也按 node 运行脚本；普通 node 会忽略它。
 
 ### 2.2 `YGL_HOME`：团队用自己的工作区
 

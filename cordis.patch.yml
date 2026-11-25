@@ -101,10 +101,14 @@
             config:
               serverName: ygl
               transport: stdio
-              command: cmd
-              args: ['/d', '/s', '/c', 'set "YGL_SESSION=superagent-%RANDOM%%RANDOM%" && ygl-trees mcp']
+              # #900: this node on the entry script the host resolved (SUPERAGENT_YGL_BIN), so no `cmd` and no `.cmd` shim sit in
+              # between and no console window opens; without one, the shell route as before.
+              command: !!js 'process.env.SUPERAGENT_YGL_BIN ? process.execPath : ''cmd'''
+              args: !!js 'process.env.SUPERAGENT_YGL_BIN ? [process.env.SUPERAGENT_YGL_BIN, ''mcp''] : [''/d'', ''/s'', ''/c'', ''set "YGL_SESSION=superagent-%RANDOM%%RANDOM%" && ygl-trees mcp'']'
               env:
                 YGL_HOME: !!js process.env.SUPERAGENT_YGL_HOME ?? `${process.env.HOME ?? process.env.USERPROFILE}/.ygl-trees-superagent`
+                YGL_SESSION: !!js '`superagent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`'
+                ELECTRON_RUN_AS_NODE: '1'
           - id: compaction
             name: cordis:group
             group: true
@@ -222,10 +226,14 @@
             config:
               serverName: ygl
               transport: stdio
-              command: cmd
-              args: ['/d', '/s', '/c', 'set "YGL_SESSION=superagent-%RANDOM%%RANDOM%" && ygl-trees mcp']
+              # #900: this node on the entry script the host resolved (SUPERAGENT_YGL_BIN), so no `cmd` and no `.cmd` shim sit in
+              # between and no console window opens; without one, the shell route as before.
+              command: !!js 'process.env.SUPERAGENT_YGL_BIN ? process.execPath : ''cmd'''
+              args: !!js 'process.env.SUPERAGENT_YGL_BIN ? [process.env.SUPERAGENT_YGL_BIN, ''mcp''] : [''/d'', ''/s'', ''/c'', ''set "YGL_SESSION=superagent-%RANDOM%%RANDOM%" && ygl-trees mcp'']'
               env:
                 YGL_HOME: !!js process.env.SUPERAGENT_YGL_HOME ?? `${process.env.HOME ?? process.env.USERPROFILE}/.ygl-trees-superagent`
+                YGL_SESSION: !!js '`superagent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`'
+                ELECTRON_RUN_AS_NODE: '1'
           - id: compaction
             name: cordis:group
             group: true
@@ -370,10 +378,14 @@
             config:
               serverName: ygl
               transport: stdio
-              command: cmd
-              args: ['/d', '/s', '/c', 'set "YGL_SESSION=superagent-%RANDOM%%RANDOM%" && ygl-trees mcp']
+              # #900: this node on the entry script the host resolved (SUPERAGENT_YGL_BIN), so no `cmd` and no `.cmd` shim sit in
+              # between and no console window opens; without one, the shell route as before.
+              command: !!js 'process.env.SUPERAGENT_YGL_BIN ? process.execPath : ''cmd'''
+              args: !!js 'process.env.SUPERAGENT_YGL_BIN ? [process.env.SUPERAGENT_YGL_BIN, ''mcp''] : [''/d'', ''/s'', ''/c'', ''set "YGL_SESSION=superagent-%RANDOM%%RANDOM%" && ygl-trees mcp'']'
               env:
                 YGL_HOME: !!js process.env.SUPERAGENT_YGL_HOME ?? `${process.env.HOME ?? process.env.USERPROFILE}/.ygl-trees-superagent`
+                YGL_SESSION: !!js '`superagent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`'
+                ELECTRON_RUN_AS_NODE: '1'
           - id: compaction
             name: cordis:group
             group: true
