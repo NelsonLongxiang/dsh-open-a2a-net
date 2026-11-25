@@ -45,6 +45,10 @@ describe('#934 a card no longer waiting', () => {
     expect(m.h.decisionCards().some(c => c.question === '换个问法？')).toBe(true)
     const out = m.h.decide(card!.id, 'choose', '甲')
     expect(out).toMatchObject({ ok: false, code: 'stale', now: { ticket: { id: ticket } } })
+    // The ticket is still running: its live stage is reported, never 'ended'.
+    const stage = (out.now as { ticket: { stage: unknown } }).ticket.stage
+    expect(stage).not.toBe('ended')
+    expect(stage).toEqual(m.h.ticket(ticket)!.stage)
     expect(String(out.error)).toContain(ticket)
     await m.h.stop()
   })
@@ -62,6 +66,16 @@ describe('#934 a card no longer waiting', () => {
     const out = m.h.decide('d-nowhere', 'approve')
     expect(out).toMatchObject({ ok: false, code: 'stale', error: expect.stringContaining('no record') })
     expect(out).not.toHaveProperty('now')
+    await m.h.stop()
+  })
+  it('#938 review B1: a card the host closed on its timeout says the host decided it, not the owner', async () => {
+    const m = await team()
+    const { id } = m.h.proposeDecision('router', 'session-r', '凭据访问', spec()) as { id: string }
+    // Closed by the host two days ago: past the day such cards stay listed.
+    expect(m.h.decisions.autoAcknowledge(id, new Date(Date.now() - 48 * 3_600_000).toISOString(), 15)).toBe(true)
+    const out = m.h.decide(id, 'approve')
+    expect(out).toMatchObject({ ok: false, code: 'stale', now: { decided: { by: 'host' } } })
+    expect(String(out.error)).toContain('by the host')
     await m.h.stop()
   })
 })

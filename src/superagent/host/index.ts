@@ -2034,7 +2034,8 @@ export class SuperagentHost {
     let now: Record<string, unknown> | undefined
     let where = 'this host has no record of it'
     if (known?.decided !== undefined) {
-      const by = known.decided.by ?? 'owner'
+      // #938 review B1: a credential card the host closed on its timeout carries autoAck, not decided.by; it was not the owner.
+      const by = known.decided.by ?? (known.autoAck !== undefined ? 'host' : 'owner')
       const first = known.decided.text.split('\n')[0] ?? ''
       now = { decided: { at: known.decided.at, by, text: first } }
       where = `it was decided at ${known.decided.at}${by === 'owner' ? '' : ` by the ${by}`}: ${first}`
