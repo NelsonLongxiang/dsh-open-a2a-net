@@ -170,6 +170,8 @@ import {RequestRecoveryStore} from './request-recovery.ts'
 import { restrictDirToCurrentUser } from './windows-private-dir.ts'
 import {RequestRecoveryRuntime} from './request-recovery-runtime.ts'
 import {registerRequestRecoveryFace} from './faces/request-recovery.ts'
+import { registerNodeOpsFace } from './faces/node-ops.ts'
+import { NodeOps, ownPackageRoot } from './superagent/host/node-ops.ts'
 import {registerReceiptCapacityFace} from './faces/receipt-capacity.ts'
 import { SidebarSends } from './sidebar-sends.ts'
 import { PI_PLATFORM, piDeliverable, piSeatAdmission } from './superagent/platforms/pi.ts'
@@ -3943,6 +3945,7 @@ export function apply(ctx: Context, config: Config): void {
     })
   })
   whenWebServerSettled(webServer=>registerRequestRecoveryFace(webServer,{ctx,controlRoute,readJsonBody,recovery:requestRecovery}))
+  { const root = ownPackageRoot(fileURLToPath(import.meta.url)); if (root !== undefined) { const ops = new NodeOps({ root, dir: join(home, 'a2a', 'node-ops') }); whenWebServerSettled(webServer => registerNodeOpsFace(webServer, { ctx, controlRoute, readJsonBody, ops })) } }
   whenWebServerSettled(webServer=>registerReceiptCapacityFace(webServer,{ctx,controlRoute,readJsonBody:readJsonBody as never,ledger:taskLedger,logger}))
   const cardCacheInFlight = new Map<string, Promise<A2aPeerCard | undefined>>()
   // #114 S6: the change hooks and the boot observation start only once every
