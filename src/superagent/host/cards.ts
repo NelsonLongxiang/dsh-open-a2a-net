@@ -156,14 +156,28 @@ export const YGL_WRITE = 'mcp__ygl__write'
  * team project for the session first. It does not ask for `rel attach`: that tool's source is always a
  * tree node, and a team project has no tree until the owner decides its milestones.
  */
-export function yglCardLines(project?: string, opts: { readonly scope?: string; readonly caps?: YglCapabilities } = {}): string[] {
+export function yglCardLines(project?: string, opts: { readonly scope?: string; readonly caps?: YglCapabilities; readonly trees?: boolean } = {}): string[] {
+  // #897 review B1: the tool is chosen where each step is written; the project, scope and other values are never rewritten.
+  const t: YglToolNames = opts.trees === true ? { read: YGL_TREES_NAME, write: YGL_TREES_NAME } : { read: 'mcp__ygl__read', write: 'mcp__ygl__write' }
+  const lines = yglCardSteps(project, opts, t)
+  return opts.trees === true ? [lines[0]!, YGL_TREES_HINT, ...lines.slice(1)] : lines
+}
+/**
+ * ygl-trees' single tool (ygl-trees/1, PR #311): a member whose session has mcp__ygl__trees gets the same steps named for it,
+ * with domain and action as written and every other argument inside params. Without it the card is unchanged (the old four
+ * tools stay for one release).
+ */
+const YGL_TREES_NAME = 'mcp__ygl__trees'
+export const YGL_TREES_HINT = `- call ${YGL_TREES_NAME} with domain and action as named below and every other argument (project, scope, query, text, id, name, to) inside params; ${YGL_TREES_NAME} with action help lists what each domain takes`
+interface YglToolNames { readonly read: string; readonly write: string }
+function yglCardSteps(project: string | undefined, opts: { readonly scope?: string; readonly caps?: YglCapabilities }, t: YglToolNames): string[] {
   if (project === undefined) return [
     'team memory (ygl-trees), as part of this ticket:',
-    '- first: mcp__ygl__read domain agent action brief (if it answers ambiguous project: mcp__ygl__write domain project action use, then again), and domain kb action search on this ticket\'s subject; build on what earlier work found',
-    YGL_MATCH_LINE,
-    yglTaskLine(),
-    '- as you go: with mcp__ygl__write, record each source you rely on and the exact lines you quote as evidence, and each judgement as a claim linked to them',
-    '- before ready: mcp__ygl__write domain task action advance id <the task id> to done, kb add what the next session should reuse, and pass the ids you wrote in ygl on a2a_ticket_report, the task id too',
+    `- first: ${t.read} domain agent action brief (if it answers ambiguous project: ${t.write} domain project action use, then again), and domain kb action search on this ticket's subject; build on what earlier work found`,
+    yglMatchLine(t),
+    yglTaskLine(t),
+    `- as you go: with ${t.write}, record each source you rely on and the exact lines you quote as evidence, and each judgement as a claim linked to them`,
+    `- before ready: ${t.write} domain task action advance id <the task id> to done, kb add what the next session should reuse, and pass the ids you wrote in ygl on a2a_ticket_report, the task id too`,
   ]
   const named = JSON.stringify(project)
   const caps = opts.caps ?? YGL_UNKNOWN
@@ -172,29 +186,29 @@ export function yglCardLines(project?: string, opts: { readonly scope?: string; 
     ? `domain kb action search on this ticket's subject with project ${named}`
     : `domain kb action search on this ticket's subject with scope ${JSON.stringify(scope)} (this team's notes), then again with scope "" (notes from before team scopes)`
   const first = caps.briefHonorsProject
-    ? `- first: mcp__ygl__read domain agent action brief with project ${named}, and ${search}; build on what earlier work found`
-    : `- first: mcp__ygl__write domain project action use name ${named} (it selects the project for your session only), then, as a separate call, mcp__ygl__read domain agent action brief, and ${search}; build on what earlier work found`
+    ? `- first: ${t.read} domain agent action brief with project ${named}, and ${search}; build on what earlier work found`
+    : `- first: ${t.write} domain project action use name ${named} (it selects the project for your session only), then, as a separate call, ${t.read} domain agent action brief, and ${search}; build on what earlier work found`
   return [
     `team memory (ygl-trees), as part of this ticket. This team's project is ${named}: use it, pass project ${named} on every read and write, and make no other project.`,
     first,
-    YGL_MATCH_LINE,
-    yglTaskLine(named),
-    '- as you go: with mcp__ygl__write, record each source you rely on and the exact lines you quote as evidence, and each judgement as a claim linked to them',
+    yglMatchLine(t),
+    yglTaskLine(t, named),
+    `- as you go: with ${t.write}, record each source you rely on and the exact lines you quote as evidence, and each judgement as a claim linked to them`,
     scope === undefined
-      ? '- before ready: mcp__ygl__write domain task action advance id <the task id> to done, kb add what the next session should reuse, and pass the ids you wrote in ygl on a2a_ticket_report, the task id too'
-      : `- before ready: mcp__ygl__write domain task action advance id <the task id> to done, kb add what the next session should reuse, with scope ${JSON.stringify(scope)}, and pass the ids you wrote in ygl on a2a_ticket_report, the task id too`,
+      ? `- before ready: ${t.write} domain task action advance id <the task id> to done, kb add what the next session should reuse, and pass the ids you wrote in ygl on a2a_ticket_report, the task id too`
+      : `- before ready: ${t.write} domain task action advance id <the task id> to done, kb add what the next session should reuse, with scope ${JSON.stringify(scope)}, and pass the ids you wrote in ygl on a2a_ticket_report, the task id too`,
   ]
 }
 /** Design Y2: match the ticket against the team's skills before work; a hit is read first. */
-const YGL_MATCH_LINE = '- also first: mcp__ygl__read domain agent action match with query set to this ticket\'s subject; if it names a skill, read it (domain skill action show with its name) before you start'
+const yglMatchLine = (t: YglToolNames): string => `- also first: ${t.read} domain agent action match with query set to this ticket's subject; if it names a skill, read it (domain skill action show with its name) before you start`
 /**
  * Design Y2: the ticket as a task in the team's project, so the library keeps what was worked on and when. The ygl MCP
  * passes no project on `task advance` (ygl-trees mcp.ts), so in a library with several projects advance answers
  * "ambiguous project" unless the project is selected for the session first; `project use` does that and nothing else.
  */
-const yglTaskLine = (named?: string): string => named === undefined
-  ? '- when you take it: mcp__ygl__write domain task action add with text set to this ticket\'s title, then domain task action advance id <its id> to doing'
-  : `- when you take it: mcp__ygl__write domain project action use name ${named} (for your session only; task advance takes no project), then domain task action add with text set to this ticket's title and project ${named}, then domain task action advance id <its id> to doing`
+const yglTaskLine = (t: YglToolNames, named?: string): string => named === undefined
+  ? `- when you take it: ${t.write} domain task action add with text set to this ticket's title, then domain task action advance id <its id> to doing`
+  : `- when you take it: ${t.write} domain project action use name ${named} (for your session only; task advance takes no project), then domain task action add with text set to this ticket's title and project ${named}, then domain task action advance id <its id> to doing`
 /** The steps without a project, for callers from before Y1c. */
 export const YGL_CARD_LINES: readonly string[] = yglCardLines()
 /** The line on a router's candidate card that names the team's project (Y1c). */

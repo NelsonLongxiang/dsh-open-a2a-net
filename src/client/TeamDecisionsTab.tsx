@@ -26,6 +26,24 @@ export interface DecisionRow {
   readonly files?: ReadonlyArray<{ readonly sha256: string; readonly size: number; readonly name: string }>
   /** The host closed this credential card as 「知道了」 on a timeout (owner 2026-11-23); the owner may still decide it. */
   readonly autoAck?: { readonly at: string; readonly minutes: number }
+  /** #888 D5: the host took the recommendation on the owner's setting; the owner may still decide it. */
+  readonly autoApproved?: { readonly at: string; readonly minutes: number }
+  /** #888 D1: per option, what the owner must fill in to choose it. */
+  readonly inputs?: Readonly<Record<string, { readonly kind: 'text' | 'file' | 'text+file'; readonly prompt: string }>>
+  /** #888 D1: derived by the host; never stored with the card. */
+  readonly needsInput?: boolean
+  readonly recommendedNeedsInput?: boolean
+}
+
+/** #888 D1: what choosing `option` requires, if anything. */
+export const inputOf = (row: DecisionRow, option: string): { readonly kind: 'text' | 'file' | 'text+file'; readonly prompt: string } | undefined =>
+  row.inputs !== undefined && Object.prototype.hasOwnProperty.call(row.inputs, option) ? row.inputs[option] : undefined
+
+/** #888 D4: whether the owner's words and files satisfy the chosen option. */
+export const inputMet = (row: DecisionRow, option: string, note: string, fileCount: number): boolean => {
+  const need = inputOf(row, option)
+  if (need === undefined) return true
+  return (need.kind === 'file' || note.trim() !== '') && (need.kind === 'text' || fileCount > 0)
 }
 
 const ROUTE = '/__dsh_a2a/superagent/decisions'
@@ -37,7 +55,7 @@ export const fileHref = (row: DecisionRow, sha256: string): string => `${ROUTE}/
 const sizeText = (bytes: number): string => bytes < 1024 ? `${String(bytes)} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`
 
 /** Only P2 and P3 can be approved with one click, and only with a recommendation to approve. */
-export const canApprove = (row: DecisionRow): boolean => (row.level === 'P2' || row.level === 'P3') && row.recommended !== ''
+export const canApprove = (row: DecisionRow): boolean => (row.level === 'P2' || row.level === 'P3') && row.recommended !== '' && row.recommendedNeedsInput !== true
 
 async function postDecision(row: DecisionRow, body: Record<string, unknown>): Promise<string | undefined> {
   try {
@@ -76,7 +94,11 @@ function Card({ row, t, done }: { readonly row: DecisionRow; readonly done: () =
     if (refused !== undefined) { setError(t('team.failed', { reason: refused })); return }
     done()
   }
-  const canConfirm = !busy && (picked !== '' || note.trim() !== '')
+  const need = picked === '' ? undefined : inputOf(row, picked)
+  // #888 D4: a file input cannot be met when the team has no canvas to send files to: say why (the confirm button already
+  // waits for the file, and a decision with files and no canvas is refused with the same reason).
+  const unreachable = need !== undefined && need.kind !== 'text' && row.address === undefined
+  const canConfirm = !busy && (picked !== '' || note.trim() !== '') && (picked === '' || inputMet(row, picked, note, files.length))
   return (
     <article className={`${styles.card} ${dragging ? styles.dragging : ''}`} {...dropProps}>
       <header className={styles.cardHead}>
@@ -85,6 +107,7 @@ function Card({ row, t, done }: { readonly row: DecisionRow; readonly done: () =
       </header>
       <p className={styles.question}>{row.question}</p>
       {row.reason !== undefined && <p className={styles.hint}>{row.reason}</p>}
+      {row.autoApproved !== undefined && <p role="note" className={styles.hint}>{t('team.autoApproved', { minutes: String(row.autoApproved.minutes), at: row.autoApproved.at, option: row.recommended })}</p>}
       {row.autoAck !== undefined && <p role="note" className={styles.hint}>{t('team.autoAcked', { minutes: String(row.autoAck.minutes), at: row.autoAck.at })}</p>}
       {row.files !== undefined && row.files.length > 0 && (
         <div className={styles.files} aria-label={t('team.cardFiles')}>
@@ -96,8 +119,11 @@ function Card({ row, t, done }: { readonly row: DecisionRow; readonly done: () =
           <input type="radio" name={row.id} checked={picked === option} disabled={busy} onChange={() => { setPicked(option) }} />
           <span>{option}</span>
           {option === row.recommended && <span className={styles.badge}>{t('team.recommended')}</span>}
+          {inputOf(row, option) !== undefined && <span className={styles.badge} data-input={inputOf(row, option)!.kind}>{t('team.needsInput')}</span>}
+          {inputOf(row, option) !== undefined && <span className={styles.hint}>{inputOf(row, option)!.prompt}</span>}
         </label>
       ))}
+      {unreachable && <p role="note" className={styles.error}>{t('team.inputNoFileTarget')}</p>}
       <input className={styles.input} value={note} disabled={busy} placeholder={t(row.options.length === 0 ? 'team.decisionWrite' : 'team.decisionNote')} aria-label={t('team.decisionNote')} onChange={(event) => { setNote(event.target.value) }} />
       <AttachedFiles t={t} files={files} setFiles={setFiles} addFiles={addFiles} disabled={busy} hint={false} />
       <div className={styles.actions}>
@@ -147,9 +173,13 @@ export function DecisionList({ t }: TeamDecisionsTabProps) {
     return () => { clearInterval(timer) }
   }, [load])
   if (rows.length === 0 && problem === undefined) return null
+  // #894 review B3: cards the host already closed (timeout) or took (#888 D5) are shown but not waiting.
+  const open = rows.filter(row => row.autoAck === undefined && row.autoApproved === undefined)
   return (
     <section className={styles.decisions} aria-label={t('team.decisions')}>
-      {rows.length > 0 && <span className={styles.label}>{t('team.decisionsCount', { count: String(rows.length) })}</span>}
+      {rows.length > 0 && <span className={styles.label}>{t('team.decisionsCount', { count: String(open.length) })}</span>}
+      {/* #888 D4: split by whether the recommendation needs input; cards the host already closed on a timeout are not counted. */}
+      {rows.some(row => row.needsInput === true) && (() => { const fill = open.filter(row => row.recommendedNeedsInput === true).length; return <span className={styles.hint}>{t('team.countNeedsInput', { count: String(fill) })} · {t('team.countDirect', { count: String(open.length - fill) })}</span> })()}
       {problem !== undefined && <p role="alert" className={styles.error}>{t(problem === 'denied' ? 'team.decisionsDenied' : 'team.decisionsUnreadable')}{rows.length > 0 ? ` ${t('team.decisionsStale')}` : ''}</p>}
       {rows.map(row => <Card key={row.id} row={row} t={t} done={() => { void load() }} />)}
     </section>

@@ -60,6 +60,27 @@ export interface A2aClientOptions {
 const HTTP_TIMEOUT_MS = 15_000
 
 /**
+ * Transport errors that mean a pooled keep-alive socket was already dead when it was reused (the peer restarted on the
+ * same address, or a proxy recycled the connection). Only the read-only card GET retries on these (once, on a fresh
+ * connection); writes never do.
+ */
+const STALE_SOCKET_CODES: ReadonlySet<string> = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE'])
+
+/**
+ * Whether a failed request died on a stale reused connection: a transport error carrying one of the stale-socket codes
+ * (on the error or its cause), not an HTTP status, and not our own timeout.
+ * @param error - what the request threw.
+ * @returns true only for a stale-socket transport failure.
+ */
+export function staleSocket(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const tagged = error as { statusCode?: unknown; ownBudgetExhausted?: unknown; code?: unknown; cause?: { code?: unknown } }
+  if (tagged.statusCode !== undefined || tagged.ownBudgetExhausted === true || error.name === 'AbortError') return false
+  const code = typeof tagged.cause?.code === 'string' ? tagged.cause.code : typeof tagged.code === 'string' ? tagged.code : undefined
+  return code !== undefined && STALE_SOCKET_CODES.has(code)
+}
+
+/**
  * One card fetch with its failure stage kept: a peer that cannot be reached
  * (transport or HTTP error) is a different diagnosis from one that answers
  * with a card verification rejects — probes report the difference, plain
@@ -140,6 +161,10 @@ export class A2aClient {
     readonly body?: string
     readonly signal?: AbortSignal
     readonly guard?: string
+    /** Ask for a fresh connection that is closed after the response (the card GET's one stale-socket retry). */
+    readonly connectionClose?: true
+    /** The time budget for this request; defaults to the full HTTP budget. */
+    readonly budgetMs?: number
   }, baseUrl: string): Promise<unknown> {
     if (init.signal?.aborted) throw new Error('A2A request aborted before dispatch')
     const controller = new AbortController()
@@ -147,7 +172,7 @@ export class A2aClient {
     const timer = this.options.schedule(() => {
       ownBudgetFired = true
       controller.abort()
-    }, HTTP_TIMEOUT_MS)
+    }, init.budgetMs ?? HTTP_TIMEOUT_MS)
     const abort = (): void => {
       controller.abort()
     }
@@ -156,7 +181,7 @@ export class A2aClient {
       const url = `${baseUrl}${path}`
       const response = await this.options.fetch(url, {
         method: init.method,
-        headers: { ...this.headers(init.body !== undefined, url, init.method, init.body), ...(init.guard !== undefined ? { 'X-A2A-Guard': init.guard } : {}) },
+        headers: { ...this.headers(init.body !== undefined, url, init.method, init.body), ...(init.guard !== undefined ? { 'X-A2A-Guard': init.guard } : {}), ...(init.connectionClose === true ? { Connection: 'close' } : {}) },
         ...(init.body !== undefined ? { body: init.body } : {}),
         signal: controller.signal,
       })
@@ -206,7 +231,18 @@ export class A2aClient {
    */
   async fetchCardDetail(baseUrl: string): Promise<CardFetchOutcome> {
     try {
-      const candidate = await this.http('/.well-known/agent-card.json', { method: 'GET' }, baseUrl)
+      const started = Date.now()
+      let candidate: unknown
+      try {
+        candidate = await this.http('/.well-known/agent-card.json', { method: 'GET' }, baseUrl)
+      } catch (error) {
+        // A pooled socket the peer had already closed (a same-address restart, a recycled proxy connection) fails the
+        // read-only GET at once: ask once more on a fresh connection, within what is left of the budget. An HTTP status,
+        // a bad card or our own timeout is an answer, not a stale socket, and is never retried.
+        const left = HTTP_TIMEOUT_MS - (Date.now() - started)
+        if (!staleSocket(error) || left <= 0) throw error
+        candidate = await this.http('/.well-known/agent-card.json', { method: 'GET', connectionClose: true, budgetMs: left }, baseUrl)
+      }
       const verified = verifyCard(candidate, Date.now())
       if (!verified.ok) return { ok: false, stage: 'rejected', reason: verified.reason }
       return { ok: true, card: verified.card }

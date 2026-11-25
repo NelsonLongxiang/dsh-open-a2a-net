@@ -88,6 +88,9 @@ const whoOf = (problem: HealthProblem): string => cleanName(problem.name) ?? pro
 
 export const problemText = (problem: HealthProblem): string =>
   problem.code === 'router-not-loaded' ? `总工会话 ${whoOf(problem)} 没有加载，需求送不到它，打开这个会话即可`
+  : problem.code === 'receipt-unsettled' ? `工单「${problem.title ?? ''}」收到的回执（${problem.detail ?? ''}）没有被网络台账正向结算，没有写进工单；请求仍在等待结果，请人工查看`
+  : problem.code === 'outbound-note-pending' ? `工单「${problem.title ?? ''}」对外请求（${problem.detail ?? ''}）的回执已收到并保存，但写进工单的备注还没写成，系统会继续重试`
+  : problem.code === 'outbound-note-ticket-ended' ? `工单「${problem.title ?? ''}」已结束后才收到对外请求（${problem.detail ?? ''}）的回执：没有重开工单，也不会重发原请求，回执已保存，请人工查看`
   : problem.code === 'decision-push-refused' ? `决策卡 ${problem.title ?? ''} 没有推到市场：${problem.detail ?? ''}；市场上这张卡会停在原来的状态，请在本机工作台上处理`
   : problem.code === 'router-turn-failed' ? `总工会话 ${whoOf(problem)} 上一回合失败（${problem.detail ?? '未知原因'}），需求在等它判断；常见原因是模型额度用完或服务中断`
   : problem.code === 'mcp-no-seat' ? `团队 MCP 服务器 ${problem.title ?? ''} 还用不了：团队里还没有带席位 id 的成员，市场只给名册里的席位发令牌`

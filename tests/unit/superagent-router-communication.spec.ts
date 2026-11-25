@@ -31,11 +31,13 @@ it('ships generated inline router text without changing preset ids or compositio
   expect(presets.map(row => row.config!.id)).toEqual(['superagent-router', 'superagent-member', 'superagent-observer', 'superagent-builder'])
   expect(prompt).toBe(presetPrompt('router'))
   const expectedComposition = {
-    'superagent-router': '0b7ca64fa013e3e8295f5bb7c963d25b757e7a3abbff26828dd679f0cde1d814',
+    // #900: the Windows ygl MCP row runs this node on the resolved entry script (router, member, observer).
+    'superagent-router': 'f12ec5d5dc39720854535dce63a9ea7906bfddf93500c4af4f3bc525e637fcb0',
     // Owner 2026-11-19: members and observers gain the PTC executor (code mode by default); router and builder unchanged.
-    'superagent-member': '37e7d7d7e52ce01c9c79c32f2c330515c29054f2b582a97ac67350a9f8f9577a',
-    'superagent-observer': '37e7d7d7e52ce01c9c79c32f2c330515c29054f2b582a97ac67350a9f8f9577a',
-    'superagent-builder': '04658b48dfdf35e0c2dea710a6f58e4efca5f0ffaca3dfa5c566dfab76175390',
+    'superagent-member': 'cf8a0b18e2dc9ff834a8b0b3e5de626684f01255414d25660aa2276876e4a884',
+    'superagent-observer': 'cf8a0b18e2dc9ff834a8b0b3e5de626684f01255414d25660aa2276876e4a884',
+    // #83: the builder gains the read-only search and skill rows, so its composition digest moves with them.
+    'superagent-builder': '4e36bbf212a2b60b8f677618d92f2b3450d48a6e61f328d3d2d25d6f1c961775',
   }
   for (const row of presets) {
     expect(digest(JSON.stringify(row.config!.plugins.filter((p: Row) => p.id !== 'persona')))).toBe(expectedComposition[row.config!.id as keyof typeof expectedComposition])
@@ -45,10 +47,10 @@ it('ships generated inline router text without changing preset ids or compositio
 })
 
 it('adds only the shared boundary to original worker personas and leaves the builder unchanged', () => {
-  // Target next/0.8 78e077c; preserve its member-proposal text and original worker semantics. The member's prefix adds the R7b question
+  // #888 D6 adds one sentence on option inputs to each persona's owner-reporting line. Target next/0.8 78e077c; preserve its member-proposal text and original worker semantics. The member's prefix adds the R7b question
   // contract (four parts); the observer's is D19's
   // rewrite (workbench-market 18: takes no tickets, tags and counts stuck points, sees health problems first — R7a).
-  const originalPrefixes = { member: 'dd48170602723c933cd0101026fc05c91b02fdd813535ff144c2de9efed4956e', observer: '1cfe304325f5868e61c68cb5e2ea666a16b8d1a9f9e2b35c9ae2c5e1656f05be' }
+  const originalPrefixes = { member: '6b97b2cfdf0f8bf830d821d12791920dba51c1ae045feaab7e0ba28c30b5acbd', observer: '0ee83435bdccd922ba485ca45bc5f79ea5b60c56024a63c63349cb0a631b38f3' }
   for (const [role, sha] of Object.entries(originalPrefixes)) {
     const original = readFileSync(new URL('src/superagent/prompts/' + role + '.md', root), 'utf8')
     expect(digest(original)).toBe(sha)
@@ -59,7 +61,10 @@ it('adds only the shared boundary to original worker personas and leaves the bui
   const builder = persona(presets.find(row => row.config?.id === 'superagent-builder')!).prefix as string
   expect(builder).toContain('only after their own reply in this session call superagent_issue_file')
   expect(builder).toContain('you never touch GitHub yourself')
-  expect(digest(builder)).toBe('972bb277f63a594b57f73bd3c261f593e27f0f2454f9fe65110a282ac3b14ddb')
+  // #83 (owner-approved minimal fix) added one sentence to the builder's persona: a loaded skill is guidance to read and
+  // grants no tool. Pin the new text as #791 did.
+  expect(builder).toContain('A skill is guidance you read: it gives you no tool')
+  expect(digest(builder)).toBe('75fdb142fd195418120f9597aa41c59ce429445211f7e04d5fd3d57ddd096d40')
 })
 
 it('retains upstream member initiative as a proposal, never a self-assignment or an external send', () => {

@@ -26,8 +26,10 @@ import { TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_LIMIT } from '../session-trans
 import { refuseIfBudgetExhausted } from '../recursion-guard.ts'
 import { peerPayloadFingerprint, WIRE_ERROR_IDEMPOTENCY_CONFLICT, WIRE_ERROR_REPLAY_REJECTED } from '../idempotency-store.ts'
 import { briefOf, type TaskLedger } from '../task-ledger.ts'
-import { parseReceipt, taskIdRefusal } from '../receipt.ts'
+import { holdsRow, parseReceipt, taskIdRefusal } from '../receipt.ts'
 import {receiptMailboxBirth,receiptMailboxHash,type ReceiptMailboxCommit} from '../receipt-mailbox.ts'
+import type { ReceiptSettlement } from '../cli-deposit.ts'
+import { archivedBySameReceipt } from '../task-ledger-rows.ts'
 import { buildAuthorization, claimCovers, nextOf, refusalOf, type Admission, type AuthProof, type RemoteCliProof, type SettlementRefusal, type Settler } from '../task-auth.ts'
 import { AdmittedBookkeepingError, ADMITTED_BOOKKEEPING_NOTE } from '../admitted-bookkeeping.ts'
 import { capacityRefusalOf, capacityRefusalNote, type CapacityRefusal } from '../task-delivery-capacity.ts'
@@ -132,6 +134,8 @@ export interface WireDeps {
   /** #114 S6: record the version if it moved and re-judge affected tasks (observe only). */
   readonly observeAuthorization: (cause: string) => void
   readonly scanSessionLogList: () => Array<{ id: string; mtimeMs: number; sizeBytes: number }>
+  /** #881 v2: a session that received an outbound result body is never served to peers. */
+  readonly restrictedSession?: (id: string) => boolean
   readonly readSessionLogTail: (id: string, limit: number) => { ok: true; id: string; messages: Array<{ role: string; text: string; time?: number }> } | { ok: false; error: string }
   readonly taskLedger: TaskLedger
   /**
@@ -148,6 +152,8 @@ export interface WireDeps {
   /** Settles a receipt; returns the enforce refusal of the row its header names (#139), if any. */
   readonly waitForForwardBirth: (message: string) => Promise<void>
   readonly settleAndAnnounce: (message: string, settler?: Settler) => SettlementRefusal | undefined
+  /** #881 v2 B2: the same settlement, with the positive verdict a receipt's mailbox row carries. */
+  readonly settleWithVerdict: (message: string, settler?: Settler) => ReceiptSettlement & { readonly refusal?: SettlementRefusal }
   readonly touchWakeDemand: () => void
   readonly session: string
   readonly resolveAgentForTeam: (team: string) => Agent | undefined
@@ -251,7 +257,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     taskLedger,
     refuseIfFlooded,
     refuseIfQueueFull,
-    settleAndAnnounce, waitForForwardBirth,
+    settleAndAnnounce, settleWithVerdict, waitForForwardBirth,
     session,
     resolveAgentForTeam,
     parseCanvasTeamName,
@@ -468,11 +474,15 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
       }
       if (id === '') {
         try {
-          const rows = scanSessionLogList()
+          const rows = scanSessionLogList().filter(row => d.restrictedSession?.(row.id) !== true)
           send(200, { ok: true, count: rows.length, sessions: rows.slice(0, 50) })
         } catch (error) {
           send(200, { ok: false, error: `transcript list failed: ${error instanceof Error ? error.message : String(error)}` })
         }
+        return
+      }
+      if (d.restrictedSession?.(id) === true) {
+        send(200, { ok: false, error: 'session unavailable' })
         return
       }
       try {
@@ -495,11 +505,16 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
     if(commit.originalBirth!==undefined&&(!row&&!archived||receiptMailboxBirth((row??archived)!)!==commit.originalBirth))throw Error('original mailbox receipt task birth changed')
     if(commit.phase!=='pending')return commit.phase
     if(archived?.endedBy==='cancelled'||archived?.endedBy==='abandoned') {
-      cliDeposits.completeReceiptCommit(commit.transportId,'refused');return 'refused'
+      cliDeposits.completeReceiptCommit(commit.transportId,'refused',{settlement:'refused',reason:'task-ended'});return 'refused'
     }
-    const refusal=archived?.endedBy==='receipt'?undefined:settleAndAnnounce(commit.message,commit.settler)
-    const phase=refusal===undefined?'delivered':'refused'
-    cliDeposits.completeReceiptCommit(commit.transportId,phase)
+    // #881 v2 B2: a task another receipt already settled endorses nothing; only a replay of this same receipt (the same
+    // settler and summary, after a stop between settling and recording) keeps its positive verdict. The transport phase is
+    // unchanged: the receipt was delivered either way; what the row's reader sees is the verdict.
+    const verdict:ReceiptSettlement&{readonly refusal?:SettlementRefusal}=archived?.endedBy==='receipt'
+      ?(!holdsRow(parsed.envelope)&&archivedBySameReceipt(archived,commit.settler.caller,parsed.summary)?{settlement:'settled'}:{settlement:'none',reason:'already-settled'})
+      :settleWithVerdict(commit.message,commit.settler)
+    const phase=verdict.refusal===undefined?'delivered':'refused'
+    cliDeposits.completeReceiptCommit(commit.transportId,phase,{settlement:verdict.settlement,...(verdict.reason!==undefined?{reason:verdict.reason}:{})})
     idempotencyStore.recordOutcome(commit.transportId,{status:'completed',reply:'receipt '+phase,receiptDelivery:phase})
     return phase
   }

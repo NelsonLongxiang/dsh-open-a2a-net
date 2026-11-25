@@ -9,9 +9,9 @@
  */
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, dirname, join, resolve } from 'node:path'
 
 /** The command ygl-trees installs. `ygl` is only the name the presets give its MCP server (tools `mcp__ygl__*`). */
 export const YGL_CLI = 'ygl-trees'
@@ -25,9 +25,65 @@ export const teamYglHome = (env: NodeJS.ProcessEnv = process.env): string =>
 /** Runs the ygl-trees CLI and resolves its stdout; rejects with the error when it cannot be started or exits non-zero. */
 export type YglRun = (args: readonly string[], env: NodeJS.ProcessEnv) => Promise<string | void>
 
+/** The environment variable that carries the resolved entry script of ygl-trees (#900); the Windows preset reads it. */
+export const YGL_BIN_ENV = 'SUPERAGENT_YGL_BIN'
+
+/**
+ * #900: the absolute path of the installed ygl-trees entry script, so Windows can run it with this node directly. The npm
+ * install on Windows is a `.cmd` shim that only `cmd` starts; `windowsHide` covers only the process spawned directly, so the
+ * node.exe under `cmd` → `.cmd` opened a visible console for every team session. Looked up where npm puts a global package:
+ * beside each `ygl-trees(.cmd)` on PATH, beside this node, and npm's default Windows prefix; a `ygl-trees` on PATH that is a
+ * link straight to the script counts too.
+ * @param env - the environment (PATH, APPDATA).
+ * @param execPath - this node.
+ * @param fs - file access (tests).
+ * @param fs.exists - whether a path exists.
+ * @param fs.read - a file's text.
+ * @param fs.real - a path with its links resolved.
+ * @returns the entry script, or undefined when none is found.
+ */
+export function resolveYglBin(env: NodeJS.ProcessEnv = process.env, execPath: string = process.execPath, fs: { exists: (path: string) => boolean; read: (path: string) => string; real?: (path: string) => string } = { exists: existsSync, read: path => readFileSync(path, 'utf8'), real: realpathSync }): string | undefined {
+  const pathDirs = (env.PATH ?? env.Path ?? '').split(delimiter).filter(dir => dir !== '')
+  for (const dir of pathDirs) {
+    try { const target = fs.real?.(join(dir, YGL_CLI)); if (target !== undefined && /\.[cm]?js$/.test(target) && fs.exists(target)) return target } catch { /* not here */ }
+  }
+  const prefixes = [
+    ...pathDirs.filter(dir => fs.exists(join(dir, `${YGL_CLI}.cmd`)) || fs.exists(join(dir, YGL_CLI))),
+    dirname(execPath),
+    ...(env.APPDATA !== undefined ? [join(env.APPDATA, 'npm')] : []),
+  ]
+  for (const prefix of prefixes) {
+    for (const dir of [join(prefix, 'node_modules', YGL_CLI), join(prefix, '..', 'lib', 'node_modules', YGL_CLI)]) {
+      try {
+        const bin = (JSON.parse(fs.read(join(dir, 'package.json'))) as { bin?: unknown }).bin
+        const rel = typeof bin === 'string' ? bin : bin !== null && typeof bin === 'object' ? (bin as Record<string, unknown>)[YGL_CLI] : undefined
+        if (typeof rel === 'string' && fs.exists(join(dir, rel))) return resolve(dir, rel)
+      } catch { /* not installed here */ }
+    }
+  }
+  return undefined
+}
+
+/**
+ * #900: on Windows, publish the resolved entry script for the presets (unless the owner set one); elsewhere nothing changes.
+ * @returns the entry script the presets will use, if any.
+ */
+export function exportYglBin(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (process.platform !== 'win32') return env[YGL_BIN_ENV]
+  if (env[YGL_BIN_ENV] === undefined || env[YGL_BIN_ENV] === '') { const bin = resolveYglBin(env); if (bin !== undefined) env[YGL_BIN_ENV] = bin }
+  return env[YGL_BIN_ENV]
+}
+
+/** How the host itself runs ygl-trees: this node on the resolved entry script when there is one (#900), otherwise the command. */
+const yglSpawn = (args: readonly string[]): { file: string; args: string[]; shell: boolean } => {
+  const bin = process.platform === 'win32' ? process.env[YGL_BIN_ENV] : undefined
+  // On Windows without a resolved entry the npm install is a `.cmd` shim, which only a shell starts; the arguments are fixed words.
+  return bin !== undefined && bin !== '' ? { file: process.execPath, args: [bin, ...args], shell: false } : { file: YGL_CLI, args: [...args], shell: process.platform === 'win32' }
+}
+
 export const defaultYglRun: YglRun = (args, env) => new Promise((resolve, reject) => {
-  // On Windows the npm install is a `.cmd` shim, which only a shell starts; the arguments are fixed words.
-  execFile(YGL_CLI, [...args], { env, timeout: 60_000, shell: process.platform === 'win32', windowsHide: true }, (error, stdout) => { if (error) reject(error); else resolve(String(stdout)) })
+  const run = yglSpawn(args)
+  execFile(run.file, run.args, { env: { ...env, ELECTRON_RUN_AS_NODE: '1' }, timeout: 60_000, shell: run.shell, windowsHide: true }, (error, stdout) => { if (error) reject(error); else resolve(String(stdout)) })
 })
 
 export type YglHomeOutcome = 'present' | 'created' | 'unavailable' | 'failed'
@@ -65,7 +121,8 @@ export function yglCapabilitiesOf(version: string | undefined): YglCapabilities 
 export type YglVersionRead = () => Promise<string | undefined>
 
 export const defaultYglVersionRead: YglVersionRead = () => new Promise(resolve => {
-  execFile(YGL_CLI, ['--version'], { timeout: 15_000, shell: process.platform === 'win32', windowsHide: true }, (error, stdout) => {
+  const run = yglSpawn(['--version'])
+  execFile(run.file, run.args, { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, timeout: 15_000, shell: run.shell, windowsHide: true }, (error, stdout) => {
     resolve(error ? undefined : String(stdout).trim().split(/\s+/)[0] || undefined)
   })
 })

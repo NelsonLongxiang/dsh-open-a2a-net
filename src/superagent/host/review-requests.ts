@@ -4,12 +4,19 @@
  * With a reviewer set, each pull request a ticket opened gets one review request at its head; a new head asks again. The
  * reviewer's formal receipt is the verdict, advice to the person who merges: it reaches the ticket as a note and the team
  * page. Nothing here merges. The request names only the repository's pull request and its commit, never ticket content.
+ *
+ * #874: a verdict is checked only from one structured line in the receipt text, `verdict: PASS|FAIL head: <full commit>`,
+ * whose commit must be the requested head in full; the receipt's request binding (receiptFor) ties it to the ticket. Any
+ * other form is kept as a reference note, never a pass. A request is recorded before it is sent, so a restart between the
+ * send and its record finds it and marks it unknown instead of asking again.
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/review-requests
  */
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { TRUSTED_PROOFS } from '../a2a-watch.ts'
+import { holdsRow, parseReceipt } from '../../receipt.ts'
+import { keepUnsettled, receiptStanding, type UnsettledReceipt } from './receipt-settlement.ts'
 import type { Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
 
 export interface ReviewRecord {
@@ -19,28 +26,99 @@ export interface ReviewRecord {
   readonly task: string
   readonly reviewer: string
   readonly at: string
-  verdict?: { readonly pass: boolean; readonly text: string; readonly at: string }
+  /** `asking`: recorded before the send, the outcome not yet known; `unknown`: found still asking after a restart. */
+  state?: 'asking' | 'unknown'
+  /** For an `unknown` request: the ticket has been told (kept on disk, so a second restart neither loses nor repeats it). */
+  told?: boolean
+  /** #877: the team identity the task id was recorded under; a retry is refused if it changed. Absent on the session path. */
+  sender?: string
+  verdict?: ReviewVerdict
+  /** #881 v2 B2: reviewer receipts the network ledger did not settle positively: kept, never a verdict. */
+  unsettled?: UnsettledReceipt[]
+}
+
+/**
+ * `verified`: one structured line names the requested head in full; `pass` is its PASS. `reference`: no structured line,
+ * the text is kept as a reference only. `unverified`: structured lines that disagree, or a commit other than the full head.
+ * Only a verified PASS has `pass: true`.
+ */
+export interface ReviewVerdict {
+  readonly pass: boolean
+  readonly checked: 'verified' | 'reference' | 'unverified'
+  readonly reason?: string
+  readonly text: string
+  readonly at: string
+}
+
+/**
+ * The structured verdict line, exactly one per receipt: `verdict: PASS head: <full commit>` (or FAIL; backticks around it
+ * are allowed). ASCII only and case as written: no case folding, so look-alike spellings never read as PASS.
+ */
+const VERDICT_LINE = /^[ \t>*_`-]*verdict:[ \t]*(PASS|FAIL)[ \t]+head:[ \t]*([0-9a-f]{7,64})[ \t`*_]*$/gm
+/** The line a request asks for, with the head filled in. */
+export const verdictLineFor = (head: string): string => `verdict: PASS head: ${head}`
+
+/** Read a receipt's verdict about `head`. Exported for tests. */
+export function readVerdict(text: string, head: string): { readonly pass: boolean; readonly checked: ReviewVerdict['checked']; readonly reason?: string } {
+  const lines = [...text.matchAll(VERDICT_LINE)].map(m => ({ verdict: m[1]!, head: m[2]! }))
+  if (lines.length === 0) return { pass: false, checked: 'reference', reason: '没有结构化结论行（verdict: PASS|FAIL head: <完整提交>）' }
+  if (lines.length > 1) return { pass: false, checked: 'unverified', reason: '结构化结论行不止一行（约定只写一行）' }
+  const first = lines[0]!
+  if (first.head !== head.toLowerCase()) return { pass: false, checked: 'unverified', reason: `结论行的提交 ${first.head} 不是请求的完整提交` }
+  return { pass: first.verdict === 'PASS', checked: 'verified' }
 }
 
 export interface ReviewRequestsDeps {
   readonly path: string
   readonly reviewer: () => string | undefined
-  readonly ask: (address: string, text: string) => Promise<string | undefined>
+  /** With `task` and `sender` (#877): send under that task id from that team identity; without, the session's route. */
+  readonly ask: (address: string, text: string, task?: string, sender?: string) => Promise<string | undefined>
+  /** #877: the team identity to send from. When present, each request gets its task id before the send. */
+  readonly sender?: () => Promise<string>
+  /** #877: a fresh task id (tests fix it). */
+  readonly taskId?: () => string
   readonly note: (ticketId: string, text: string) => void
   readonly logger: { warn(format: string, ...args: unknown[]): void }
 }
 
 const clip = (text: string, max: number): string => (text.length <= max ? text : `${text.slice(0, max)}…`)
 
+/** #885 review M10: the host's wiring of the team route (#877): with a task and a sender, the team identity's --task route. */
+export function reviewRoute(a2a: { askReview(address: string, text: string): Promise<string | undefined>; askReviewAs(address: string, text: string, task: string, sender: string): Promise<string | undefined>; ensureIdentity(): Promise<string> }): Pick<ReviewRequestsDeps, 'ask' | 'sender'> {
+  return {
+    ask: (address, text, task, sender) => task !== undefined && sender !== undefined ? a2a.askReviewAs(address, text, task, sender) : a2a.askReview(address, text),
+    sender: () => a2a.ensureIdentity(),
+  }
+}
+
 export class ReviewRequests {
   /** The latest request per pull request: a new head replaces it, so a late verdict on the old head matches nothing. */
   private records: Record<string, ReviewRecord>
   private readonly asking = new Set<string>()
+  /** Notes found at start, given on the first call after it: the host builds this before the engine that takes notes. */
+  private startNotes: Array<{ readonly thread: string; readonly head: string; readonly ticketId: string; readonly text: string }> = []
 
   constructor(private readonly d: ReviewRequestsDeps) {
     let stored: Record<string, ReviewRecord> = {}
     try { if (existsSync(d.path)) stored = JSON.parse(readFileSync(d.path, 'utf8')) as Record<string, ReviewRecord> } catch { /* start empty */ }
     this.records = stored
+    let changed = false
+    for (const r of Object.values(stored)) {
+      // A verdict stored before structured checking (no `checked`): a reference only, never a pass.
+      if (r.verdict !== undefined && (r.verdict as Partial<ReviewVerdict>).checked === undefined) {
+        r.verdict = { ...r.verdict, pass: false, checked: 'reference', reason: '旧版记录（结构化核对之前），只作参考' }
+        changed = true
+      }
+      // Still asking at start: the process stopped between the send and its record. Whether it went out is unknown;
+      // asking again could ask twice, so it is marked and the ticket told once (`told` on disk). A new head asks as usual.
+      // #877: a request recorded with its task id is asked again under that same id (the send chain answers with the first
+      // result, never a second request), so it stays asking; only an older request without an id is unknown.
+      if (r.state === 'asking' && !(r.task !== '' && r.sender !== undefined)) { r.state = 'unknown'; r.told = false; changed = true }
+    }
+    if (changed) this.save()
+    for (const r of Object.values(stored)) {
+      if (r.state === 'unknown' && r.told !== true) this.startNotes.push({ thread: r.thread, head: r.head, ticketId: r.ticketId, text: `评审请求是否已发给 ${r.reviewer} 未知（发送途中重启，提交 ${r.head.slice(0, 7)}）：不自动重发，以免重复派单。请核对评审人一侧，或推新提交重新请求。` })
+    }
   }
 
   private save(): void {
@@ -51,31 +129,99 @@ export class ReviewRequests {
 
   list(): readonly ReviewRecord[] { return Object.values(this.records) }
 
+  private flushStartNotes(): void {
+    if (this.startNotes.length === 0) return
+    const notes = this.startNotes
+    this.startNotes = []
+    for (const n of notes) {
+      this.d.note(n.ticketId, n.text)
+      const r = this.records[n.thread]
+      if (r !== undefined && r.head === n.head && r.state === 'unknown') r.told = true
+    }
+    this.save()
+  }
+
   /** An open pull request was read at `head`. A failure of the ask throws, and the next read tries again. */
   async opened(thread: string, head: string, url: string, ticketId: string): Promise<void> {
+    this.flushStartNotes()
     const reviewer = this.d.reviewer()
-    if (reviewer === undefined || this.asking.has(thread) || this.records[thread]?.head === head) return
+    const current = this.records[thread]
+    // #877: a request recorded with its task id whose outcome is not known yet is asked again under that same id.
+    const retry = current !== undefined && current.head === head && current.state === 'asking' && current.task !== '' && current.sender !== undefined
+    if (reviewer === undefined || this.asking.has(thread) || (current?.head === head && !retry)) return
     this.asking.add(thread)
+    // #885 review B1: a request asked again under its recorded id may already be with the reviewer, so restoring puts that
+    // same record back (a changed identity or an unlinked reviewer leaves it as it is, to be asked again under the same id).
+    const before = current
+    const restore = (): void => { if (before === undefined) delete this.records[thread]; else this.records[thread] = before; this.save() }
     try {
-      const task = await this.d.ask(reviewer, `[评审请求] ${url} @ ${head}。请在这个提交上评审，结论用回执给出：PASS 或 FAIL，并写上提交号。`)
-      if (task === undefined) { this.d.logger.warn('superagent: the reviewer %s is not linked; no review request was sent', reviewer); return }
-      this.records[thread] = { thread, ticketId, head, task, reviewer, at: new Date().toISOString() }
+      const text = `[评审请求] ${url} @ ${head}。请在这个提交上评审，结论用回执给出，并在回执正文里单独写这一行（只写一行；不通过把 PASS 换成 FAIL）：${verdictLineFor(head)}`
+      if (retry || this.d.sender !== undefined) {
+        // #877: the task id and the team identity are recorded before the send; a restart or a failed send keeps them.
+        const sender = retry ? current.sender! : await this.d.sender!()
+        const id = retry ? current.task : (this.d.taskId?.() ?? `rev-${randomUUID()}`)
+        if (!retry) { this.records[thread] = { thread, ticketId, head, task: id, reviewer, at: new Date().toISOString(), state: 'asking', sender }; this.save() }
+        // #885 review B4: asked again, it goes to the reviewer the id was recorded for, never to a newly configured one.
+        const to = retry ? current.reviewer : reviewer
+        let task: string | undefined
+        try { task = await this.d.ask(to, text, id, sender) } catch (error) {
+          // Nothing went out (the identity changed, the host refused before any dispatch): ask anew on a later read. Any other
+          // failure may have gone out: keep the id, so the next read asks again under it and never sends a second request.
+          if ((error as { delivery?: unknown }).delivery === 'not-sent') restore()
+          throw error
+        }
+        if (task === undefined) { restore(); this.d.logger.warn('superagent: the reviewer %s is not linked; no review request was sent', to); return }
+        if (task !== id) throw new Error(`review request answered for task ${task}, not ${id}; kept to ask again under ${id}`)
+        // #885 review B2: a verdict that arrived while the send was in flight is kept.
+        const now = this.records[thread]
+        this.records[thread] = { thread, ticketId, head, task, reviewer: to, at: now!.at, sender, ...(now?.verdict !== undefined ? { verdict: now.verdict } : {}) }
+        this.save()
+        return
+      }
+      // Recorded before the send: a restart before the task id is kept finds it (see the constructor).
+      this.records[thread] = { thread, ticketId, head, task: '', reviewer, at: new Date().toISOString(), state: 'asking' }
+      this.save()
+      let task: string | undefined
+      // A thrown send is tried again on a later read, as before: the record goes back to what it was.
+      try { task = await this.d.ask(reviewer, text) } catch (error) { restore(); throw error }
+      if (task === undefined) { restore(); this.d.logger.warn('superagent: the reviewer %s is not linked; no review request was sent', reviewer); return }
+      this.records[thread] = { thread, ticketId, head, task, reviewer, at: this.records[thread]!.at }
       this.save()
     } finally { this.asking.delete(thread) }
   }
 
+  /** #881 v2 B2: review requests still without a verdict whose reviewer receipts the ledger did not settle positively. */
+  unsettledProblems(): Array<{ readonly ticketId: string; readonly task: string; readonly last: UnsettledReceipt }> {
+    return Object.values(this.records).filter(r => r.verdict === undefined && (r.unsettled?.length ?? 0) > 0).map(r => ({ ticketId: r.ticketId, task: r.task, last: r.unsettled!.at(-1)! }))
+  }
+
   /** A mailbox row: the reviewer's receipt on the task of a request that is still the latest is its verdict. */
   received(trigger: Trigger): void {
+    this.flushStartNotes()
     const receiptFor = trigger.meta.receiptFor
     if (typeof receiptFor !== 'string') return
-    const record = Object.values(this.records).find(r => r.task === receiptFor && r.verdict === undefined)
+    const record = Object.values(this.records).find(r => r.task !== '' && r.task === receiptFor && r.verdict === undefined)
     if (record === undefined || trigger.actor.id !== record.reviewer) return
     if (typeof trigger.meta.proof !== 'string' || !TRUSTED_PROOFS.has(trigger.meta.proof)) return
+    // #881 v2 B2: an acknowledgement or a question from the reviewer is not a verdict; a final receipt is one only when the
+    // network ledger settled the review task with it. Anything else is kept for the health view.
+    const at = trigger.text.indexOf('[A2A receipt] task '), parsed = at < 0 ? null : parseReceipt(trigger.text.slice(at))
+    const interim = parsed !== null && holdsRow(parsed.envelope)
+    const standing = receiptStanding(trigger, interim)
+    if (!standing.ok) {
+      const kept = keepUnsettled(record.unsettled, standing.unsettled)
+      if (JSON.stringify(kept) !== JSON.stringify(record.unsettled ?? [])) { record.unsettled = kept; this.save() }
+      return
+    }
+    if (interim) return
     const short = record.head.slice(0, 7)
-    // The verdict must name the commit it was given on: a bare PASS could be about anything.
-    const pass = /\bPASS\b/.test(trigger.text) && trigger.text.includes(short)
-    record.verdict = { pass, text: clip(trigger.text, 500), at: trigger.at }
+    // The verdict must name the commit it was given on, in full, in its structured line; free text is a reference only.
+    const read = readVerdict(trigger.text, record.head)
+    // #885 review B2: the reviewer answered this task, so it is no longer being asked (a later read does not ask again).
+    delete record.state
+    record.verdict = { pass: read.pass, checked: read.checked, ...(read.reason !== undefined ? { reason: read.reason } : {}), text: clip(trigger.text, 500), at: trigger.at }
     this.save()
-    this.d.note(record.ticketId, `评审结论（${short}）：${pass ? 'PASS' : '未通过'}。${clip(trigger.text, 500)}（仅供合并人参考，成员和宿主都不合并。）`)
+    const label = read.checked === 'verified' ? `已核对完整提交 ${record.head}` : `参考，未核验：${read.reason ?? ''}`
+    this.d.note(record.ticketId, `评审结论（${short}，${label}）：${read.checked === 'verified' ? (read.pass ? 'PASS' : '未通过') : '不计为通过'}。${clip(trigger.text, 500)}（仅供合并人参考，成员和宿主都不合并。）`)
   }
 }

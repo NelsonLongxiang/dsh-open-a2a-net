@@ -300,6 +300,19 @@ export class A2aSource {
     return await this.routeAs(address, text, context)
   }
 
+  /**
+   * #877 (owner decision 2026-11-24): ask the reviewer with a task id recorded before the send, from the team identity, so
+   * a retry after an unknown outcome reuses the same id and the send chain answers with the first result instead of a
+   * second request. Refused before anything runs when the team identity changed since the id was recorded (as
+   * askApproved). The reviewer must still be linked; undefined when not.
+   */
+  async askReviewAs(address: string, text: string, task: string, sender: string): Promise<string | undefined> {
+    if (sender === '' || this.address !== sender) throw new RouteRefused('团队发送身份变化，未执行 route。', task, 'not-sent')
+    const check = JSON.parse(await this.context.commands.run('a2a-net', ['admission', address, '--json'])) as { admitted?: unknown; rule?: unknown }
+    if (check.admitted !== true || typeof check.rule !== 'string' || !LINK_RULES.has(check.rule)) return undefined
+    return await this.routeAs(address, text, undefined, task, true)
+  }
+
   /** Send one persisted approved outbound attempt; no automatic retry under another task id. */
   async askApproved(address: string, text: string, task: string, sender: string): Promise<string | undefined> {
     if (sender === '' || this.address !== sender) throw new RouteRefused('团队发送身份变化，未执行 route。', task, 'not-sent')
@@ -314,11 +327,15 @@ export class A2aSource {
    * that address), while a child team answers from its host's face, never from its canvas address — the check said no
    * and nothing was sent (test host, 2026-11-12). The child's own admission of this identity still applies to the send.
    */
-  async routeAs(address: string, text: string, context?: string, task?: string): Promise<string | undefined> {
+  async routeAs(address: string, text: string, context?: string, task?: string, replayHeld = false): Promise<string | undefined> {
     const route = async (): Promise<string | undefined> => {
       const args = ['route', address, '--json', ...(context !== undefined ? ['--context', context] : []), ...(task !== undefined ? ['--task', task] : []), '--', text]
       const stdout = task !== undefined ? await (this.d.run ?? runCli)(args, this.env()) : await this.context.commands.run('a2a-net', args)
-      const sent = JSON.parse(stdout) as { task_id?: unknown; routed?: unknown; delivered?: unknown; acceptance?: unknown; prior?: { status?: unknown }; error?: unknown }
+      const sent = JSON.parse(stdout) as { task_id?: unknown; routed?: unknown; delivered?: unknown; acceptance?: unknown; prior?: { found?: unknown; status?: unknown }; error?: unknown; replay?: unknown; received?: unknown; code?: unknown }
+      // #885 review B3: a review request asked again under its own task id gets the CLI's replay answer (cli/a2a.mjs: the
+      // host's 409 body plus received and the prior outcome). The reviewer's host already holds that task, pending or
+      // completed: the request is there once, so that is the answer. A failed prior, a conflict or an unknown outcome is not.
+      if (replayHeld && task !== undefined && sent.task_id === task && sent.replay === true && sent.received === true && sent.code === -32003 && sent.acceptance !== 'unknown' && sent.prior?.found === true && (sent.prior.status === 'pending' || sent.prior.status === 'completed')) return task
       if (task !== undefined && (sent.task_id !== task || (sent.delivered !== true && sent.routed !== true) || sent.acceptance === 'unknown' || (sent.prior !== undefined && sent.prior.status !== 'completed') || sent.error !== undefined)) throw new RouteRefused('原 task 的接纳未确认，请对账，不重派。', task)
       return typeof sent.task_id === 'string' ? sent.task_id : undefined
     }

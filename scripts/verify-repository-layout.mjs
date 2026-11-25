@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Read-only repository layout check. This reports paths; it never moves or deletes them. */
-import { readdirSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { readdirSync, readFileSync, realpathSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
@@ -21,7 +21,7 @@ const LOCAL_FILES = new Set(['.npmrc', '.DS_Store', 'desktop.ini'])
 const LOCAL_ONLY = new Set(['.claude', '.sessions', 'node_modules', 'lib', 'coverage', 'tmp', 'feedback', 'a2a-inbox'])
 
 /** Pure path policy, shared by the CLI and counterexample fixtures. */
-export function layoutFindings(tracked, entries) {
+export function layoutFindings(tracked, entries, { linkedWorktree = false } = {}) {
   const findings = []
   for (const path of tracked) {
     const segments = path.split('/')
@@ -37,17 +37,54 @@ export function layoutFindings(tracked, entries) {
     const known = kind === 'directory'
       ? SOURCE_DIRS.has(name) || LOCAL_DIRS.has(name)
       : kind === 'file'
-        ? ROOT_FILES.has(name) || LOCAL_FILES.has(name)
+        ? ROOT_FILES.has(name) || LOCAL_FILES.has(name) || (name === '.git' && linkedWorktree)
         : kind === 'link' && ['node_modules', '.git'].includes(name)
     if (!known) findings.push({ code: 'unexpected-root-entry', path: name, reason: 'Inspect ownership and references, then preserve/archive the object; this check does not delete it.' })
   }
   return findings
 }
 
+/** Inspect this checkout, never an index or work tree selected by inherited Git environment overrides. */
+function readGit(root, args) {
+  const env = { ...process.env }
+  for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key]
+  return spawnSync('git', args, { cwd: root, env, encoding: 'utf8', maxBuffer: 16 << 20 })
+}
+
+/** A separate gitdir may forge common/back pointers; registration must belong to this common repository too. */
+function isRegisteredAdmin(root, admin, common) {
+  if (dirname(admin) !== realpathSync(join(common, 'worktrees'))) return false
+  const listed = readGit(root, ['worktree', 'list', '--porcelain', '-z'])
+  if (listed.error || listed.status !== 0) return false
+  const current = realpathSync(root)
+  return listed.stdout.split('\0').some(field => {
+    if (!field.startsWith('worktree ')) return false
+    // Another registered checkout can already be gone (prunable); it must not hide this valid one.
+    try { return realpathSync(field.slice(9)) === current } catch { return false }
+  })
+}
+
+/** A copied gitfile is not proof: Git's per-worktree admin directory must point back to this exact .git file. */
+function isLinkedWorktree(root) {
+  try {
+    const proof = readGit(root, ['rev-parse', '--absolute-git-dir', '--git-common-dir', '--show-toplevel', '--is-inside-work-tree'])
+    if (proof.error || proof.status !== 0) return false
+    const paths = proof.stdout.trimEnd().split(/\r?\n/)
+    if (paths.length !== 4 || paths[3] !== 'true') return false
+    const [admin, common, top] = paths.slice(0, 3).map(path => realpathSync(resolve(root, path)))
+    if (admin === common || top !== realpathSync(root)) return false
+    if (!isRegisteredAdmin(root, admin, common)) return false
+    const back = readFileSync(join(admin, 'gitdir'), 'utf8').replace(/\r?\n$/, '')
+    return realpathSync(resolve(admin, back)) === realpathSync(join(root, '.git'))
+  } catch {
+    return false
+  }
+}
+
 /** Check the current index plus actual root entries; include ignored files instead of hiding clutter. */
 export function checkRepositoryLayout(root) {
   const absolute = resolve(root)
-  const listed = spawnSync('git', ['ls-files', '--cached', '-z'], { cwd: absolute, encoding: 'utf8', maxBuffer: 16 << 20 })
+  const listed = readGit(absolute, ['ls-files', '--cached', '-z'])
   if (listed.error) throw listed.error
   if (listed.status !== 0) throw Error('Cannot inspect Git index: ' + String(listed.stderr).trim())
   const tracked = listed.stdout.split('\0').filter(Boolean)
@@ -55,7 +92,8 @@ export function checkRepositoryLayout(root) {
     name: entry.name,
     kind: entry.isSymbolicLink() ? 'link' : entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : 'other',
   }))
-  return { root: absolute, tracked: tracked.length, rootEntries: entries.length, findings: layoutFindings(tracked, entries) }
+  const linkedWorktree = entries.some(entry => entry.name === '.git' && entry.kind === 'file') && isLinkedWorktree(absolute)
+  return { root: absolute, tracked: tracked.length, rootEntries: entries.length, findings: layoutFindings(tracked, entries, { linkedWorktree }) }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

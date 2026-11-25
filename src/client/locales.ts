@@ -44,6 +44,7 @@ export type A2aNetKey =
   | 'team.fromMember'
   | 'team.fromHealth'
   | 'team.autoAcked'
+  | 'team.autoApproved'
   | 'team.fromTool'
   | 'team.fromOutbound'
   | 'team.fromSender'
@@ -66,6 +67,10 @@ export type A2aNetKey =
   | 'team.healthQueuedStalled'
   | 'team.healthQueuedAllBusy'
   | 'team.decisionsCount'
+  | 'team.needsInput'
+  | 'team.countNeedsInput'
+  | 'team.countDirect'
+  | 'team.inputNoFileTarget'
   | 'team.tab'
   | 'team.guide'
   | 'team.pick'
@@ -112,6 +117,7 @@ export const zh: Record<A2aNetKey, string> = {
   'team.fromObserver': '观察者提出',
   'team.fromMember': '成员提问',
   'team.fromHealth': '健康自检',
+  'team.autoApproved': '已自动采纳「{option}」：{minutes} 分钟内没有人处理，宿主已于 {at} 按你的设置采纳推荐项（不是你本人的决定）。仍可改判。',
   'team.autoAcked': '知道了（超时自动）：{minutes} 分钟内没有人处理，宿主已于 {at} 按「知道了」结卡。仍可改判。',
   'team.fromTool': '工具申请',
   'team.fromOutbound': '对外请求',
@@ -135,6 +141,10 @@ export const zh: Record<A2aNetKey, string> = {
   'team.healthQueuedStalled': '有空闲成员，但这些工单一直没派出去，原因不明；可请总工改派',
   'team.healthQueuedAllBusy': '所有成员都在忙',
   'team.decisionsCount': '待你决定（{count}）',
+  'team.needsInput': '需你填写',
+  'team.countNeedsInput': '需填写 {count}',
+  'team.countDirect': '可直接定 {count}',
+  'team.inputNoFileTarget': '这个选项要附文件，但团队没有绑定画布，现在附不了',
   'team.tab': '团队',
   'team.guide': '处理团队等你决定的事，或给团队提需求，不用离开当前对话',
   'team.pick': '团队',
@@ -194,6 +204,7 @@ export const en: Record<A2aNetKey, string> = {
   'team.fromObserver': 'From an observer',
   'team.fromMember': 'From a member',
   'team.fromHealth': 'Health check',
+  'team.autoApproved': 'Taken automatically: 「{option}」. Nobody decided within {minutes} minutes, so the host took the recommendation at {at} on your setting (not your own decision). You can still decide it.',
   'team.autoAcked': 'Acknowledged (timed out): nobody decided within {minutes} minutes, so the host closed it as 「知道了」 at {at}. You can still decide it.',
   'team.fromTool': 'Tool request',
   'team.fromOutbound': 'Outbound request',
@@ -217,6 +228,10 @@ export const en: Record<A2aNetKey, string> = {
   'team.healthQueuedStalled': 'a member is free, yet these tickets have not gone out; the cause is not known, the router can reassign',
   'team.healthQueuedAllBusy': 'every member is busy',
   'team.decisionsCount': 'Waiting for your decision ({count})',
+  'team.needsInput': 'Needs your input',
+  'team.countNeedsInput': 'Need input: {count}',
+  'team.countDirect': 'Can decide directly: {count}',
+  'team.inputNoFileTarget': 'This option needs a file, but the team has no canvas to send it to',
   'team.tab': 'Team',
   'team.guide': 'Decide what your teams wait for, or send them a request, without leaving this conversation',
   'team.pick': 'Team',

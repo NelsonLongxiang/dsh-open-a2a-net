@@ -1,11 +1,11 @@
 # superagent: staffing changes the market proposes and the node carries out
 
-Status: **approved by the owner, 2026-11-12** (「都交给你办吧，你都可以的」, handing the review seat the open owner items). Not implemented. Written 2026-11-11.
+Status: **approved by the owner, 2026-11-12** (「都交给你办吧，你都可以的」, handing the review seat the open owner items). Partly implemented (S1a; see the implementation check below). Written 2026-11-11.
 
-Implementation check (2026-11-18, next/0.8 `44907c00`): S1a is built (#666, `src/superagent/host/staffing.ts`). It carries out `team.create`, `member.add` and `team.rules.set` from the `owner-local` source, and the builder blueprints use it (#670). Since the owner ruling of 2026-11-18 (#741) it also carries out `member.retire` from `owner-local` only (confirm; never the router, a remote member, or a member that owns an open ticket — running, parked or named). Not built yet: S1b (the market entrance), S2 role templates and S3. `team.retire` and `member.retemplate` are refused as `not-yet`, and so is `member.retire` from any other source.
+Implementation check (2026-11-23, next/0.8 `856d085c`): S1a is built (#666, `src/superagent/host/staffing.ts`), and the builder blueprints use it (#670). From the `owner-local` source it carries out, each on `confirm`: `team.create`, `member.add`, `team.rules.set`; `member.retire` (owner ruling 2026-11-18, #741: never the router, a remote member, or a member that owns an open ticket — running, parked or named); `team.github.set` (PR #801, issue #800); and the #808 blueprint parts: `canvas.create`, `canvas.member.add`, `canvas.member.remove` (#809), `network.set`, `network.peer.add`, `network.peer.remove`, `network.originClaimByPeer.set` (#817), `team.approvers.set`, `session.join`, `session.seatName.set` (#820), and `team.settings.set` for the team's A2A settings only (#827). From `owner-local`, `team.retire` and `member.retemplate` are refused as `off`. Not built yet: S1b (the market entrance), S2 role templates and S3; the market's default policy has the #808 operations `off`, and `team.retire`, `member.retemplate` and `member.retire` from the market are refused as `not-yet`.
 
 - **Rulings:** the five boundary points below are taken as proposed: the W2 defaults, rules proposed from the market and confirmed on the node, the node's approvers confirming, and a retired member's open ticket finishing.
-- **Next:** S1 is queued behind the root-team work. Each step is high tier and needs a non-self review PASS.
+- **Next:** S1a is built; S1b, S2 and S3 remain. Each step is high tier and needs a non-self review PASS.
 - **2026-11-12, the team builder** ([superagent-builder](superagent-builder.md)): S1 is split into S1a (the core, with the source as a field) and S1b (the market's entry). The builder is a second source, `owner-local`, of the same changes. `team.rules.set` gains a `scope` and `member.add` a `profile`, for both sources (W2, W6).
 
 - **Asked for by** the workbench market's design session, after the owner's direction (2026-11-11): building an A2A team should be possible from the market; the canvas is easy for the owner but does not suit management. The market's side is `docs/productization/14-team-and-assignment.md` §8 in the market repository: management sees a staffing table (department → team → members, members added from job templates), not a canvas.
@@ -145,5 +145,5 @@ It cannot read or move credentials, widen tools, or reach the owner's user.
 
 ## Unknowns to check before S2/S3
 
-- Starting a new session for a node identity from the team host, and on a linked member host through `serve`: the session-controller path is there for node identities, but not yet driven from superagent.
-- `node-identity.md` §8 rulings still pending (#161): naming and archiving rules may shape `seatId`.
+- Starting a new session for a node identity from the team host, and on a linked member host through `serve`: the session-controller path is there for node identities (`ctx.sessionController.create({ cwd, agentPreset })`, node-identity.md §4.4; the carrier fields exist in `src/node-store.ts`), but superagent does not drive it yet — that wiring belongs to S2 (templates and `member.add`/`member.retemplate` on this instance, see the plan above).
+- ~~`node-identity.md` §8 rulings still pending (#161)~~ — resolved 2026-11-02 (owner ruling, r3 `a390f894`, wording follow-up `24ead2c`: items 1-4 as recommended, 5-10 as proposed); `seatId` naming follows the node name.

@@ -20,6 +20,8 @@ export interface TeamFieldValues {
   readonly blockedTools?: readonly string[]
   /** Minutes before an undecided credential-access card is closed as 「知道了」; absent 15, 0 off. */
   readonly credentialAckMinutes?: number
+  /** #888 D5: the host takes an eligible card's recommendation after a wait; off unless the owner turns it on. */
+  readonly autoApprove?: { readonly enabled: boolean; readonly levels: readonly string[]; readonly sources: readonly string[]; readonly afterMinutes: number; readonly perHour: number; readonly armedAt?: string }
   readonly approvers?: readonly string[]
   readonly reviewer?: string
   readonly repos?: Readonly<Record<string, string>>
@@ -178,6 +180,18 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
   const credentialAck = input('凭据访问提醒：多少分钟没人处理就自动按「知道了」结卡（0 表示不自动）', String(s.credentialAckMinutes ?? 15), '15')
   toolsBox.append(routerTools, blockedTools, credentialAck)
 
+  // #888 D5: owner 2026-11-24 — off by default; when turned on, P3 only, 30 minutes, no sources until the owner adds them.
+  const aa = s.autoApprove ?? { enabled: false, levels: ['P3'], sources: [], afterMinutes: 30, perHour: 10 }
+  const autoBox = section('决策卡自动采纳', '打开后，总工或观察者提的决策卡在下面选定的级别和来源里，等够时间仍没人处理，宿主会自动采纳推荐项，并告诉提卡方这不是你本人的决定；你仍可改判。P0、P1，有需要填写的选项的卡，以及工具、对外请求等宿主卡永远不自动采纳。打开或放宽时从那一刻重新计时，已积压的卡不会马上被批。这一块的修改需要在已登录的界面里保存。')
+  const check = (label: string, checked: boolean): HTMLInputElement => { const box = el('input', '') as HTMLInputElement; box.type = 'checkbox'; box.checked = checked; box.setAttribute('aria-label', label); box.addEventListener('change', mark); return box }
+  const row = (box: HTMLInputElement, label: string): HTMLElement => { const r = el('label', 'wb-sa-hint'); r.append(box, document.createTextNode(` ${label}`)); return r }
+  const autoOn = check('打开决策卡自动采纳', aa.enabled)
+  const autoP2 = check('包括 P2', aa.levels.includes('P2')), autoP3 = check('包括 P3', aa.levels.includes('P3'))
+  const autoRouter = check('总工提的卡', aa.sources.includes('router')), autoObserver = check('观察者提的卡', aa.sources.includes('observer'))
+  const autoMinutes = input('等多少分钟没人处理再自动采纳（15–1440）', String(aa.afterMinutes), '30')
+  const autoPerHour = input('每小时最多自动采纳几张（1–60）', String(aa.perHour), '10')
+  autoBox.append(row(autoOn, '打开自动采纳'), row(autoP3, 'P3'), row(autoP2, 'P2'), row(autoRouter, '总工提的卡'), row(autoObserver, '观察者提的卡'), autoMinutes, autoPerHour)
+
   const approverBox = section('审批人', '团队想请别的团队做事时，会提一张「对外请求」P0 决策卡。除了你，这里列出的成员或观察者也能代为审批（必须写理由，不能批自己提的卡）。填会话 id，一行一个；总工不能当审批人。这一块的修改需要在已登录的界面里保存。')
   const approvers = area('审批人', (s.approvers ?? []).join('\n'), 2, '一行一个会话 id，例如 session-0123abcd-…')
   approverBox.appendChild(approvers)
@@ -251,7 +265,13 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
     if (!same(approverList, s.approvers ?? [])) out.approvers = approverList
     const address = reviewer.value.trim()
     if (address !== (s.reviewer ?? '')) out.reviewer = address === '' ? null : address
+    const afterMinutes = Number(autoMinutes.value.trim()), perHour = Number(autoPerHour.value.trim())
+    if (!Number.isInteger(afterMinutes) || afterMinutes < 15 || afterMinutes > 1440) return { error: '自动采纳的等待时间要是 15–1440 的整数分钟' }
+    if (!Number.isInteger(perHour) || perHour < 1 || perHour > 60) return { error: '每小时自动采纳上限要是 1–60 的整数' }
+    const nextAuto = { enabled: autoOn.checked, levels: [...(autoP2.checked ? ['P2'] : []), ...(autoP3.checked ? ['P3'] : [])], sources: [...(autoRouter.checked ? ['router'] : []), ...(autoObserver.checked ? ['observer'] : [])], afterMinutes, perHour }
+    const { armedAt: _stamp, ...currentAuto } = aa
+    if (!same(nextAuto, { enabled: currentAuto.enabled, levels: [...currentAuto.levels], sources: [...currentAuto.sources], afterMinutes: currentAuto.afterMinutes, perHour: currentAuto.perHour })) out.autoApprove = nextAuto
     return { patch: out }
   }
-  return { nodes: [rulesBox, dispatchBox, profilesBox, execBox, botsBox, repoBox, githubBox, toolsBox, approverBox, reviewBox], patch }
+  return { nodes: [rulesBox, dispatchBox, profilesBox, execBox, botsBox, repoBox, githubBox, toolsBox, autoBox, approverBox, reviewBox], patch }
 }

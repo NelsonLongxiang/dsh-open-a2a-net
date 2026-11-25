@@ -33,18 +33,18 @@ import { parseSeatNames } from '../../owner-settings.ts'
  */
 export const TEAM_SETTING_KEYS = ['sources', 'progressOff', 'decisionPush', 'reviewer'] as const
 
-export const STAFFING_OPS = ['team.create', 'team.retire', 'member.add', 'member.retire', 'member.retemplate', 'team.rules.set', 'team.github.set', 'canvas.create', 'canvas.member.add', 'canvas.member.remove', 'network.set', 'network.peer.add', 'network.peer.remove', 'network.originClaimByPeer.set', 'team.approvers.set', 'session.join', 'session.seatName.set', 'team.settings.set'] as const
+export const STAFFING_OPS = ['team.create', 'team.retire', 'member.add', 'member.retire', 'member.retemplate', 'team.rules.set', 'team.github.set', 'canvas.create', 'canvas.member.add', 'canvas.member.remove', 'network.set', 'network.peer.add', 'network.peer.remove', 'network.originClaimByPeer.set', 'team.approvers.set', 'session.join', 'session.seatName.set', 'session.title.set', 'team.settings.set'] as const
 export type StaffingOp = typeof STAFFING_OPS[number]
 export type StaffingSource = 'owner-local' | `market:${string}`
 export type PolicyMode = 'auto' | 'confirm' | 'off'
 
 /** What this version carries out; the rest is refused as `not-yet`. */
-const BUILT: ReadonlySet<StaffingOp> = new Set(['team.create', 'member.add', 'member.retire', 'team.rules.set', 'team.github.set', 'canvas.create', 'canvas.member.add', 'canvas.member.remove', 'network.set', 'network.peer.add', 'network.peer.remove', 'network.originClaimByPeer.set', 'team.approvers.set', 'session.join', 'session.seatName.set', 'team.settings.set'])
+const BUILT: ReadonlySet<StaffingOp> = new Set(['team.create', 'member.add', 'member.retire', 'team.rules.set', 'team.github.set', 'canvas.create', 'canvas.member.add', 'canvas.member.remove', 'network.set', 'network.peer.add', 'network.peer.remove', 'network.originClaimByPeer.set', 'team.approvers.set', 'session.join', 'session.seatName.set', 'session.title.set', 'team.settings.set'])
 
 /** #626 W2 defaults for the market; `owner-local` (a blueprint, agreed as a whole) is `confirm`, retiring is `off`. */
 export const DEFAULT_POLICY: Readonly<Record<'owner-local' | 'market', Readonly<Record<StaffingOp, PolicyMode>>>> = {
-  'owner-local': { 'team.create': 'confirm', 'team.retire': 'off', 'member.add': 'confirm', 'member.retire': 'confirm', 'member.retemplate': 'off', 'team.rules.set': 'confirm', 'team.github.set': 'confirm', 'canvas.create': 'confirm', 'canvas.member.add': 'confirm', 'canvas.member.remove': 'confirm', 'network.set': 'confirm', 'network.peer.add': 'confirm', 'network.peer.remove': 'confirm', 'network.originClaimByPeer.set': 'confirm', 'team.approvers.set': 'confirm', 'session.join': 'confirm', 'session.seatName.set': 'confirm', 'team.settings.set': 'confirm' },
-  market: { 'team.create': 'confirm', 'team.retire': 'confirm', 'member.add': 'auto', 'member.retire': 'auto', 'member.retemplate': 'confirm', 'team.rules.set': 'confirm', 'team.github.set': 'confirm', 'canvas.create': 'off', 'canvas.member.add': 'off', 'canvas.member.remove': 'off', 'network.set': 'off', 'network.peer.add': 'off', 'network.peer.remove': 'off', 'network.originClaimByPeer.set': 'off', 'team.approvers.set': 'off', 'session.join': 'off', 'session.seatName.set': 'off', 'team.settings.set': 'off' },
+  'owner-local': { 'team.create': 'confirm', 'team.retire': 'off', 'member.add': 'confirm', 'member.retire': 'confirm', 'member.retemplate': 'off', 'team.rules.set': 'confirm', 'team.github.set': 'confirm', 'canvas.create': 'confirm', 'canvas.member.add': 'confirm', 'canvas.member.remove': 'confirm', 'network.set': 'confirm', 'network.peer.add': 'confirm', 'network.peer.remove': 'confirm', 'network.originClaimByPeer.set': 'confirm', 'team.approvers.set': 'confirm', 'session.join': 'confirm', 'session.seatName.set': 'confirm', 'session.title.set': 'confirm', 'team.settings.set': 'confirm' },
+  market: { 'team.create': 'confirm', 'team.retire': 'confirm', 'member.add': 'auto', 'member.retire': 'auto', 'member.retemplate': 'confirm', 'team.rules.set': 'confirm', 'team.github.set': 'confirm', 'canvas.create': 'off', 'canvas.member.add': 'off', 'canvas.member.remove': 'off', 'network.set': 'off', 'network.peer.add': 'off', 'network.peer.remove': 'off', 'network.originClaimByPeer.set': 'off', 'team.approvers.set': 'off', 'session.join': 'off', 'session.seatName.set': 'off', 'session.title.set': 'off', 'team.settings.set': 'off' },
 }
 
 /** The parameters each operation takes; any other key is refused (`not-allowed`, #626 W3: nothing outside these). */
@@ -66,6 +66,7 @@ const PARAMS: Readonly<Record<StaffingOp, readonly string[]>> = {
   'team.approvers.set': ['team', 'approvers'],
   'session.join': ['session'],
   'session.seatName.set': ['session', 'name'],
+  'session.title.set': ['session', 'title'],
   'team.settings.set': ['team', ...TEAM_SETTING_KEYS],
 }
 
@@ -156,6 +157,13 @@ export interface StaffingDeps {
   /** #808 P3: the owner's seat names (display labels only), and a whole-map write through the owner-settings writer. */
   readonly seatNamesRead?: () => Readonly<Record<string, string>>
   readonly seatNamesWrite?: (names: Record<string, string>) => { ok: true } | { ok: false; error: string }
+  /** The session list's title (the host's session-title service): read a live local session's title, rename it (an explicit title, which the host pins), or put the automatic title back. */
+  readonly sessionTitleRead?: (session: string) => { live: boolean; title?: string }
+  readonly sessionTitleRename?: (session: string, title: string) => { ok: true; title: string } | { ok: false; error: string }
+  /** Back to the automatic title; true only when the host no longer keeps a user title (an empty session cannot unpin). */
+  readonly sessionTitleReset?: (session: string) => boolean | Promise<boolean>
+  /** Whether the host's session-title service is mounted now; checked at submit, not left to fail at apply. */
+  readonly sessionTitleAvailable?: () => boolean
   /** A CLI member's pinned home origin (#809 R3: restored when a removal is undone). */
   readonly canvasCliHome?: (member: string) => string | undefined
   /** The owner's policy overrides, by source kind and op. */
@@ -391,6 +399,15 @@ export class StaffingExecutor {
         if (typeof params.session !== 'string' || !SESSION.test(params.session)) return { ok: false, code: 'invalid', error: `${where}.session is a local session id` }
         if (typeof params.name !== 'string' || (params.name !== '' && parseSeatNames({ [params.session]: params.name }) === undefined)) return { ok: false, code: 'invalid', error: `${where}.name is a display label of at most 64 characters, not shaped like an address ('' clears it)` }
         if (this.d.seatNamesRead === undefined || this.d.seatNamesWrite === undefined) return { ok: false, code: 'not-yet', error: `${where}: this host does not carry seat names` }
+      } else if (input.op === 'session.title.set') {
+        if (typeof params.session !== 'string' || !SESSION.test(params.session)) return { ok: false, code: 'invalid', error: `${where}.session is a local session id` }
+        if (typeof params.title !== 'string' || params.title.trim() === '' || parseSeatNames({ [params.session]: params.title }) === undefined) return { ok: false, code: 'invalid', error: `${where}.title is a title of at most 64 characters, not shaped like an address` }
+        // The session list collapses runs of spaces (the host's normalizeSessionTitle): what the owner previews is what shows.
+        const shown = params.title.replace(/\s+/gu, ' ').trim()
+        if (shown !== params.title.trim()) return { ok: false, code: 'invalid', error: `${where}.title would be shown as «${shown}»: the session list collapses runs of spaces; give it that way` }
+        if (this.d.sessionTitleRead === undefined || this.d.sessionTitleRename === undefined || this.d.sessionTitleReset === undefined) return { ok: false, code: 'not-yet', error: `${where}: this host does not carry session titles` }
+        if (this.d.sessionTitleAvailable?.() === false) return { ok: false, code: 'not-yet', error: `${where}: this host's session-title service is not mounted now` }
+        if (!this.d.sessionTitleRead(params.session).live) return { ok: false, code: 'invalid', error: `${where}.session is not a live local session` }
       } else if (input.op === 'team.github.set') {
         const team = teamRef(); if (typeof team !== 'string') return team
         const bad = githubSetRefusal(params)
@@ -586,6 +603,23 @@ export class StaffingExecutor {
       if (!wrote.ok) return wrote
       onUndo(() => this.d.seatNamesWrite!(before).ok)
       return { ok: true, result: { session, seatName: name === '' ? 'cleared' : 'set', by: `builder-blueprint ${entry.id}` } }
+    }
+    if (input.op === 'session.title.set') {
+      const session = p.session as string, title = (p.title as string).trim()
+      const before = this.d.sessionTitleRead!(session)
+      if (!before.live) return { ok: false, error: `no live local session ${session}` }
+      const renamed = this.d.sessionTitleRename!(session, title)
+      if (!renamed.ok) return renamed
+      // Undo puts the exact earlier text back (pinned, as any explicit title is); with none before, the automatic title comes back.
+      const earlier = before.title
+      const putBack = async (): Promise<boolean> => { if (earlier === undefined) return await this.d.sessionTitleReset!(session); const back = this.d.sessionTitleRename!(session, earlier); return back.ok && back.title === earlier }
+      // The host may store less than was previewed (its byte limit is its own): then this step did not do what was agreed.
+      if (renamed.title !== title) {
+        const restored = await putBack()
+        return { ok: false, error: `the host stored the title as «${renamed.title}», not as previewed (its length limit); ${restored ? 'the earlier title is back' : 'putting the earlier title back failed'}` }
+      }
+      onUndo(putBack)
+      return { ok: true, result: { session, title: renamed.title, by: `builder-blueprint ${entry.id}` } }
     }
     // #808 P2: network settings, merged key by key into the home layer's a2a config; they take effect on restart.
     if (input.op === 'network.set' || input.op === 'network.peer.add' || input.op === 'network.peer.remove' || input.op === 'network.originClaimByPeer.set') {
