@@ -118,6 +118,8 @@ export interface TeamSettings {
   readonly progressOff?: true
   /** Observer phase 2 (T5-A): the observer may cast a card into a team session; off unless the owner turns it on. */
   readonly observerCast?: true
+  /** #902 S2: the observer may write its own cards (session templates) for named members; off unless the owner turns it on. */
+  readonly observerCardDraft?: true
   /** T5-B: the idle sweep (overdue waits, orphan stops, no self-check record) adds health problems; off unless the owner turns it on. */
   readonly idleSweep?: true
   /** T8: true pushes the router's and observer's decision cards to the market (a rule change: the owner turns it on). Absent: off. */
@@ -370,6 +372,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const paused = 'paused' in r ? r.paused : current.paused
   const progressOff = 'progressOff' in r ? r.progressOff : current.progressOff
   const observerCast = 'observerCast' in r ? r.observerCast : current.observerCast
+  const observerCardDraft = 'observerCardDraft' in r ? r.observerCardDraft : current.observerCardDraft
   const idleSweep = 'idleSweep' in r ? r.idleSweep : current.idleSweep
   const decisionPush = 'decisionPush' in r ? r.decisionPush : current.decisionPush
   let prepare = current.prepare
@@ -439,6 +442,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   if (typeof paused !== 'boolean') return { ok: false, error: 'paused must be true or false' }
   if (progressOff !== undefined && typeof progressOff !== 'boolean') return { ok: false, error: 'progressOff must be true or false' }
   if (observerCast !== undefined && typeof observerCast !== 'boolean') return { ok: false, error: 'observerCast must be true or false' }
+  if (observerCardDraft !== undefined && typeof observerCardDraft !== 'boolean') return { ok: false, error: 'observerCardDraft must be true or false' }
   if (idleSweep !== undefined && typeof idleSweep !== 'boolean') return { ok: false, error: 'idleSweep must be true or false' }
   if (decisionPush !== undefined && typeof decisionPush !== 'boolean') return { ok: false, error: 'decisionPush must be true or false' }
   const botsRaw = (r.bots ?? {}) as Record<string, unknown>
@@ -489,7 +493,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const observers = current.observers ?? []
   const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
   if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
-  return { ok: true, settings: { ...(autoApprove !== undefined ? { autoApprove } : {}), ...(credentialAckMinutes !== undefined ? { credentialAckMinutes } : {}), ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), ...(approvers !== undefined ? { approvers } : {}), ...(blockedTools !== undefined ? { blockedTools } : {}), evalTimeoutMs, paused, ...(progressOff === true ? { progressOff: true as const } : {}), ...(observerCast === true ? { observerCast: true as const } : {}), ...(idleSweep === true ? { idleSweep: true as const } : {}), ...(decisionPush === true ? { decisionPush: true as const } : {}), ...(mcp !== undefined ? { mcp } : {}) } }
+  return { ok: true, settings: { ...(autoApprove !== undefined ? { autoApprove } : {}), ...(credentialAckMinutes !== undefined ? { credentialAckMinutes } : {}), ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), ...(approvers !== undefined ? { approvers } : {}), ...(blockedTools !== undefined ? { blockedTools } : {}), evalTimeoutMs, paused, ...(progressOff === true ? { progressOff: true as const } : {}), ...(observerCast === true ? { observerCast: true as const } : {}), ...(observerCardDraft === true ? { observerCardDraft: true as const } : {}), ...(idleSweep === true ? { idleSweep: true as const } : {}), ...(decisionPush === true ? { decisionPush: true as const } : {}), ...(mcp !== undefined ? { mcp } : {}) } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/

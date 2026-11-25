@@ -136,6 +136,10 @@ export const SENDER_CARDS_MAX = 10, SENDER_HOLD_MAX_AGE_MS = 24 * 3_600_000
 const INTERVENTIONS_READ_DEFAULT = 100, INTERVENTIONS_READ_MAX = 500
 /** #764 review: per target session, at most this many casts an hour, and one wake per this window. */
 const CAST_PER_HOUR = 3, CAST_WAKE_MS = 15 * 60_000
+/** #902 S2: the observer's own cards kept per team, at most. */
+const OBSERVER_CARDS_MAX = 50
+/** #902 S2: one card of the observer's own, as kept in the team's observer-cards.json. */
+interface ObserverCard { readonly name: string; readonly for: readonly string[] | 'team'; readonly scene: string; readonly from?: string; readonly at: string; readonly sha256: string }
 
 export class SuperagentHost {
   readonly store: JsonRepositories
@@ -1291,7 +1295,10 @@ export class SuperagentHost {
     const entry = limits[target] ?? { casts: [], wakeAt: 0 }
     entry.casts = entry.casts.filter(at => now - at < 3_600_000 && at <= now + 60_000)
     if (entry.casts.length >= CAST_PER_HOUR) return { ok: false, code: 'rate-limited', error: `at most ${String(CAST_PER_HOUR)} casts an hour into one session` }
-    const out = this.d.castCard?.({ sessionId: target, templateId, reason, basis })
+    // #902 S2: the observer's own card goes only to the members it was written for.
+    const draft = this.observerCards()[templateId]
+    if (draft !== undefined && draft.for !== 'team' && !draft.for.includes(target)) return { ok: false, code: 'not-for', error: 'that card of yours is written for other members; edit its for list with a2a_card_draft' }
+    const out = this.d.castCard?.({ sessionId: target, templateId, reason, basis, ...(draft !== undefined ? { authorSession: observer } : {}) })
     if (out === undefined) return { ok: true, available: false, reason: 'dsh-prompt-templates with the cast service (0.17+) is not on this host' }
     if (!out.ok) return { ok: false, code: out.code ?? 'refused', error: out.error ?? 'the card was not cast' }
     entry.casts.push(now)
@@ -1322,6 +1329,59 @@ export class SuperagentHost {
     const hits = key.length >= 8 ? this.store.tickets.list().filter(t => t.id === key || t.id.startsWith(key)) : []
     if (hits.length !== 1) return refuse('ticket: must name one ticket of this team (its id, or a prefix of at least 8 characters)')
     return `ticket:${hits[0]!.id}`
+  }
+
+  /** #902 S2: the observer's own cards of this team, by template id: who each is for, its scene and what it came from. */
+  private observerCardsPath(): string { return join(this.stateDir, 'observer-cards.json') }
+  private observerCards(): Record<string, ObserverCard> {
+    try { const v = JSON.parse(readFileSync(this.observerCardsPath(), 'utf8')) as { cards?: Record<string, ObserverCard> }; return v.cards ?? {} } catch { return {} }
+  }
+  private saveObserverCards(cards: Record<string, ObserverCard>): void {
+    const path = this.observerCardsPath()
+    writeFileSync(`${path}.tmp`, `${JSON.stringify({ cards }, null, 2)}\n`, 'utf8')
+    renameSync(`${path}.tmp`, path)
+  }
+
+  /**
+   * #902 S2: the observer writes its own cards — ordinary session templates of its own session, through the same host's
+   * prompt-template plugin (#87+) — each for named members of this team (or the whole team), with a one-line scene and,
+   * optionally, the library card it came from. Off unless the owner turns on observerCardDraft; at most
+   * OBSERVER_CARDS_MAX per team. Actions: list (default), create, update (id), delete (id).
+   */
+  cardDraft(observer: string, input: { action?: unknown; id?: unknown; name?: unknown; content?: unknown; for?: unknown; scene?: unknown; from?: unknown }): Record<string, unknown> {
+    if (!this.isObserver(observer)) return { ok: false, code: 'not-observer', error: 'a2a_card_draft serves only the team\'s observer' }
+    const cards = this.observerCards()
+    const action = String(input.action ?? 'list')
+    if (action === 'list') return { ok: true, on: this.settingsValue.observerCardDraft === true, cards: Object.entries(cards).map(([id, c]) => ({ id, ...c })) }
+    if (this.settingsValue.observerCardDraft !== true) return { ok: false, code: 'off', error: 'writing your own cards is off for this team (the owner turns on observerCardDraft)' }
+    const svc = this.d.cardDrafts?.()
+    if (svc === undefined) return { ok: true, available: false, reason: 'dsh-prompt-templates with author-session cards (#87) is not on this host' }
+    const id = String(input.id ?? '').trim()
+    if (action === 'delete') {
+      if (cards[id] === undefined) return { ok: false, code: 'card', error: 'no card of yours with that id' }
+      const out = svc.remove({ authorSession: observer, id })
+      if (!out.ok) return out as Record<string, unknown>
+      delete cards[id]
+      this.saveObserverCards(cards)
+      return { ok: true, deleted: out.deleted === true }
+    }
+    if (action !== 'create' && action !== 'update') return { ok: false, code: 'input', error: 'action is list, create, update or delete' }
+    if (action === 'update' && cards[id] === undefined) return { ok: false, code: 'card', error: 'no card of yours with that id' }
+    if (action === 'create' && Object.keys(cards).length >= OBSERVER_CARDS_MAX) return { ok: false, code: 'full', error: `at most ${String(OBSERVER_CARDS_MAX)} cards of your own per team: delete one first` }
+    const team = new Set([this.settings.router, ...this.settings.members].filter((s): s is string => typeof s === 'string' && s !== observer))
+    const forRaw = input.for
+    const named = Array.isArray(forRaw) ? [...new Set(forRaw.map(v => String(v).trim()))] : forRaw === 'team' ? ['team'] : []
+    const forList = named.length === 1 && named[0] === 'team' ? 'team' as const : named
+    if (forList !== 'team' && (forList.length === 0 || forList.some(s => !team.has(s)))) return { ok: false, code: 'for', error: 'for is ["team"] or a list of this team\'s sessions (not you)' }
+    const scene = String(input.scene ?? '').replace(/\s+/g, ' ').trim()
+    if (scene === '' || scene.length > 200) return { ok: false, code: 'scene', error: 'scene is one line of 1..200 characters: the business situation this card is for' }
+    const from = input.from === undefined || input.from === null || String(input.from).trim() === '' ? undefined : String(input.from).trim().slice(0, 100)
+    const description = `for: ${forList === 'team' ? 'team' : forList.join(', ')} · scene: ${scene}${from !== undefined ? ` · from: ${from}` : ''}`.slice(0, 512)
+    const out = svc.draft({ authorSession: observer, ...(action === 'update' ? { id } : {}), name: String(input.name ?? ''), content: String(input.content ?? ''), description })
+    if (!out.ok || typeof out.id !== 'string') return out as Record<string, unknown>
+    cards[out.id] = { name: String(out.name ?? input.name ?? ''), for: forList, scene, ...(from !== undefined ? { from } : {}), at: this.now(), sha256: String(out.content_sha256 ?? '') }
+    this.saveObserverCards(cards)
+    return { ok: true, id: out.id, created: out.created === true, for: forList, scene }
   }
 
   /**

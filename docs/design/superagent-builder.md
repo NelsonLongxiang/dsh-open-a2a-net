@@ -140,7 +140,7 @@ Owner 2026-11-23: "the builder should be able to set every parameter"; credentia
 | `github`, `sources.github`, `allowed.github` | blueprint: `team.github.set` | built (#800) |
 | `approvers` | blueprint: `team.approvers.set` | built (#808 P3) |
 | `sources.a2a`, `progressOff`, `decisionPush`, `reviewer` | blueprint: `team.settings.set` (new, #808 P4) | the team's A2A settings: the A2A Source, progress receipts over A2A, the decision-card push over A2A, the reviewer's A2A address |
-| `acceptMode`, `models`, `prompts`, `maxConcurrent`, `evalTimeoutMs`, `paused`, `sources.workbench`, `observerCast`, `idleSweep`, `repos`, `blockedTools` | GUI | not A2A settings (owner 2026-11-23: "all the parameters" means the A2A ones) |
+| `acceptMode`, `models`, `prompts`, `maxConcurrent`, `evalTimeoutMs`, `paused`, `sources.workbench`, `observerCast`, `observerCardDraft`, `idleSweep`, `repos`, `blockedTools` | GUI | not A2A settings (owner 2026-11-23: "all the parameters" means the A2A ones) |
 | `credentialAckMinutes` | GUI | not an A2A setting: a timeout for one card kind |
 | `allowed.workbench`, `allowed.a2a`, `bots.a2a` | GUI | admission: who may originate work (owner ruling: admission stays in the GUI) |
 | `serves`, `observers` | neither | written by the `serve` control action / derived from the canvas |
