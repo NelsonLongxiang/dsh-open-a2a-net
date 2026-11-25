@@ -72,12 +72,28 @@ export const YGL_TREES_READ_ROUTES: Readonly<Record<string, readonly string[]>> 
   tree: ['state', 'list', 'show'], node: ['can', 'ready', 'path', 'ancestors', 'descendants', 'validate'], task: ['list'], rel: ['list'],
   produce: ['report-show', 'report-list'], project: ['list', 'show'], db: ['stats', 'timeline'], skill: ['list', 'match', 'show'],
 }
-/** Why a router's `trees` call is refused (owner's option A), or undefined for help and the old read routes. */
+const plainObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
+/**
+ * Why a router's `trees` call is refused (owner's option A), or undefined for help and the old read routes. #897 review B2:
+ * the outer shape is checked as ygl-trees' dispatcher checks it before dispatch (546976ac mcp-trees.ts): an object with only
+ * domain, action and params; params, when present, a plain object; help takes at most params.action. The parameters of a
+ * read route are then the dispatcher's to validate against that route's schema: none of them can turn a read into a write.
+ */
 export function yglTreesReadRefusal(args: unknown): string | undefined {
-  const a = args !== null && typeof args === 'object' ? args as { domain?: unknown; action?: unknown } : {}
-  if (a.action === 'help') return undefined
-  if (typeof a.domain === 'string' && typeof a.action === 'string' && Object.prototype.hasOwnProperty.call(YGL_TREES_READ_ROUTES, a.domain) && YGL_TREES_READ_ROUTES[a.domain]!.includes(a.action)) return undefined
-  return `[superagent-role-tools] the team router only reads the team's memory: ${YGL_TREES} takes help and the read routes, not ${String(a.domain ?? '?')}/${String(a.action ?? '?')}`
+  const refuse = (what: string): string => `[superagent-role-tools] the team router only reads the team's memory: ${YGL_TREES} takes help and the read routes, not ${what}`
+  if (!plainObject(args)) return refuse('a call that is not an object')
+  const extra = Object.keys(args).find(k => k !== 'domain' && k !== 'action' && k !== 'params')
+  if (extra !== undefined) return refuse(`an unknown field ${JSON.stringify(extra)}`)
+  if (Object.prototype.hasOwnProperty.call(args, 'params') && !plainObject(args.params)) return refuse('params that are not an object')
+  const { domain, action } = args as { domain?: unknown; action?: unknown }
+  if (action === 'help') {
+    const helpExtra = plainObject(args.params) ? Object.keys(args.params).find(k => k !== 'action') : undefined
+    if (helpExtra !== undefined) return refuse(`help with params.${helpExtra}`)
+    if (domain !== undefined && typeof domain !== 'string') return refuse('help on a domain that is not a string')
+    return undefined
+  }
+  if (typeof domain === 'string' && typeof action === 'string' && Object.prototype.hasOwnProperty.call(YGL_TREES_READ_ROUTES, domain) && YGL_TREES_READ_ROUTES[domain]!.includes(action)) return undefined
+  return refuse(`${String(domain ?? '?')}/${String(action ?? '?')}`)
 }
 export const YGL_READ_TOOLS: readonly string[] = ['mcp__ygl__read', YGL_TREES]
 export const YGL_WORK_TOOLS: readonly string[] = [...YGL_READ_TOOLS, 'mcp__ygl__write', 'mcp__ygl__verify', 'mcp__ygl__doctor']

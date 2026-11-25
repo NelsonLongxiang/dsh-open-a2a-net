@@ -40,3 +40,24 @@ describe('assignment card wording', () => {
     expect(trees.slice(2).join('\n')).toBe(legacy.slice(1).join('\n').replace(/mcp__ygl__(read|write)\b/g, 'mcp__ygl__trees'))
   })
 })
+
+describe('#897 review', () => {
+  it('B1: a team whose name contains an old tool name keeps its project and scope word for word on the trees card', () => {
+    const caps = { briefHonorsProject: false, kbScope: true } as never
+    const project = 'team-mcp__ygl__read', scope = 'bench:team-mcp__ygl__write'
+    for (const trees of [true, false]) {
+      const card = yglCardLines(project, { scope, caps, trees }).join('\n')
+      expect(card).toContain(JSON.stringify(project))
+      expect(card).toContain(JSON.stringify(scope))
+      expect(card).not.toContain('team-mcp__ygl__trees')
+    }
+    expect(yglCardLines(undefined, { trees: true }).join('\n')).not.toMatch(/mcp__ygl__(read|write)\b/)
+  })
+  it('B2: the router is refused calls whose outer shape the dispatcher would refuse', () => {
+    for (const call of [{ action: 'help', params: null }, { action: 'help', params: [] }, { action: 'help', params: 'x' }, { action: 'help', params: { domain: 'kb' } }, { action: 'help', domain: 3 },
+      { domain: 'kb', action: 'search', params: [] }, { domain: 'kb', action: 'search', params: null }, { domain: 'kb', action: 'search', extra: 1 }, [{ domain: 'kb', action: 'search' }]])
+      expect(roleToolRefusal('router', YGL_TREES, call), JSON.stringify(call)).toMatch(/only reads the team's memory/)
+    expect(roleToolRefusal('router', YGL_TREES, { action: 'help', params: { action: 'search' }, domain: 'kb' })).toBeUndefined()
+    expect(roleToolRefusal('router', YGL_TREES, { domain: 'kb', action: 'search', params: { query: 'q' } })).toBeUndefined()
+  })
+})
