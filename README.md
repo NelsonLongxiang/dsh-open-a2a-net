@@ -6,7 +6,7 @@ English | [中文](README_zh.md)
 
 **New in the preview: Superagent turns requests into team tickets—a router accepts work, fixed members execute it, progress stays visible, and owner decisions arrive as option-based cards.**
 
-> **Version boundary: Superagent teams belong to the opt-in 0.8 preview.** On 2026-11-20 npm `latest` was still 0.7.0 and `preview` was 0.8.1-preview.27. The default install does not imply the new capabilities below.
+> **Version boundary: 0.8 is officially released.** From 0.8.1, npm `latest` installs 0.8, Superagent teams included; before it, `latest` was 0.7.0 and 0.8 was only on the opt-in `preview` tag. On an older install, check your version before assuming the capabilities below.
 
 An open-source plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). The A2A foundation handles discovery, addressing, routing and receipts between sessions and hosts. **Superagent** adds requests, scoped tickets, fixed members and human decisions on top—not just messages between multiple chats.
 
