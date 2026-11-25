@@ -68,7 +68,7 @@ Upstream superagent prepares each ticket's directory with a command, caps how ma
   - **What is reported (#910 B2).**
     - The wake is reported as `sent`, `not-live` or `failed`; `woken` is true only when sent. A cast whose limits could not be saved says `limitsRecorded: false`.
     - Arming or withdrawing a release that cannot be saved is refused and changes nothing.
-    - A release is written `releasing` before its cast; after a restart it is settled by asking the plugin for the exact origins it could have cast with (found: released, `reconciled`; none: looked at again, the plugin's own filter being the proof). A plugin that keeps no origin, or a failed read, ends it failed as `uncertain` rather than casting twice.
+    - A release is written `releasing` before its cast; after a restart it is settled by asking the plugin for the exact origins it could have cast with (found: released, `reconciled`; none: looked at again, the plugin's own filter being the proof). A plugin that keeps no origin, or a read that fails or throws, ends it failed as `uncertain` rather than casting twice; a cast that throws leaves it `releasing` for the next look. One release's fault never stops the others in the same look.
   - **Event conditions.** `when: event…` is refused as not available yet; S3 ships ticket, idle and at conditions only.
   - **Custom cards (#908 B1).**
     - Each record keeps its author. After an observer handover the new observer cannot edit, delete or cast the old one's cards (`not-yours`); lists show `mine`, not the author.
@@ -76,7 +76,7 @@ Upstream superagent prepares each ticket's directory with a command, caps how ma
     - An edit is marked `pending` on disk before the plugin's text changes; a card left pending is not cast until a save completes it. A new card whose record cannot be written is taken back from the plugin; if that fails too, the answer names the orphan.
 - **#911 review fixes (S4).**
   - **Who sets and withdraws.** `castOff`, `observerTriggerRouter` and `cast-withdraw` take the owner's proof like every rule field: the browser owner, or a live owner delegate whose use is audited; an unknown or revoked delegate is refused with no browser fallback. The HTTP face tests cover both, and that a refusal changes nothing.
-  - **Turning a member off.** It also withdraws this team's casts still waiting for that member and its armed releases (`member-off`); the settings answer says how many were withdrawn and which were not (a card already handed to a step, or one the plugin refused). Other teams' rows are left alone.
+  - **Turning a member off.** It also withdraws this team's casts still waiting for that member and its armed releases (`member-off`); the settings answer says how many were withdrawn and which were not (a card already handed to a step, or one the plugin refused), and the team page shows that answer, as a problem when anything was left. Other teams' rows are left alone.
   - **Moved members.** A cast is this team's by its origin, so a cast for a member that has since left is still listed and the owner can withdraw it; the observer cannot. Releases live in the team's own state, wherever their target sits now.
   - **What leaves the host.** Only whitelisted fields of a plugin row reach the team state and the tools (id, session, template, name, version, caller, reason, basis, times, state, mode), plus `requested`, `release`, `legacy` and `mine`. Card text, the origin string and the observer's session id never do.
 - **#903 S1 review fixes (#906).**

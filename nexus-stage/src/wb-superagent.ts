@@ -130,6 +130,21 @@ export interface SaCasts {
 
 const CAST_MODE: Readonly<Record<string, string>> = { insert: '插入（下一步）', queue: '排队（下一轮开头）', trigger: '触发（空闲时立即开一轮）' }
 
+/** #913 review 2: what turning a member's casting off withdrew, as the host answered. */
+export interface CastOffReceipt { readonly withdrawn: number; readonly notWithdrawn: readonly string[]; readonly releasesWithdrawn: number; readonly releasesSaved: boolean }
+
+/** Whether turning casting off left something not withdrawn. */
+export function castOffFailed(r: CastOffReceipt | undefined): boolean { return r !== undefined && (r.notWithdrawn.length > 0 || !r.releasesSaved) }
+
+/** The owner's line after turning a member's casting off: saved, what was withdrawn, and what was not. */
+export function castOffText(name: string, r: CastOffReceipt | undefined): string {
+  if (r === undefined) return `${name}：已停用投卡`
+  const parts = [`${name}：已停用投卡`, `撤回排着的卡 ${String(r.withdrawn)} 张、挂着的释放 ${String(r.releasesWithdrawn)} 张`]
+  if (r.notWithdrawn.length > 0) parts.push(`没撤回 ${String(r.notWithdrawn.length)} 张（已交给会话但未确认、或插件拒绝）：${r.notWithdrawn.join('、')}`)
+  if (!r.releasesSaved) parts.push('挂着的释放的撤回没写进磁盘，到期时会按停用失败')
+  return parts.join('；')
+}
+
 /** #902 S4: a release condition in the owner's words. */
 export function releaseWhenText(when: string, ticketTitle: (id: string) => string = id => id.slice(0, 8)): string {
   if (when.startsWith('idle:')) return `空闲满 ${when.slice(5)} 分钟`
@@ -742,7 +757,18 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
       row.appendChild(el('span', '', `${sessionName(id)}${id === s.router ? '（总工）' : ''}：${off ? '已停用投卡' : '可投卡'}`))
       const button = el('button', 'wb-btn', off ? '恢复投卡' : '停用投卡')
       button.type = 'button'
-      button.addEventListener('click', () => { save({ castOff: off ? c.off.filter(x => x !== id) : [...c.off, id] }, `${sessionName(id)}：${off ? '已恢复投卡' : '已停用投卡'}`) })
+      button.addEventListener('click', () => {
+        if (off) { save({ castOff: c.off.filter(x => x !== id) }, `${sessionName(id)}：已恢复投卡`); return }
+        // #913 review 2: turning a member off also withdraws what waits for it; say what could not be withdrawn.
+        void (async () => {
+          try {
+            const result = await deps.act({ action: 'settings', settings: { castOff: [...c.off, id] } })
+            if (result.ok !== true) { say(`没有成功：${String(result.error ?? result.code ?? '未知原因')}`, 'danger'); return }
+            say(castOffText(sessionName(id), result.castOff as CastOffReceipt | undefined), castOffFailed(result.castOff as CastOffReceipt | undefined) ? 'danger' : undefined)
+            deps.refresh()
+          } catch (error) { say(`没有成功：${String(error)}`, 'danger') }
+        })()
+      })
       row.appendChild(button)
       head.appendChild(row)
     }

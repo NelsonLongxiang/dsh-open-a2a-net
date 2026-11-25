@@ -282,3 +282,36 @@ describe('#913 review: what is left open is said, not assumed', () => {
     await m.h.stop()
   })
 })
+
+describe('#913 review 2: a plugin that throws never stops the release look', () => {
+  it('a releasing release whose lookup throws ends uncertain; a cast that throws stays releasing; other releases go on', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-rev-home-'))
+    const clock = { ms: Date.parse('2026-11-25T00:00:00Z') }
+    const m = await team({ home, clock })
+    const a = (await m.cast({ mode: 'release', when: 'at:2026-11-25T00:10:00Z' })).release as string
+    const b = (await m.cast({ template_id: 't2', mode: 'release', when: 'at:2026-11-25T00:10:00Z' })).release as string
+    await m.h.stop()
+    const file = join(home, ...findReleases(home))
+    const saved = JSON.parse(readFileSync(file, 'utf8')) as { releases: Array<{ id: string; state: string }> }
+    saved.releases.find(r => r.id === a)!.state = 'releasing'
+    writeFileSync(file, JSON.stringify(saved))
+    const n = await team({ home, clock })
+    const d = (n.h as unknown as { d: Record<string, unknown> }).d
+    d.castQueue = () => ({ list: () => { throw new Error('sqlite busy') }, withdraw: () => ({ ok: true }) })
+    clock.ms += 11 * 60_000
+    let throws = true
+    const realCast = d.castCard as (i: unknown) => unknown
+    d.castCard = (i: unknown) => { if (throws) { throws = false; throw new Error('plugin gone') } return realCast(i) }
+    expect(() => n.h.releaseTick()).not.toThrow()
+    let rows = Object.fromEntries((JSON.parse(readFileSync(file, 'utf8')).releases as Array<{ id: string; state: string; result?: string }>).map(r => [r.id, r]))
+    expect(rows[a]).toMatchObject({ state: 'failed', result: expect.stringMatching(/^uncertain/) })
+    expect(rows[b]).toMatchObject({ state: 'releasing' })
+    // The next look: b's lookup now works (no row with its origin), so it is looked at again and cast once.
+    d.castQueue = () => ({ list: () => ({ ok: true, items: [] }), withdraw: () => ({ ok: true }) })
+    n.h.releaseTick()
+    rows = Object.fromEntries((JSON.parse(readFileSync(file, 'utf8')).releases as Array<{ id: string; state: string }>).map(r => [r.id, r]))
+    expect(rows[b]).toMatchObject({ state: 'released' })
+    expect(n.casts.map(c => c.templateId)).toEqual(['t2'])
+    await n.h.stop()
+  })
+})

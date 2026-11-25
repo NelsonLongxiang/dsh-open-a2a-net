@@ -1535,8 +1535,13 @@ export class SuperagentHost {
       if (!this.saveReleases(releases)) { r.state = 'armed'; delete r.attemptAt; continue }
       // A trigger released by an idle condition finds the session idle; one released otherwise may find it busy, and then
       // the card is queued for its next turn instead of being refused.
-      let out = this.castCard(r.observer, { session_id: r.session_id, template_id: r.template_id, reason: r.reason, basis: r.basis, mode: r.then }, r.id)
-      if (r.then === 'trigger' && out.ok === false && (out.code === 'busy' || out.code === 'trigger-limited')) out = this.castCard(r.observer, { session_id: r.session_id, template_id: r.template_id, reason: r.reason, basis: r.basis, mode: 'queue' }, r.id)
+      // A plugin that throws here leaves the release `releasing` (already on disk): the next look settles it by its origin,
+      // and the other releases of this look go on (#913 review 2).
+      let out: Record<string, unknown>
+      try {
+        out = this.castCard(r.observer, { session_id: r.session_id, template_id: r.template_id, reason: r.reason, basis: r.basis, mode: r.then }, r.id)
+        if (r.then === 'trigger' && out.ok === false && (out.code === 'busy' || out.code === 'trigger-limited')) out = this.castCard(r.observer, { session_id: r.session_id, template_id: r.template_id, reason: r.reason, basis: r.basis, mode: 'queue' }, r.id)
+      } catch (error) { this.d.logger.warn('superagent: release %s left releasing, settled at the next look: %s', r.id, String(error)); continue }
       r.state = out.ok === true && out.available !== false ? 'released' : 'failed'
       r.endedAt = at
       r.result = out.ok === true ? (out.available === false ? String(out.reason ?? 'unavailable') : `${String(out.mode)}${typeof out.id === 'string' ? ` ${out.id}` : ''}`) : `${String(out.code)}: ${String(out.error ?? '')}`.slice(0, 300)
@@ -1549,8 +1554,14 @@ export class SuperagentHost {
   private releaseRow(r: CardRelease): string | undefined | 'unknown' {
     let keeps = false
     try { keeps = this.d.castCapabilities?.()?.origin === true } catch { /* none */ }
-    const svc = this.d.castQueue?.()
+    // #913 review 2: a plugin that throws (its service or its database) is unknown too, and the other releases go on.
+    let svc: ReturnType<NonNullable<SuperagentHostDeps['castQueue']>> | undefined
+    try { svc = this.d.castQueue?.() } catch { return 'unknown' }
     if (!keeps || svc === undefined) return 'unknown'
+    try { return this.releaseRowExact(r, svc) } catch { return 'unknown' }
+  }
+
+  private releaseRowExact(r: CardRelease, svc: NonNullable<ReturnType<NonNullable<SuperagentHostDeps['castQueue']>>>): string | undefined | 'unknown' {
     // #913 review: ask for the exact origins this release could have cast with (its then mode, or queue when a trigger
     // found the target busy), so "none" is proven by the plugin's own filter, not by a window of recent rows.
     for (const mode of [...new Set([r.then, 'queue'])]) {
@@ -1691,7 +1702,7 @@ export class SuperagentHost {
    */
   cardQueue(observer: string, input: { action?: unknown; session_id?: unknown; id?: unknown; state?: unknown }): Record<string, unknown> {
     if (!this.isObserver(observer)) return { ok: false, code: 'not-observer', error: 'a2a_card_queue serves only the team\'s observer' }
-    return this.castQueueView(input, observer)
+    try { return this.castQueueView(input, observer) } catch (error) { return { ok: false, code: 'plugin', error: `the prompt-template plugin failed: ${String((error as Error)?.message ?? error)}` } }
   }
 
   /**
@@ -1699,7 +1710,7 @@ export class SuperagentHost {
    * in the plugin's queue for this team's sessions, and this team's releases.
    */
   ownerCastQueue(input: { action?: unknown; session_id?: unknown; id?: unknown; state?: unknown }): Record<string, unknown> {
-    return this.castQueueView(input, undefined)
+    try { return this.castQueueView(input, undefined) } catch (error) { return { ok: false, code: 'plugin', error: `the prompt-template plugin failed: ${String((error as Error)?.message ?? error)}` } }
   }
 
   /**

@@ -75,3 +75,31 @@ describe('待投卡', () => {
     expect(releaseWhenText('at:2026-11-25T01:00:00.000Z').startsWith('到 ')).toBe(true)
   })
 })
+
+describe('待投卡: turning a member off says what was not withdrawn (#913 review 2)', () => {
+  it('a mixed answer names the cards left and is shown as a problem', async () => {
+    const acts: Json[] = []
+    const deps: SuperagentPaneDeps = {
+      async act(body) { acts.push(body); return { ok: true, castOff: { withdrawn: 1, notWithdrawn: ['q7'], releasesWithdrawn: 2, releasesSaved: false } } },
+      refresh: () => {},
+    }
+    const p = createSuperagentPane(deps)
+    p.update(state({ on: true, draft: false, triggerRouter: false, off: [], available: true, waiting: [], releases: [] }), [], Date.parse('2026-11-25T01:00:00.000Z'))
+    ;[...p.root.querySelectorAll<HTMLButtonElement>('.wb-filter')].find(b => b.textContent === '团队')!.click()
+    ;[...p.root.querySelectorAll<HTMLButtonElement>('.wb-btn')].find(b => b.textContent === '停用投卡')!.click()
+    await new Promise(r => setTimeout(r, 20))
+    expect(acts).toEqual([{ action: 'settings', settings: { castOff: ['session-r'] } }])
+    const text = p.root.textContent ?? ''
+    expect(text).toContain('撤回排着的卡 1 张、挂着的释放 2 张')
+    expect(text).toContain('没撤回 1 张')
+    expect(text).toContain('q7')
+    expect(text).toContain('没写进磁盘')
+    expect(p.root.querySelector('.is-danger')).not.toBeNull()
+  })
+  it('castOffText without failures reads plainly', async () => {
+    const { castOffText, castOffFailed } = await import('../src/wb-superagent.ts')
+    expect(castOffText('甲', { withdrawn: 2, notWithdrawn: [], releasesWithdrawn: 0, releasesSaved: true })).toBe('甲：已停用投卡；撤回排着的卡 2 张、挂着的释放 0 张')
+    expect(castOffFailed({ withdrawn: 2, notWithdrawn: [], releasesWithdrawn: 0, releasesSaved: true })).toBe(false)
+    expect(castOffText('甲', undefined)).toBe('甲：已停用投卡')
+  })
+})
