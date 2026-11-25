@@ -88,9 +88,15 @@ export function decisionCardText(event: PushEvent, rev: number, team: string, ca
 
 /** The option a decision chose, read from its stored text (`决定：<option>`); empty when it was words only. */
 export function decidedOption(text: string, options: readonly string[]): string {
-  const line = text.split('\n').find(l => l.startsWith('决定：'))
-  const chosen = line === undefined ? '' : line.slice('决定：'.length).trim()
-  return options.includes(chosen) ? chosen : ''
+  const at = text.indexOf('决定：')
+  if (at < 0) return ''
+  const rest = text.slice(at + '决定：'.length)
+  // #935 review B1: an option may hold line breaks (up to 1,000 characters), so the decision is not read from its first
+  // line. Whole options are matched, each ending at the end of the text or at a line break; the longest wins, so a short
+  // option that begins a longer one never takes its place.
+  let chosen = ''
+  for (const option of options) if ((rest === option || rest.startsWith(`${option}\n`)) && option.length > chosen.length) chosen = option
+  return chosen
 }
 
 /**

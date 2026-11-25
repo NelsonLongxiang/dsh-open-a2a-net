@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { optionIds, parseDecision, resolveOption, type DecisionSpec } from '../../src/superagent/host/decisions.ts'
-import { decisionCardText, PUSH_OPTION_MAX } from '../../src/superagent/host/decision-push.ts'
+import { decidedOption, decisionCardText, PUSH_OPTION_MAX } from '../../src/superagent/host/decision-push.ts'
 
 const spec = (level: DecisionSpec['level'] = 'P1'): DecisionSpec => ({ level, options: ['甲', '乙', '丙'], recommended: '乙' })
 
@@ -87,5 +87,26 @@ describe('#923 long options', () => {
     const head = '同'.repeat(400)
     const out = decisionCardText('created', 1, 't', { id: 'd-2', question: 'q', source: 'router', by: 'r', at: '2026-11-20T00:00:00Z', level: 'P1', options: [head + '甲', head + '乙'], recommended: head + '甲' } as never)
     expect(out).toMatchObject({ ok: false, why: expect.stringContaining('distinct') })
+  })
+})
+
+describe('#935 review B1: a decided option that holds line breaks', () => {
+  it('reads the whole option from the decision, longest first, old one-line decisions as before', () => {
+    expect(decidedOption('决定：甲\n乙', ['甲', '甲\n乙'])).toBe('甲\n乙')
+    expect(decidedOption('决定：甲\n说明：想清楚了', ['甲', '甲\n乙'])).toBe('甲')
+    expect(decidedOption('决定：乙', ['甲', '乙'])).toBe('乙')
+    expect(decidedOption('说明：都不要', ['甲', '乙'])).toBe('')
+  })
+  it('end to end: a long multi-line option decided by id reaches the market as its cut text, not null', async () => {
+    const m = await team()
+    const long = `第一行${'长'.repeat(400)}\n第二行${'续'.repeat(100)}`
+    const raised = m.h.proposeDecision('router', 'session-r', '选哪个？', { level: 'P1', options: [long, '乙'], recommended: long }) as { id: string }
+    expect(m.h.decide(raised.id, 'choose', 'o1')).toMatchObject({ ok: true })
+    const stored = m.h.decisions.get(raised.id)!
+    const body = (event: 'created' | 'decided') => JSON.parse((decisionCardText(event, 1, 't', stored as never) as { text: string }).text.split('\n').slice(1).join('\n')).card
+    const sent = body('created').options[0]
+    expect(sent.length).toBeLessThanOrEqual(PUSH_OPTION_MAX)
+    expect(body('decided').decided_option).toBe(sent)
+    await m.h.stop()
   })
 })
