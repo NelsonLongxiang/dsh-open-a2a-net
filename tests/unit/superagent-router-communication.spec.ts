@@ -50,7 +50,7 @@ it('adds only the shared boundary to original worker personas and leaves the bui
   // #888 D6 adds one sentence on option inputs to each persona's owner-reporting line. Target next/0.8 78e077c; preserve its member-proposal text and original worker semantics. The member's prefix adds the R7b question
   // contract (four parts); the observer's is D19's
   // rewrite (workbench-market 18: takes no tickets, tags and counts stuck points, sees health problems first — R7a).
-  const originalPrefixes = { member: 'dca76d444c14e822b9f0e19a0175c67525ff1bbfbc05f9afd7fbfc3ab69a4c4e', observer: '24d40d26f1e912e66d4fb405bb0921670f8227634c2648cda08c93d5c12d7d64' }
+  const originalPrefixes = { member: '6b97b2cfdf0f8bf830d821d12791920dba51c1ae045feaab7e0ba28c30b5acbd', observer: '0ee83435bdccd922ba485ca45bc5f79ea5b60c56024a63c63349cb0a631b38f3' }
   for (const [role, sha] of Object.entries(originalPrefixes)) {
     const original = readFileSync(new URL('src/superagent/prompts/' + role + '.md', root), 'utf8')
     expect(digest(original)).toBe(sha)

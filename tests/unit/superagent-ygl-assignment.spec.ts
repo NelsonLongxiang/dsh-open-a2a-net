@@ -22,14 +22,14 @@ const expectOnlyTaskStepSelects = (card: string): void => {
   expect(uses[0]!.startsWith('- when you take it:'), uses[0]).toBe(true)
 }
 
-async function team(ygl: boolean, made: string[] = [], version?: string) {
+async function team(ygl: boolean, made: string[] = [], version?: string, has?: (id: string, name: string) => boolean) {
   const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
   const { routeItem, registerSuperagentTools } = await import('../../src/superagent/host/tools.ts')
   const sent: Array<[string, string]> = []
   const h = new SuperagentHost({
     canvasTeam: (name: string) => name === 'team' ? { local: ['session-r', 'session-m'], remote: [] } : undefined, home: mkdtempSync(join(tmpdir(), 'sa-ygl-')), logger: { info: () => {}, warn: () => {} },
     deliverToSession: (id: string, text: string) => { sent.push([id, text]); return true }, interval: () => () => {}, memberTurn: () => ({ quiet: true, text: '' }), sessionName: (id: string) => id,
-    hasTool: (id: string, name: string) => ygl && ((id === 'session-m' && name === 'mcp__ygl__write') || (id === 'session-r' && name === 'mcp__ygl__read')),
+    hasTool: has ?? ((id: string, name: string) => ygl && ((id === 'session-m' && name === 'mcp__ygl__write') || (id === 'session-r' && name === 'mcp__ygl__read'))),
     ensureYglProject: (name: string) => { made.push(name) },
     // Without a version, the host reads what the start-up probe learned (the module state), as src/index.ts wires it.
     yglCapabilities: version !== undefined ? () => yglCapabilitiesOf(version) : yglCapabilities,
@@ -211,5 +211,28 @@ describe('#739 rereview R1: no card goes out before the version read settles, on
     }
     await h.stop()
     setYglCapabilitiesForTest(YGL_UNKNOWN)
+  })
+})
+
+describe('ygl-trees single tool (Y1f): sessions that have mcp__ygl__trees', () => {
+  const treesOnly = (id: string, name: string) => name === 'mcp__ygl__trees' && (id === 'session-m' || id === 'session-r')
+  it('a member with only trees gets the steps named for trees; the router with only trees is told the project; ready is reminded', async () => {
+    const m = await team(true, [], undefined, treesOnly)
+    expect(m.card).toContain('team memory (ygl-trees)')
+    expect(m.card).toContain('mcp__ygl__trees domain agent action')
+    expect(m.card).toContain('inside params')
+    expect(m.card).not.toMatch(/mcp__ygl__(read|write)\b/)
+    expect(m.candidate).toContain('this team\'s ygl-trees project is "team-team"')
+    expect(await m.report({ ticket_id: m.ticket, state: 'ready', summary: '结论' })).toMatchObject({ ok: false, code: 'ygl-record' })
+    await m.h.stop()
+  })
+  it('a member with both the old tools and trees gets the trees wording; with only the old ones, today\'s', async () => {
+    const both = (id: string, name: string) => (id === 'session-m' && (name === 'mcp__ygl__write' || name === 'mcp__ygl__trees')) || (id === 'session-r' && name === 'mcp__ygl__read')
+    const m = await team(true, [], undefined, both)
+    expect(m.card).toContain('mcp__ygl__trees domain agent action')
+    await m.h.stop()
+    const n = await team(true)
+    expect(n.card).not.toContain('mcp__ygl__trees')
+    await n.h.stop()
   })
 })

@@ -43,7 +43,7 @@ import { DECISION_FILES_MAX, DecisionBook, decisionFiles, DECISION_NOTE_MAX, inp
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
-import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, blockableTool, grantClass, type Role } from './role-tools.ts'
+import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, YGL_TREES, blockableTool, grantClass, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
 import { armAutoApprove, CREDENTIAL_ACK_MINUTES_DEFAULT, DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 import { searchTeam } from './search.ts'
@@ -980,7 +980,7 @@ export class SuperagentHost {
   private ensureYglProject(): void { const project = this.yglProject(); if (project !== undefined) { try { this.d.ensureYglProject?.(project) } catch { /* best effort */ } } }
   private yglRouterLines(router: string): string[] {
     const project = this.yglProject()
-    if (project === undefined || this.d.hasTool?.(router, 'mcp__ygl__read') !== true) return []
+    if (project === undefined || (this.d.hasTool?.(router, 'mcp__ygl__read') !== true && this.d.hasTool?.(router, YGL_TREES) !== true)) return []
     this.ensureYglProject()
     return [yglRouterLine(project, this.yglScope())]
   }
@@ -1012,7 +1012,7 @@ export class SuperagentHost {
     for (const rule of (profile?.rules ?? []).filter(r => r.enabled)) lines.push(`your rule ${rule.name}: ${clip(rule.text, 600)}`)
     if (profile !== undefined) lines.push('If this ticket does not fit your role and rules, report blocked and say why; the router will choose again.')
     // The team's memory, in the card the member acts on (owner 2026-11-10: a persona line alone was not followed).
-    if (this.d.hasTool?.(member, YGL_WRITE) === true) { this.ensureYglProject(); lines.push(...yglCardLines(this.yglProject(), { scope: this.yglScope(), caps: this.yglCaps() })) }
+    if (this.d.hasTool?.(member, YGL_WRITE) === true || this.d.hasTool?.(member, YGL_TREES) === true) { this.ensureYglProject(); lines.push(...yglCardLines(this.yglProject(), { scope: this.yglScope(), caps: this.yglCaps(), trees: this.d.hasTool?.(member, YGL_TREES) === true })) }
     for (const name of ticket.mandate.basis.rules ?? []) {
       const rule = this.settingsValue.rules.find(r => r.name === name)
       if (rule !== undefined) lines.push(`accepted on team rule ${rule.name}: ${clip(rule.text, 600)}`)
@@ -1331,9 +1331,9 @@ export class SuperagentHost {
    * @returns the refusal, or undefined to take the report.
    */
   yglReadyRefusal(member: string, ticketId: string, state: string, ids: readonly string[]): { ok: false; code: string; error: string } | undefined {
-    if (state !== 'ready' || ids.length > 0 || this.d.hasTool?.(member, YGL_WRITE) !== true || this.yglReminded.has(ticketId)) return undefined
+    if (state !== 'ready' || ids.length > 0 || (this.d.hasTool?.(member, YGL_WRITE) !== true && this.d.hasTool?.(member, YGL_TREES) !== true) || this.yglReminded.has(ticketId)) return undefined
     this.yglReminded.add(ticketId)
-    return { ok: false, code: 'ygl-record', error: 'Before ready, record what this ticket found in ygl-trees: evidence and claims with mcp__ygl__write, and kb add what the next session should reuse. Then report ready again with the ids in ygl. If nothing here is worth keeping, report ready again and say why in summary; this reminder comes only once.' }
+    return { ok: false, code: 'ygl-record', error: 'Before ready, record what this ticket found in ygl-trees: evidence and claims with mcp__ygl__write (or mcp__ygl__trees), and kb add what the next session should reuse. Then report ready again with the ids in ygl. If nothing here is worth keeping, report ready again and say why in summary; this reminder comes only once.' }
   }
 
   /** The team page's 搜索 (host/search.ts): this team's records only. */
