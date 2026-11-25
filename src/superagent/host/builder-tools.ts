@@ -81,6 +81,27 @@ export function orgInventory(input: InventoryInput): { [key: string]: JsonValue 
   return { teams, candidates, staffing, note: 'Teams by id (primary for the primary team); members by seatId. Credentials, MCP servers, tool grants, bots, allow-lists, GitHub settings and file paths are never shown.' }
 }
 
+/** One team builder session as the owner's user scope lists it (#903 S1). */
+export interface BuilderRow { readonly session: string; readonly name: string; readonly live: boolean; readonly joined: boolean; readonly awaiting: number; readonly recent: number }
+
+/**
+ * #903 S1: this host's team builder sessions — the sessions under the builder preset that hold no team role — with how
+ * many of their blueprints await the owner and how many they drafted in all (the newest 200 ledger entries).
+ */
+export function builderSessions(input: {
+  readonly sessions: ReadonlyArray<{ readonly id: string; readonly live: boolean; readonly joined: boolean }>
+  readonly isBuilder: (session: string) => boolean
+  readonly nameOf: (session: string) => string
+  readonly staffing: ReadonlyArray<{ readonly state: string; readonly by: { readonly session?: string } }>
+}): BuilderRow[] {
+  const recent = input.staffing.slice(-200)
+  return input.sessions.filter(s => input.isBuilder(s.id)).map(s => ({
+    session: s.id, name: cleanName(input.nameOf(s.id)) ?? s.id, live: s.live, joined: s.joined,
+    awaiting: recent.filter(e => e.by.session === s.id && e.state === 'awaiting').length,
+    recent: recent.filter(e => e.by.session === s.id).length,
+  }))
+}
+
 const githubLine = (g: { enabled?: unknown; allowed?: unknown; repos?: unknown; intake?: unknown }): string => {
   const parts: string[] = []
   if (g.enabled !== undefined) parts.push(`来源${g.enabled === true ? '开' : '关'}`)
