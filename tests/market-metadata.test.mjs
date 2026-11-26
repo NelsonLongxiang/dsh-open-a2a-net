@@ -41,7 +41,7 @@ test('original editable sources disclose simulated examples rather than product 
     assert.ok(!/https?:\/\//.test(svg.replace('http://www.w3.org/2000/svg','')))
   }
 })
-test('both locale readmes use only the curated original artwork and qualify Superagent preview', () => {
+test('both locale readmes use only the curated original artwork and state the stable Superagent installation', () => {
   for (const [file,note] of [['README.md','not a product UI'],['README_zh.md','非实际界面']]) {
     const text = readFileSync(resolve(root,file),'utf8')
     assert.ok(!/虚构|fictional/i.test(text))
@@ -50,8 +50,10 @@ test('both locale readmes use only the curated original artwork and qualify Supe
     assert.deepEqual(refs.map(m=>m[2]),manifest)
     for (const m of refs) assert.ok(m[1].toLowerCase().includes(note.toLowerCase()))
     const intro = text.split('\n').slice(0,12).join('\n')
-    assert.ok(intro.includes('Superagent') && intro.includes('0.8') && intro.includes('0.7.0'))
-    assert.ok(text.includes('@nelsonlongxiang/dsh-open-a2a-net@preview'))
+    // 0.8.2 is npm latest: the intro names it (not the old 0.7.0 default), and the install is the plain package name, not a preview tag
+    assert.ok(intro.includes('Superagent') && intro.includes('0.8.2') && !intro.includes('0.7.0'))
+    assert.ok(/^dsh plugin --profile web add @nelsonlongxiang\/dsh-open-a2a-net$/m.test(text))
+    assert.ok(!text.includes('@nelsonlongxiang/dsh-open-a2a-net@preview'))
     assert.ok(!text.includes('workbench-demo.png') && !text.includes('ledger-demo.png'))
   }
 })
