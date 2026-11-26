@@ -79,7 +79,7 @@ export interface A2aSourceDeps {
 /** One CLI run: stdout on exit 0, otherwise an Error carrying `exitCode` (a2a-watch reads it) and the stderr text. */
 export function runCli(args: string[], env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI_PATH, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'], ...(signal !== undefined ? { signal } : {}) })
+    const child = spawn(process.execPath, [CLI_PATH, ...args], { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, ...(signal !== undefined ? { signal } : {}) })
     let stdout = '', stderr = ''
     const timer = setTimeout(() => child.kill('SIGTERM'), CLI_TIMEOUT_MS)
     child.stdout.on('data', chunk => { stdout += String(chunk) })
