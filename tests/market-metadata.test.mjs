@@ -52,8 +52,9 @@ test('both locale readmes use only the curated original artwork and state the st
     const intro = text.split('\n').slice(0,12).join('\n')
     // 0.8.2 is npm latest: the intro names it (not the old 0.7.0 default), and the install is the plain package name, not a preview tag
     assert.ok(intro.includes('Superagent') && intro.includes('0.8.2') && !intro.includes('0.7.0'))
-    assert.ok(/^dsh plugin --profile web add @nelsonlongxiang\/dsh-open-a2a-net$/m.test(text))
-    assert.ok(!text.includes('@nelsonlongxiang/dsh-open-a2a-net@preview'))
+    const pkgName = JSON.parse(readFileSync(resolve(root,'package.json'),'utf8')).name
+    assert.ok(text.split('\n').includes(`dsh plugin --profile web add ${pkgName}`))
+    assert.ok(!text.includes(`${pkgName}@preview`))
     assert.ok(!text.includes('workbench-demo.png') && !text.includes('ledger-demo.png'))
   }
 })
