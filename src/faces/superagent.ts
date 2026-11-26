@@ -155,7 +155,7 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
             } else if (fields.action === 'request') {
               send(200, sa.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined, fields.via === 'cli' ? 'cli' : undefined))
             } else if (fields.action === 'answer') {
-              send(200, sa.answer(typeof fields.ticket_id === 'string' ? fields.ticket_id : '', typeof fields.text === 'string' ? fields.text : ''))
+              send(200, sa.answer(typeof fields.ticket_id === 'string' ? fields.ticket_id : '', typeof fields.text === 'string' ? fields.text : '', typeof fields.option === 'string' ? fields.option : undefined))
             } else if (fields.action === 'serve') {
               // Design v5 (D4): serve another host's team — the canvas team `<zone>/canvas/<name>@<fp8>`. The fingerprint picks
               // the linked peer whose signed card key it names and which advertises that canvas; that key is pinned, so only it
