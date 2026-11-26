@@ -6,7 +6,7 @@
 
 **新版重点：Superagent 把需求变成团队工单——总工受理、成员分工、进展可追踪，需要你拍板的事以决策卡呈现。**
 
-> **版本说明：Superagent 团队能力属于主动选择的 0.8 预览版。** 2026-11-14 核对 npm：`latest` 仍为 0.7.0，`preview` 为 0.8.1-preview.25。不要用默认安装命令推断已获得下文的新版能力。
+> **版本说明：** [发布记录](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/5e550134ecf1dc55075bc905355e45440ee1219b/docs/release.md#082正式版已发布到-npm-的-latest-标签)中的 npm `latest` 为 0.8.2。团队能力仍取决于宿主配置。当前检出的 CLI 帮助也含待发布改动，包括终端配对和 #937 的 profile 依赖声明同步。
 
 面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的开源插件。A2A 底座负责会话和主机之间的发现、寻址、路由与回执；新版 **Superagent** 在这层网络之上组织需求、工单、固定成员和人的决策，而不只是让多个对话互发消息。
 
@@ -74,7 +74,7 @@
 dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net@preview
 ```
 
-仅先体验 0.7.0 默认版的普通 A2A 网络能力：
+安装 npm `latest` 的稳定版：
 
 ```sh
 dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
@@ -124,7 +124,7 @@ dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
 本包还附带一个命令 `a2a-net`（`bin` → `cli/a2a.mjs`，0.6.27+），供脚本、终端和其他 agent 工具链这类非 DSH 会话的调用方使用。它生成自己的 Ed25519 身份（`<name>/<16 位十六进制>`），把签名卡片寄存到一台 home 宿主上，最长 4 小时（`publish`；过期的寄存以离线行保留，重新 publish 即恢复），并在该宿主上用信箱收件（保留 64 条），而不是被唤醒：
 
 ```sh
-npm i -g @nelsonlongxiang/dsh-open-a2a-net@preview      # 或 pnpm add -g …；npm 的 latest 仍是 0.7.0
+npm i -g @nelsonlongxiang/dsh-open-a2a-net            # 从 npm latest 安装稳定版 CLI
 a2a-net init review-seat --home http://127.0.0.1:3080   # 身份 + home 宿主
 A2A_KEY=... a2a-net publish                              # 寄存（有密钥的宿主）
 a2a-net route dsh/1a2b3c4d "status?"                     # 默认异步；--sync 等待回复
@@ -133,6 +133,15 @@ a2a-net inbox --new                                      # 未读来信；--wait
 
 从 0.6.38 起 `forwardDirect` 默认 `true`；本机目标未找到时，home 可替已验签且在线的 CLI 向已链接的对端目标转发一跳。两边运营者必须各自链接：A 链接 B 的接收成员，B 链接 CLI 句柄并将 home 钉为 A。画布目标只需 A 链接画布属主主机（#282 S3，同队即授权；属主主机须为 0.6.37 及以上）：接收成员在转发行出生时从属主签名名片冻结，回执只有来自这些成员、且由该属主公钥签名时才放行进 CLI 信箱并结算。作用域及结算 enforce 开启时，B 成员宿主的自动回执结清 A 的转发行并进入 CLI 信箱；`--sync` 返回 B 的回复，但转发路径上同步等待只有约 15 秒的传输窗口，超时返回 `-32005`（已投递未结清）：对端做完后仍会自动回执，请按 task id / `inbox` 对账，不要盲目重发；长任务用默认的异步 `route`，再 `inbox --wait --renew`。命令、参数、环境变量与退出码见 [`src/skill/references/cli.md`](src/skill/references/cli.md)。
 
+
+| 命令组 | 0.8.2 可用入口 |
+|---|---|
+| 代理凭证 | `user issue`、`import`、`list`、`revoke`、`nodes` |
+| 团队控制 | `user teams`、`state`、`decisions`、`decide`、`request`、`answer`、`api` |
+| 节点运维 | `user node status`、`install`、`rollback`、`restart` |
+| 组队顾问（只读） | `user builder inventory`、`list` |
+
+终端配对 `user pair`（#939）和安装/回滚时的 profile 声明同步（#937）已在当前检出，待下一版发布。参数见 [CLI 参考](src/skill/references/cli.md)，版本见 [发布记录](docs/release.md)。
 
 ### Pi 席位（让 Pi 作为 superagent 团队成员）
 
@@ -324,7 +333,7 @@ import { A2aClient } from '@nelsonlongxiang/dsh-open-a2a-net/a2a-client'
 
 外部节点需要自己实现三样东西：签名卡片、`GET /.well-known/agent-card.json` 和 `POST /a2a/direct`，这些模块编码的线上格式就是契约。匿名取卡只能拿到最小发现面，**不带 `peers`**（#312）。引荐列表要求 OriginClaim 验签通过，且调用方是本机 config.peers 显式种下的对端（根地址按 origin，挂载地址精确匹配），或原 operator link 已成立。无关系的自签名陌生人拿不到拓扑；显式 seed 可在双边完整名片链接形成前读取引荐。会话、roster、组织字段仍须原完整名片链接门。带签名的 `?discovery=1` 只请求核心与引荐，用于有限次自举，避免递归获取完整卡片。仅匿名取卡的旧爬取者须显式配置 seed 或升级签名请求；缺少 peers 仍是合法签名卡片，委派记录不变。要拿完整卡片，必须带上通过验证的 OriginClaim 信封（即用你自己的卡片密钥签名的 `X-A2A-Caller` / `-Url` / `-Ts` / `-Sig`；这是不带受众的旧信封，宿主只在 `originClaimUnboundWindow` 打开期间接受，默认仍打开，窗口关闭后必须改用绑定受众的形式——另带 `X-A2A-Caller-Aud` 与 `X-A2A-Caller-Sig2`；带请求体的 POST 还应带 `X-A2A-Caller-Sig3`（链路 key、转发回执结算、superagent 的签名面都要求它），见 `docs/protocol/delivery-origin-auth.md` §2.1），**并且**与提供卡片的宿主有链接：你的卡片 URL 与它同源、你的句柄是它的已加入会话句柄之一、它的操作者把你的精确句柄加成了画布远端成员，或双方操作者互相种了对方（它的 `peers` 列有你的源，你卡片的 `peers` 也列有它的源）。验签通过但没有链接的调用方仍只拿到最小卡片。细节见 `docs/protocol/delivery-origin-auth.md` 及 `docs/protocol/` 下其余文档。
 
-**按哪个产物实现。** npm 直装已含四个子路径：npm 上自 0.6.24 起的发布版都带齐这批导出（0.5.15 与 0.6.24 之间没有发布版），当前 `latest` 为 0.7.0，`npm install @nelsonlongxiang/dsh-open-a2a-net` 开箱即用——`examples/external-node/` 有一个可对内嵌 mock peer 跑通全部四个子路径的外部节点参考实现。子路径导出随提交 `9cb3852` 落地（0.6.24 已含），完整卡片的链接门自 0.6.25 起；0.5.15 及更早的发布版没有这批导出，也早于 OriginClaim 信封和上述准入规则，从它们引入会报 `ERR_PACKAGE_PATH_NOT_EXPORTED`——历史上的做法（钉提交、`pnpm build`、`npm pack`、依赖 tarball）仅留作需要从源码构建时的历史注（脱离 DSH profile 的 Git 构建受「安装」一节所述限制，本节的做法未在当前主干上重跑）：
+**按哪个产物实现。** npm 直装已含四个子路径：npm 上自 0.6.24 起的发布版都带齐这批导出（0.5.15 与 0.6.24 之间没有发布版），`npm install @nelsonlongxiang/dsh-open-a2a-net` 开箱即用——`examples/external-node/` 有一个可对内嵌 mock peer 跑通全部四个子路径的外部节点参考实现。子路径导出随提交 `9cb3852` 落地（0.6.24 已含），完整卡片的链接门自 0.6.25 起；0.5.15 及更早的发布版没有这批导出，也早于 OriginClaim 信封和上述准入规则，从它们引入会报 `ERR_PACKAGE_PATH_NOT_EXPORTED`——历史上的做法（钉提交、`pnpm build`、`npm pack`、依赖 tarball）仅留作需要从源码构建时的历史注（脱离 DSH profile 的 Git 构建受「安装」一节所述限制，本节的做法未在当前主干上重跑）：
 
 ```bash
 # 历史做法（没有带导出的发布版时）：从钉住的提交自行构建
