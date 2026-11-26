@@ -74,13 +74,41 @@ describe('#929 gap 2: user request status', () => {
     await m.h.stop()
   })
 
-  it('it reads only: asking again changes nothing, and a long report summary is cut', async () => {
+  it('it reads only: asking again changes nothing in the host', async () => {
     const m = await team()
     const trigger = m.ask('做事')
     await m.accept(trigger, '做事')
+    const before = JSON.stringify(m.h.state())
     const a = JSON.stringify(m.h.requestStatus(trigger))
     expect(JSON.stringify(m.h.requestStatus(trigger))).toBe(a)
-    expect(JSON.stringify(m.h.state())).toBe(JSON.stringify(m.h.state()))
+    m.h.requestStatus('wb-00000000-0000-0000-0000-000000000000')
+    m.h.requestStatus('not-a-trigger')
+    expect(JSON.stringify(m.h.state())).toBe(before)
+    await m.h.stop()
+  })
+
+  it('what the ticket last reported is shown, and a long summary is cut', async () => {
+    const m = await team()
+    const trigger = m.ask('做事')
+    const ticket = await m.accept(trigger, '做事')
+    // The holder reports a summary far longer than the view shows: its head is kept, its tail is cut.
+    const summary = 'S'.repeat(600) + 'TAILMARK'
+    expect(m.h.report('session-m', { state: 'progress', summary }, ticket)).toMatchObject({ ok: true })
+    const before = JSON.stringify(m.h.state())
+    const status = m.h.requestStatus(trigger) as { tickets: Array<{ id: string; report?: { state: string; summary: string; at: string } }> }
+    const shown = status.tickets.find(item => item.id === ticket)?.report
+    expect(shown?.state).toBe('progress')
+    expect(shown?.summary.startsWith('S'.repeat(480))).toBe(true)
+    expect(shown?.summary).not.toContain('TAILMARK')
+    expect(shown!.summary.length).toBeLessThan(summary.length)
+    expect(typeof shown?.at).toBe('string')
+    // Reading it again, and for a request that has no ticket, leaves the host exactly as it was.
+    m.h.requestStatus(trigger)
+    expect(JSON.stringify(m.h.state())).toBe(before)
+    // A newer report replaces the older one.
+    expect(m.h.report('session-m', { state: 'waiting', summary: '等回复' }, ticket)).toMatchObject({ ok: true })
+    const later = m.h.requestStatus(trigger) as { tickets: Array<{ report?: { state: string; summary: string } }> }
+    expect(later.tickets[0]!.report).toMatchObject({ state: 'waiting', summary: '等回复' })
     await m.h.stop()
   })
 })
