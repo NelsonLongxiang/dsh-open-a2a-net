@@ -4,15 +4,20 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { setTimeout as delay } from 'node:timers/promises'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { registerAdminFaces, type AdminFaceDeps } from '../../src/faces/admin.ts'
+import { CANVAS_NOTIFY_DEBOUNCE_MS } from '../../src/faces/canvas-notify.ts'
 import { CanvasStore } from '../../src/canvas-store.ts'
+import { PeerStore } from '../../src/peer-store.ts'
 import { OWNER_DELEGATE_HEADER, OwnerDelegates, issueOwnerDelegate } from '../../src/superagent/host/owner-delegate.ts'
 import { configureOwnerDelegates } from '../../src/superagent/host/owner-proof.ts'
 
 let server: Server, base = '', dir = '', auditPath = '', token = '', store: CanvasStore
 const routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => void>()
+const disposers: Array<() => void> = []
+let peerStore: PeerStore
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 
 beforeEach(async () => {
@@ -23,18 +28,26 @@ beforeEach(async () => {
   configureOwnerDelegates(new OwnerDelegates(delegates, auditPath))
   store = new CanvasStore(join(dir, 'a2a', 'canvas.json'))
   store.create('alpha'); store.create('beta')
+  peerStore = new PeerStore([], '')
   routes.clear(); logger.info.mockClear()
   const connection = { browserPeer: { id: 'owner' }, admit: (req: Pick<IncomingMessage, 'headers'>) => (req.headers.cookie === 'login=ok' ? { peer: { id: 'owner' } } : { rejection: 401 as const }) }
-  const ctx = new Proxy({ effect: (fn: () => unknown) => fn(), get: () => connection } as Record<string, unknown>, { get: (target, key) => (key in target ? target[key as string] : () => undefined) })
+  const ctx = new Proxy({ effect: (fn: () => unknown) => {
+    const dispose = fn()
+    if (typeof dispose === 'function') disposers.push(() => { dispose() })
+  }, get: () => connection } as Record<string, unknown>, { get: (target, key) => (key in target ? target[key as string] : () => undefined) })
   const webServer = { register: (r: { path: string; handler: (req: IncomingMessage, res: ServerResponse) => void }) => { routes.set(r.path, r.handler); return () => undefined } }
   const readJsonBody = (req: IncomingMessage, _res: ServerResponse, use: (body: unknown) => void) => { let text = ''; req.on('data', c => { text += String(c) }); req.on('end', () => use(JSON.parse(text))) }
-  const d = new Proxy({ ctx, config: { team: 'dsh' }, canvasStore: store, logger, controlRoute: (h: unknown) => h, readJsonBody, ownCanvasFingerprint: 'abcd1234' } as Record<string, unknown>, { get: (target, key) => (key in target ? target[key as string] : undefined) }) as unknown as AdminFaceDeps
+  const d = new Proxy({ ctx, config: { team: 'dsh' }, canvasStore: store, peerStore, logger, controlRoute: (h: unknown) => h, readJsonBody, ownCanvasFingerprint: 'abcd1234' } as Record<string, unknown>, { get: (target, key) => (key in target ? target[key as string] : undefined) }) as unknown as AdminFaceDeps
   registerAdminFaces(webServer as never, d)
   server = createServer((req, res) => { const handler = routes.get(new URL(req.url ?? '/', 'http://x').pathname); if (handler === undefined) { res.writeHead(404); res.end(); return } handler(req, res) })
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   base = `http://127.0.0.1:${String((server.address() as { port: number }).port)}`
 })
-afterEach(async () => { configureOwnerDelegates(undefined); await new Promise<void>(resolve => server.close(() => resolve())) })
+afterEach(async () => {
+  for (const dispose of disposers.splice(0).reverse()) dispose()
+  configureOwnerDelegates(undefined)
+  await new Promise<void>(resolve => server.close(() => resolve()))
+})
 
 const post = async (body: unknown, headers: Record<string, string> = { [OWNER_DELEGATE_HEADER]: token }): Promise<{ status: number; json: Record<string, any> }> => {
   const res = await fetch(base + '/__dsh_a2a/canvas', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) })
@@ -43,6 +56,14 @@ const post = async (body: unknown, headers: Record<string, string> = { [OWNER_DE
 const audit = (): Array<Record<string, any>> => { try { return readFileSync(auditPath, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)) } catch { return [] } }
 
 describe('set-label', () => {
+  it('flushes a real debounced canvas notification when there are no peers', async () => {
+    const list = vi.spyOn(peerStore, 'list')
+    const response = await post({ action: 'set-label', name: 'alpha', label: 'Updated' })
+    expect(response).toMatchObject({ status: 200, json: { ok: true, label: 'Updated' } })
+    await delay(CANVAS_NOTIFY_DEBOUNCE_MS)
+    expect(list).toHaveBeenCalled()
+    expect(store.labelOf('alpha')).toBe('Updated')
+  })
   it('needs the owner: nothing is 401, a bad delegate 403, a delegate or the browser login sets it; a refusal changes nothing', async () => {
     expect((await post({ action: 'set-label', name: 'alpha', label: '采集队' }, {})).status).toBe(401)
     expect((await post({ action: 'set-label', name: 'alpha', label: '采集队' }, { [OWNER_DELEGATE_HEADER]: 'dshod_wrong' })).status).toBe(403)
