@@ -217,7 +217,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     name: 'superagent_read',
     description: 'Team router only: read the candidate holding a trigger (kind candidate, trigger_id), one ticket (kind ticket, ticket_id) or the open and recent tickets (kind tickets), or recent decisions and the rules they named (kind decisions).',
     parameters: {
-      kind: { type: 'string', required: true, description: 'candidate | ticket | tickets | decisions | outbound_result' },
+      kind: { type: 'string', required: true, description: 'candidate | ticket | tickets | decisions | decision-receipts | outbound_result' },
       trigger_id: { type: 'string', description: 'For kind candidate.' },
       ticket_id: { type: 'string', description: 'For kind ticket and outbound_result.' },
       task_id: { type: 'string', description: 'For kind outbound_result: the outbound request task.' },
@@ -228,6 +228,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     execute: async (args: { kind: string; trigger_id?: string; ticket_id?: string; task_id?: string }, exec): Promise<Record<string, JsonValue>> => {
       const h = asRouter(exec)
       if (h === undefined) return { ...notRouter }
+      if (args.kind === 'decision-receipts') return json(h.observerDecisionReceipts(String((exec.agent as { id: unknown } | undefined)?.id ?? ''))) as Record<string, JsonValue>
       // #881 v2 B1: before every other branch, never wrongId, no similar or available ids.
       if (args.kind === 'outbound_result') return json(h.outboundResult(String((exec.agent as { id: unknown } | undefined)?.id ?? ''), String(args.ticket_id ?? ''), String(args.task_id ?? ''))) as Record<string, JsonValue>
       if (args.kind === 'candidate') {
@@ -657,18 +658,19 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
   // Design outbound-requests O3: an approver the owner named decides outbound cards it did not raise, with a reason.
   ctx.tools.register(defineTool({
     name: 'a2a_decision_decide',
-    description: 'Approvers only (a member or observer the owner named in the team settings): decide a waiting outbound card, a request to send something to another team. Read the card first (a2a_ticket_read kind decisions, or the card text you were shown). option: 批准：以团队名义发出, or 拒绝. Give the reason. You cannot decide a card you raised, nor any other kind of card.',
+    description: 'Named approvers decide outbound cards as before. Team observers may decide an eligible local card using its generation from a2a_ticket_read kind=cards. Give one existing option and a reason.',
     parameters: {
       card_id: { type: 'string', required: true, description: 'The card\'s id.' },
+      generation: { type: 'string', description: 'Exact version from kind=cards for an observer decision.' },
       option: { type: 'string', required: true, description: 'One of the card\'s options.' },
       reason: { type: 'string', required: true, description: 'Why, in a sentence or two; it is recorded with the decision.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_decision_decide', value) },
     presentCall: args => ({ card: 'generic', title: `a2a_decision_decide ${String(args.card_id)}`, kind: 'other', rawInput: args }),
-    execute: async (args: { card_id?: string; option?: string; reason?: string }, exec): Promise<Record<string, JsonValue>> => {
+    execute: async (args: { card_id?: string; generation?: string; option?: string; reason?: string }, exec): Promise<Record<string, JsonValue>> => {
       const h = host(exec), me = callerOf(exec)
       if (h === undefined || me === undefined) return { ok: false, code: 'not-team', error: 'a2a_decision_decide serves only the sessions of a superagent team on this host' }
-      const out = h.approverDecide(me, String(args.card_id ?? ''), args.option, args.reason)
+      const out = h.observerOrApproverDecide(me, String(args.card_id ?? ''), args.generation, args.option, args.reason)
       // Approving is not delivering (live check): the host sends it now, and the answer reaches the asking ticket as a note.
       return (out.approved === true ? { ...out, note: 'Approved. The host sends the text from the team\'s A2A identity now; whether it went out, and the other team\'s receipt, reach the asking ticket as notes.' } : out) as Record<string, JsonValue>
     },
@@ -680,7 +682,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     name: 'a2a_ticket_read',
     description: 'Team member or observer only, read-only: where your work stands before you act on it. kind mine: your open tickets; kind ticket: one of them (ticket_id). An observer can also read kind team (the team\'s open and recent tickets) and kind decisions (the router\'s recent decisions), kind health (the host\'s health problems, which reach the observer first), and from this host\'s prompt-template plugin kind library (the cards, their versions, switches and intervals), kind templates (one session\'s own templates, session_id) and kind interventions (each time a card went into a session: schedule, event, manual by the owner, or a plugin; digests only, never text). An approver the owner named reads kind outbound: the outbound cards waiting for a decision, with their ids. It changes nothing.',
     parameters: {
-      kind: { type: 'string', required: true, description: 'mine | ticket | team | decisions | health | library | templates | interventions | outbound | outbound_result' },
+      kind: { type: 'string', required: true, description: 'mine | ticket | team | decisions | cards | decision-receipts | health | library | templates | interventions | outbound | outbound_result' },
       session_id: { type: 'string', description: 'For kind templates (required): the session whose own templates to read; for kind interventions: one session.' },
       since: { type: 'string', description: 'For kind interventions: only rows at or after this ISO time.' },
       source: { type: 'string', description: 'For kind interventions: schedule | event | manual | plugin (manual = the owner sending a card by hand).' },
@@ -693,7 +695,9 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     execute: async (args: { kind?: string; ticket_id?: string; task_id?: string; session_id?: string; since?: string; source?: string; limit?: number }, exec): Promise<Record<string, JsonValue>> => {
       const h = host(exec)
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
+      if (h !== undefined && me !== undefined && args.kind === 'decision-receipts') return json(h.observerDecisionReceipts(me, args.ticket_id)) as Record<string, JsonValue>
       if (h === undefined || me === undefined || h.roleOf(me) !== 'member' || !h.settings.members.includes(me)) return { ok: false, code: 'not-member', error: 'a2a_ticket_read serves only the members on this host of a superagent team' }
+      if (args.kind === 'cards') return json(h.observerDecisionCards(me)) as Record<string, JsonValue>
       // #881 v2 B1: the outbound result status, before every other branch; the host decides who may see what.
       if (args.kind === 'outbound_result') return json(h.outboundResult(me, String(args.ticket_id ?? ''), String(args.task_id ?? ''))) as Record<string, JsonValue>
       const observer = h.isObserver(me)

@@ -67,6 +67,14 @@ export type A2aNetKey =
   | 'team.healthQueuedStalled'
   | 'team.healthQueuedAllBusy'
   | 'team.decisionsCount'
+  | 'team.observerDecision'
+  | 'team.observerCorrect'
+  | 'team.observerCorrection'
+  | 'team.observerState.pending'
+  | 'team.observerState.attempting'
+  | 'team.observerState.applied'
+  | 'team.observerState.failed'
+  | 'team.observerState.unknown'
   | 'team.needsInput'
   | 'team.countNeedsInput'
   | 'team.countDirect'
@@ -141,6 +149,14 @@ export const zh: Record<A2aNetKey, string> = {
   'team.healthQueuedStalled': '有空闲成员，但这些工单一直没派出去，原因不明；可请总工改派',
   'team.healthQueuedAllBusy': '所有成员都在忙',
   'team.decisionsCount': '待你决定（{count}）',
+  'team.observerDecision': '观察者代决 · {name} · {at} · {option} · {state}',
+  'team.observerCorrect': '记录改判，不撤回原动作',
+  'team.observerCorrection': '属主改判：{option}',
+  'team.observerState.pending': '待处理',
+  'team.observerState.attempting': '执行中',
+  'team.observerState.applied': '已应用',
+  'team.observerState.failed': '未应用',
+  'team.observerState.unknown': '结果未知',
   'team.needsInput': '需你填写',
   'team.countNeedsInput': '需填写 {count}',
   'team.countDirect': '可直接定 {count}',
@@ -228,6 +244,14 @@ export const en: Record<A2aNetKey, string> = {
   'team.healthQueuedStalled': 'a member is free, yet these tickets have not gone out; the cause is not known, the router can reassign',
   'team.healthQueuedAllBusy': 'every member is busy',
   'team.decisionsCount': 'Waiting for your decision ({count})',
+  'team.observerDecision': 'Observer decision · {name} · {at} · {option} · {state}',
+  'team.observerCorrect': 'Record correction without undoing the original action',
+  'team.observerCorrection': 'Owner correction: {option}',
+  'team.observerState.pending': 'Pending',
+  'team.observerState.attempting': 'Applying',
+  'team.observerState.applied': 'Recorded',
+  'team.observerState.failed': 'Could not apply',
+  'team.observerState.unknown': 'Outcome unknown',
   'team.needsInput': 'Needs your input',
   'team.countNeedsInput': 'Need input: {count}',
   'team.countDirect': 'Can decide directly: {count}',

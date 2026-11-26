@@ -36,6 +36,24 @@ describe('the deep link: only tab, view and a card id that fits the rule', () =>
   })
 })
 
+describe('the observer decision board', () => {
+  it('excludes settled cards from waiting and posts correction and control separately', async () => {
+    const decide = vi.fn(async () => ({ status: 200, body: { ok: true } }))
+    const observerResult = { generation: 'v1', name: 'Observer', at: '2026-11-26T10:00:00Z', state: 'applied', option: '知道了', reason: 'fixture', canCorrect: true, controlOptions: ['停止'] }
+    const group = createDecisionsGroup({ list: async () => ({ decisions: [], observerDecisions: [row({ source: 'health', options: ['知道了', '停止'], observerResult })] }), decide })
+    document.body.replaceChildren(group.root)
+    await group.refresh()
+    expect(group.waiting()).toBe(0)
+    expect(group.root.textContent).toContain('观察者代决')
+    button(group.root, '记录改判').click()
+    await flush()
+    expect(decide).toHaveBeenLastCalledWith({ id: 'd-1', teamId: 't2', generation: 'v1', how: 'observer-correct', option: '停止' })
+    button(group.root, '停止').click()
+    await flush()
+    expect(decide).toHaveBeenLastCalledWith({ id: 'd-1', teamId: 't2', generation: 'v1', how: 'credential-control', option: '停止' })
+  })
+})
+
 describe('the 等你拍板 group', () => {
   it('every text on a card is text: question, reason, options and file names never become markup', async () => {
     const m = mount(() => [row()])
