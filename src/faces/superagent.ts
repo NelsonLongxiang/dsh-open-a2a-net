@@ -409,8 +409,9 @@ export function registerOwnerDelegateFaces(webServer: WebServer, d: Pick<Superag
     // only, so a remote node's owner can hand its agent a delegate without a shell on that node.
     const read = (path: string): string | undefined => { try { return readFileSync(path, 'utf8') } catch { return undefined } }
     const write = (path: string, text: string): void => { const tmp = `${path}.${process.pid}.tmp`; writeFileSync(tmp, text, { encoding: 'utf8', mode: 0o600 }); renameSync(tmp, path) }
-    // #933: terminal pairing (owner-pairing.ts). The owner allows a pairing on this page; the delegate is issued then and its
-    // token handed once to the terminal holding the pairing's secret. A delegate approved but never collected is revoked.
+    // #933: terminal pairing (owner-pairing.ts). The owner allows a pairing on this page, which only marks it; the delegate is
+    // issued when the terminal holding the pairing's secret collects it, its token answered once, so a pairing allowed but
+    // never collected (it expired, or the node restarted) leaves no credential behind.
     const pairings = new OwnerPairings()
     const issueFor = (name: string, days: number): { token: string; id: string } => {
       const out = issueOwnerDelegate(delegatesPath, name, days, { read, write, random: () => ({ token: `dshod_${randomBytes(32).toString('base64url')}`, id: randomUUID() }), now: () => new Date() })
