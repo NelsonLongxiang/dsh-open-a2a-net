@@ -4,13 +4,13 @@ English | [中文](README_zh.md)
 
 [![npm](https://img.shields.io/npm/v/@nelsonlongxiang/dsh-open-a2a-net?label=npm)](https://www.npmjs.com/package/@nelsonlongxiang/dsh-open-a2a-net)
 
-**New in the preview: Superagent turns requests into team tickets—a router accepts work, fixed members execute it, progress stays visible, and owner decisions arrive as option-based cards.**
+**Superagent turns requests into team tickets. A router accepts work, fixed members execute it, progress stays visible, and owner decisions arrive as option-based cards.**
 
 > **Version boundary:** npm `latest` is 0.8.2 in the [published release record](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/5e550134ecf1dc55075bc905355e45440ee1219b/docs/release.md#082正式版已发布到-npm-的-latest-标签). Team features still depend on the host configuration. The checkout’s CLI can describe commands that are awaiting release, including device-code pairing and the profile dependency updates in #937.
 
 An open-source plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). The A2A foundation handles discovery, addressing, routing and receipts between sessions and hosts. **Superagent** adds requests, scoped tickets, fixed members and human decisions on top—not just messages between multiple chats.
 
-## Preview highlight: Superagent turns routing into a visible workflow
+## Superagent turns routing into a visible workflow
 
 ### Follow one request through the team
 
@@ -40,11 +40,11 @@ This is a workflow illustration, not a completed case study or a promise to acce
 - **External intake is opt-in.** A2A intake is controlled by the bot list and accept mode. GitHub Issue intake is off by default and requires owner-configured repositories and allowed users; this is not automatic monitoring of every issue.
 - **No silent expansion of authority.** Rule changes need human confirmation. Members cannot widen tickets, open sessions or directly dispatch to other teams; outbound team requests follow the configured approval flow.
 
-See the [released preview Superagent guide](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/6ca847560f9bc90c17be64e9558f830a4abf5113/src/skill/references/superagent.md). Root teams are still marked in progress and are not represented here as a mature capability.
+See the [Superagent guide shipped with 0.8.2](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/5465acecb8312f5c38c2bf80fd82a9110df0879e/src/skill/references/superagent.md). Root teams are still marked in progress and are not represented here as a mature capability.
 
 ### How is this different from an ordinary canvas team?
 
-| Ordinary A2A collaboration | Superagent team (0.8 preview) |
+| Ordinary A2A collaboration | Superagent team |
 | --- | --- |
 | Which sessions are reachable, where does this message go, and has a receipt arrived? | Is this request accepted, who owns the ticket, where does it stand, and what needs a person’s decision? |
 | Discover routable teams; the caller organizes the work | The router accepts and assigns work, fixed members execute it, and reports and follow-ups remain attached to tickets |
@@ -58,7 +58,7 @@ See the [released preview Superagent guide](https://github.com/NelsonLongxiang/d
 
 ## Superagent, illustrated
 
-The following artwork is **original hand-drawn-style functional illustration with a simulated example—not a product UI capture, interface layout or evidence of completed work**. The illustrations explain the opt-in preview workflow.
+The following artwork is **original hand-drawn-style functional illustration with a simulated example—not a product UI capture, interface layout or evidence of completed work**. The illustrations explain the Superagent workflow.
 
 ![Original Superagent workflow illustration; simulated example, not a product UI](images/market/01-superagent-flow.png)
 
@@ -68,13 +68,7 @@ The following artwork is **original hand-drawn-style functional illustration wit
 
 ## Install and try one request
 
-**For the Superagent preview highlight described here, explicitly opt in:**
-
-```sh
-dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net@preview
-```
-
-For the stable release (npm `latest`):
+Install the stable release (npm `latest`) to use the Superagent workflow on a configured host:
 
 ```sh
 dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net

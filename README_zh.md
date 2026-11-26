@@ -40,11 +40,11 @@
 - **外部入口需主动开启。** A2A 团队接单按 bot 列表与接单模式控制；GitHub Issue 作为需求来源需属主启用并配置仓库、允许用户，默认关闭。没有启用就不承诺自动监听所有 Issue。
 - **团队不自行扩大权限。** 规则变更要人确认；成员不能擅自增加工单范围、创建会话或直接跨团队派活。跨团队请求需按团队配置审批。
 
-完整机制见[已发布预览版 Superagent 指南](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/6ca847560f9bc90c17be64e9558f830a4abf5113/src/skill/references/superagent.md)；仍标为进行中的 Root teams 不作为本页成熟能力承诺。
+完整机制见 [0.8.2 随包发布的 Superagent 指南](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/5465acecb8312f5c38c2bf80fd82a9110df0879e/src/skill/references/superagent.md)。仍标为进行中的 Root teams 不作为本页成熟能力承诺。
 
 ### 与普通画布组队有什么不同？
 
-| 普通 A2A 协作 | Superagent 团队（0.8 预览版） |
+| 普通 A2A 协作 | Superagent 团队 |
 | --- | --- |
 | 回答“网络里有哪些会话、消息发给谁、回执到了吗” | 在网络之上回答“需求是否受理、工单给谁、推进到哪、什么需要人决定” |
 | 发现可路由团队，调用方自行组织工作 | 总工受理和分派，既定成员执行，报告与后续输入挂在工单上 |
@@ -58,7 +58,7 @@
 
 ## 用原创手绘看懂 Superagent
 
-以下均为**原创手绘风格功能示意，采用模拟案例，不是实际产品界面、布局承诺或已完成工作的证据**。插画说明主动选择的预览版工作流，不使用内部会话或主机信息。
+以下均为**原创手绘风格功能示意，采用模拟案例，不是实际产品界面、布局承诺或已完成工作的证据**。插画说明 Superagent 工作流，不使用内部会话或主机信息。
 
 ![Superagent 需求协作流程原创示意图；模拟案例，非实际界面](images/market/01-superagent-flow.png)
 
@@ -68,13 +68,7 @@
 
 ## 安装与首次使用
 
-**体验本文的 Superagent 新版重点，请主动选择预览版：**
-
-```sh
-dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net@preview
-```
-
-安装 npm `latest` 的稳定版：
+安装 npm `latest` 的稳定版，在已配置的宿主上使用下文的 Superagent 流程。
 
 ```sh
 dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
