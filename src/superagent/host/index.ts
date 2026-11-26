@@ -39,7 +39,7 @@ import { SettingsHistory } from './settings-history.ts'
 import { HealthReminders, HEALTH_TICK_MS, cleanName, type HealthProblem } from './health-reminders.ts'
 import { DecisionPush, PUSH_TICK_MS } from './decision-push.ts'
 import { QuestionGate, questionToken } from './question-gate.ts'
-import { DECISION_FILES_MAX, DecisionBook, decisionFiles, DECISION_NOTE_MAX, inputFor, needsInput, recommendedNeedsInput, oneClick, parseDecision, resolveOption, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
+import { AUTO_ACK_TEXT, DECISION_FILES_MAX, DecisionBook, decisionFiles, DECISION_NOTE_MAX, inputFor, needsInput, recommendedNeedsInput, oneClick, parseDecision, resolveOption, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
@@ -1939,7 +1939,8 @@ export class SuperagentHost {
    */
   decide(id: string, how: unknown, option?: unknown, note?: unknown, files?: unknown): Record<string, unknown> {
     const card = this.decisionCards().find(row => row.id === id)
-    if (card === undefined) return { ok: false, code: 'stale', error: 'that decision is no longer waiting: it was decided, or its ticket moved on' }
+    // #934: say where a card that is no longer waiting went, instead of a bare refusal.
+    if (card === undefined) return this.staleDecision(id)
     // The owner's files, staged by the right bar like a request's (C8): reference lines, added below the decision.
     const parsedFiles = decisionFiles(files)
     if (!parsedFiles.ok) return parsedFiles
@@ -2027,6 +2028,33 @@ export class SuperagentHost {
     if (!filed.ok) return { ok: false, code: 'refused', error: filed.error }
     this.decisions.decide(card.id, { at, text: answer, ...choice, triggerId: filed.triggerId, ...withFiles }, stored)
     return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
+  }
+
+  /**
+   * #934: a card that is no longer waiting, and where it went: its decision (when, by whom, its first line), or the stage of
+   * the ticket it was asked on. Nothing changes; the answer only tells the decider what to look at instead.
+   */
+  private staleDecision(id: string): Record<string, unknown> {
+    const known = this.decisions.get(id)
+    const ticketId = known?.ticketId ?? known?.outbound?.ticketId
+    let now: Record<string, unknown> | undefined
+    let where = 'this host has no record of it'
+    if (known?.decided !== undefined) {
+      // #938 review B1: a credential card the host closed on its timeout carries autoAck and no decided.by. The autoAck record
+      // stays when the owner decides again, so the host is named only while the decision is still that auto-ack itself (same
+      // time, the host's fixed text); a later owner decision, even in the same millisecond, stays the owner's.
+      const hostAck = known.autoAck !== undefined && known.decided.at === known.autoAck.at && known.decided.text === AUTO_ACK_TEXT
+      const by = known.decided.by ?? (hostAck ? 'host' : 'owner')
+      const first = known.decided.text.split('\n')[0] ?? ''
+      now = { decided: { at: known.decided.at, by, text: first } }
+      where = `it was decided at ${known.decided.at}${by === 'owner' ? '' : ` by the ${by}`}: ${first}`
+    } else if (ticketId !== undefined) {
+      const ticket = this.store.tickets.get(ticketId)
+      const stage = ticket === undefined ? { stage: 'gone' } : ticket.ended !== undefined ? { stage: 'ended', outcome: ticket.ended.outcome } : { stage: this.ticket(ticketId)?.stage ?? null }
+      now = { ticket: { id: ticketId, ...stage } }
+      where = ticket === undefined ? `its ticket ${ticketId} is no longer on this host` : ticket.ended !== undefined ? `its ticket ${ticketId} ended (${String(ticket.ended.outcome)})` : `its ticket ${ticketId} moved on: the question it asked is no longer open`
+    }
+    return { ok: false, code: 'stale', error: `that decision is no longer waiting: ${where}`, ...(now !== undefined ? { now } : {}) }
   }
 
   /** Recent inferred candidates and what became of them, for improving the rules (design D13). */
