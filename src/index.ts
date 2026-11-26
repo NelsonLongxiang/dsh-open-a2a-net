@@ -2169,7 +2169,7 @@ export function apply(ctx: Context, config: Config): void {
             // gh#152: members are read through the local tiers' lens — one of
             // this host's own handles resolves to the session it names, and
             // the two stored shapes of one session publish as ONE handle.
-            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...((team => team?.a2aAddress !== undefined ? { superagentTeam: true as const, identity: team.a2aAddress } : {})(superagentTeams?.all().find(team => team.a2aAddress !== undefined && team.settings.canvas === name))), ...(canvasStore.isRoot(name) ? { root: true as const } : {}), ...((admits => admits.length > 0 ? { admits } : {})(superagentTeams?.all().find(team => team.a2aAddress !== undefined && team.settings.canvas === name)?.admittedRoots() ?? [])) })) } : {}),
+            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), ...(canvasStore.labelOf(name) !== undefined ? { label: canvasStore.labelOf(name) } : {}), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...((team => team?.a2aAddress !== undefined ? { superagentTeam: true as const, identity: team.a2aAddress } : {})(superagentTeams?.all().find(team => team.a2aAddress !== undefined && team.settings.canvas === name))), ...(canvasStore.isRoot(name) ? { root: true as const } : {}), ...((admits => admits.length > 0 ? { admits } : {})(superagentTeams?.all().find(team => team.a2aAddress !== undefined && team.settings.canvas === name)?.admittedRoots() ?? [])) })) } : {}),
             ...(named && lanIp !== '' ? { lanIp } : {}),
             ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
             description: `A2A node exposing team ${config.team}${named ? '' : ' (minimal card — OriginClaim envelope required for the full card: X-A2A-Caller/-Url/-Ts/-Sig signed with your card key)'}`,
@@ -3965,6 +3965,7 @@ export function apply(ctx: Context, config: Config): void {
   // superagent's HTTP faces live in src/faces/superagent.ts (#570 line ratchet); registered after cardCache exists: whenWebServerSettled may run its callback at once.
   if (superagentHost !== undefined && superagentTeams !== undefined) whenWebServerSettled((webServer) => {
     registerSuperagentFaces(webServer, {
+      canvasLabel: name => canvasStore.labelOf(name),
       ownerDelegatesPath: join(home, 'a2a', 'owner-delegates.json'),
       sidebarSends,
       ctx, config, superagentHost, superagentTeams, controlRoute, readJsonBody, recordActivity, routeTrunk,

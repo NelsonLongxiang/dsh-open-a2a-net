@@ -313,7 +313,7 @@ Set an `apiKey` before exposing the listener beyond loopback.
 | --- | --- |
 | `GET /__dsh_a2a/state` | The state face the panel and workbench poll (sessions, canvas, peers, remote rows, activity, ledger). |
 | `POST /__dsh_a2a/join` · `/leave` | Join or leave one session node. |
-| `/__dsh_a2a/canvas` · `/canvas-layout` | Canvas teams (create/remove/add-member/remove-member, plus the owner's confirm-member / restore-suspended / delete-suspended / cli-home-options) and the board layout. |
+| `/__dsh_a2a/canvas` · `/canvas-layout` | Canvas teams (create/remove/add-member/remove-member, plus `set-label` (#953: the team's display label, owner delegate or browser login; the name stays the address) and the owner's confirm-member / restore-suspended / delete-suspended / cli-home-options) and the board layout. |
 | `POST /__dsh_a2a/roster-op` | Owner-controlled roster teams on the planning board (`op`: create — at least two joined local sessions — / add-member / remove-member / dissolve), with the exact names in `teamJoinAllowlist` maintained alongside; it cannot admit remote or unjoined sessions. |
 | `POST /__dsh_a2a/dispatch` | Workbench quick dispatch into a team. |
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | Settle an owed task from the caller side (cancel also makes a best-effort stop notice to the target: a steered notice for a local one, a wire delivery for a remote one — which also carries `cancel_task_id` when the peer's card declares `queuedTaskCancellation`, withdrawing the original task if it is still queued; the reply carries `steered` and `removed`); the row lands in `archived[]`. |
