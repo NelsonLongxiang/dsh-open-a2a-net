@@ -6,6 +6,16 @@
  *   stages each (by sha256, granted to `team`), and routes ONE message carrying one reference line
  *   per file through the ordinary route trunk — admission, ledger and receipts are a2a_route's. The
  *   route's host-written `peer_content` flag rides the result (N4: a route that reached a peer taints).
+ *   With `grant_only: true` it stages the grants and sends NOTHING (a member seat takes no direct
+ *   delivery): no message is routed, and the result carries each file's reference line for the sender to
+ *   hand over through an admitted channel. The audience's pull admission is the pull face's own, unchanged.
+ * - Refusal consistency (ticket 9c22cfa8): a refusal the HOST produced before anything left it
+ *   (routeTrunk's local-route shapes) rolls this call's new grants back — a pre-existing grant of the
+ *   same (sha256, to, by) is kept (stage() only extended its expiry). A refusal from beyond this host,
+ *   or an unknown outcome, revokes nothing: the result says the grants are live (files[].expiresAt)
+ *   and names the exact revoke entry. A failure part-way through staging (a missing/oversized file, a
+ *   full store) rolls the same fresh set back too. The join gate runs BEFORE staging, so an unjoined
+ *   session is refused with nothing staged.
  * - `a2a_file_fetch { ref }` pulls one referenced file — from this host's own store when the
  *   reference names this host, else over the pull face with this host's OriginClaim envelope — checks
  *   sha256 and size, and lands it at `<workspace>/a2a-inbox/<sha12>-<name>`, never following a link.
@@ -58,6 +68,11 @@ const workspaceOf = (agent: Agent | undefined): string => {
 }
 
 export function createFileTools(d: FileToolsDeps): { registerFileSend: () => void; registerFileFetch: () => void; registerFileGrants: () => void; registerFileRevoke: () => void } {
+  // #854 review B2: per (sha256, to, by) stage generation and in-flight count. A send rolls back only a grant no
+  // other send has staged since its own stage() — a concurrent send that re-staged the key may already have delivered
+  // a reference to it. The entry is dropped once no send holds the key, so the map stays bounded.
+  const stageGens = new Map<string, { gen: number; inflight: number }>()
+  const genKey = (sha: string, to: string, by: string): string => `${sha}\u0000${to}\u0000${by}`
   const { ctx, config, blobStore } = d
 
   function registerFileSend(): void {
@@ -67,19 +82,30 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
         'Send one or more files to an A2A team WITHOUT putting their bytes in a session message (#91 file channel). '
         + 'Each file is stored on this host by sha256 and granted to the team for 24h; the team receives ONE message '
         + 'with one "[A2A file] v1 …" reference line per file and pulls them with a2a_file_fetch. At most 16 files, '
-        + '64 MiB each. Paths are relative to your workspace (or absolute).',
+        + '64 MiB each. Paths are relative to your workspace (or absolute). '
+        + 'With grant_only: true nothing is sent: the grants are staged and the "[A2A file] v1 …" reference lines come '
+        + 'back in the result, for you to hand over through an admitted channel (a member seat takes no direct delivery).',
       parameters: {
         paths: { type: 'array', items: { type: 'string' }, required: true, description: 'Files to send (1–16).' },
         team: { type: 'string', required: true, description: 'Target team, as for a2a_route.' },
         note: { type: 'string', description: 'Optional text to put above the references.' },
         task_id: { type: 'string', description: 'Optional task id to record on the grants (default: the task this send goes out in).' },
+        grant_only: { type: 'boolean', description: 'Stage the grants for the team WITHOUT routing any message (no direct delivery, no task, no receipt). The result carries the "[A2A file] v1 …" reference lines: hand them to the designated audience through a channel that admits it (e.g. your ticket report). For an audience that must not be direct-messaged, such as a member seat.' },
       },
       output: {
         schema: { type: 'object', additionalProperties: true },
-        render: (_args, value) => [{ type: 'text', text: value.ok === true ? `Sent ${String((value.files as unknown[]).length)} file(s) to ${String(value.team)} (task ${String(value.task_id)}).` : `File send refused: ${String(value.error)}` }],
+        render: (_args, value) => [{ type: 'text', text: value.ok !== true
+          ? value.grants === 'rolled-back'
+            ? `File send refused before anything left this host: ${String(value.error)} — ${String(value.rolled_back)} grant(s) from this send revoked, nothing was delivered.`
+            : value.grants === 'live'
+              ? `File send refused beyond this host (delivery may already have happened): ${String(value.error)} — the grants from this send are STILL LIVE until they expire (files[].expiresAt); revoke unwanted ones with a2a_file_revoke { sha256, to }.`
+              : `File send refused: ${String(value.error)}`
+          : value.grant_only === true
+            ? `Granted ${String((value.files as unknown[]).length)} file(s) to ${String(value.team)} for pull; nothing was sent — hand these reference lines over yourself:\n${(value.refs as string[]).join('\n')}`
+            : `Sent ${String((value.files as unknown[]).length)} file(s) to ${String(value.team)} (task ${String(value.task_id)}).` }],
       },
-      presentCall: args => ({ card: 'generic', title: `A2A file send → ${String(args.team)}`, kind: 'other', rawInput: args }),
-      execute: async (args: { paths: string[]; team: string; note?: string; task_id?: string }, exec): Promise<Record<string, JsonValue>> => {
+      presentCall: args => ({ card: 'generic', title: args.grant_only === true ? `A2A file grant → ${String(args.team)}` : `A2A file send → ${String(args.team)}`, kind: 'other', rawInput: args }),
+      execute: async (args: { paths: string[]; team: string; note?: string; task_id?: string; grant_only?: boolean }, exec): Promise<Record<string, JsonValue>> => {
         const agent = exec.agent as Agent | undefined
         const team = String(args.team ?? '').trim()
         const paths = Array.isArray(args.paths) ? args.paths.map(p => String(p)) : []
@@ -87,35 +113,83 @@ export function createFileTools(d: FileToolsDeps): { registerFileSend: () => voi
         if (paths.length === 0 || paths.length > FILE_SEND_MAX) return { ok: false, error: `paths must name 1–${String(FILE_SEND_MAX)} files`, peer_content: false }
         const taskId = typeof args.task_id === 'string' && args.task_id.trim() !== '' ? args.task_id.trim() : undefined
         if (taskId !== undefined && !BLOB_TASK_RE.test(taskId)) return { ok: false, error: 'task_id is 1–80 of A-Z a-z 0-9 . _ : -', peer_content: false }
+        const grantOnly = args.grant_only === true
+        if (grantOnly && typeof args.note === 'string' && args.note.trim() !== '') return { ok: false, error: 'grant_only sends no message, so it carries no note: put the note in the channel you hand the reference lines over through', peer_content: false }
         // #787: file-channel `from` is still the default ownCardUrl origin, not a per-peer claim URL. A cloud that cannot reach that origin cannot pull the blob; this map does not cover the file channel.
         const from = originOf(d.ownCardUrl())
         if (from === '') return { ok: false, error: 'this host publishes no card URL yet (announce is off or the web server has not settled): a receiver could not pull from it', peer_content: false }
+        // The join gate runs here, before anything is staged: an unjoined session is refused with nothing staged, for a
+        // routed send (the trunk would apply it only after staging) and for a grant-only send (which never reaches the trunk).
+        d.a2aJoinGateRefusal(agent === undefined ? undefined : { agent })
         const cwd = workspaceOf(agent)
         const by = agent !== undefined ? String(agent.id) : 'host'
+        // Rollback safety: only grants THIS call creates may be revoked on a local refusal. A grant that already
+        // existed for the same (sha256, to, by) is a prior legitimate send — stage() only extended its expiry.
+        const preExisting = new Set(blobStore.grantsBy(by).filter(g => g.to === team).map(g => g.sha256))
+        const mine = new Map<string, number>() // sha256 → the stage generation this call wrote
+        try {
         const staged: Array<{ sha256: string; size: number; name: string; expiresAt: number }> = []
+        // Nothing has left this host while the loop below runs: a failure part-way through (a missing or
+        // oversized file, a full store) rolls this call's NEW grants back — a partial send must not leave
+        // grants the result never hands a reference for. Pre-existing keys are kept (only their expiry moved).
+        const rollBackFresh = (): { rolled: number; kept: number; concurrent: number } => {
+          const shas = [...new Set(staged.map(f => f.sha256))]
+          const ours = shas.filter(sha => !preExisting.has(sha))
+          // Another send re-staged the key after this call did (its generation moved on): it may have delivered a reference, keep it.
+          const fresh = ours.filter(sha => stageGens.get(genKey(sha, team, by))?.gen === mine.get(sha))
+          for (const sha of fresh) blobStore.revoke(sha, team, by)
+          return { rolled: fresh.length, kept: shas.length - ours.length, concurrent: ours.length - fresh.length }
+        }
+
         for (const p of paths) {
           const abs = isAbsolute(p) ? p : cwd !== '' ? resolve(cwd, p) : ''
-          if (abs === '') return { ok: false, error: `relative path ${p} needs a session workspace`, peer_content: false }
+          if (abs === '') { const r = rollBackFresh(); return { ok: false, error: `relative path ${p} needs a session workspace`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept, kept_concurrent: r.concurrent } }
           let bytes: Uint8Array
           try {
             const st = statSync(abs)
-            if (!st.isFile()) return { ok: false, error: `${p} is not a file`, peer_content: false }
-            if (st.size > BLOB_FILE_MAX) return { ok: false, error: `${p} is ${String(st.size)} bytes; the file channel takes at most ${String(BLOB_FILE_MAX)}`, peer_content: false }
+            if (!st.isFile()) { const r = rollBackFresh(); return { ok: false, error: `${p} is not a file`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept, kept_concurrent: r.concurrent } }
+            if (st.size > BLOB_FILE_MAX) { const r = rollBackFresh(); return { ok: false, error: `${p} is ${String(st.size)} bytes; the file channel takes at most ${String(BLOB_FILE_MAX)}`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept, kept_concurrent: r.concurrent } }
             bytes = readFileSync(abs)
           } catch (error) {
-            return { ok: false, error: `cannot read ${p}: ${error instanceof Error ? error.message : String(error)}`, peer_content: false }
+            { const r = rollBackFresh(); return { ok: false, error: `cannot read ${p}: ${error instanceof Error ? error.message : String(error)}`, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept, kept_concurrent: r.concurrent } }
           }
           const out = blobStore.stage(bytes, { name: abs.split(/[\\/]/).pop() ?? p, to: team, by, ...(taskId !== undefined ? { taskId } : {}) })
-          if (!out.ok) return { ok: false, error: `${p}: ${out.error}`, code: out.code, peer_content: false }
+          if (!out.ok) { const r = rollBackFresh(); return { ok: false, error: `${p}: ${out.error}`, code: out.code, peer_content: false, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept, kept_concurrent: r.concurrent } }
           staged.push({ sha256: out.sha256, size: out.size, name: out.name, expiresAt: out.expiresAt })
+          { const k = genKey(out.sha256, team, by); const e = stageGens.get(k); const gen = (e?.gen ?? 0) + 1
+            stageGens.set(k, { gen, inflight: (e?.inflight ?? 0) + (mine.has(out.sha256) ? 0 : 1) }); mine.set(out.sha256, gen) }
         }
         const note = typeof args.note === 'string' ? args.note.trim() : ''
-        const message = [...(note !== '' ? [note] : []), ...staged.map(f => formatFileRef({ ...f, from }))].join('\n')
-        // The route's own trunk: join gate, admission, ledger and receipts are a2a_route's.
+        const refs = staged.map(f => formatFileRef({ ...f, from }))
+        if (grantOnly) {
+          // Grants only: no message, no route, no ledger entry, no receipt. The grants stand alone for 24h and the
+          // sender hands the reference lines over through a channel that admits them. Nothing left this host.
+          return { ok: true, team, grant_only: true, notified: false, files: staged, refs, ...(taskId !== undefined ? { task_id: taskId } : {}), peer_content: false }
+        }
+        const message = [...(note !== '' ? [note] : []), ...refs].join('\n')
+        // The route's own trunk: admission, ledger and receipts are a2a_route's (the join gate already ran above).
         const { [LOCAL_ROUTE]: local, ...routed } = await d.routeTrunk({ team, message, async: true }, agent, exec.signal) as Record<string, JsonValue> & { [LOCAL_ROUTE]?: true }
+        if (routed.ok !== true) {
+          // A local-route refusal is host-deterministic: nothing left this host, so nothing was delivered.
+          // #854 review B1: the trunk also marks an UNKNOWN acceptance as local (the reference may already sit in a local
+          // session's queue). Only a refusal that proves nothing left this host rolls back; an unknown outcome stays live.
+          if (local === true && routed.acceptance !== 'unknown') {
+            const r = rollBackFresh()
+            return { ...routed, ok: false, team, files: staged, grants: 'rolled-back', rolled_back: r.rolled, kept_pre_existing: r.kept, kept_concurrent: r.concurrent, peer_content: false }
+          }
+          // Beyond this host (a peer's refusal, or an outcome we cannot know): a delivered reference may exist,
+          // so revoking would break it. The grants stay live and the result says so, with the exact revoke entry.
+          return { ...routed, ok: false, team, files: staged, grants: 'live', revoke: staged.map(f => ({ sha256: f.sha256, to: team })), peer_content: true }
+        }
         // The grants remember the task they went out in (unless the caller named one).
         if (taskId === undefined && typeof routed.task_id === 'string') for (const f of staged) blobStore.tagTask(f.sha256, team, by, routed.task_id)
-        return { ...routed, ok: routed.ok === true, team, files: staged, peer_content: local !== true }
+        return { ...routed, ok: true, team, files: staged, peer_content: local !== true }
+        } finally {
+          for (const sha of mine.keys()) {
+            const k = genKey(sha, team, by); const e = stageGens.get(k)
+            if (e !== undefined) { if (e.inflight <= 1) stageGens.delete(k); else stageGens.set(k, { gen: e.gen, inflight: e.inflight - 1 }) }
+          }
+        }
       },
     }))
   }

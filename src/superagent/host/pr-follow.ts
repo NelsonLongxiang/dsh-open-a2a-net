@@ -25,7 +25,7 @@ export type GhRun = (args: string[]) => Promise<string>
 
 /** `gh` as the operator set it up on this host. */
 export const defaultGh: GhRun = args => new Promise((resolve, reject) => {
-  execFile('gh', args, { timeout: 30_000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => { if (error) reject(error); else resolve(stdout) })
+  execFile('gh', args, { timeout: 30_000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (error, stdout) => { if (error) reject(error); else resolve(stdout) })
 })
 
 /** A pull request URL's repository and number, and the id of its thread; undefined for anything else. */

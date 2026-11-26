@@ -2,7 +2,7 @@
 
 ## Files use the file channel
 
-Files do not go through session messages. Send with `a2a_file_send { paths, team }` (up to 16 files, 64 MiB each), not `a2a_route` with file bytes or JPFILE-PART chunks. The receiver uses `a2a_file_fetch { ref }` with the `[A2A file] v1 …` line. CLI: `a2a-net file send <path…> <team>` / `a2a-net file fetch "<reference line>"`. One reference message carries the transfer; ordinary routing and receipt rules below apply to that message. JPFILE-PART chunks are refused (`file-channel-required`, with `advice.reason: use-file-channel`).
+Files do not go through session messages. Send with `a2a_file_send { paths, team }` (up to 16 files, 64 MiB each), not `a2a_route` with file bytes or JPFILE-PART chunks. The receiver uses `a2a_file_fetch { ref }` with the `[A2A file] v1 …` line. CLI: `a2a-net file send <path…> <team>` / `a2a-net file fetch "<reference line>"`. One reference message carries the transfer; ordinary routing and receipt rules below apply to that message. JPFILE-PART chunks are refused (`file-channel-required`, with `advice.reason: use-file-channel`). When the audience must not be direct-messaged (a member seat refuses `[superagent-member-inbound]`), send with `grant_only: true`: the grants are staged, nothing is routed, and the reference lines come back in the result — hand them over through a channel that admits them (e.g. your ticket report); the audience pulls with `a2a_file_fetch` as usual.
 
 ## The receipt contract
 

@@ -75,7 +75,9 @@ export function registerNodeOpsFace(server: WebServer, d: NodeOpsFaceDeps): void
         const failed = (error: unknown): void => { try { send(500, { ok: false, code: 'failed', error: String((error as Error)?.message ?? error) }) } catch { /* already answered */ } }
         if (f.action === 'install') {
           if (typeof f.tgz !== 'string' || typeof f.sha256 !== 'string' || !/^[0-9a-fA-F]{64}$/.test(f.sha256)) { send(400, { ok: false, code: 'input', error: 'install takes tgz (base64) and sha256 (hex)' }); return }
-          void thenRestart(d.ops.install(Buffer.from(f.tgz, 'base64'), f.sha256, who, f.forceDeps === true)).catch(failed)
+          // #936: how the profile declares it; the CLI says npm when the tarball is the registry's own for that version.
+          if (f.declare !== undefined && f.declare !== 'npm' && f.declare !== 'file') { send(400, { ok: false, code: 'input', error: 'declare is npm or file' }); return }
+          void thenRestart(d.ops.install(Buffer.from(f.tgz, 'base64'), f.sha256, who, f.forceDeps === true, f.declare === 'npm' ? 'npm' : 'file')).catch(failed)
           return
         }
         if (f.action === 'rollback') {

@@ -132,18 +132,20 @@ export function createSessionLogDecoder(decoder: BoundedZstdDecoder | undefined 
 
 export const decodeSessionLog = createSessionLogDecoder()
 
-function clampEntry(text: string): string {
-  const flat = text.replace(/\s+/g, ' ').trim()
-  return flat.length > TRANSCRIPT_ENTRY_TEXT_CAP ? flat.slice(0, TRANSCRIPT_ENTRY_TEXT_CAP) + '…' : flat
+const flatten = (text: string): string => text.replace(/\s+/g, ' ').trim()
+
+function clampEntry(text: string, cap = TRANSCRIPT_ENTRY_TEXT_CAP): string {
+  const flat = flatten(text)
+  return flat.length > cap ? flat.slice(0, cap) + '…' : flat
 }
 
 /**
- * Extract the last `limit` human-visible turns from a decoded session log.
+ * Every human-visible turn of a decoded session log, oldest first, each text shaped by `shape`.
  * User lines come from user/message data.content[].text; assistant lines from
  * assistant/message data.message.content[] segments of type "text" (reasoning
  * and tool calls are working detail, not transcript).
  */
-export function extractTranscript(logText: string, limit = TRANSCRIPT_DEFAULT_LIMIT): TranscriptEntry[] {
+function collectEntries(logText: string, shape: (text: string) => string): TranscriptEntry[] {
   const entries: TranscriptEntry[] = []
   for (const line of logText.split('\n')) {
     if (line.trim() === '') continue
@@ -158,15 +160,58 @@ export function extractTranscript(logText: string, limit = TRANSCRIPT_DEFAULT_LI
         .filter(seg => seg?.type === 'text' && typeof seg.text === 'string')
         .map(seg => seg.text as string)
         .join(' ')
-      if (text.trim() !== '') entries.push({ role: 'user', text: clampEntry(text), time })
+      if (text.trim() !== '') entries.push({ role: 'user', text: shape(text), time })
     } else if (event.type === 'assistant/message') {
       const data = event.data as { message?: { content?: Array<{ type?: string; text?: unknown }> } } | undefined
       const text = (data?.message?.content ?? [])
         .filter(seg => seg?.type === 'text' && typeof seg.text === 'string')
         .map(seg => seg.text as string)
         .join(' ')
-      if (text.trim() !== '') entries.push({ role: 'assistant', text: clampEntry(text), time })
+      if (text.trim() !== '') entries.push({ role: 'assistant', text: shape(text), time })
     }
   }
-  return entries.slice(-limit)
+  return entries
+}
+
+/**
+ * Extract the last `limit` human-visible turns from a decoded session log.
+ */
+export function extractTranscript(logText: string, limit = TRANSCRIPT_DEFAULT_LIMIT): TranscriptEntry[] {
+  return collectEntries(logText, clampEntry).slice(-limit)
+}
+
+/** All turns with whitespace flattened and nothing cut, for paging (#951): the cut is applied per page. */
+export function parseTranscriptEntries(logText: string): TranscriptEntry[] {
+  return collectEntries(logText, flatten)
+}
+
+/** The largest per-entry text a page may ask for (#951); the default stays the historical cap. */
+export const TRANSCRIPT_PAGE_CHARS_MAX = 4000
+
+/** One page of a transcript: entries carry their index in the whole transcript. */
+export interface TranscriptPage {
+  readonly total: number
+  readonly from: number
+  readonly to: number
+  /** The cursor pointed past the end (the log changed under the reader): the page is the newest one, re-read from here. */
+  readonly stale: boolean
+  readonly entries: ReadonlyArray<TranscriptEntry & { readonly i: number }>
+}
+
+/**
+ * The `limit` entries just before index `before` (the newest when `before` is absent).
+ * Entries are only appended to a session log, so an index keeps meaning the same entry while the log grows.
+ * @param entries - the whole transcript, oldest first (see parseTranscriptEntries).
+ * @param page - the cursor, the page size and the per-entry text cap.
+ * @returns the page.
+ */
+export function pageTranscript(entries: readonly TranscriptEntry[], page: { before?: number; limit?: number; entryCap?: number } = {}): TranscriptPage {
+  const total = entries.length
+  const limit = Math.max(1, Math.min(TRANSCRIPT_MAX_LIMIT, Math.floor(page.limit ?? TRANSCRIPT_DEFAULT_LIMIT)))
+  const cap = Math.max(1, Math.min(TRANSCRIPT_PAGE_CHARS_MAX, Math.floor(page.entryCap ?? TRANSCRIPT_ENTRY_TEXT_CAP)))
+  const stale = page.before !== undefined && page.before > total
+  const to = page.before === undefined ? total : Math.min(Math.max(0, Math.floor(page.before)), total)
+  const from = Math.max(0, to - limit)
+  const shown = entries.slice(from, to).map((entry, k) => ({ ...entry, text: entry.text.length > cap ? entry.text.slice(0, cap) + '…' : entry.text, i: from + k }))
+  return { total, from, to, stale, entries: shown }
 }

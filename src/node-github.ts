@@ -50,7 +50,7 @@ export interface GithubProbeDeps {
 }
 
 const ghApi = (timeoutMs: number) => (path: string): Promise<string> => new Promise((resolve, reject) => {
-  execFile('gh', ['api', path], { timeout: timeoutMs, maxBuffer: 1 << 20 }, (error, stdout) => {
+  execFile('gh', ['api', path], { timeout: timeoutMs, maxBuffer: 1 << 20, windowsHide: true }, (error, stdout) => {
     if (error !== null) reject(error)
     else resolve(stdout)
   })

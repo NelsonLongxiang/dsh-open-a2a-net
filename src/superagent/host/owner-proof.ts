@@ -42,6 +42,14 @@ export interface BrowserOwnerConnection {
   admit(request: Pick<IncomingMessage, 'headers'>): { readonly peer: { readonly id: string } } | { readonly rejection: 401 | 403 }
 }
 
+/** What a deferred proof hands back: who was verified, and the one call that writes the audit line (false = could not be written). */
+export interface DeferredOwnerProof {
+  readonly ok: true
+  /** The verified delegate; undefined when the owner is logged in at the browser (the line then reads id null, name browser-owner). */
+  readonly delegate: { readonly id: string; readonly name: string } | undefined
+  readonly commit: (extra: Readonly<Record<string, unknown>>) => boolean
+}
+
 export type BrowserOwnerProof = { readonly ok: true } | {
   readonly ok: false
   readonly status: 401 | 403 | 503
@@ -55,7 +63,11 @@ const unavailable = (): BrowserOwnerProof => ({ ok: false, status: 503, code: 'o
  * Verify the original request as the Host's authenticated browser owner. Never rebuild its authority, trust proxy headers
  * independently, copy credentials to another request, or accept an API operator merely because it is authenticated.
  */
-export function browserOwnerProof(connection: unknown, request: Pick<IncomingMessage, 'headers'> & Partial<Pick<IncomingMessage, 'method' | 'url'>>, options: { readonly delegate?: boolean } = {}): BrowserOwnerProof {
+export function browserOwnerProof(connection: unknown, request: Pick<IncomingMessage, 'headers'> & Partial<Pick<IncomingMessage, 'method' | 'url'>>, options: { readonly delegate?: boolean; readonly deferAudit: true }): DeferredOwnerProof | Extract<BrowserOwnerProof, { ok: false }>
+export function browserOwnerProof(connection: unknown, request: Pick<IncomingMessage, 'headers'> & Partial<Pick<IncomingMessage, 'method' | 'url'>>, options?: { readonly delegate?: boolean }): BrowserOwnerProof
+export function browserOwnerProof(connection: unknown, request: Pick<IncomingMessage, 'headers'> & Partial<Pick<IncomingMessage, 'method' | 'url'>>, options: { readonly delegate?: boolean; readonly deferAudit?: boolean } = {}): BrowserOwnerProof | DeferredOwnerProof {
+  const deferred = (who: { readonly id: string | null; readonly name: string }, delegate: DeferredOwnerProof['delegate']): DeferredOwnerProof =>
+    ({ ok: true, delegate, commit: extra => delegates?.audit(who, { method: request.method, url: request.url }, extra) === true })
   // The owner's delegate (the control API's user scope) stands in for the browser owner on these operations. It never
   // opens the control route by itself: the callers here already sit behind the control key. An unknown, revoked or
   // expired token refuses outright instead of falling back to the browser login it was meant to replace.
@@ -64,6 +76,8 @@ export function browserOwnerProof(connection: unknown, request: Pick<IncomingMes
     const token = Array.isArray(presented) ? '' : presented
     const found = delegates?.check(token)
     if (found === undefined || !found.ok) return { ok: false, status: 403, code: 'owner-delegate', error: `属主代理凭证无效（${found === undefined ? 'unconfigured' : found.reason}），未执行操作。` }
+    // A deferred proof writes nothing yet: the route validates first and commits the line only for what it accepted (#951).
+    if (options.deferAudit === true) return deferred(found, { id: found.id, name: found.name })
     if (delegates?.audit(found, { method: request.method, url: request.url }) !== true) return { ok: false, status: 503, code: 'owner-delegate', error: '属主代理的审计记录写不进去，未执行操作。' }
     return { ok: true }
   }
@@ -81,7 +95,7 @@ export function browserOwnerProof(connection: unknown, request: Pick<IncomingMes
     }
     if (typeof admission.peer?.id !== 'string' || admission.peer.id === '') return unavailable()
     if (admission.peer.id !== host.browserPeer.id) return { ok: false, status: 403, code: 'owner-proof', error: '此操作只允许已登录的 DSH 浏览器主人；API 凭据不能代替浏览器主人确认。' }
-    return { ok: true }
+    return options.deferAudit === true ? deferred({ id: null, name: 'browser-owner' }, undefined) : { ok: true }
   } catch {
     // A disposed/unavailable provider must not authorize the write, and its error may contain sensitive request details.
     return unavailable()

@@ -19,6 +19,7 @@ import type { RailTone } from './wb-rail'
 import { buildTeamFields, type TeamRule } from './wb-superagent-settings'
 import { createSenderRecovery, type RecoveryOutbound } from './request-recovery-panel'
 import { createDecisionsGroup, type DecisionsDeps } from './wb-decisions'
+import { createPairingsBanner, type PairingsDeps } from './wb-pairings'
 
 type Json = Record<string, unknown>
 
@@ -172,6 +173,8 @@ export interface SuperagentPaneDeps {
   addTeam?(canvas: string, router: string): Promise<Json>
   /** T8: the decision cards (GET / POST /__dsh_a2a/superagent/decisions); absent, the 等你拍板 group is not shown. */
   decisions?: DecisionsDeps
+  /** #933: terminal pairings the owner allows or refuses. */
+  pairings?: PairingsDeps
 }
 
 export type SaView = 'person' | 'request' | 'tickets' | 'team' | 'settings'
@@ -369,6 +372,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   root.append(el('div', 'wb-pane-head', 'superagent 团队'), teamBar, addTeamBox, searchWrap, nav, note, body)
   // T8: built once, re-parented into 待你处理 on each render, so a pick or words being written survive the poll.
   const decisionsGroup = deps.decisions === undefined ? undefined : createDecisionsGroup(deps.decisions)
+  const pairingsBanner = deps.pairings === undefined ? undefined : createPairingsBanner(deps.pairings)
 
   // The sub-tab is a per-viewer convenience kept across reloads (every access guarded).
   let view: SaView = (() => {
@@ -618,6 +622,7 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
   function renderPerson(state: SaState): void {
     const problems = problemsOf(state, now).map(p => { const c = el('div', `wb-led-card is-${p.tone}`, p.text); return c })
     if (problems.length > 0) body.appendChild(group('问题', 'is-danger', problems))
+    if (pairingsBanner !== undefined) body.appendChild(pairingsBanner.root)
     if (decisionsGroup !== undefined) body.appendChild(decisionsGroup.root)
     body.appendChild(group('待你处理的工单', 'is-warn', personTickets(state).map(t => ticketCard(t, { answer: true })), '没有需要你处理的工单'))
   }
@@ -1049,9 +1054,10 @@ export function createSuperagentPane(deps: SuperagentPaneDeps): SuperagentPane {
     if (changed && !busy) render()
     if (state === null) return { badge: '' }
     void decisionsGroup?.refresh()
+    void pairingsBanner?.refresh()
     // The rail badge counts every team's waiting tickets: the picker names the other teams' counts, and a badge that
     // showed only this team's would hide them (an owner on one team never learned another needed them).
-    const waiting = personTickets(state).length + (decisionsGroup?.waiting() ?? 0) + (state.teams ?? []).reduce((n, team) => n + (team.id !== state.selectedTeam ? team.waiting ?? 0 : 0), 0)
+    const waiting = personTickets(state).length + (decisionsGroup?.waiting() ?? 0) + (pairingsBanner?.waiting() ?? 0) + (state.teams ?? []).reduce((n, team) => n + (team.id !== state.selectedTeam ? team.waiting ?? 0 : 0), 0)
     const problems = problemsOf(state, at)
     if (problems.some(p => p.tone === 'danger')) return { badge: String(waiting + problems.length), tone: 'danger' }
     return waiting + problems.length > 0 ? { badge: String(waiting + problems.length), tone: 'warn' } : { badge: '' }
