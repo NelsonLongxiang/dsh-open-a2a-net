@@ -35,6 +35,19 @@ export function parseSeatNames(value: unknown): Record<string, string> | undefin
   return Object.fromEntries(entries.map(([id, name]) => [id, (name as string).trim()]))
 }
 
+/**
+ * #953: a canvas team's display label, by the seat-name rules: plain text, 1..64 characters, no controls, not shaped like an
+ * address. Display only: the team's name stays its routable address.
+ * @param value - the candidate.
+ * @returns the trimmed label, or undefined when it is not acceptable.
+ */
+export function parseDisplayLabel(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const text = value.trim()
+  if (text === '' || [...text].length > 64 || /[\p{Cc}\p{Cf}\u2028\u2029\ufffd]/u.test(value) || !/[^\p{Z}\p{C}\p{M}]/u.test(value) || ADDRESS_SHAPED.test(text)) return undefined
+  return text
+}
+
 /** Boot config degrades entry-by-entry; owner POST remains all-or-nothing. Never echo label contents in warnings. */
 export function loadSeatNames(value: unknown, warn: (reason: string) => void): Record<string, string> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) { warn('seatNames: ignored invalid map'); return {} }

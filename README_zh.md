@@ -166,7 +166,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 画布队伍是用户自建的有名多成员路由组：**一个原子会话节点可同时属于多个队伍**，路由到 `<team>/canvas/<name>` 解析**第一个活成员**（成员顺序即路由优先级），无活成员则唤醒**第一个冷 joined 成员**（wake-on-route）；本机成员都不可用时，再依次落到远端成员（经目录解析其句柄，远端节点不会在这里被唤醒）。发起路由的会话自己不会占用本机两档（自路由规则，#41）。`canvas/` 路径段与节点别名（`<team>/<id8>`）结构性无冲突，两个命名空间互不干扰。
 
 - 存储：`<dsh-home>/a2a/canvas.json`（有序队伍条目；上限：64 队 × 32 成员；文件另带版本号、成员属主锚、暂停记录与 CLI home 钉）
-- 控制 API：`POST /__dsh_a2a/canvas`，`action: create | remove | add-member | remove-member`；`add-member` 对不存在的队伍会先建队。另有属主的成员来源与暂停治理操作 `confirm-member`、`restore-suspended`、`delete-suspended`（#334/#335），以及仅查询已有 CLI 成员候选的 `cli-home-options`。队名 ≤40 字，不含 `/`，不是纯数字，不以 `@<8 位小写十六进制>` 结尾，且不能被 roster 保留（`roster:` 前缀，或等于白名单/roster 团队名）；含暂停成员的队不能 `remove`。
+- 控制 API：`POST /__dsh_a2a/canvas`，`action: create | remove | add-member | remove-member`；`add-member` 对不存在的队伍会先建队。另有属主设置队伍显示名的 `set-label`（#953，只用于显示，队名即地址不变；显示名 ≤64 字、无控制字符、不是地址形状，`a2a-net user canvas label <名> <显示名…>` / `--clear`），以及属主的成员来源与暂停治理操作 `confirm-member`、`restore-suspended`、`delete-suspended`（#334/#335），以及仅查询已有 CLI 成员候选的 `cli-home-options`。队名 ≤40 字，不含 `/`，不是纯数字，不以 `@<8 位小写十六进制>` 结尾，且不能被 roster 保留（`roster:` 前缀，或等于白名单/roster 团队名）；含暂停成员的队不能 `remove`。
 - CLI 成员标「home 未确定」时，打开其画布队详情并点「指定 home」。宿主现读名片，只列已链接且列出该句柄的主机，并显示不可读名片数；不会自动选中。确认后复用本机 `add-member` 的显式 `home`，提交时再次现读校验，不放宽自动钉或准入。本机持有在线户口或离线墓碑时显示「本机持有，无需指定」，候选返回 `held:true` 且为空，显式 home 写入提示先撤销本机户口；回执优先投在线本机信箱；本机 publish 成功会清除冲突旧钉并在面板提示，户口离线不复活旧钉；本地投递中途到期即报错，不回落对端目录。
 - 成员必须是 joined 会话（活节点或已记意图）——未加入会话没有路由后门；退出网络（leave/archive）自动把它移出全部画布队（旧式裸句柄槽位改记为 suspended：不再路由、不计入有效成员，由属主 `restore-suspended` 或 `delete-suspended`，见 `docs/design/canvas-member-provenance.md`）
 - 成员也可以是操作者手工加入的**远端**带 zone 团队句柄（`zone/a1b2c3d4`）——这就是让该远端调用方在本机获准入、并有权拿完整卡片的链接。写入时宿主现读已链接的种子/委托主机的验签名片，把句柄钉成带属主指纹的 `zone/a1b2c3d4@<8 位指纹>`；找不到唯一可验证的属主就拒写（#334）。不带指纹的旧式裸句柄只作兼容保留（`canvasLegacyBareMembers` 默认 `true` 时仍按旧读法计入、授权和路由），需属主 `confirm-member` 确认
@@ -246,7 +246,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | --- | --- |
 | `GET /__dsh_a2a/state` | 面板与工作台轮询的状态面（会话、画布、peers、远端行、活动、账本）。 |
 | `POST /__dsh_a2a/join` · `/leave` | 加入或退出一个会话节点。 |
-| `/__dsh_a2a/canvas` · `/canvas-layout` | 画布队伍（create/remove/add-member/remove-member，另有属主的 confirm-member / restore-suspended / delete-suspended / cli-home-options）与规划板布局。 |
+| `/__dsh_a2a/canvas` · `/canvas-layout` | 画布队伍（create/remove/add-member/remove-member，另有 `set-label`（#953：队伍的显示名，属主委托或浏览器登录；队名仍是地址）与属主的 confirm-member / restore-suspended / delete-suspended / cli-home-options）与规划板布局。 |
 | `POST /__dsh_a2a/roster-op` | 属主在规划板创建（至少两个已加入的本机会话）、加减成员、解散 roster 队（`op`：create / add-member / remove-member / dissolve），并同步维护 `teamJoinAllowlist` 里的精确名；不能接纳远端或未加入的会话。 |
 | `POST /__dsh_a2a/dispatch` | 工作台快速派单到一个团队。 |
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | 从调用方一侧结清一个欠账任务（cancel 还会尽力向目标转达停止通知：本机目标直接 steer，远端目标经 wire 投递，卡片声明 `queuedTaskCancellation` 时另带 `cancel_task_id` 撤回队列中的原任务；回复里带 `steered`、`removed`）；该行落入 `archived[]`。 |
