@@ -17,6 +17,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/canvas-store
  */
 
+import { parseDisplayLabel } from './owner-settings.ts'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, openSync, closeSync, fsyncSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
@@ -50,6 +51,8 @@ export interface CanvasSnapshot {
   readonly requesters?: Readonly<Record<string, readonly string[]>>
   /** superagent pi platform P2: the key pinned for a Pi seat (a CLI handle member), from its deposit card when it was added. */
   readonly seatKeys?: Readonly<Record<string, string>>
+  /** #953: display-only labels of teams, by team name. */
+  readonly labels?: Readonly<Record<string, string>>
 }
 
 /** A root team's child: another team (`<zone>/canvas/<name>@<fp8>`), the key of its owning host, and how many root tickets it takes at once. */
@@ -126,6 +129,8 @@ export class CanvasStore {
   private children: Record<string, CanvasChild[]> = {}
   private requesters: Record<string, string[]> = {}
   private seatKeys: Record<string, string> = {}
+  /** #953: display labels by team name; the name stays the address. */
+  private labels: Record<string, string> = {}
   private disk: string | undefined
   private readOnlyReason = ''
   private lastWriteError = ''
@@ -209,6 +214,7 @@ export class CanvasStore {
       this.teams = kept.slice(0, CANVAS_TEAM_CAP)
       this.restoreRequesters(snapshot)
       this.restoreSeatKeys(snapshot)
+      this.restoreLabels(snapshot)
       if (snapshot.cliHome !== null && typeof snapshot.cliHome === 'object' && !Array.isArray(snapshot.cliHome)) {
         for (const [handle, home] of Object.entries(snapshot.cliHome)) {
           if (CLI_HANDLE_RE.test(handle) && typeof home === 'string' && validHomeOrigin(home) && this.linked(handle)) this.cliHome[handle] = home
@@ -257,6 +263,17 @@ export class CanvasStore {
   }
 
   /** Pi platform P2: pinned seat keys of CLI handles that are still members somewhere; anything else is dropped. */
+  /** #953: a label survives a restart only for a team that exists and only if it still passes the label rules. */
+  private restoreLabels(snapshot: Partial<CanvasSnapshot>): void {
+    this.labels = {}
+    const raw = snapshot.labels
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return
+    for (const [name, label] of Object.entries(raw)) {
+      const clean = parseDisplayLabel(label)
+      if (clean !== undefined && this.teams.some(t => t.name === name)) this.labels[name] = clean
+    }
+  }
+
   private restoreSeatKeys(snapshot: Partial<CanvasSnapshot>): void {
     this.seatKeys = {}
     const raw = snapshot.seatKeys
@@ -287,6 +304,7 @@ export class CanvasStore {
       this.children = Object.fromEntries(Object.entries(previous.children ?? {}).map(([name, list]) => [name, list.map(c => ({ ...c }))]))
       this.requesters = Object.fromEntries(Object.entries(previous.requesters ?? {}).map(([name, list]) => [name, [...list]]))
       this.seatKeys = { ...previous.seatKeys }
+      this.labels = { ...previous.labels }
       this.revision = previous.revision ?? 0
       throw error
     }
@@ -296,7 +314,7 @@ export class CanvasStore {
   }
 
   private serialize(): string {
-    return JSON.stringify({ teams: this.teams, memberOwners: this.memberOwners, suspendedMembers: this.suspended, cliHome: this.cliHome, cliHomeCleared: [...this.cliHomeCleared], roots: [...this.roots], children: this.children, requesters: this.requesters, seatKeys: this.seatKeys, revision: this.revision })
+    return JSON.stringify({ teams: this.teams, memberOwners: this.memberOwners, suspendedMembers: this.suspended, cliHome: this.cliHome, cliHomeCleared: [...this.cliHomeCleared], roots: [...this.roots], children: this.children, requesters: this.requesters, seatKeys: this.seatKeys, labels: this.labels, revision: this.revision })
   }
   private write(): void {
     if (this.readOnlyReason) throw Error(this.readOnlyReason)
@@ -310,7 +328,8 @@ export class CanvasStore {
       ...(this.roots.size ? { roots: [...this.roots] } : {}),
       ...(Object.keys(this.children).length ? { children: Object.fromEntries(Object.entries(this.children).map(([name, list]) => [name, list.map(c => ({ ...c }))])) } : {}),
       ...(Object.keys(this.requesters).length ? { requesters: Object.fromEntries(Object.entries(this.requesters).map(([name, list]) => [name, [...list]])) } : {}),
-      ...(Object.keys(this.seatKeys).length ? { seatKeys: { ...this.seatKeys } } : {}) }
+      ...(Object.keys(this.seatKeys).length ? { seatKeys: { ...this.seatKeys } } : {}),
+      ...(Object.keys(this.labels).length ? { labels: { ...this.labels } } : {}) }
     const bytes = JSON.stringify(snapshot)
     if (this.path !== '') {
       mkdirSync(dirname(this.path), { recursive: true })
@@ -542,8 +561,36 @@ export class CanvasStore {
     for (const id of [...removed!.members, ...requesters]) this.forgetUnusedHome(id)
     this.roots.delete(name)
     Reflect.deleteProperty(this.children, name)
+    Reflect.deleteProperty(this.labels, name)
     this.persist()
     return true
+  }
+
+  /** #953: the team's display label, or undefined when it shows by its name. */
+  labelOf(name: string): string | undefined { return this.labels[name] }
+
+  /**
+   * #953: set a team's display label, or clear it (undefined, null or ''). Display only: the name, which is the routable
+   * address, never changes, so members, bindings and remote references are untouched.
+   * @param name - the existing team.
+   * @param label - the new label, or nothing to clear.
+   * @returns ok, or the code and reason; a write that cannot be persisted throws like every other store write and leaves the old label.
+   */
+  setLabel(name: string, label: unknown): { ok: true } | { ok: false; code: 'read-only' | 'no-team' | 'label'; error: string } {
+    if (this.readOnlyReason || this.failedSuspension) return { ok: false, code: 'read-only', error: this.state().error ?? 'canvas store is read-only' }
+    if (!this.hasTeam(name)) return { ok: false, code: 'no-team', error: 'no such canvas team' }
+    if (label === undefined || label === null || label === '') {
+      if (this.labels[name] === undefined) return { ok: true }
+      Reflect.deleteProperty(this.labels, name)
+      this.persist()
+      return { ok: true }
+    }
+    const clean = parseDisplayLabel(label)
+    if (clean === undefined) return { ok: false, code: 'label', error: 'a label is plain text of 1 to 64 characters: no control characters, and not shaped like an address (a/b)' }
+    if (this.labels[name] === clean) return { ok: true }
+    this.labels[name] = clean
+    this.persist()
+    return { ok: true }
   }
 
   // ── R7: roots and their child teams ──
