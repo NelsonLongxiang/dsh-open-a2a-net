@@ -262,13 +262,15 @@ describe('credential-access card: the owner\'s own choice acts (4351d67f)', () =
     expect(roleToolRefusal('member', 'bash', undefined, [], ['bash'])).toContain('blocked')
     expect(roleToolRefusal('observer', 'bash', undefined, [], ['bash'])).toContain('blocked')
     expect(roleToolRefusal('member', 'a2a_ticket_report', undefined, [], ['a2a_ticket_report'])).toBeUndefined()
+    expect(roleToolRefusal('member', 'schedule_create', undefined, [], ['schedule_create'])).toBeUndefined()
     expect(roleToolRefusal('member', 'bash', undefined, [], [])).toBeUndefined()
     expect(blockableTool('member', 'run_code')).toBe(false)
     const m = await team()
     m.clock.now += 10 * 60_000
-    m.h.auditCall(m.holder, 'member', 'a2a_ticket_report', CALL)
+    // #895: a2a_* tools carry notes and reports, so a name in them is recorded and raises no card; schedule_create is a team tool that still follows the conservative rule
+    m.h.auditCall(m.holder, 'member', 'schedule_create', CALL)
     const teamToolCard = m.h.decisionCards().filter(c => c.by === 'credential:' + m.holder && c.decided === undefined).at(-1)!
-    expect(m.h.decide(teamToolCard.id, 'choose', m.CREDENTIAL_BLOCK)).toMatchObject({ action: 'block-tool', tool: 'a2a_ticket_report', blocked: false })
+    expect(m.h.decide(teamToolCard.id, 'choose', m.CREDENTIAL_BLOCK)).toMatchObject({ action: 'block-tool', tool: 'schedule_create', blocked: false })
     expect(m.h.settings.blockedTools).toBeUndefined()
     await m.h.stop()
   })
