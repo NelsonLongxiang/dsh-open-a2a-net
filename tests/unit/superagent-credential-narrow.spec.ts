@@ -6,6 +6,7 @@
  * name mentioned (recorded, no card) and the same name acted on (card). All paths, headers and values are synthetic.
  */
 import { mkdtempSync } from '../temp-dirs.ts'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -194,6 +195,41 @@ describe('#947 review: equivalent forms are judged alike, inert quoting is inert
     carded('a2a_file_fetch', { ref: '[A2A file] v1 name=cli.json' }, 'credential-file')
     carded('a2a_some_new_tool', { anything: 'cat ~/.ssh/id_rsa' }, 'credential-file')
     carded('superagent_some_new_tool', { anything: '~/.npmrc' }, 'credential-file')
+  })
+})
+
+describe('#947 follow-up: a quoted parenthesis does not end an expansion; a note tool\'s files field is a send', () => {
+  it('paren: the part of a command substitution after a quoted ) still runs and cards; the same text in single quotes is inert', () => {
+    for (const command of [
+      'echo "$(echo ")" ; cat ~/.ssh/id_rsa)"',
+      "echo \"$(echo ')' ; cat ~/.npmrc)\"",
+      'echo $(echo ")" ; cat ~/.ssh/id_rsa)',
+      'echo "$( (true); cat ~/.ssh/id_rsa)"',
+      'echo "$(true $(true) ; cat ~/.ssh/id_rsa)"',
+      // a quoted ) inside a nested expansion inside double quotes: only skipping the nested expansion as a whole finds the cat
+      'echo "$(echo "$(echo ")")" ; cat ~/.ssh/id_rsa)"',
+    ]) carded('bash', bash(command), 'credential-file')
+    for (const command of [
+      "echo 'x $(echo \")\" ; cat ~/.ssh/id_rsa)'",
+      "git commit -m 'note: $(echo \")\" ; cat ~/.npmrc)'",
+      // an escaped quote does not protect the parenthesis: the expansion ends at that bare ), so the cat after it is only text in the surrounding double quotes
+      'echo "$(echo \\")\\" ; cat ~/.ssh/id_rsa)"',
+    ]) recordedOnly('bash', bash(command))
+  })
+  it('files: a protected path in a note tool\'s files field cards; the same path in its text, or an ordinary file, does not', () => {
+    carded('a2a_ticket_report', { ticket_id: 't', state: 'ready', summary: 'done', files: ['/home/dev/.ssh/id_rsa'] }, 'credential-file')
+    carded('superagent_decision_propose', { question: 'q', files: ['.worktrees/t/.env'] }, 'credential-file')
+    carded('a2a_decision_propose', { question: 'q', files: [SCRATCH + '/run.log'] }, 'other-session')
+    carded('a2a_ticket_report', { summary: 'ok', files: ['docs/report.md', '/home/dev/.aws/credentials'] }, 'credential-file')
+    recordedOnly('a2a_ticket_report', { summary: 'cat ~/.ssh/id_rsa was not run', files: ['docs/report.md'] })
+    recordedOnly('superagent_decision_propose', { question: 'what about ~/.npmrc?', files: ['tmp/t/review.md', 'src/a.ts'] })
+    // files that is not a list of strings names nothing the host would stage
+    recordedOnly('a2a_ticket_report', { summary: 'x', files: '~/.ssh/id_rsa' })
+    recordedOnly('a2a_ticket_report', { summary: '~/.ssh/id_rsa', files: [42, null, { path: 'x' }] })
+  })
+  it('the skill text says both', () => {
+    const doc = readFileSync(join(process.cwd(), 'src/skill/references/superagent.md'), 'utf8')
+    for (const clause of ['its files field', 'an actual send and cards', 'read quote-aware: a quoted closing parenthesis does not end it']) expect(doc).toContain(clause)
   })
 })
 
