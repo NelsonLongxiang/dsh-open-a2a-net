@@ -4,13 +4,13 @@ English | [中文](README_zh.md)
 
 [![npm](https://img.shields.io/npm/v/@nelsonlongxiang/dsh-open-a2a-net?label=npm)](https://www.npmjs.com/package/@nelsonlongxiang/dsh-open-a2a-net)
 
-**New in the preview: Superagent turns requests into team tickets—a router accepts work, fixed members execute it, progress stays visible, and owner decisions arrive as option-based cards.**
+**Superagent turns requests into team tickets. A router accepts work, fixed members execute it, progress stays visible, and owner decisions arrive as option-based cards.**
 
-> **Version boundary: Superagent teams belong to the opt-in 0.8 preview.** On 2026-11-14 npm `latest` was still 0.7.0 and `preview` was 0.8.1-preview.25. The default install does not imply the new capabilities below.
+> **Version boundary:** npm `latest` is 0.8.2 in the [published release record](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/5e550134ecf1dc55075bc905355e45440ee1219b/docs/release.md#082正式版已发布到-npm-的-latest-标签). Team features still depend on the host configuration. The checkout’s CLI can describe commands that are awaiting release, including device-code pairing and the profile dependency updates in #937.
 
 An open-source plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). The A2A foundation handles discovery, addressing, routing and receipts between sessions and hosts. **Superagent** adds requests, scoped tickets, fixed members and human decisions on top—not just messages between multiple chats.
 
-## Preview highlight: Superagent turns routing into a visible workflow
+## Superagent turns routing into a visible workflow
 
 ### Follow one request through the team
 
@@ -40,11 +40,11 @@ This is a workflow illustration, not a completed case study or a promise to acce
 - **External intake is opt-in.** A2A intake is controlled by the bot list and accept mode. GitHub Issue intake is off by default and requires owner-configured repositories and allowed users; this is not automatic monitoring of every issue.
 - **No silent expansion of authority.** Rule changes need human confirmation. Members cannot widen tickets, open sessions or directly dispatch to other teams; outbound team requests follow the configured approval flow.
 
-See the [released preview Superagent guide](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/6ca847560f9bc90c17be64e9558f830a4abf5113/src/skill/references/superagent.md). Root teams are still marked in progress and are not represented here as a mature capability.
+See the [Superagent guide shipped with 0.8.2](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/5465acecb8312f5c38c2bf80fd82a9110df0879e/src/skill/references/superagent.md). Root teams are still marked in progress and are not represented here as a mature capability.
 
 ### How is this different from an ordinary canvas team?
 
-| Ordinary A2A collaboration | Superagent team (0.8 preview) |
+| Ordinary A2A collaboration | Superagent team |
 | --- | --- |
 | Which sessions are reachable, where does this message go, and has a receipt arrived? | Is this request accepted, who owns the ticket, where does it stand, and what needs a person’s decision? |
 | Discover routable teams; the caller organizes the work | The router accepts and assigns work, fixed members execute it, and reports and follow-ups remain attached to tickets |
@@ -58,7 +58,7 @@ See the [released preview Superagent guide](https://github.com/NelsonLongxiang/d
 
 ## Superagent, illustrated
 
-The following artwork is **original hand-drawn-style functional illustration with a simulated example—not a product UI capture, interface layout or evidence of completed work**. The illustrations explain the opt-in preview workflow.
+The following artwork is **original hand-drawn-style functional illustration with a simulated example—not a product UI capture, interface layout or evidence of completed work**. The illustrations explain the Superagent workflow.
 
 ![Original Superagent workflow illustration; simulated example, not a product UI](images/market/01-superagent-flow.png)
 
@@ -68,13 +68,7 @@ The following artwork is **original hand-drawn-style functional illustration wit
 
 ## Install and try one request
 
-**For the Superagent preview highlight described here, explicitly opt in:**
-
-```sh
-dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net@preview
-```
-
-For the 0.7.0 default release’s ordinary A2A network capabilities first:
+Install the stable release (npm `latest`) to use the Superagent workflow on a configured host:
 
 ```sh
 dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
@@ -176,7 +170,7 @@ stays listed as an offline row until re-published), and receives into a mailbox 
 entries kept) instead of being woken:
 
 ```sh
-npm i -g @nelsonlongxiang/dsh-open-a2a-net@preview      # or pnpm add -g …; `latest` is still 0.7.0
+npm i -g @nelsonlongxiang/dsh-open-a2a-net            # install the stable CLI from npm latest
 a2a-net init review-seat --home http://127.0.0.1:3080   # identity + home host
 A2A_KEY=... a2a-net publish                              # deposit (key-gated host)
 a2a-net route dsh/1a2b3c4d "status?"                     # async by default; --sync waits for the reply
@@ -186,6 +180,15 @@ a2a-net inbox --new                                      # unread mail; --wait b
 From 0.6.38, `forwardDirect` defaults to `true`: after a local miss the home can forward an authenticated online CLI one hop to a linked peer target. Both operators must link: A links the receiving B member; B links the CLI handle and explicitly pins A as its home. For canvas targets A links only the owner host (#282 S3, same team authorizes; the owner host must run 0.6.37 or later): receipts are admitted and settle only from receivers frozen from the owner's signed card, on that owner's key. With scope and settlement enforcement on, the member-host auto-receipt settles A’s forwarded row and lands in the CLI inbox; `--sync` returns B’s reply, but on the forwarded path a synchronous wait has only a ~15s transport window and times out with `-32005` (delivered, not settled): the target still auto-receipts when it finishes, so reconcile by task id / `inbox` and do not resend blindly; for long work use the default async `route`, then `inbox --wait --renew`. Commands, flags, environment
 variables and exit codes: [`src/skill/references/cli.md`](src/skill/references/cli.md).
 
+
+| CLI family | Available in 0.8.2 |
+|---|---|
+| Delegate lifecycle | `user issue`, `import`, `list`, `revoke`, `nodes` |
+| Team control | `user teams`, `state`, `decisions`, `decide`, `request`, `answer`, `api` |
+| Node operations | `user node status`, `install`, `rollback`, `restart` |
+| Builder (read only) | `user builder inventory`, `list` |
+
+Device-code `user pair` (#939) and install/rollback profile-declaration synchronization (#937) are in the checkout, awaiting the next release. See the [CLI reference](src/skill/references/cli.md) for flags and the [release record](docs/release.md) for availability.
 
 ### Pi seats (a Pi agent as a superagent team member)
 
@@ -433,7 +436,7 @@ the envelope details.
 
 **Which artifact to build against.** npm direct install already includes the
 four subpaths: every npm release from 0.6.24 on carries them (there is no
-release between 0.5.15 and 0.6.24; `latest` is currently 0.7.0), so
+release between 0.5.15 and 0.6.24), so
 `npm install @nelsonlongxiang/dsh-open-a2a-net` works out of the box —
 see `examples/external-node/` for a runnable external-node example that
 exercises all four subpaths against an embedded mock peer. The subpath

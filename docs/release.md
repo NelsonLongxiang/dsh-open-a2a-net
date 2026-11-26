@@ -5,6 +5,8 @@
 
 > 2026-11-10（#569）：预览版从 npm 回读、核对通过后，立即单独提交一次「记录已发布」：把该版本一节的标题改成「已发布到 npm 的 preview 标签」，并写上状态行（标签指向的提交、npm 发布时间、shasum、integrity、回读结果）。不要等到下一版发版时才顺手改。
 
+> **分支说明**：本分支保留当时的预览发版记录。正式版 0.8.1 和 0.8.2 的发布时间、标签、包摘要及回读结果见 [master 的发布记录](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/5e550134ecf1dc55075bc905355e45440ee1219b/docs/release.md)。后续打包与发布按 [现行发布闸门](release-gate.md)。
+
 ## 0.8.1-preview.25（预览版，已发布到 npm 的 preview 标签）
 
 - 状态（2026-11-14）：标签 `v0.8.1-preview.25` 指向发布合并提交 `6ca847560f9bc90c17be64e9558f830a4abf5113`（发版 PR #702）；干净双构建候选 `0b3ffbb4560927d6150fd138b4412810d8ac316c` 与最终文件树相同。npmjs 发布时间 `2026-11-14T12:58:55.681Z`，`dist-tags.preview=0.8.1-preview.25`，`latest` 仍是 0.7.0。包为 375 文件／1,390,758 字节；shasum `251057c09af331db663ae54d16ba7a4eb9bd86b3`，SHA256 `caff9b4e8412a7307e1b4e1081745490e09fda8fa7cd6226f9751e7f6bd68768`，integrity `sha512-0Of8Ydd8uEZShdJIGl+3ABoyrmNmp7xs5ZPWPpL63+8Z0RBlJ6JSySTgCgKD47m4tlH2rWtp4JqQjHbfTGArtQ==`。公共 npm 下载回读与审计原始 tgz 逐字节一致；GitHub prerelease 附同一原包且服务端摘要相同。发布后元数据和 tgz 曾短暂返回 404，已等待至可见，未重复 publish。未发布到 Gitea，未安装或激活任何节点。
