@@ -2019,7 +2019,7 @@ export class SuperagentHost {
       return { ok: true, approved: chosen === OUTBOUND_APPROVE }
     }
     if (card.ticketId !== undefined) {
-      const out = this.answer(card.ticketId, answer)
+      const out = this.attachAnswer(card.ticketId, answer)
       if (!out.ok) return out
       this.decisions.decide(card.id, { at, text: answer, ...choice, triggerId: out.triggerId, ...withFiles }, stored)
       return { ok: true, ticket_id: card.ticketId, trigger_id: out.triggerId }
@@ -2727,18 +2727,42 @@ export class SuperagentHost {
    * The owner answers a question on a ticket that did not start in the workbench: its requester is an agent, so nobody else
    * can (definition 找人: a question reaches a person). The answer is the owner's message on a new workbench Thread, routed
    * straight to the ticket as the router's attach does.
+   *
+   * #929 gap 1: a question that is a card with options names its card (`card`, `options`) when it needs input, and `option`
+   * answers it by the option's text, id (o2) or number (2) with the text as its words, exactly as deciding the card does; a
+   * ticket with no open question takes the owner's note for its holder instead of a refusal.
+   * @param option - an option of the ticket's question card, when the answer picks one.
    */
-  answer(ticketId: string, text: string): { ok: true; triggerId: string; thread: string } | { ok: false; code: string; error: string } {
+  answer(ticketId: string, text: string, option?: string): Record<string, unknown> {
     const body = text.trim()
-    if (body === '' || body.length > 20_000) return { ok: false, code: 'text', error: 'text is required, at most 20000 characters' }
+    if (body.length > 20_000) return { ok: false, code: 'text', error: 'text is at most 20000 characters' }
+    if (body === '' && (option === undefined || option === '')) return { ok: false, code: 'text', error: 'text is required, at most 20000 characters' }
     const ticket = this.store.tickets.get(ticketId)
     if (ticket === undefined || ticket.ended !== undefined) return { ok: false, code: 'ticket', error: 'no open ticket has that id' }
-    if (ticket.attention === undefined) return { ok: false, code: 'no-question', error: 'that ticket has no open question' }
-    // #888 D3: a question with an option that needs input is answered on the decision page, not in plain text here.
+    if (ticket.attention === undefined) {
+      if (option !== undefined && option !== '') return { ok: false, code: 'no-question', error: 'that ticket has no open question, so there is no option to answer; send the text alone to leave the holder a note' }
+      // #929: no question to answer, but the owner may still leave the holder a note (a new delivery, as an observer's note is).
+      try { this.engine.note(ticketId, `[属主留言] ${body}`) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
+      this.pass()
+      return { ok: true, noted: true, ticketId }
+    }
     const card = this.decisions.get(ticketCardId(ticket.id, ticket.attention.question))
-    if (card !== undefined && card.decided === undefined && needsInput(card)) return { ok: false, code: 'needs-input', error: '这个问题有需要填写的选项，请到决策页作答' }
+    const open = card !== undefined && card.decided === undefined ? card : undefined
+    if (option !== undefined && option !== '') {
+      if (open === undefined) return { ok: false, code: 'no-card', error: "that ticket's question is not a card with options; answer it with text alone" }
+      return { ...this.decide(open.id, 'choose', option, body === '' ? undefined : body), card: open.id }
+    }
+    // #888 D3: a question with an option that needs input is answered on the decision page, not in plain text here.
+    if (open !== undefined && needsInput(open)) return { ok: false, code: 'needs-input', card: open.id, options: open.options, error: `这个问题有需要填写的选项：用 user decide ${open.id} --option <选项文字|o2|2> --note <说明>（或 user answer … --option）作答，也可到决策页作答` }
+    return this.attachAnswer(ticketId, body)
+  }
+
+  /**
+   * The owner's words as a message on a new workbench Thread, attached to the ticket in one step so the router never gets it
+   * as a candidate. #929: deciding the ticket's question card calls this, not `answer`, which refuses an unfilled card.
+   */
+  private attachAnswer(ticketId: string, body: string): { ok: true; triggerId: string; thread: string } | { ok: false; code: string; error: string } {
     const trigger = this.workbenchTrigger(body)
-    // Received and attached in one step, so the router never gets it as a candidate.
     try { this.engine.receive(trigger); this.engine.attach(ticketId, trigger.id) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
     this.pass()
     return { ok: true, triggerId: trigger.id, thread: trigger.threads[0]!.id }
