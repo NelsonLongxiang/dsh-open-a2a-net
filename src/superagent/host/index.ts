@@ -2286,10 +2286,6 @@ export class SuperagentHost {
       if (!github && row.retry !== undefined) {
         const nowMs = Date.parse(this.now())
         if (!validReplyRetry(row.retry) || !Number.isFinite(nowMs)) continue
-        if (nowMs - Date.parse(row.retry.firstFailedAt) >= REPLY_RETRY_MAX_AGE_MS) {
-          this.store.atomic(() => { const current = this.store.messages.get(row.message.id); if (current?.status === 'pending') this.store.messages.save({ ...current, retry: undefined, status: 'dropped', droppedAt: this.now(), reason: 'reply-unsent-24h' }) })
-          continue
-        }
         if (nowMs < Date.parse(row.retry.nextAt)) continue
       }
       // Persist the next eligible time BEFORE side effects: a restart in the send/catch window cannot bypass cooldown.
@@ -2310,11 +2306,17 @@ export class SuperagentHost {
           const current = this.store.messages.get(row.message.id)
           if (current?.status !== 'pending' || current.retry === undefined || !validReplyRetry(current.retry)) return
           const failedAt = Date.parse(this.now())
+          // Preserve Source semantics: even at the age limit, a recovered send succeeds first.
+          // Only another failed attempt can end a reply that remained unsent for 24 hours.
+          if (failedAt - Date.parse(current.retry.firstFailedAt) >= REPLY_RETRY_MAX_AGE_MS) {
+            this.store.messages.save({ ...current, retry: undefined, status: 'dropped', droppedAt: this.now(), reason: 'reply-unsent-24h' })
+            return
+          }
           const delay = Date.parse(current.retry.nextAt) - Date.parse(current.retry.lastFailedAt)
           this.store.messages.save({ ...current, retry: { ...current.retry, lastFailedAt: new Date(failedAt).toISOString(), nextAt: new Date(failedAt + delay).toISOString() } })
         })
         // The Source health owns the safe refusal reason. Command errors can contain private reply text.
-        this.d.logger.warn('superagent: reply %s remains pending; retry is delayed', row.message.id)
+        this.d.logger.warn(this.store.messages.get(row.message.id)?.status === 'dropped' ? 'superagent: reply %s remained unsent for 24 hours after another failed attempt' : 'superagent: reply %s remains pending; retry is delayed', row.message.id)
       })
         .catch(() => { this.d.logger.warn('superagent: reply status could not be persisted; original checkpoint retained') })
         .finally(() => { this.sending.delete(row.message.id) })

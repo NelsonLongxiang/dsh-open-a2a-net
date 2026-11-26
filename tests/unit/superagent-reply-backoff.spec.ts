@@ -20,6 +20,42 @@ async function fixture(home = mkdtempSync(join(tmpdir(), 'reply-backoff-')), ini
   return { home, host, calls, warnings, queue, flush, setClock: (ms: number) => { clock = ms }, recover: () => { down = false }, sends: () => calls.filter(a => a[0] === 'receipt' || a[0] === 'route') }
 }
 describe('#918 pending reply retries', () => {
+  it('review: recovery at 24h preserves original source send-before-drop behavior', async () => {
+    const f = await fixture();f.queue('recover-at-deadline');await f.flush()
+    f.recover();f.setClock(T0+24*3600000);await f.flush()
+    expect(f.host.store.messages.get('recover-at-deadline')?.status).toBe('sent')
+    expect(f.sends()).toHaveLength(2)
+  })
+  it('allows an original-id recovered send after restart at the 24h boundary', async () => {
+    const f = await fixture();f.queue('restart-at-deadline');await f.flush();await f.host.stop()
+    const g = await fixture(f.home,T0+24*3600000);g.recover();await g.flush()
+    expect(g.host.store.messages.get('restart-at-deadline')?.status).toBe('sent')
+    expect(g.sends()).toHaveLength(1)
+    expect(g.sends()[0]).toEqual(f.sends()[0])
+  })
+  it('review: a failed pre-send persistence never sends and leaves original row pending', async () => {
+    const f = await fixture();f.queue('checkpoint-fail')
+    const original=f.host.store.atomic.bind(f.host.store)
+    f.host.store.atomic=()=>{throw Error('injected checkpoint failure')}
+    try{expect(()=>f.host.pass()).toThrow('injected checkpoint failure')}finally{f.host.store.atomic=original}
+    expect(f.sends()).toHaveLength(0)
+    expect(f.host.store.messages.get('checkpoint-fail')?.status).toBe('pending')
+    expect(f.host.store.messages.get('checkpoint-fail')?.retry).toBeUndefined()
+  })
+  it('review: terminal persistence failure holds original checkpoint and permits original-id recovery', async () => {
+    const f = await fixture();f.queue('terminal-fail')
+    const atomic=f.host.store.atomic.bind(f.host.store)
+    ;(f.host as any).a2a.send=async()=>{f.host.store.atomic=()=>{throw Error('injected completion persistence failure')};return 'sent'}
+    try{await f.flush()}finally{f.host.store.atomic=atomic}
+    expect(f.host.store.messages.get('terminal-fail')?.status).toBe('pending')
+    expect(f.host.store.messages.get('terminal-fail')?.retry?.failures).toBe(1)
+    expect(f.warnings.some(w=>JSON.stringify(w).includes('original checkpoint retained'))).toBe(true)
+    let again=0
+    ;(f.host as any).a2a.send=async(m:any)=>{expect(m.id).toBe('terminal-fail');again++;return 'sent'}
+    f.setClock(T0+5000);await f.flush();expect(again).toBe(0)
+    f.setClock(T0+30000);await f.flush();expect(again).toBe(1)
+    expect(f.host.store.messages.get('terminal-fail')?.status).toBe('sent')
+  })
   it('keeps a confirmed gone result terminal instead of retrying it', async () => {
     const f = await fixture();f.queue('one')
     ;(f.host as any).a2a.send = async () => 'gone'
@@ -66,7 +102,9 @@ describe('#918 pending reply retries', () => {
     expect(f.sends()).toHaveLength(6)
     expect((f.host.store.messages.get('one') as any).retry.nextAt).toBe(new Date(T0+1050000).toISOString())
     f.setClock(T0 + 24*3600000);await f.flush()
+    expect(f.sends()).toHaveLength(7)
     expect(f.host.store.messages.get('one')?.status).toBe('dropped')
+    expect(f.host.store.messages.get('one')?.reason).toBe('reply-unsent-24h')
   })
   it('holds malformed persisted retry state without throwing or sending and exposes the problem', async () => {
     const f = await fixture();f.queue('one')
