@@ -274,6 +274,8 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 
 状态面的账本：`tasks`（pending，每行带 `settleable`）、`tasksStaleCount`、`tasksDead`（已知时带 `direction`），以及 `archived`——最新 64 条已结清行，最新在前，每行带 `outcome`、`endedBy`（`receipt` | `echo` | `abandoned` | `cancelled` | `evicted`）、回执在调用方结束之后才到时带 `late: true`、已知时带 `direction`——另有 `archivedCount` 与 `archivedSplit`（按结局计数）。
 
+属主签发委托或终端发起待批准配对时可传 `scope`，应答原样回显数组。限定范围的委托可在获准的方法和路径上代替控制密钥。原有不带 `scope` 的委托仍需控制密钥。`X-DSH-On-Behalf-Of` 接收含 `id`（最多 64 字符）和 `name`（最多 32 字符）的 JSON，只用于审计和插话标注。HTTP 请求头中请转义 JSON 的非 ASCII 字符。代办人声明不参与权限判断。
+
 ## 舞台（可视化面）
 
 全页工作台与模型工具并列挂载：`/__dsh_a2a_nexus`（A2A 工作台——自 0.6.2 起 2D 空间规划板即舞台，目录/主机/台账/活动/规划面板（宿主运行 superagent 团队时多一个「团队」页）乘可折叠侧栏，合并为一个响应式外壳；canvas 面掉线时面板回落主区；Three.js 拓扑观测在 0.6.0 退役；`?mode=plan` 仍汇聚到规划板）。不带斜杠的挂载路径会 301 重定向到带尾斜杠形式，两种写法都能渲染，外壳的相对资源总在服务树内解析。此前的办公室舞台 `/__dsh_a2a_canvas` 已移除。离线开发时，`nexus-stage/scripts/mockhost.py [port]`（默认 8780）服务已构建的舞台（`assets/nexusDist`），状态取自 `LIVE_STATE`（默认本机 3080 端口的 `/__dsh_a2a/state`），取不到就用空舰队；在其上打开 `/?fault=500` 可演练页内故障徽标，`/?demo=1` 合并一份演示联邦数据（2 个 peer、2 条在途路由），设 `LAYOUT_FILE=<路径>` 可让布局跨重启保留（默认只存内存）。`pnpm verify` 是包了一层「临时目录零残留」闸门的 `pnpm verify:core`；其中 `verify:nexus` 步骤会自行 `npm ci` 安装舞台子包依赖再构建，无需手工引导子包（仓库根的依赖仍需先 `pnpm install`）。

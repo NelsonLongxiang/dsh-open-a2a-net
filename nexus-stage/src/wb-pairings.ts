@@ -6,7 +6,7 @@
  */
 type Json = Record<string, unknown>
 
-export interface PairingRow { readonly id: string; readonly code: string; readonly name: string; readonly days: number; readonly expiresAt: string; readonly state: string }
+export interface PairingRow { readonly id: string; readonly code: string; readonly name: string; readonly days: number; readonly expiresAt: string; readonly state: string; readonly scope?: readonly string[] }
 
 export interface PairingsDeps {
   /** GET /__dsh_a2a/owner-delegates (its `pairings`). */
@@ -30,7 +30,17 @@ export function pairingOf(raw: unknown): PairingRow | undefined {
   const r = raw as Json
   if (typeof r.id !== 'string' || r.id === '' || r.id.length > 64 || typeof r.code !== 'string' || !CODE.test(r.code)) return undefined
   if (typeof r.name !== 'string' || typeof r.days !== 'number' || typeof r.expiresAt !== 'string' || typeof r.state !== 'string') return undefined
-  return { id: r.id, code: r.code, name: r.name, days: r.days, expiresAt: r.expiresAt, state: r.state }
+  const scope = scopeOf(r.scope)
+  return { id: r.id, code: r.code, name: r.name, days: r.days, expiresAt: r.expiresAt, state: r.state, ...(scope === undefined ? {} : { scope }) }
+}
+
+function scopeOf(raw: unknown): readonly string[] | undefined {
+  return Array.isArray(raw) && raw.every((entry): entry is string => typeof entry === 'string') ? raw : undefined
+}
+
+function scopeText(scope: readonly string[] | undefined): string {
+  if (scope === undefined) return '原有属主委托（需要控制密钥）'
+  return scope.length === 0 ? '无可用动作' : scope.join(' · ')
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -48,8 +58,10 @@ export function createPairingsBanner(deps: PairingsDeps): PairingsBanner {
   head.append(el('span', undefined, '终端配对请求'))
   const hint = el('div', 'wb-sa-hint', '只在你自己的终端里运行了 a2a-net user pair、且终端上显示的短码与这里一致时才允许；允许后该终端获得这台节点的属主代理凭据。')
   const list = el('div', 'wb-sa-pairings-list')
-  root.append(head, hint, list)
+  const delegatesPane = el('details', 'wb-sa-pairings')
+  root.append(head, hint, list, delegatesPane)
   let rows: PairingRow[] = []
+  let delegates: { name: string; scope?: readonly string[]; revoked: boolean }[] = []
   const said = new Map<string, string>()
   const busy = new Set<string>()
   let reading: Promise<void> | undefined
@@ -57,11 +69,18 @@ export function createPairingsBanner(deps: PairingsDeps): PairingsBanner {
   function draw(): void {
     list.replaceChildren()
     const waiting = rows.filter(r => r.state === 'waiting')
-    root.hidden = waiting.length === 0 && said.size === 0
+    root.hidden = waiting.length === 0 && said.size === 0 && delegates.length === 0
+    delegatesPane.hidden = delegates.length === 0
+    delegatesPane.replaceChildren(el('summary', undefined, '已签发的属主委托'))
+    for (const delegate of delegates) {
+      delegatesPane.append(el('div', 'wb-sa-hint', delegate.name + ' · ' + scopeText(delegate.scope) + (delegate.revoked ? ' · 已吊销' : '')))
+    }
+    head.hidden = hint.hidden = waiting.length === 0 && said.size === 0
     for (const r of waiting) {
       const card = el('div', 'wb-sa-pairing')
       card.dataset.pairing = r.id
       card.append(el('div', 'wb-sa-pairing-title', `终端配对请求：${r.name}`), el('div', 'wb-sa-pairing-code', `短码 ${r.code}`), el('div', 'wb-sa-hint', `有效 ${String(r.days)} 天的凭据 · 请求在 ${r.expiresAt} 前有效`))
+      card.append(el('div', 'wb-sa-hint', '委托范围：' + scopeText(r.scope)))
       const allow = el('button', 'wb-btn', '允许')
       const deny = el('button', 'wb-btn is-ghost', '拒绝')
       allow.type = 'button'; deny.type = 'button'
@@ -97,6 +116,11 @@ export function createPairingsBanner(deps: PairingsDeps): PairingsBanner {
     reading = (async () => {
       try {
         const body = await deps.list()
+        delegates = Array.isArray(body.delegates) ? body.delegates.flatMap((raw: unknown) => {
+          const row = raw as Json | null
+          if (typeof row?.name !== 'string' || (row.scope !== undefined && scopeOf(row.scope) === undefined)) return []
+          return [{ name: row.name, scope: scopeOf(row.scope), revoked: typeof row.revokedAt === 'string' }]
+        }) : []
         rows = Array.isArray(body.pairings) ? body.pairings.map(pairingOf).filter((p): p is PairingRow => p !== undefined) : []
       } catch { /* keep what is shown; the next tick reads again */ }
       draw()

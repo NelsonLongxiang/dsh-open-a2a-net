@@ -26,9 +26,10 @@ import type { SuperagentHost } from '../superagent/host/index.ts'
 import type { SuperagentTeams } from '../superagent/host/teams.ts'
 import { verifyCard } from '../card.ts'
 import { claimCovers } from '../task-auth.ts'
-import { browserOwnerProof, touchesRules } from '../superagent/host/owner-proof.ts'
+import { browserOwnerProof, needsTeamDelegateProof, touchesRules } from '../superagent/host/owner-proof.ts'
 import { issueOwnerDelegate, parseOwnerDelegates, revokeOwnerDelegate } from '../superagent/host/owner-delegate.ts'
 import { OwnerPairings } from '../superagent/host/owner-pairing.ts'
+import { validOwnerScope, type OwnerAction } from '../superagent/host/owner-delegate-scope.ts'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { canvasOwnerFingerprint, splitCanvasOwner } from '../canvas-id.ts'
@@ -96,6 +97,7 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
       handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
         const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
         if (req.method === 'GET') {
+          if (needsTeamDelegateProof(req) && !requireBrowserOwner(req, send)) return
           const params = new URL(req.url ?? '/', 'http://x').searchParams
           const asked = superagentTeams!.get(params.get('teamId') ?? undefined)
           if (asked === undefined) { send(404, { ok: false, error: 'no such team on this instance' }); return }
@@ -285,7 +287,9 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
       handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
         const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
         // Each card names its team's canvas address: the right bar stages the owner's files to it (C8).
-        if (req.method === 'GET') { send(200, { decisions: superagentTeams.decisionCards().map(card => ({ ...card, ...inputFlags(card), ...optionIdFlags(card), ...(typeof card.team === 'string' && card.team !== '' ? { address: `${config.team}/canvas/${card.team}` } : {}) })), health: superagentTeams.health() }); return }
+        if (req.method === 'GET') {
+          if (needsTeamDelegateProof(req) && !requireBrowserOwner(req, send)) return
+          send(200, { decisions: superagentTeams.decisionCards().map(card => ({ ...card, ...inputFlags(card), ...optionIdFlags(card), ...(typeof card.team === 'string' && card.team !== '' ? { address: `${config.team}/canvas/${card.team}` } : {}) })), health: superagentTeams.health() }); return }
         readJsonBody(req, res, (body) => {
           const fields = body as { teamId?: unknown; id?: unknown; how?: unknown; option?: unknown; note?: unknown; files?: unknown }
           const team = superagentTeams.get(typeof fields.teamId === 'string' ? fields.teamId : undefined)
@@ -368,6 +372,7 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
       handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
         const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
         if (req.method === 'GET') {
+          if (needsTeamDelegateProof(req) && !requireBrowserOwner(req, send)) return
           // ?session=<id>: also the requests that session's team tab sent to other instances, with their receipts.
           const asked = new URL(req.url ?? '/', 'http://localhost').searchParams.get('session') ?? ''
           send(200, { teams: [...superagentTeams.rows().map(row => ({ ...row, ...(row.canvas !== undefined ? { address: `${config.team}/canvas/${row.canvas}` } : {}) })), ...linkedTeams()],
@@ -417,9 +422,9 @@ export function registerOwnerDelegateFaces(webServer: WebServer, d: Pick<Superag
     // issued when the terminal holding the pairing's secret collects it, its token answered once, so a pairing allowed but
     // never collected (it expired, or the node restarted) leaves no credential behind.
     const pairings = new OwnerPairings()
-    const issueFor = (name: string, days: number): { token: string; id: string } => {
-      const out = issueOwnerDelegate(delegatesPath, name, days, { read, write, random: () => ({ token: `dshod_${randomBytes(32).toString('base64url')}`, id: randomUUID() }), now: () => new Date() })
-      return { token: out.token, id: out.record.id }
+    const issueFor = (name: string, days: number, scope?: readonly OwnerAction[]) => {
+      const out = issueOwnerDelegate(delegatesPath, name, days, { read, write, random: () => ({ token: `dshod_${randomBytes(32).toString('base64url')}`, id: randomUUID() }), now: () => new Date() }, scope)
+      return { token: out.token, id: out.record.id, scope: out.record.scope }
     }
     const sweepPairings = (): void => { pairings.sweep() }
     ctx.effect(() => webServer.register({
@@ -434,7 +439,7 @@ export function registerOwnerDelegateFaces(webServer: WebServer, d: Pick<Superag
           return
         }
         readJsonBody(req, res, (body) => {
-          const fields = body as { action?: unknown; name?: unknown; days?: unknown; id?: unknown }
+          const fields = body as { action?: unknown; name?: unknown; days?: unknown; id?: unknown; scope?: unknown }
           let connection: unknown
           try { connection = ctx.get('connection') } catch { /* refused below */ }
           // Issuing needs the real browser owner; a delegate may revoke (itself or another), never issue.
@@ -444,7 +449,9 @@ export function registerOwnerDelegateFaces(webServer: WebServer, d: Pick<Superag
             const name = typeof fields.name === 'string' ? fields.name.trim() : ''
             if (name === '' || name.length > 80) { send(400, { ok: false, error: 'name is required, at most 80 characters' }); return }
             const days = typeof fields.days === 'number' && Number.isFinite(fields.days) ? fields.days : 30
-            const out = issueOwnerDelegate(delegatesPath, name, days, { read, write, random: () => ({ token: `dshod_${randomBytes(32).toString('base64url')}`, id: randomUUID() }), now: () => new Date() })
+            if (Object.hasOwn(fields, 'scope') && !validOwnerScope(fields.scope)) { send(400, { ok: false, error: 'scope must be an array of supported owner actions' }); return }
+            const scope = validOwnerScope(fields.scope) ? fields.scope : undefined
+            const out = issueOwnerDelegate(delegatesPath, name, days, { read, write, random: () => ({ token: `dshod_${randomBytes(32).toString('base64url')}`, id: randomUUID() }), now: () => new Date() }, scope)
             const { sha256: _sha, ...record } = out.record
             send(200, { ok: true, delegate: record, token: out.token })
             return
@@ -477,9 +484,9 @@ export function registerOwnerDelegateFaces(webServer: WebServer, d: Pick<Superag
         const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), 'Cache-Control': 'no-store' }); res.end(payload) }
         if (req.method !== 'POST') { send(405, { ok: false, error: 'POST start or poll' }); return }
         readJsonBody(req, res, (body) => {
-          const fields = body as { action?: unknown; name?: unknown; days?: unknown; id?: unknown; secret?: unknown }
+          const fields = body as { action?: unknown; name?: unknown; days?: unknown; id?: unknown; secret?: unknown; scope?: unknown }
           sweepPairings()
-          if (fields.action === 'start') { const out = pairings.start(req.socket.remoteAddress ?? '', fields.name, fields.days); send(out.ok ? 200 : out.code === 'input' ? 400 : 429, out); return }
+          if (fields.action === 'start') { const out = pairings.start(req.socket.remoteAddress ?? '', fields.name, fields.days, fields.scope); send(out.ok ? 200 : out.code === 'input' ? 400 : 429, out); return }
           if (fields.action === 'poll') { const answer = pairings.poll(fields.id, fields.secret, issueFor); send(answer.state === 'retry' ? 503 : 200, answer); return }
           send(400, { ok: false, error: 'action must be start or poll' })
         })

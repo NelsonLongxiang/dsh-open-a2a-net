@@ -13,6 +13,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { appendFileSync, readFileSync } from 'node:fs'
 import type { IncomingMessage } from 'node:http'
+import { validOwnerScope, type OwnerAction } from './owner-delegate-scope.ts'
 
 /** The request header that carries a delegate token. */
 export const OWNER_DELEGATE_HEADER = 'x-dsh-owner-delegate'
@@ -25,11 +26,12 @@ export interface OwnerDelegateRecord {
   readonly createdAt: string
   readonly expiresAt: string | null
   readonly revokedAt: string | null
+  readonly scope?: readonly OwnerAction[]
 }
 
 /** What a check of a presented token found. */
 export type OwnerDelegateCheck =
-  | { readonly ok: true; readonly id: string; readonly name: string }
+  | { readonly ok: true; readonly id: string; readonly name: string; readonly scope?: readonly OwnerAction[] }
   | { readonly ok: false; readonly reason: 'absent' | 'unknown' | 'revoked' | 'expired' | 'store' }
 
 /**
@@ -46,6 +48,7 @@ export function parseOwnerDelegates(text: string): OwnerDelegateRecord[] {
     const r = row as Record<string, unknown> | null
     return r !== null && typeof r === 'object' && typeof r.id === 'string' && typeof r.name === 'string'
       && typeof r.sha256 === 'string' && /^[0-9a-f]{64}$/.test(r.sha256) && typeof r.createdAt === 'string'
+      && (!Object.hasOwn(r, 'scope') || validOwnerScope(r.scope))
       && (r.expiresAt === null || typeof r.expiresAt === 'string') && (r.revokedAt === null || typeof r.revokedAt === 'string')
   })
 }
@@ -79,7 +82,7 @@ export class OwnerDelegates {
     if (found === undefined) return { ok: false, reason: 'unknown' }
     if (found.revokedAt !== null) return { ok: false, reason: 'revoked' }
     if (found.expiresAt !== null && Date.parse(found.expiresAt) <= this.now().getTime()) return { ok: false, reason: 'expired' }
-    return { ok: true, id: found.id, name: found.name }
+    return { ok: true, id: found.id, name: found.name, ...(found.scope === undefined ? {} : { scope: found.scope }) }
   }
 
   /**
@@ -117,7 +120,8 @@ export function issueOwnerDelegate(storePath: string, name: string, days: number
   readonly write: (path: string, text: string) => void
   readonly random: () => { readonly token: string; readonly id: string }
   readonly now: () => Date
-}): { readonly record: OwnerDelegateRecord; readonly token: string } {
+}, scope?: readonly OwnerAction[]): { readonly record: OwnerDelegateRecord; readonly token: string } {
+  if (scope !== undefined && !validOwnerScope(scope)) throw new Error('invalid owner delegate scope')
   const text = io.read(storePath)
   const rows = text === undefined ? [] : parseOwnerDelegates(text)
   const { token, id } = io.random()
@@ -125,6 +129,7 @@ export function issueOwnerDelegate(storePath: string, name: string, days: number
   const record: OwnerDelegateRecord = {
     id, name, sha256: createHash('sha256').update(token, 'utf8').digest('hex'), createdAt: at.toISOString(),
     expiresAt: days > 0 ? new Date(at.getTime() + days * 86_400_000).toISOString() : null, revokedAt: null,
+    ...(scope === undefined ? {} : { scope: [...scope] }),
   }
   io.write(storePath, `${JSON.stringify({ delegates: [...rows, record] }, null, 2)}\n`)
   return { record, token }
