@@ -23,7 +23,7 @@ import { ProgressReceipts } from './progress.ts'
 import { SplitBook } from './split.ts'
 import { progressState } from './progress.ts'
 import { TeamMcp } from './team-mcp.ts'
-import { credentialAccess, redactedPreview, type CredentialKind } from './credential-audit.ts'
+import { credentialVerdict, redactedPreview, type CredentialKind } from './credential-audit.ts'
 import { RosterReports } from './roster.ts'
 import { MemberExecutor, runOf, transientError, type MemberTurn, type PrepareRunner, type QueuedAssignment } from './executor.ts'
 import { PiEvents } from './pi-events.ts'
@@ -225,7 +225,7 @@ export class SuperagentHost {
   /** #825 review: the request a credential card filed back, by trigger id, and the session its ticket must not go to. */
   private readonly credentialExclusions = new Map<string, string>()
   private readonly exclusionsPath: string
-  private readonly credentialHits: Array<{ at: string; session: string; role: string; tool: string; kinds: readonly CredentialKind[]; preview: string; card?: string }> = []
+  private readonly credentialHits: Array<{ at: string; session: string; role: string; tool: string; kinds: readonly CredentialKind[]; preview: string; card?: string; recordOnly?: true }> = []
   private readonly credentialCardAt = new Map<string, number>()
   /** docs/design/superagent-team-mcp.md M1–M3: the team's MCP servers, their tokens in this process's memory only. */
   readonly mcp: TeamMcp
@@ -2449,28 +2449,33 @@ export class SuperagentHost {
   /**
    * The credential-access audit (local market trial, 2026-11-11): a team session's tool call that touches credential
    * files, an Authorization header or another session's files is recorded — the kinds, the tool, a redacted preview,
-   * never what was read — and the owner gets a P1 card, at most one per session and kind every 10 minutes. It does not
-   * block: a team session's sandbox limits writes, not reads, and the boundary is the owner's to set.
+   * never what was read. #895 (owner ruling 2026-11-26): only a call that really reads, sends or copies a protected file,
+   * makes a request with an Authorization or x-api-key header, or reads another session's credential files also gives the
+   * owner a P1 card, at most one per session and kind every 10 minutes; a name that only appears in a search term, a
+   * description or a body is recorded and nothing more. It does not block: a team session's sandbox limits writes, not
+   * reads, and the boundary is the owner's to set.
+   * @returns the kinds recorded, whether or not a card was raised.
    */
   auditCall(session: string, role: string, tool: string, args: unknown): CredentialKind[] {
-    const kinds = credentialAccess(args)
+    const { kinds, card: cardKinds } = credentialVerdict(tool, args)
     if (kinds.length === 0) return kinds
     const at = this.now(), nowMs = Date.parse(at)
     const preview = redactedPreview(args)
-    const key = `${session}|${kinds.join(',')}`
+    const key = `${session}|${cardKinds.join(',')}`
     const last = this.credentialCardAt.get(key)
     let card: string | undefined
-    if (last === undefined || nowMs - last >= CREDENTIAL_CARD_GAP_MS) {
+    if (cardKinds.length > 0 && (last === undefined || nowMs - last >= CREDENTIAL_CARD_GAP_MS)) {
       this.credentialCardAt.set(key, nowMs)
       const who = this.displayName(session)
-      const what = kinds.map(kind => CREDENTIAL_KIND_TEXT[kind]).join('、')
+      const what = cardKinds.map(kind => CREDENTIAL_KIND_TEXT[kind]).join('、')
       const out = this.decisions.propose({ source: 'health', by: `credential:${session}`, question: `${who} 的 ${tool} 调用触及${what}（${at}）`, reason: `宿主只记录不拦截；命令预览（已遮蔽）：${preview}`, at,
         spec: { level: 'P1', options: ['知道了', CREDENTIAL_STOP, CREDENTIAL_BLOCK], recommended: '知道了' } })
       if (out.ok) card = out.id
     }
-    this.credentialHits.push({ at, session, role, tool, kinds, preview, ...(card !== undefined ? { card } : {}) })
+    this.credentialHits.push({ at, session, role, tool, kinds, preview, ...(card !== undefined ? { card } : {}), ...(cardKinds.length === 0 ? { recordOnly: true as const } : {}) })
     if (this.credentialHits.length > CREDENTIAL_HITS_KEPT) this.credentialHits.splice(0, this.credentialHits.length - CREDENTIAL_HITS_KEPT)
-    this.d.logger.warn('superagent: credential-access audit: %s (%s) %s touched %s', session, role, tool, kinds.join(','))
+    if (cardKinds.length > 0) this.d.logger.warn('superagent: credential-access audit: %s (%s) %s touched %s', session, role, tool, cardKinds.join(','))
+    else this.d.logger.info('superagent: credential-access audit (record only): %s (%s) %s mentioned %s', session, role, tool, kinds.join(','))
     return kinds
   }
 
