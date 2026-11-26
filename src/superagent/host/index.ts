@@ -2733,7 +2733,7 @@ export class SuperagentHost {
    * ticket with no open question takes the owner's note for its holder instead of a refusal.
    * @param option - an option of the ticket's question card, when the answer picks one.
    */
-  answer(ticketId: string, text: string, option?: string): Record<string, unknown> & ({ ok: true } | { ok: false; code: string; error: string }) {
+  answer(ticketId: string, text: string, option?: string): Record<string, unknown> {
     const body = text.trim()
     if (body.length > 20_000) return { ok: false, code: 'text', error: 'text is at most 20000 characters' }
     if (body === '' && (option === undefined || option === '')) return { ok: false, code: 'text', error: 'text is required, at most 20000 characters' }
