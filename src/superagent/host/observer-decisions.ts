@@ -1,4 +1,5 @@
 import { type StoredCard, needsInput } from './decisions.ts'
+import type { TicketInput } from '../upstream/dsh-superagent/src/core/index.ts'
 
 const LEVEL = { P0: 0, P1: 1, P2: 2, P3: 3 } as const
 export const OBSERVER_DECISION_WINDOW_MS = 24 * 3_600_000
@@ -39,6 +40,26 @@ export interface ObserverDecision {
   readonly state: 'pending' | 'attempting' | 'applied' | 'failed' | 'unknown'
   readonly correction?: { readonly at: string; readonly option: number; readonly reason: string }
   readonly credentialControl?: { readonly at: string; readonly option: number }
+}
+
+/** Host-owned structured metadata on the upstream engine's existing non-authorizing note. */
+interface ObserverAnswerNote extends Extract<TicketInput, { kind: 'note' }> {
+  readonly observerDecision: Pick<ObserverDecision, 'teamId' | 'cardId' | 'generation' | 'session' | 'human' | 'option' | 'level'> & { readonly questionVersion: string }
+}
+
+export function observerAnswerNote(decision: ObserverDecision, questionVersion: string): ObserverAnswerNote {
+  return { id: decision.id, kind: 'note', at: decision.at, text: '[观察者代决答复] ' + decision.id,
+    observerDecision: { teamId: decision.teamId, cardId: decision.cardId, generation: decision.generation,
+      session: decision.session, human: false, option: decision.option, level: decision.level, questionVersion },
+  }
+}
+
+export function isObserverAnswerReceipt(input: TicketInput, decision: ObserverDecision, questionVersion: string): boolean {
+  if (input.kind !== 'note' || input.id !== decision.id || input.at !== decision.at || !('observerDecision' in input)) return false
+  const metadata = input.observerDecision as Partial<ObserverAnswerNote['observerDecision']> | null | undefined
+  return metadata?.teamId === decision.teamId && metadata.cardId === decision.cardId && metadata.generation === decision.generation
+    && metadata.session === decision.session && metadata.human === false && metadata.option === decision.option
+    && metadata.level === decision.level && metadata.questionVersion === questionVersion
 }
 
 /** Reject malformed observer records before any quota or execution calculation. */

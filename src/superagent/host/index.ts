@@ -46,7 +46,7 @@ import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, YGL_TREES, blockableTool, grantClass, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
 import { armAutoApprove, CREDENTIAL_ACK_MINUTES_DEFAULT, DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
-import { armObserverDecisionRule, observerCardView, observerOptions, observerRefusal, OBSERVER_DECISION_WINDOW_MS, OBSERVER_QUOTA_WINDOW_MS, type ObserverDecision } from './observer-decisions.ts'
+import { armObserverDecisionRule, isObserverAnswerReceipt, observerAnswerNote, observerCardView, observerOptions, observerRefusal, OBSERVER_DECISION_WINDOW_MS, OBSERVER_QUOTA_WINDOW_MS, type ObserverDecision } from './observer-decisions.ts'
 import { searchTeam } from './search.ts'
 import { A2aReceipts, END_RECEIPT_GRACE_MS } from './receipts.ts'
 export { END_RECEIPT_GRACE_MS } from './receipts.ts'
@@ -1937,8 +1937,7 @@ export class SuperagentHost {
 
   private ticketObserverReceipt(decision: ObserverDecision): boolean {
     const target = decision.target
-    return target.kind === 'ticket-answer' && this.store.tickets.get(target.ticketId)?.inputs.some(input => input.id === decision.id
-      && input.kind === 'note' && input.observerDecision?.generation === decision.generation) === true
+    return target.kind === 'ticket-answer' && this.store.tickets.get(target.ticketId)?.inputs.some(input => isObserverAnswerReceipt(input, decision, target.questionVersion)) === true
   }
 
   private advanceObserverDecision(card: StoredCard): void {
@@ -1975,9 +1974,7 @@ export class SuperagentHost {
       const ticket = this.store.tickets.get(target.ticketId)
       if (ticket === undefined || ticket.ended !== undefined || ticket.attention?.id !== target.questionVersion) return false
       if (this.ticketObserverReceipt(decision)) return true
-      ticket.inputs.push({ id: decision.id, kind: 'note', at: decision.at, text: '[观察者代决答复] ' + decision.id,
-        observerDecision: { teamId: decision.teamId, cardId: card.id, generation: decision.generation, session: decision.session, human: false, option: decision.option, level: decision.level, questionVersion: target.questionVersion },
-      })
+      ticket.inputs.push(observerAnswerNote(decision, target.questionVersion))
       delete ticket.attention
       ticket.updatedAt = decision.at
       this.store.tickets.save(ticket)

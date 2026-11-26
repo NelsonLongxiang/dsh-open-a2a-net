@@ -254,10 +254,7 @@ export type TicketInput =
   | { id: string; kind: 'resumed'; triggerId: string; at: string }
   | { id: string; kind: 'text'; text: string; at: string }
   /** A fact the main Session gave the ticket from other work: context, which asks for nothing and grants nothing. */
-  | { id: string; kind: 'note'; text: string; at: string; observerDecision?: {
-    readonly teamId: string; readonly cardId: string; readonly generation: string; readonly session: string; readonly human: false
-    readonly option: number; readonly level: string; readonly questionVersion: string
-  } }
+  | { id: string; kind: 'note'; text: string; at: string }
 
 /**
  * How a Policy change bears on a ticket: the rules it was accepted under that changed, with their instruction now, or no
