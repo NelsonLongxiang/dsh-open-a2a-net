@@ -154,6 +154,8 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
               send(200, sa.ownerCastQueue({ action: 'withdraw', session_id: typeof fields.session_id === 'string' ? fields.session_id : '', id: typeof fields.id === 'string' ? fields.id : '' }))
             } else if (fields.action === 'request') {
               send(200, sa.request(typeof fields.text === 'string' ? fields.text : '', typeof fields.thread === 'string' ? fields.thread : undefined, fields.via === 'cli' ? 'cli' : undefined))
+            } else if (fields.action === 'request-status') {
+              send(200, sa.requestStatus(typeof fields.trigger_id === 'string' ? fields.trigger_id : ''))
             } else if (fields.action === 'answer') {
               send(200, sa.answer(typeof fields.ticket_id === 'string' ? fields.ticket_id : '', typeof fields.text === 'string' ? fields.text : '', typeof fields.option === 'string' ? fields.option : undefined))
             } else if (fields.action === 'serve') {

@@ -103,3 +103,7 @@ it('limits the casting and declaration promises the code actually keeps (#944 re
   expect(cli).toContain('other whitespace and layout are not promised')
   expect(cli).not.toContain('Both profile files are written all or nothing; any other line stays byte for byte')
 })
+
+it('documents user request status (#929 gap 2)', () => {
+  for (const name of ['user request status --team ID <trigger id>', '`ticketed`', '`pending`', '`filtered`', '`no-ticket`']) expect(cli).toContain(name)
+})
