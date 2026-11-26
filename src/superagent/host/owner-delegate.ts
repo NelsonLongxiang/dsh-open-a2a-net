@@ -86,12 +86,15 @@ export class OwnerDelegates {
    * Record one accepted use. An audit that cannot be written refuses the use (the owner must be able to see it).
    * @param who - the delegate.
    * @param request - the request it authorized.
+   * @param extra - what the route did (#951): action, target, sizes; never the text itself.
    * @returns whether the line was written.
    */
-  audit(who: { readonly id: string; readonly name: string }, request: Pick<IncomingMessage, 'method' | 'url'>): boolean {
+  audit(who: { readonly id: string | null; readonly name: string }, request: Pick<IncomingMessage, 'method' | 'url'>, extra?: Readonly<Record<string, unknown>>): boolean {
     const path = new URL(request.url ?? '/', 'http://x').pathname
+    // Extra fields (#951: action, target, sizes, digest) follow the fixed ones and can never replace them; no extra = the old line byte for byte.
+    const more = Object.fromEntries(Object.entries(extra ?? {}).filter(([key]) => !['at', 'id', 'name', 'method', 'path'].includes(key)))
     try {
-      appendFileSync(this.auditPath, `${JSON.stringify({ at: this.now().toISOString(), id: who.id, name: who.name, method: request.method ?? '', path })}\n`, { encoding: 'utf8', mode: 0o600 })
+      appendFileSync(this.auditPath, `${JSON.stringify({ at: this.now().toISOString(), id: who.id, name: who.name, method: request.method ?? '', path, ...more })}\n`, { encoding: 'utf8', mode: 0o600 })
       return true
     } catch { return false }
   }
