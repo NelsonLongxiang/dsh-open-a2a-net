@@ -67,6 +67,19 @@ describe('user session read', () => {
   })
 })
 
+describe('user session stop', () => {
+  it('posts the id and idempotency key and reports an idle seat', async () => {
+    const id = 'session-0123456789abcdef'
+    answer.body = { ok: true, id, stopped: false }
+    const result = await run('user', 'session', 'stop', id, '--request-id', 'cancel-1')
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.out)).toMatchObject({ stopped: false })
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ method: 'POST', url: '/__dsh_a2a/user/session/stop' })
+    expect(JSON.parse(seen[0]!.body)).toEqual({ id, request_id: 'cancel-1' })
+  })
+})
+
 describe('user session prompt', () => {
   it('--steer sends mode steer with the text after -- (a text that starts with a dash is fine) and the request id', async () => {
     answer.body = { ok: true, id: 'session-0123456789abcdef', mode: 'steer', delivered: 'steered' }
