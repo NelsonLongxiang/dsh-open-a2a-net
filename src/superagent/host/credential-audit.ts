@@ -141,8 +141,30 @@ function segments(command: string): string[] {
 }
 
 /**
+ * Where the $( ) that opens just before `from` ends: the index of its closing parenthesis, or the end of the text. Quote-aware:
+ * a parenthesis inside single or double quotes does not count, a nested $( ) is skipped as a whole wherever it sits (even in double
+ * quotes, where the shell still runs it), a backslash escapes the next character, and a bare ( ) pair inside nests (#947 follow-up).
+ */
+function endOfSub(command: string, from: number): number {
+  let single = false, double = false, depth = 0
+  for (let j = from; j < command.length; j++) {
+    const ch = command[j]!
+    if (single) { if (ch === "'") single = false; continue }
+    if (ch === '\\') { j++; continue }
+    if (ch === "'" && !double) { single = true; continue }
+    if (ch === '"') { double = !double; continue }
+    if (ch === '$' && command[j + 1] === '(') { j = endOfSub(command, j + 2); continue }
+    if (double) continue
+    if (ch === '(') depth++
+    else if (ch === ')') { if (depth === 0) return j; depth-- }
+  }
+  return command.length
+}
+
+/**
  * The commands a shell would run inside $( ) or backticks. Quote-aware (#947 review B2): inside single quotes nothing is expanded,
- * so a note that quotes $(cat …) is text; a double-quoted $( ) does run; a backslash-escaped one does not; $( ) nests.
+ * so a note that quotes $(cat …) is text; a double-quoted $( ) does run; a backslash-escaped one does not; $( ) nests, and a
+ * quoted closing parenthesis does not end one.
  */
 function substitutions(command: string): string[] {
   const out: string[] = []
@@ -154,10 +176,9 @@ function substitutions(command: string): string[] {
     if (ch === "'" && !double) { single = true; continue }
     if (ch === '"') { double = !double; continue }
     if (ch === '$' && command[i + 1] === '(') {
-      let depth = 1, j = i + 2
-      for (; j < command.length && depth > 0; j++) { if (command[j] === '(') depth++; else if (command[j] === ')') depth-- }
-      out.push(command.slice(i + 2, depth === 0 ? j - 1 : j))
-      i = j - 1
+      const end = endOfSub(command, i + 2)
+      out.push(command.slice(i + 2, end))
+      i = end
       continue
     }
     if (ch === '`') {
@@ -247,6 +268,13 @@ const NOTE_TOOLS: ReadonlySet<string> = new Set([
 /** Only the tools that carry text a person or the host reads. The file-transfer tools (a2a_file_*) read and write files, so a prefix is not enough (#947 review N1); a tool not named here keeps the old rule. */
 const isNoteTool = (tool: string): boolean => NOTE_TOOLS.has(tool)
 
+/** The paths a note tool is asked to stage: the strings of its files field, nothing else. */
+function fileTargets(args: unknown): string[] {
+  if (args === null || typeof args !== 'object') return []
+  const files = (args as Record<string, unknown>).files
+  return Array.isArray(files) ? files.filter((item): item is string => typeof item === 'string') : []
+}
+
 /**
  * Which of the hits make the owner's card (#895). Structured tools are read by field: the file a read or write names is
  * the target, a search term and the body of a write are not; a shell command is read word by word. A tool or shape that is
@@ -276,6 +304,11 @@ export function credentialVerdict(tool: string, args: unknown): CredentialVerdic
       const code = field(args, ['code'])
       return code === undefined ? { kinds, card: kinds } : card(kind => codeCard(code, kind))
     }
-    default: return isNoteTool(tool) ? card(() => false) : { kinds, card: kinds }
+    default: {
+      if (!isNoteTool(tool)) return { kinds, card: kinds }
+      // A note tool's text is inert, but its files field names workspace files the host stages and sends to the owner: a protected one is an actual send (#947 follow-up)
+      const files = fileTargets(args)
+      return card(kind => files.some(file => kind === 'credential-file' ? matchesFile(file) : kind === 'other-session' ? matchesOther(file) : false))
+    }
   }
 }
