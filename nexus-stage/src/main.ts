@@ -311,6 +311,18 @@ const bench = createWorkbench({
       try { return await res.json() as Record<string, unknown> } catch { return { ok: false } }
     },
     selectTeam(id) { rememberTeam(id); void pollSuperagent() },
+    // #933: terminal pairings, allowed or refused through the owner-delegate face (the host requires the owner's own login).
+    pairings: {
+      async list() {
+        const res = await controlFetch('/__dsh_a2a/owner-delegates', { cache: 'no-store' })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return await res.json() as Record<string, unknown>
+      },
+      async act(body) {
+        const res = await controlFetch('/__dsh_a2a/owner-delegates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        try { return { status: res.status, body: await res.json() as Record<string, unknown> } } catch { return { status: res.status, body: { ok: false, error: `HTTP ${res.status}` } } }
+      },
+    },
     // T8: the decision cards, decided through the owner control face; whether the person is the owner is the host's call.
     decisions: {
       async list() {

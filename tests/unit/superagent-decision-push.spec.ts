@@ -71,7 +71,8 @@ describe('T8: the envelope', () => {
     expect(c.reason.endsWith('…')).toBe(true)
     expect(c.files[0].name).toHaveLength(200)
     const no = (over: Record<string, unknown>, event: 'created' | 'decided' = 'created') => decisionCardText(event, 1, 't', card(over)).ok
-    expect(no({ options: ['甲', '乙'.repeat(301)], recommended: '甲' })).toBe(false)
+    // #923: an option over the market's limit is cut and sent like a reason, no longer refused (superagent-decision-option-ids.spec.ts).
+    expect(no({ options: ['甲', '乙'.repeat(301)], recommended: '甲' })).toBe(true)
     expect(no({ options: ['甲', ' '], recommended: '甲' })).toBe(false)
     expect(no({ recommended: '丙' })).toBe(false)
     expect(no({ recommended: undefined })).toBe(false)

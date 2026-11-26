@@ -4,13 +4,13 @@ English | [中文](README_zh.md)
 
 [![npm](https://img.shields.io/npm/v/@nelsonlongxiang/dsh-open-a2a-net?label=npm)](https://www.npmjs.com/package/@nelsonlongxiang/dsh-open-a2a-net)
 
-**New in the preview: Superagent turns requests into team tickets—a router accepts work, fixed members execute it, progress stays visible, and owner decisions arrive as option-based cards.**
+**Superagent turns requests into team tickets. A router accepts work, fixed members execute it, progress stays visible, and owner decisions arrive as option-based cards.**
 
-> **Version boundary: 0.8 is officially released.** From 0.8.1, npm `latest` installs 0.8, Superagent teams included; before it, `latest` was 0.7.0 and 0.8 was only on the opt-in `preview` tag. On an older install, check your version before assuming the capabilities below.
+> **Version boundary:** npm `latest` is 0.8.2 in the [published release record](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/5e550134ecf1dc55075bc905355e45440ee1219b/docs/release.md#082正式版已发布到-npm-的-latest-标签). Team features still depend on the host configuration. The checkout’s CLI can describe commands that are awaiting release, including device-code pairing and the profile dependency updates in #937.
 
 An open-source plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). The A2A foundation handles discovery, addressing, routing and receipts between sessions and hosts. **Superagent** adds requests, scoped tickets, fixed members and human decisions on top—not just messages between multiple chats.
 
-## Preview highlight: Superagent turns routing into a visible workflow
+## Superagent turns routing into a visible workflow
 
 ### Follow one request through the team
 
@@ -40,11 +40,11 @@ This is a workflow illustration, not a completed case study or a promise to acce
 - **External intake is opt-in.** A2A intake is controlled by the bot list and accept mode. GitHub Issue intake is off by default and requires owner-configured repositories and allowed users; this is not automatic monitoring of every issue.
 - **No silent expansion of authority.** Rule changes need human confirmation. Members cannot widen tickets, open sessions or directly dispatch to other teams; outbound team requests follow the configured approval flow.
 
-See the [released preview Superagent guide](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/0c4579c8af37805a5c9b67942eb05b12e3121fb4/src/skill/references/superagent.md) (tag `v0.8.1-preview.27`). Root teams are not presented on this page as a mature capability.
+See the [Superagent guide shipped with 0.8.2](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/5465acecb8312f5c38c2bf80fd82a9110df0879e/src/skill/references/superagent.md). Root teams are still marked in progress and are not represented here as a mature capability.
 
 ### How is this different from an ordinary canvas team?
 
-| Ordinary A2A collaboration | Superagent team (0.8 preview) |
+| Ordinary A2A collaboration | Superagent team |
 | --- | --- |
 | Which sessions are reachable, where does this message go, and has a receipt arrived? | Is this request accepted, who owns the ticket, where does it stand, and what needs a person’s decision? |
 | Discover routable teams; the caller organizes the work | The router accepts and assigns work, fixed members execute it, and reports and follow-ups remain attached to tickets |
@@ -58,7 +58,7 @@ See the [released preview Superagent guide](https://github.com/NelsonLongxiang/d
 
 ## Superagent, illustrated
 
-The following artwork is **original hand-drawn-style functional illustration with a simulated example—not a product UI capture, interface layout or evidence of completed work**. The illustrations explain the opt-in preview workflow.
+The following artwork is **original hand-drawn-style functional illustration with a simulated example—not a product UI capture, interface layout or evidence of completed work**. The illustrations explain the Superagent workflow.
 
 ![Original Superagent workflow illustration; simulated example, not a product UI](images/market/01-superagent-flow.png)
 
@@ -68,13 +68,7 @@ The following artwork is **original hand-drawn-style functional illustration wit
 
 ## Install and try one request
 
-**For the Superagent preview highlight described here, explicitly opt in:**
-
-```sh
-dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net@preview
-```
-
-For the 0.7.0 default release’s ordinary A2A network capabilities first:
+Install the stable release (npm `latest`) to use the Superagent workflow on a configured host:
 
 ```sh
 dsh plugin --profile web add @nelsonlongxiang/dsh-open-a2a-net
@@ -176,7 +170,7 @@ stays listed as an offline row until re-published), and receives into a mailbox 
 entries kept) instead of being woken:
 
 ```sh
-npm i -g @nelsonlongxiang/dsh-open-a2a-net@preview      # or pnpm add -g …; `latest` is still 0.7.0
+npm i -g @nelsonlongxiang/dsh-open-a2a-net            # install the stable CLI from npm latest
 a2a-net init review-seat --home http://127.0.0.1:3080   # identity + home host
 A2A_KEY=... a2a-net publish                              # deposit (key-gated host)
 a2a-net route dsh/1a2b3c4d "status?"                     # async by default; --sync waits for the reply
@@ -186,6 +180,15 @@ a2a-net inbox --new                                      # unread mail; --wait b
 From 0.6.38, `forwardDirect` defaults to `true`: after a local miss the home can forward an authenticated online CLI one hop to a linked peer target. Both operators must link: A links the receiving B member; B links the CLI handle and explicitly pins A as its home. For canvas targets A links only the owner host (#282 S3, same team authorizes; the owner host must run 0.6.37 or later): receipts are admitted and settle only from receivers frozen from the owner's signed card, on that owner's key. With scope and settlement enforcement on, the member-host auto-receipt settles A’s forwarded row and lands in the CLI inbox; `--sync` returns B’s reply, but on the forwarded path a synchronous wait has only a ~15s transport window and times out with `-32005` (delivered, not settled): the target still auto-receipts when it finishes, so reconcile by task id / `inbox` and do not resend blindly; for long work use the default async `route`, then `inbox --wait --renew`. Commands, flags, environment
 variables and exit codes: [`src/skill/references/cli.md`](src/skill/references/cli.md).
 
+
+| CLI family | Available in 0.8.2 |
+|---|---|
+| Delegate lifecycle | `user issue`, `import`, `list`, `revoke`, `nodes` |
+| Team control | `user teams`, `state`, `decisions`, `decide`, `request`, `answer`, `api` |
+| Node operations | `user node status`, `install`, `rollback`, `restart` |
+| Builder (read only) | `user builder inventory`, `list` |
+
+Device-code `user pair` (#939) and install/rollback profile-declaration synchronization (#937) are in the checkout, awaiting the next release. See the [CLI reference](src/skill/references/cli.md) for flags and the [release record](docs/release.md) for availability.
 
 ### Pi seats (a Pi agent as a superagent team member)
 
@@ -321,7 +324,11 @@ Set an `apiKey` before exposing the listener beyond loopback.
 | `GET /__dsh_a2a/superagent/models` | Unless `superagent: false`: the DSH model catalog for the team's settings (the page falls back to free text) |
 | `GET /__dsh_a2a/superagent/decisions/file` | Unless `superagent: false`: `?card=&sha256=&teamId=` downloads a file a card names (its proposer's, or one sent with the decision) while the file channel still holds it (24 h). Needs the GUI login on a host that has one. |
 | `GET`/`POST /__dsh_a2a/superagent/teams` | Unless `superagent: false`: this instance's teams; POST `{ canvas, router }` adds one. The list also has the teams linked instances advertise; POST `{ action: 'send', address, session, text }` sends one a request as that session (design M9). `teamId` in a POST body or `?teamId=` on a GET of `/__dsh_a2a/superagent` picks a team by id (design M3). |
-| `GET`/`POST /__dsh_a2a/owner-delegates` | The control API's user scope: owner delegates. GET lists them (never the token). POST `{ action: 'issue', name, days }` issues one and returns its token once (browser owner only); `{ action: 'revoke', id }` revokes one (browser owner or a delegate). A live delegate sent as `X-DSH-Owner-Delegate` next to the control key stands in for the browser owner on decision cards, rules and the other owner-only operations; each use is appended to `a2a/owner-delegates-audit.jsonl`. |
+| `GET`/`POST /__dsh_a2a/owner-delegates` | The control API's user scope: owner delegates. GET lists them (never the token). POST `{ action: 'issue', name, days }` issues one and returns its token once (browser owner only); `{ action: 'revoke', id }` revokes one (browser owner or a delegate). A live delegate sent as `X-DSH-Owner-Delegate` next to the control key stands in for the browser owner on decision cards, rules and the other owner-only operations; each use is appended to `a2a/owner-delegates-audit.jsonl`. #933: GET also lists terminal pairings waiting for the owner (no secret, no token); POST `{ action: 'pair-approve' | 'pair-deny', id }` allows or refuses one (the browser owner only; an owner delegate cannot), marking it allowed — the delegate is issued only when the terminal holding the pairing's secret collects it, its token answered once, so a pairing allowed but never collected (expired, or the node restarted) leaves no credential. |
+| `POST /__dsh_a2a/owner-delegates/pair` | #933 terminal pairing (`user pair`): `{ action: 'start', name, days }` answers a short code, a poll secret and a 10-minute expiry; `{ action: 'poll', id, secret }` answers waiting / approved (issued then, with the token, once) / retry (issuing failed; the pairing stays allowed) / denied / expired / not-found (an unknown id and a wrong secret answer alike). Outside the control route and credential-free by design; limited to 3 pairings waiting at once and a per-address start budget, and gated by the owner checking the code before allowing it on the team page. Answers are not cached. |
+| `GET /__dsh_a2a/user/sessions` | #951 S1, the user scope's session list: this node's live and joined sessions with joined, live, archived, role, status and queued inbox (`?team=` keeps one canvas team). Needs the control key plus the owner (a delegate in `X-DSH-Owner-Delegate`, or a browser login): only the key is 401, a bad delegate 403. Writes one audit line before it answers; an unwritable audit is 503. |
+| `GET /__dsh_a2a/user/session` | #951 S1: one page of a session's transcript, `?id=&before=&limit=&chars=` (entries carry their index; `before` pages backward, a `stale` page means the log changed; `chars` up to 4000). Same owner proof and audit as the list. |
+| `POST /__dsh_a2a/user/session/prompt` | #951 S1: `{ id, mode: 'steer'|'queue', text, request_id? }` puts a line into a live, joined seat under `[属主代输入 · <delegate> · mode]` with `source.kind` `a2a-owner-proxy`. Refusals write no audit line: id/mode/text 400, unknown 404, archived / not joined / not live 409, a reused request id with other content 409. An accepted one is audited (action, target, sizes, SHA-256; never the text) before delivery, body limit 100 000 bytes, text 8000 characters. |
 | `GET`/`POST /__dsh_a2a/node-ops` | Node operations of the user scope. GET answers this plugin's version, process id, start time, kept backups and the last operations. POST (browser owner or an owner delegate) `{ action: 'install', tgz, sha256, restart?, forceDeps? }` replaces this plugin's own package directory with the `npm pack` tarball (base64): the digest must match, the running package must sit under `node_modules`, a tarball whose `dependencies` differ is refused unless `forceDeps`, the package's `node_modules` moves across and the replaced directory is kept as a backup (newest three). `{ action: 'rollback', id?, restart? }` puts a backup back; `{ action: 'restart' }` asks this node's `dsh-simple-restart` route over loopback. Every operation is appended to `a2a/node-ops/log.jsonl`. |
 | `GET /__dsh_a2a/superagent/builder` | The user scope's view of this host's team builders (#903 S1, read-only; browser owner or an owner delegate). `?view=inventory` is the inventory a team builder sees: teams with their router and members by seat, roles, rule texts and revisions, sessions on no team and the newest staffing entries — never credentials, admission lists, MCP servers, tool grants, GitHub settings or file paths. `?view=builders` lists the builder sessions with how many of their blueprints await the owner. |
 | `GET`/`POST /__dsh_a2a/superagent/staffing` | Staffing changes (S1a): GET lists the ledger; POST `{ action: 'submit', change: { id, summary?, ops }, agree?: true }` or `{ action: 'agree', id }`, from the signed-in DSH interface only. Operations: `team.create`, `member.add` (with an optional profile), `team.rules.set` (scope team / dispatch / member:<seatId>); existing sessions only; a failure is undone in reverse. |
@@ -432,7 +439,7 @@ the envelope details.
 
 **Which artifact to build against.** npm direct install already includes the
 four subpaths: every npm release from 0.6.24 on carries them (there is no
-release between 0.5.15 and 0.6.24; `latest` is currently 0.7.0), so
+release between 0.5.15 and 0.6.24), so
 `npm install @nelsonlongxiang/dsh-open-a2a-net` works out of the box —
 see `examples/external-node/` for a runnable external-node example that
 exercises all four subpaths against an embedded mock peer. The subpath

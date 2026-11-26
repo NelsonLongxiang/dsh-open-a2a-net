@@ -23,7 +23,7 @@ import { ProgressReceipts } from './progress.ts'
 import { SplitBook } from './split.ts'
 import { progressState } from './progress.ts'
 import { TeamMcp } from './team-mcp.ts'
-import { credentialAccess, redactedPreview, type CredentialKind } from './credential-audit.ts'
+import { credentialVerdict, redactedPreview, type CredentialKind } from './credential-audit.ts'
 import { RosterReports } from './roster.ts'
 import { MemberExecutor, runOf, transientError, type MemberTurn, type PrepareRunner, type QueuedAssignment } from './executor.ts'
 import { PiEvents } from './pi-events.ts'
@@ -39,7 +39,7 @@ import { SettingsHistory } from './settings-history.ts'
 import { HealthReminders, HEALTH_TICK_MS, cleanName, type HealthProblem } from './health-reminders.ts'
 import { DecisionPush, PUSH_TICK_MS } from './decision-push.ts'
 import { QuestionGate, questionToken } from './question-gate.ts'
-import { DECISION_FILES_MAX, DecisionBook, decisionFiles, DECISION_NOTE_MAX, inputFor, needsInput, recommendedNeedsInput, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
+import { AUTO_ACK_TEXT, DECISION_FILES_MAX, DecisionBook, decisionFiles, DECISION_NOTE_MAX, inputFor, needsInput, recommendedNeedsInput, oneClick, parseDecision, resolveOption, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
@@ -225,7 +225,7 @@ export class SuperagentHost {
   /** #825 review: the request a credential card filed back, by trigger id, and the session its ticket must not go to. */
   private readonly credentialExclusions = new Map<string, string>()
   private readonly exclusionsPath: string
-  private readonly credentialHits: Array<{ at: string; session: string; role: string; tool: string; kinds: readonly CredentialKind[]; preview: string; card?: string }> = []
+  private readonly credentialHits: Array<{ at: string; session: string; role: string; tool: string; kinds: readonly CredentialKind[]; preview: string; card?: string; recordOnly?: true }> = []
   private readonly credentialCardAt = new Map<string, number>()
   /** docs/design/superagent-team-mcp.md M1–M3: the team's MCP servers, their tokens in this process's memory only. */
   readonly mcp: TeamMcp
@@ -1939,7 +1939,8 @@ export class SuperagentHost {
    */
   decide(id: string, how: unknown, option?: unknown, note?: unknown, files?: unknown): Record<string, unknown> {
     const card = this.decisionCards().find(row => row.id === id)
-    if (card === undefined) return { ok: false, code: 'stale', error: 'that decision is no longer waiting: it was decided, or its ticket moved on' }
+    // #934: say where a card that is no longer waiting went, instead of a bare refusal.
+    if (card === undefined) return this.staleDecision(id)
     // The owner's files, staged by the right bar like a request's (C8): reference lines, added below the decision.
     const parsedFiles = decisionFiles(files)
     if (!parsedFiles.ok) return parsedFiles
@@ -1953,9 +1954,11 @@ export class SuperagentHost {
       if (recommendedNeedsInput(card)) return { ok: false, code: 'needs-input', error: 'the recommended option needs you to fill something in: choose it and fill it in' }
       chosen = card.recommended
     } else if (how === 'choose') {
-      if (typeof option === 'string' && card.options.includes(option)) chosen = option
+      // #923: the option by its exact text, its id (o2) or its number (2).
+      const named = resolveOption(card.options, option)
+      if (named !== undefined) chosen = named
       else if (option === undefined || option === null || option === '') { if (words === '') return { ok: false, code: 'choice', error: 'choose an option, or write your decision' }; chosen = '' }
-      else return { ok: false, code: 'choice', error: 'that is not one of the options' }
+      else return { ok: false, code: 'choice', error: `that is not one of the options: give its text, its id (o1..o${String(card.options.length)}) or its number (1..${String(card.options.length)})` }
     } else return { ok: false, code: 'how', error: 'how must be approve or choose' }
     // #888 D3: an option that needs input is chosen only with it (the owner's own free-text decision, no option, stays open).
     const required = chosen === '' ? undefined : inputFor(card, chosen)
@@ -1967,11 +1970,15 @@ export class SuperagentHost {
     // The first line stays exactly 决定：<option>; readers of decided.text depend on it.
     const answer = [...(chosen !== '' ? [`决定：${chosen}`] : []), ...(words !== '' ? [`说明：${words}`] : []), ...attached.map(file => file.ref)].join('\n')
     const withFiles = attached.length > 0 ? { files: attached } : {}
+    // #935 review B1/B2: the option is recorded by its position, so readers never guess it back from the text, where a
+    // note or a words-only decision can look like another option.
+    const optionAt = chosen === '' ? -1 : card.options.indexOf(chosen)
+    const choice = optionAt >= 0 ? { option: optionAt } : {}
     const at = this.now()
     const { title: _title, ...stored } = card
     // A health reminder's decision is a dismissal: it opens no ticket and answers no question (reliability R7).
     if (card.source === 'health') {
-      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      this.decisions.decide(card.id, { at, text: answer, ...choice, ...withFiles }, stored)
       this.healthReminders.decided(card.id, chosen, Date.parse(at))
       // Owner ruling 2026-11-23 (ticket 4351d67f): on a credential-access card the owner's own choice acts. Only this
       // owner route reaches here; the timeout writes 「知道了」 without it, and an approver may decide outbound cards only.
@@ -1980,14 +1987,14 @@ export class SuperagentHost {
     }
     // Staffing changes (S1a): the team's confirmation of a change; the host's executor carries it out once all agree.
     if (card.source === 'staffing') {
-      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      this.decisions.decide(card.id, { at, text: answer, ...choice, ...withFiles }, stored)
       this.d.staffingDecided?.(card.by, this, chosen === STAFFING_CONFIRM)
       return { ok: true, confirmed: chosen === STAFFING_CONFIRM }
     }
     // Design M12: the owner takes, or not, one request from a sender the bot list does not hold.
     if (card.source === 'sender') {
       if (chosen === '') return { ok: false, code: 'choice', error: 'choose whether to take this request' }
-      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      this.decisions.decide(card.id, { at, text: answer, ...choice, ...withFiles }, stored)
       if (chosen === SENDER_DECLINE) { this.pass(); return { ok: true, taken: false } }
       const trigger = this.store.triggers.get(card.by)
       if (chosen === SENDER_TAKE_LIST && trigger !== undefined && !this.settingsValue.bots.a2a.includes(trigger.actor.id)) {
@@ -1999,7 +2006,7 @@ export class SuperagentHost {
     }
     // Design tool-requests T4: a tool request is applied to the team's grants, not ticketed.
     if (card.source === 'tool') {
-      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      this.decisions.decide(card.id, { at, text: answer, ...choice, ...withFiles }, stored)
       if (chosen.startsWith('批准')) this.grantTool(card.by)
       return { ok: true, granted: chosen.startsWith('批准') }
     }
@@ -2007,20 +2014,47 @@ export class SuperagentHost {
     if (card.source === 'outbound') {
       // Refuse before consuming the decision: re-enabling the Source can then approve this same card.
       if (chosen === OUTBOUND_APPROVE && (!this.settingsValue.sources.a2a || this.settingsValue.paused)) return { ok: false, code: 'a2a-off', error: '团队来源已停用或暂停；原卡仍待批准，没有发出。' }
-      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      this.decisions.decide(card.id, { at, text: answer, ...choice, ...withFiles }, stored)
       void this.outbound.decided(card.id, chosen === OUTBOUND_APPROVE, this.settingsValue.canvas ?? '', ticketId => this.store.tickets.get(ticketId)?.title).catch(error => this.d.logger.warn('superagent: approved outbound %s needs reconciliation: %s', card.id, String(error)))
       return { ok: true, approved: chosen === OUTBOUND_APPROVE }
     }
     if (card.ticketId !== undefined) {
-      const out = this.answer(card.ticketId, answer)
+      const out = this.attachAnswer(card.ticketId, answer)
       if (!out.ok) return out
-      this.decisions.decide(card.id, { at, text: answer, triggerId: out.triggerId, ...withFiles }, stored)
+      this.decisions.decide(card.id, { at, text: answer, ...choice, triggerId: out.triggerId, ...withFiles }, stored)
       return { ok: true, ticket_id: card.ticketId, trigger_id: out.triggerId }
     }
     const filed = this.request(`[决策卡]（${card.source === 'router' ? '总工' : '观察者'}提出）${card.question}\n${answer}`)
     if (!filed.ok) return { ok: false, code: 'refused', error: filed.error }
-    this.decisions.decide(card.id, { at, text: answer, triggerId: filed.triggerId, ...withFiles }, stored)
+    this.decisions.decide(card.id, { at, text: answer, ...choice, triggerId: filed.triggerId, ...withFiles }, stored)
     return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
+  }
+
+  /**
+   * #934: a card that is no longer waiting, and where it went: its decision (when, by whom, its first line), or the stage of
+   * the ticket it was asked on. Nothing changes; the answer only tells the decider what to look at instead.
+   */
+  private staleDecision(id: string): Record<string, unknown> {
+    const known = this.decisions.get(id)
+    const ticketId = known?.ticketId ?? known?.outbound?.ticketId
+    let now: Record<string, unknown> | undefined
+    let where = 'this host has no record of it'
+    if (known?.decided !== undefined) {
+      // #938 review B1: a credential card the host closed on its timeout carries autoAck and no decided.by. The autoAck record
+      // stays when the owner decides again, so the host is named only while the decision is still that auto-ack itself (same
+      // time, the host's fixed text); a later owner decision, even in the same millisecond, stays the owner's.
+      const hostAck = known.autoAck !== undefined && known.decided.at === known.autoAck.at && known.decided.text === AUTO_ACK_TEXT
+      const by = known.decided.by ?? (hostAck ? 'host' : 'owner')
+      const first = known.decided.text.split('\n')[0] ?? ''
+      now = { decided: { at: known.decided.at, by, text: first } }
+      where = `it was decided at ${known.decided.at}${by === 'owner' ? '' : ` by the ${by}`}: ${first}`
+    } else if (ticketId !== undefined) {
+      const ticket = this.store.tickets.get(ticketId)
+      const stage = ticket === undefined ? { stage: 'gone' } : ticket.ended !== undefined ? { stage: 'ended', outcome: ticket.ended.outcome } : { stage: this.ticket(ticketId)?.stage ?? null }
+      now = { ticket: { id: ticketId, ...stage } }
+      where = ticket === undefined ? `its ticket ${ticketId} is no longer on this host` : ticket.ended !== undefined ? `its ticket ${ticketId} ended (${String(ticket.ended.outcome)})` : `its ticket ${ticketId} moved on: the question it asked is no longer open`
+    }
+    return { ok: false, code: 'stale', error: `that decision is no longer waiting: ${where}`, ...(now !== undefined ? { now } : {}) }
   }
 
   /** Recent inferred candidates and what became of them, for improving the rules (design D13). */
@@ -2415,28 +2449,33 @@ export class SuperagentHost {
   /**
    * The credential-access audit (local market trial, 2026-11-11): a team session's tool call that touches credential
    * files, an Authorization header or another session's files is recorded — the kinds, the tool, a redacted preview,
-   * never what was read — and the owner gets a P1 card, at most one per session and kind every 10 minutes. It does not
-   * block: a team session's sandbox limits writes, not reads, and the boundary is the owner's to set.
+   * never what was read. #895 (owner ruling 2026-11-26): only a call that really reads, sends or copies a protected file,
+   * makes a request with an Authorization or x-api-key header, or reads another session's credential files also gives the
+   * owner a P1 card, at most one per session and kind every 10 minutes; a name that only appears in a search term, a
+   * description or a body is recorded and nothing more. It does not block: a team session's sandbox limits writes, not
+   * reads, and the boundary is the owner's to set.
+   * @returns the kinds recorded, whether or not a card was raised.
    */
   auditCall(session: string, role: string, tool: string, args: unknown): CredentialKind[] {
-    const kinds = credentialAccess(args)
+    const { kinds, card: cardKinds } = credentialVerdict(tool, args)
     if (kinds.length === 0) return kinds
     const at = this.now(), nowMs = Date.parse(at)
     const preview = redactedPreview(args)
-    const key = `${session}|${kinds.join(',')}`
+    const key = `${session}|${cardKinds.join(',')}`
     const last = this.credentialCardAt.get(key)
     let card: string | undefined
-    if (last === undefined || nowMs - last >= CREDENTIAL_CARD_GAP_MS) {
+    if (cardKinds.length > 0 && (last === undefined || nowMs - last >= CREDENTIAL_CARD_GAP_MS)) {
       this.credentialCardAt.set(key, nowMs)
       const who = this.displayName(session)
-      const what = kinds.map(kind => CREDENTIAL_KIND_TEXT[kind]).join('、')
+      const what = cardKinds.map(kind => CREDENTIAL_KIND_TEXT[kind]).join('、')
       const out = this.decisions.propose({ source: 'health', by: `credential:${session}`, question: `${who} 的 ${tool} 调用触及${what}（${at}）`, reason: `宿主只记录不拦截；命令预览（已遮蔽）：${preview}`, at,
         spec: { level: 'P1', options: ['知道了', CREDENTIAL_STOP, CREDENTIAL_BLOCK], recommended: '知道了' } })
       if (out.ok) card = out.id
     }
-    this.credentialHits.push({ at, session, role, tool, kinds, preview, ...(card !== undefined ? { card } : {}) })
+    this.credentialHits.push({ at, session, role, tool, kinds, preview, ...(card !== undefined ? { card } : {}), ...(cardKinds.length === 0 ? { recordOnly: true as const } : {}) })
     if (this.credentialHits.length > CREDENTIAL_HITS_KEPT) this.credentialHits.splice(0, this.credentialHits.length - CREDENTIAL_HITS_KEPT)
-    this.d.logger.warn('superagent: credential-access audit: %s (%s) %s touched %s', session, role, tool, kinds.join(','))
+    if (cardKinds.length > 0) this.d.logger.warn('superagent: credential-access audit: %s (%s) %s touched %s', session, role, tool, cardKinds.join(','))
+    else this.d.logger.info('superagent: credential-access audit (record only): %s (%s) %s mentioned %s', session, role, tool, kinds.join(','))
     return kinds
   }
 
@@ -2693,18 +2732,42 @@ export class SuperagentHost {
    * The owner answers a question on a ticket that did not start in the workbench: its requester is an agent, so nobody else
    * can (definition 找人: a question reaches a person). The answer is the owner's message on a new workbench Thread, routed
    * straight to the ticket as the router's attach does.
+   *
+   * #929 gap 1: a question that is a card with options names its card (`card`, `options`) when it needs input, and `option`
+   * answers it by the option's text, id (o2) or number (2) with the text as its words, exactly as deciding the card does; a
+   * ticket with no open question takes the owner's note for its holder instead of a refusal.
+   * @param option - an option of the ticket's question card, when the answer picks one.
    */
-  answer(ticketId: string, text: string): { ok: true; triggerId: string; thread: string } | { ok: false; code: string; error: string } {
+  answer(ticketId: string, text: string, option?: string): Record<string, unknown> {
     const body = text.trim()
-    if (body === '' || body.length > 20_000) return { ok: false, code: 'text', error: 'text is required, at most 20000 characters' }
+    if (body.length > 20_000) return { ok: false, code: 'text', error: 'text is at most 20000 characters' }
+    if (body === '' && (option === undefined || option === '')) return { ok: false, code: 'text', error: 'text is required, at most 20000 characters' }
     const ticket = this.store.tickets.get(ticketId)
     if (ticket === undefined || ticket.ended !== undefined) return { ok: false, code: 'ticket', error: 'no open ticket has that id' }
-    if (ticket.attention === undefined) return { ok: false, code: 'no-question', error: 'that ticket has no open question' }
-    // #888 D3: a question with an option that needs input is answered on the decision page, not in plain text here.
+    if (ticket.attention === undefined) {
+      if (option !== undefined && option !== '') return { ok: false, code: 'no-question', error: 'that ticket has no open question, so there is no option to answer; send the text alone to leave the holder a note' }
+      // #929: no question to answer, but the owner may still leave the holder a note (a new delivery, as an observer's note is).
+      try { this.engine.note(ticketId, `[属主留言] ${body}`) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
+      this.pass()
+      return { ok: true, noted: true, ticketId }
+    }
     const card = this.decisions.get(ticketCardId(ticket.id, ticket.attention.question))
-    if (card !== undefined && card.decided === undefined && needsInput(card)) return { ok: false, code: 'needs-input', error: '这个问题有需要填写的选项，请到决策页作答' }
+    const open = card !== undefined && card.decided === undefined ? card : undefined
+    if (option !== undefined && option !== '') {
+      if (open === undefined) return { ok: false, code: 'no-card', error: "that ticket's question is not a card with options; answer it with text alone" }
+      return { ...this.decide(open.id, 'choose', option, body === '' ? undefined : body), card: open.id }
+    }
+    // #888 D3: a question with an option that needs input is answered on the decision page, not in plain text here.
+    if (open !== undefined && needsInput(open)) return { ok: false, code: 'needs-input', card: open.id, options: open.options, error: `这个问题有需要填写的选项：用 user decide ${open.id} --option <选项文字|o2|2> --note <说明>（或 user answer … --option）作答，也可到决策页作答` }
+    return this.attachAnswer(ticketId, body)
+  }
+
+  /**
+   * The owner's words as a message on a new workbench Thread, attached to the ticket in one step so the router never gets it
+   * as a candidate. #929: deciding the ticket's question card calls this, not `answer`, which refuses an unfilled card.
+   */
+  private attachAnswer(ticketId: string, body: string): { ok: true; triggerId: string; thread: string } | { ok: false; code: string; error: string } {
     const trigger = this.workbenchTrigger(body)
-    // Received and attached in one step, so the router never gets it as a candidate.
     try { this.engine.receive(trigger); this.engine.attach(ticketId, trigger.id) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
     this.pass()
     return { ok: true, triggerId: trigger.id, thread: trigger.threads[0]!.id }
@@ -2722,6 +2785,30 @@ export class SuperagentHost {
       this.pass()
       return { ok: true, result, triggerId: trigger.id, thread: trigger.threads[0]!.id }
     } catch (error) { return { ok: false, error: String(error) } }
+  }
+
+  /**
+   * #929 gap 2: where a request went. `request` hands back a trigger id and a thread and nothing about what became of it; this
+   * answers from the store: the tickets that message started or reached, each with its stage and what it last reported, or that
+   * the router has not judged it yet, that the Source's scope filter turned it away, or that it was judged and no ticket came of it. Read only: it changes nothing and says
+   * nothing a team state read would not (a report summary is cut to 500 characters).
+   * @param triggerId - the id `request` returned (wb-…).
+   * @returns the request's standing, or a refusal when the id is not a workbench trigger or no request has it.
+   */
+  requestStatus(triggerId: string): Record<string, unknown> {
+    if (!/^wb-[0-9a-f-]{36}$/.test(triggerId)) return { ok: false, code: 'trigger', error: 'trigger must be the id a request returned (wb-…)' }
+    if (this.store.triggers.get(triggerId) === undefined) return { ok: false, code: 'unknown', error: 'no request on this team has that trigger id' }
+    const disposition = this.store.triggers.disposition(triggerId)
+    const tickets = this.store.tickets.list()
+      .filter(ticket => ticket.origin.triggerId === triggerId || ticket.origin.triggerIds.includes(triggerId) || ticket.inputs.some(input => input.kind === 'trigger' && input.triggerId === triggerId))
+      .map(ticket => {
+        const report = ticket.assignments.findLast(assignment => assignment.report)?.report
+        const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
+        return { id: ticket.id, title: ticket.title, stage, ...(report !== undefined ? { report: { state: report.state, summary: clip(report.summary, 500), at: report.at } } : {}), ...(ticket.attention !== undefined && ticket.ended === undefined ? { asking: true } : {}) }
+      })
+    // ticketed: it started or reached a ticket; filtered: the Source's scope filter turned it away; no-ticket: the router decided and no ticket came of it; pending: nobody has decided yet
+    const status = tickets.length > 0 ? 'ticketed' : disposition?.filtered !== undefined ? 'filtered' : disposition?.decisionId !== undefined ? 'no-ticket' : 'pending'
+    return { ok: true, triggerId, status, tickets }
   }
 
   private workbenchTrigger(body: string, thread?: string, via?: WorkbenchVia): Trigger {

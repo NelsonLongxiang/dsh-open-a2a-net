@@ -13,7 +13,8 @@ import { parseFileRef } from '../../blob-store.ts'
 
 export type DecisionLevel = 'P0' | 'P1' | 'P2' | 'P3'
 const LEVELS: readonly string[] = ['P0', 'P1', 'P2', 'P3']
-const OPTIONS_MIN = 2, OPTIONS_MAX = 6, OPTION_MAX = 300, QUESTION_MAX = 2_000
+// #923: options up to 1,000 characters (13080 hit 300); the market push cuts them to its own v1 limit.
+const OPTIONS_MIN = 2, OPTIONS_MAX = 6, OPTION_MAX = 1_000, QUESTION_MAX = 2_000
 /** How many cards one proposer may have open at once: it acts on its own judgement, and a loop must not bury the owner. */
 export const OPEN_CARDS_MAX = 10
 /** How long a decided card is kept, and how many at most: the record of what was decided, not an archive. */
@@ -87,7 +88,7 @@ export interface StoredCard extends DecisionSpec {
   /** Files the proposer put on the card (C8). */
   readonly files?: readonly DecisionFile[]
   /** `by: 'host'` only on the host's automatic decision (#888 D5); the owner's own decision never carries it. */
-  readonly decided?: { readonly at: string; readonly text: string; readonly triggerId?: string; readonly files?: readonly DecisionFile[]; readonly by?: 'host' }
+  readonly decided?: { readonly at: string; readonly text: string; readonly triggerId?: string; readonly files?: readonly DecisionFile[]; readonly by?: 'host'; /** #935 review: the chosen option's position in `options`, recorded when an option was chosen (absent for words only, and on older records). */ readonly option?: number }
   /** The host closed this card as 「知道了」 on a timeout (owner 2026-11-23): the audit record; it stays when the owner decides again. */
   readonly autoAck?: { readonly at: string; readonly by: 'host'; readonly rule: 'credential-ack-timeout'; readonly minutes: number }
   /**
@@ -124,6 +125,34 @@ export function parseDecision(raw: { options?: unknown; recommended?: unknown; l
   const inputs = parseInputs(raw.inputs, options)
   if (!inputs.ok) return inputs.error
   return { level: (LEVELS.includes(String(raw.level)) ? raw.level : 'P1') as DecisionLevel, options, recommended, ...(inputs.inputs !== undefined ? { inputs: inputs.inputs } : {}) }
+}
+
+/** #923: an option's stable id on its card: its position, o1..o6 (a card's options never change once it is raised). */
+export const optionId = (index: number): string => `o${String(index + 1)}`
+
+/**
+ * #923: the option a decider means: the option's exact text first, then its id (`o2`), then its 1-based number (`2`).
+ * @param options - the card's options.
+ * @param value - what the decider sent.
+ * @returns the option's text, or undefined when it names none.
+ */
+export function resolveOption(options: readonly string[], value: unknown): string | undefined {
+  if (typeof value === 'number') return Number.isInteger(value) && value >= 1 ? options[value - 1] : undefined
+  if (typeof value !== 'string') return undefined
+  if (options.includes(value)) return value
+  const text = value.trim()
+  if (options.includes(text)) return text
+  const m = /^o?(\d{1,2})$/i.exec(text)
+  if (m === null) return undefined
+  const n = Number(m[1])
+  return n >= 1 ? options[n - 1] : undefined
+}
+
+/** #923: what a listing adds to a card so a decider can name an option by id: the ids, and the recommendation's. */
+export function optionIds(card: { readonly options?: readonly string[]; readonly recommended?: string }): { optionIds: string[]; recommendedId?: string } {
+  const options = card.options ?? []
+  const at = card.recommended !== undefined && card.recommended !== '' ? options.indexOf(card.recommended) : -1
+  return { optionIds: options.map((_, index) => optionId(index)), ...(at >= 0 ? { recommendedId: optionId(at) } : {}) }
 }
 
 /** The stable id of a member's question on a ticket: a new question is a new card. */
@@ -225,7 +254,7 @@ export class DecisionBook {
   autoApproveDecide(id: string): boolean {
     const card = this.cards.find(c => c.id === id && c.decided === undefined && c.autoApproved !== undefined)
     if (card === undefined) return false
-    this.cards = this.cards.map(c => c.id === id ? { ...c, decided: { at: card.autoApproved!.at, text: autoApprovedText(card.recommended), by: 'host' } } : c)
+    this.cards = this.cards.map(c => c.id === id ? { ...c, decided: { at: card.autoApproved!.at, text: autoApprovedText(card.recommended), by: 'host', ...(card.options.indexOf(card.recommended) >= 0 ? { option: card.options.indexOf(card.recommended) } : {}) } } : c)
     this.save()
     this.changed('decided', this.get(id))
     return true

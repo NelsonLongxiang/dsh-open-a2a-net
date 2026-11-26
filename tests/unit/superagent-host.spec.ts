@@ -1135,7 +1135,10 @@ describe('spec audit: follow-ups, the owner answering, the terminal', () => {
     h.pass()
     const accepted = routeItem(h, { trigger_id: '1', kind: 'accept', title: 'bump', scope: 's', reason: 'r', rules: ['deps'] }) as { ticket_id: string }
     await vi.waitFor(() => { expect(sent.some(([id, t]) => id === 'session-m' && t.startsWith('[superagent assignment]'))).toBe(true) })
-    expect(h.answer(accepted.ticket_id, '用 CSV')).toMatchObject({ ok: false, code: 'no-question' })
+    // #929: no open question is no longer a refusal: the owner's text is a note for the holder, an option has nothing to pick.
+    expect(h.answer(accepted.ticket_id, '先用 CSV 试')).toMatchObject({ ok: true, noted: true })
+    await vi.waitFor(() => { expect(sent.some(([id, t]) => id === 'session-m' && t.includes('[属主留言] 先用 CSV 试'))).toBe(true) })
+    expect(h.answer(accepted.ticket_id, '', '乙')).toMatchObject({ ok: false, code: 'no-question' })
     expect(h.report('session-m', { state: 'waiting', summary: '要问', question: '用哪种格式？' }, accepted.ticket_id)).toMatchObject({ ok: true })
     const answered = h.answer(accepted.ticket_id, '用 CSV') as { triggerId: string }
     expect(answered).toMatchObject({ ok: true })

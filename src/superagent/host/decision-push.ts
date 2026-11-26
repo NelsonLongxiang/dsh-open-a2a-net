@@ -50,12 +50,17 @@ export const marketClean = (text: string): string => text.replace(/[\u0000-\u000
  */
 export function decisionCardText(event: PushEvent, rev: number, team: string, card: StoredCard): { ok: true; text: string } | { ok: false; why: string } {
   if (!PUSH_ID.test(card.id)) return { ok: false, why: 'card id outside the market\'s id rule' }
-  const options = card.options ?? []
+  // #923: a card's options may be longer than the market's v1 limit; they go cut to it, and the recommendation and the
+  // decision are mapped by position, so the cut texts still match.
+  const raw = card.options ?? []
+  const options = raw.map(option => cut(option, PUSH_OPTION_MAX))
   const seen = options.map(marketClean)
   if (options.length < 2 || options.length > 6 || new Set(seen).size !== seen.length) return { ok: false, why: 'options must be 2..6 and distinct' }
   if (seen.some(option => option === '' || option.length > PUSH_OPTION_MAX)) return { ok: false, why: 'an option is empty or longer than 300 characters' }
-  const recommended = card.recommended ?? ''
-  if (!seen.includes(marketClean(recommended))) return { ok: false, why: 'the recommended option is not one of the options' }
+  // Compared as the market cleans them, like the options (#766): a direction control never hides the recommendation.
+  const recommendedAt = raw.map(marketClean).indexOf(marketClean(card.recommended ?? ''))
+  if (recommendedAt < 0) return { ok: false, why: 'the recommended option is not one of the options' }
+  const recommended = options[recommendedAt]
   const level = card.level ?? 'P1'
   if (!(PUSH_LEVELS as readonly string[]).includes(level)) return { ok: false, why: 'level outside P0..P3' }
   if (marketClean(card.question) === '' || card.question.length > PUSH_QUESTION_MAX) return { ok: false, why: 'question empty or longer than 2000 characters' }
@@ -73,7 +78,7 @@ export function decisionCardText(event: PushEvent, rev: number, team: string, ca
       recommended, ...(card.reason !== undefined ? { reason: cut(card.reason, PUSH_REASON_MAX) } : {}),
       files: files.map(f => ({ name: cut(f.name, PUSH_FILE_NAME_MAX), size: f.size, sha256: f.sha256 })), created_at: card.at,
       // A decision in words only (no option chosen) is null: the market takes null or one of the options, never ''.
-      ...(event === 'decided' && card.decided !== undefined ? { decided_at: card.decided.at, decided_option: decidedOption(card.decided.text, options) || null } : {}),
+      ...(event === 'decided' && card.decided !== undefined ? { decided_at: card.decided.at, decided_option: (typeof card.decided.option === 'number' && Number.isInteger(card.decided.option) ? options[card.decided.option] : options[raw.indexOf(decidedOption(card.decided.text, raw))]) ?? null } : {}),
     },
   }
   const text = `${DECISION_CARD_HEADER}\n${JSON.stringify(body)}`
@@ -81,11 +86,19 @@ export function decisionCardText(event: PushEvent, rev: number, team: string, ca
   return { ok: true, text }
 }
 
-/** The option a decision chose, read from its stored text (`决定：<option>`); empty when it was words only. */
+/**
+ * The option an older decision chose, read from its stored text, for records made before the host recorded the option's
+ * position (`decided.option`). Only a text that begins with `决定：` names an option — words only begin with `说明：` and
+ * may mention anything. An option may hold line breaks, so whole options are matched, each ending at the end of the text
+ * or at a line break; when more than one fits (a note can read like a longer option), the answer is empty rather than a
+ * guess (#935 review B1/B2).
+ * @returns the option, or empty.
+ */
 export function decidedOption(text: string, options: readonly string[]): string {
-  const line = text.split('\n').find(l => l.startsWith('决定：'))
-  const chosen = line === undefined ? '' : line.slice('决定：'.length).trim()
-  return options.includes(chosen) ? chosen : ''
+  if (!text.startsWith('决定：')) return ''
+  const rest = text.slice('决定：'.length)
+  const fits = options.filter(option => rest === option || rest.startsWith(`${option}\n`))
+  return fits.length === 1 ? fits[0]! : ''
 }
 
 /**
