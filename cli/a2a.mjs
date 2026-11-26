@@ -56,7 +56,7 @@ CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) 
 文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR] · file grants · file revoke <sha256> <to>   (#91: bytes never ride a message)
 superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
 user:     user issue [--name N] [--days D] [--dsh-home DIR] · user import --token-file F · user pair [--name N] [--days D] · user list · user revoke <id> · user nodes
-          · user teams · user state --team ID · user decisions · user decide <card id> (--approve | --option O) [--note T]
+          · user teams · user state --team ID · user decisions · user decide <card id> (--approve | --option TEXT|o2|2) [--note T]
           · user request --team ID <text…> · user answer --team ID <ticket id> <text…> · user api <GET|POST> <path> [--data JSON|@file]
           · user node status [--all] · user node install <tgz> [--restart] [--force-deps] · user node rollback [backup id] [--restart] · user node restart
           · user builder inventory [--all] · user builder list [--all]   (the team builders, read-only)
@@ -773,7 +773,7 @@ async function cmdTicket() {
     if (question !== undefined) {
       const options = (flag('--options') ?? '').split('|').map(o => o.trim()).filter(o => o !== '')
       const recommended = flag('--recommended')?.trim(), level = flag('--level')
-      if (options.length < 2 || options.length > 6 || options.some(o => o.length > 300) || new Set(options).size !== options.length) usage('ticket report: --question needs --options A|B|… (2 to 6 different options, each at most 300 characters)')
+      if (options.length < 2 || options.length > 6 || options.some(o => o.length > 1000) || new Set(options).size !== options.length) usage('ticket report: --question needs --options A|B|… (2 to 6 different options, each at most 1000 characters)')
       if (recommended === undefined || !options.includes(recommended)) usage('ticket report: --question needs --recommended, one of the --options copied exactly')
       if (level !== undefined && !['P0', 'P1', 'P2', 'P3'].includes(level)) usage('ticket report: --level is P0, P1, P2 or P3')
       if (question.length > 2000) usage('ticket report: a question is at most 2000 characters')
@@ -1042,10 +1042,10 @@ async function cmdUser() {
   if (sub === 'teams') { printOut(await userCall('GET', '/__dsh_a2a/superagent/teams'), out => { for (const t of out.teams ?? []) console.log(`${String(t.id || '(primary)').padEnd(24)} ${String(t.address ?? '')}  ${t.open ? 'open' : 'closed'}`) }); return }
   const team = flag('--team')
   if (sub === 'state') { printOut(await userCall('GET', `/__dsh_a2a/superagent${team !== undefined ? `?teamId=${encodeURIComponent(team)}` : ''}`), out => { for (const t of out.tickets ?? []) if (!t.ended) console.log(`${String(t.id)}  ${String(t.stage?.stage ?? '?')}${t.attention ? ' [question]' : ''}  ${String(t.title)}`) }); return }
-  if (sub === 'decisions') { printOut(await userCall('GET', '/__dsh_a2a/superagent/decisions'), out => { for (const c of out.decisions ?? []) console.log(`${String(c.id)}  ${String(c.level)}  [${String(c.team ?? '')}] ${String(c.question)}\n    options: ${(c.options ?? []).join(' | ')}  recommended: ${String(c.recommended ?? '')}`) }); return }
+  if (sub === 'decisions') { printOut(await userCall('GET', '/__dsh_a2a/superagent/decisions'), out => { for (const c of out.decisions ?? []) console.log(`${String(c.id)}  ${String(c.level)}  [${String(c.team ?? '')}] ${String(c.question)}${(c.options ?? []).map((o, i) => `\n    ${i + 1}) ${String(o)}`).join('')}\n    recommended: ${c.recommendedId !== undefined ? `${String(c.recommendedId).slice(1)}) ` : ''}${String(c.recommended ?? '')}`) }); return }
   if (sub === 'decide') {
     const [id] = words
-    if (id === undefined || (!has('--approve') && flag('--option') === undefined && flag('--note') === undefined)) usage('usage: a2a user decide <card id> (--approve | --option O) [--note T]')
+    if (id === undefined || (!has('--approve') && flag('--option') === undefined && flag('--note') === undefined)) usage('usage: a2a user decide <card id> (--approve | --option TEXT|o2|2) [--note T]')
     const cards = (await userCall('GET', '/__dsh_a2a/superagent/decisions')).decisions ?? []
     const card = cards.find(c => c.id === id)
     if (card === undefined) die(`[user] no waiting decision ${id}`)

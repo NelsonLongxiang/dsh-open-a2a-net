@@ -5,8 +5,10 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/faces/superagent
  */
 import { CLI_HANDLE_RE } from '../cli-deposit.ts'
-import { needsInput, recommendedNeedsInput } from '../superagent/host/decisions.ts'
+import { optionIds, needsInput, recommendedNeedsInput } from '../superagent/host/decisions.ts'
 /** #888 D4: the two derived input flags the decision pages read; never stored with the card. */
+// #923: each listed card carries its options' ids and the recommendation's, for deciding by id.
+const optionIdFlags = (card: Record<string, unknown>): ReturnType<typeof optionIds> => optionIds(card as never)
 const inputFlags = (card: Record<string, unknown>): { needsInput: boolean; recommendedNeedsInput: boolean } => ({ needsInput: needsInput(card as never), recommendedNeedsInput: recommendedNeedsInput(card as never) })
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -281,7 +283,7 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
       handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
         const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
         // Each card names its team's canvas address: the right bar stages the owner's files to it (C8).
-        if (req.method === 'GET') { send(200, { decisions: superagentTeams.decisionCards().map(card => ({ ...card, ...inputFlags(card), ...(typeof card.team === 'string' && card.team !== '' ? { address: `${config.team}/canvas/${card.team}` } : {}) })), health: superagentTeams.health() }); return }
+        if (req.method === 'GET') { send(200, { decisions: superagentTeams.decisionCards().map(card => ({ ...card, ...inputFlags(card), ...optionIdFlags(card), ...(typeof card.team === 'string' && card.team !== '' ? { address: `${config.team}/canvas/${card.team}` } : {}) })), health: superagentTeams.health() }); return }
         readJsonBody(req, res, (body) => {
           const fields = body as { teamId?: unknown; id?: unknown; how?: unknown; option?: unknown; note?: unknown; files?: unknown }
           const team = superagentTeams.get(typeof fields.teamId === 'string' ? fields.teamId : undefined)
@@ -409,8 +411,9 @@ export function registerOwnerDelegateFaces(webServer: WebServer, d: Pick<Superag
     // only, so a remote node's owner can hand its agent a delegate without a shell on that node.
     const read = (path: string): string | undefined => { try { return readFileSync(path, 'utf8') } catch { return undefined } }
     const write = (path: string, text: string): void => { const tmp = `${path}.${process.pid}.tmp`; writeFileSync(tmp, text, { encoding: 'utf8', mode: 0o600 }); renameSync(tmp, path) }
-    // #933: terminal pairing (owner-pairing.ts). The owner allows a pairing on this page; the delegate is issued then and its
-    // token handed once to the terminal holding the pairing's secret. A delegate approved but never collected is revoked.
+    // #933: terminal pairing (owner-pairing.ts). The owner allows a pairing on this page, which only marks it; the delegate is
+    // issued when the terminal holding the pairing's secret collects it, its token answered once, so a pairing allowed but
+    // never collected (it expired, or the node restarted) leaves no credential behind.
     const pairings = new OwnerPairings()
     const issueFor = (name: string, days: number): { token: string; id: string } => {
       const out = issueOwnerDelegate(delegatesPath, name, days, { read, write, random: () => ({ token: `dshod_${randomBytes(32).toString('base64url')}`, id: randomUUID() }), now: () => new Date() })

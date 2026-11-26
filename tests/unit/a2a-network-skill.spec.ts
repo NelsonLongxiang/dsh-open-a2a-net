@@ -85,3 +85,17 @@ it('runs the real package-copy entry and resolves modified skill local navigatio
   }
   expect(localLinks).toBeGreaterThan(12)
 })
+
+it('documents the observer card group and node-operation declaration sync', () => {
+  for (const name of ['a2a_card_cast', 'a2a_card_queue', 'observerCast', 'observerCardDraft', 'castOff', 'member-off', '待投卡', 'insert', 'queue', 'trigger', 'release']) expect(detail).toContain(name)
+  for (const name of ['#936', '#937', 'deps-changed', 'declaration.drift', '--force-deps', 'user node status', 'user node rollback']) expect(cli).toContain(name)
+})
+
+it('limits the casting and declaration promises the code actually keeps (#944 review B1-B3)', () => {
+  for (const clause of ['not a guarantee', 'notWithdrawn', 'releasesSaved', '`trigger` always wakes', 'one trigger per 30 minutes', '`queue` never wakes', '5 minutes to 7 days ahead']) expect(detail).toContain(clause)
+  expect(detail).not.toContain('one wake per 15 minutes. Record')
+  expect(detail).not.toContain('armed releases are withdrawn, and')
+  expect(cli).toContain('every other line stays byte for byte')
+  expect(cli).toContain('other whitespace and layout are not promised')
+  expect(cli).not.toContain('Both profile files are written all or nothing; any other line stays byte for byte')
+})
