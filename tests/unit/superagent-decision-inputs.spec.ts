@@ -170,6 +170,28 @@ describe('D3: an option that needs input is chosen only with it', () => {
     expect(m.h.decisions.get(refused.card!)!.decided!.text).toContain('说明：因为乙更稳')
     await m.h.stop()
   })
+  it('#929 owner repro: on a question card where one option needs input, every option can be chosen in the user scope', async () => {
+    // One team per scenario: the helper binds the member to one ticket at a time.
+    const ask = async () => {
+      const m = await team()
+      const ticket = await m.openTicket()
+      expect(await m.call('a2a_ticket_report', 'session-m', { ticket_id: ticket, state: 'waiting', summary: 's', question: '要哪个？', ...base, inputs: { 乙: { kind: 'text', prompt: 'p' } } })).toMatchObject({ ok: true })
+      return { m, ticket, card: (m.h.answer(ticket, 'x') as { card: string }).card }
+    }
+    // The option that needs no input: before #929 deciding the card failed with the decision-page refusal all the same.
+    const a = await ask()
+    expect(a.m.h.decide(a.card, 'choose', '甲')).toMatchObject({ ok: true, ticket_id: a.ticket })
+    expect(a.m.h.decisions.get(a.card)!.decided!.text).toContain('决定：甲')
+    await a.m.h.stop()
+    // The option that needs words, by user decide (the words as the note) ...
+    const b = await ask()
+    expect(b.m.h.decide(b.card, 'choose', '乙', '改两处')).toMatchObject({ ok: true, ticket_id: b.ticket })
+    await b.m.h.stop()
+    // ... and by user answer --option.
+    const c = await ask()
+    expect(c.m.h.answer(c.ticket, '', '甲')).toMatchObject({ ok: true, card: c.card })
+    await c.m.h.stop()
+  })
 })
 
 describe('D2: remote members, Pi or DSH', () => {
