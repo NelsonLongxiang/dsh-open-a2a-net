@@ -341,6 +341,9 @@ describe('superagent engine in the a2a host', () => {
       const again = await m.tool('superagent_route', m.R, { items: [{ trigger_id: trigger, kind: 'accept', title: 'again', scope: 'y', reason: 'z' }] })
       expect(again.results[0].ticket_id ?? ticketId).toBe(ticketId)
       expect((await m.state()).tickets).toHaveLength(1)
+      // #929 gap 2: the owner can ask where the request went (the same endpoint `user request status` uses)
+      expect(await m.sa({ action: 'request-status', trigger_id: asked.triggerId })).toMatchObject({ ok: true, triggerId: asked.triggerId, status: 'ticketed', tickets: [{ id: ticketId, title: '节点列表搜索框' }] })
+      expect(await m.sa({ action: 'request-status', trigger_id: 'not-a-trigger' })).toMatchObject({ ok: false, code: 'trigger' })
 
       // 4) The owner's follow-up on that Thread goes to the ticket (Subscription fan-out), not to a new Eval.
       const before = m.R.steered.length
@@ -350,12 +353,16 @@ describe('superagent engine in the a2a host', () => {
       expect(s.tickets[0].inputs.some((i: any) => i.kind === 'trigger' && i.triggerId === follow.triggerId)).toBe(true)
       await new Promise(r => setTimeout(r, 100))
       expect(m.R.steered.length).toBe(before)
+      expect(await m.sa({ action: 'request-status', trigger_id: follow.triggerId })).toMatchObject({ ok: true, status: 'ticketed', tickets: [{ id: ticketId }] })
 
       // 5) A second request: the router ignores it, with a reason; no ticket.
       const chat = await m.sa({ action: 'request', text: '今天天气怎么样' })
       await vi.waitFor(() => { expect(m.R.steered.some(t => t.includes(chat.triggerId))).toBe(true) }, { timeout: 8000 })
       expect(await m.tool('superagent_route', m.R, { items: [{ trigger_id: chat.triggerId, kind: 'ignore', reason: '闲聊，不是工作请求' }] })).toMatchObject({ ok: true, results: [{ decision: 'ignore' }] })
       expect((await m.state()).tickets).toHaveLength(1)
+
+      // #929 gap 2: a request the router ignored is judged, with no ticket
+      expect(await m.sa({ action: 'request-status', trigger_id: chat.triggerId })).toMatchObject({ ok: true, status: 'no-ticket', tickets: [] })
 
       // 6) The router takes no A2A work and sends none — by handle or session id — and sits in no other canvas (v5 R3), so no
       // canvas route can reach it either.

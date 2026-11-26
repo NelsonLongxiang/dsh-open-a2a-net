@@ -290,10 +290,10 @@ export class NodeOps {
         const file = join(stage, 'package.tgz')
         writeFileSync(file, tgz)
         // #898 review: look before unpacking — paths and entry types — and again after, on the tree itself.
-        const list = (flags: string): string[] => execFileSync('tar', [flags, 'package.tgz'], { cwd: stage, encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }).split(/\r?\n/).filter(line => line !== '')
+        const list = (flags: string): string[] => execFileSync('tar', [flags, 'package.tgz'], { cwd: stage, windowsHide: true, encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }).split(/\r?\n/).filter(line => line !== '')
         const listed = tarballListingRefusal(list('-tzf'), list('-tvzf'))
         if (listed !== undefined) return { ok: false, code: 'tarball', error: listed }
-        execFileSync('tar', ['-xzf', 'package.tgz'], { cwd: stage, stdio: 'ignore', timeout: 60_000 })
+        execFileSync('tar', ['-xzf', 'package.tgz'], { cwd: stage, windowsHide: true, stdio: 'ignore', timeout: 60_000 })
         const entries = readdirSync(stage).filter(name => name !== 'package.tgz')
         if (entries.length !== 1 || entries[0] !== 'package') return { ok: false, code: 'tarball', error: 'the tarball must hold exactly one package/ directory' }
         const next = join(stage, 'package')
