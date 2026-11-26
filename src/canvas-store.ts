@@ -130,7 +130,7 @@ export class CanvasStore {
   private requesters: Record<string, string[]> = {}
   private seatKeys: Record<string, string> = {}
   /** #953: display labels by team name; the name stays the address. */
-  private labels: Record<string, string> = {}
+  private labels = new Map<string, string>()
   private disk: string | undefined
   private readOnlyReason = ''
   private lastWriteError = ''
@@ -262,18 +262,18 @@ export class CanvasStore {
     }
   }
 
-  /** Pi platform P2: pinned seat keys of CLI handles that are still members somewhere; anything else is dropped. */
   /** #953: a label survives a restart only for a team that exists and only if it still passes the label rules. */
   private restoreLabels(snapshot: Partial<CanvasSnapshot>): void {
-    this.labels = {}
+    this.labels.clear()
     const raw = snapshot.labels
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return
     for (const [name, label] of Object.entries(raw)) {
       const clean = parseDisplayLabel(label)
-      if (clean !== undefined && this.teams.some(t => t.name === name)) this.labels[name] = clean
+      if (clean !== undefined && this.hasTeam(name)) this.labels.set(name, clean)
     }
   }
 
+  /** Pi platform P2: pinned seat keys of CLI handles that are still members somewhere; anything else is dropped. */
   private restoreSeatKeys(snapshot: Partial<CanvasSnapshot>): void {
     this.seatKeys = {}
     const raw = snapshot.seatKeys
@@ -304,7 +304,7 @@ export class CanvasStore {
       this.children = Object.fromEntries(Object.entries(previous.children ?? {}).map(([name, list]) => [name, list.map(c => ({ ...c }))]))
       this.requesters = Object.fromEntries(Object.entries(previous.requesters ?? {}).map(([name, list]) => [name, [...list]]))
       this.seatKeys = { ...previous.seatKeys }
-      this.labels = { ...previous.labels }
+      this.labels = new Map(Object.entries(previous.labels ?? {}))
       this.revision = previous.revision ?? 0
       throw error
     }
@@ -314,7 +314,7 @@ export class CanvasStore {
   }
 
   private serialize(): string {
-    return JSON.stringify({ teams: this.teams, memberOwners: this.memberOwners, suspendedMembers: this.suspended, cliHome: this.cliHome, cliHomeCleared: [...this.cliHomeCleared], roots: [...this.roots], children: this.children, requesters: this.requesters, seatKeys: this.seatKeys, labels: this.labels, revision: this.revision })
+    return JSON.stringify({ teams: this.teams, memberOwners: this.memberOwners, suspendedMembers: this.suspended, cliHome: this.cliHome, cliHomeCleared: [...this.cliHomeCleared], roots: [...this.roots], children: this.children, requesters: this.requesters, seatKeys: this.seatKeys, labels: Object.fromEntries(this.labels), revision: this.revision })
   }
   private write(): void {
     if (this.readOnlyReason) throw Error(this.readOnlyReason)
@@ -329,7 +329,7 @@ export class CanvasStore {
       ...(Object.keys(this.children).length ? { children: Object.fromEntries(Object.entries(this.children).map(([name, list]) => [name, list.map(c => ({ ...c }))])) } : {}),
       ...(Object.keys(this.requesters).length ? { requesters: Object.fromEntries(Object.entries(this.requesters).map(([name, list]) => [name, [...list]])) } : {}),
       ...(Object.keys(this.seatKeys).length ? { seatKeys: { ...this.seatKeys } } : {}),
-      ...(Object.keys(this.labels).length ? { labels: { ...this.labels } } : {}) }
+      ...(this.labels.size > 0 ? { labels: Object.fromEntries(this.labels) } : {}) }
     const bytes = JSON.stringify(snapshot)
     if (this.path !== '') {
       mkdirSync(dirname(this.path), { recursive: true })
@@ -556,18 +556,18 @@ export class CanvasStore {
     if (index < 0) return false
     if (this.suspended.some(r => r.team === name)) return false
     const [removed] = this.teams.splice(index, 1)
-    const requesters = this.requesters[name] ?? []
+    const requesters = Object.hasOwn(this.requesters, name) ? this.requesters[name]! : []
     delete this.requesters[name]
     for (const id of [...removed!.members, ...requesters]) this.forgetUnusedHome(id)
     this.roots.delete(name)
     Reflect.deleteProperty(this.children, name)
-    Reflect.deleteProperty(this.labels, name)
+    this.labels.delete(name)
     this.persist()
     return true
   }
 
   /** #953: the team's display label, or undefined when it shows by its name. */
-  labelOf(name: string): string | undefined { return this.labels[name] }
+  labelOf(name: string): string | undefined { return this.labels.get(name) }
 
   /**
    * #953: set a team's display label, or clear it (undefined, null or ''). Display only: the name, which is the routable
@@ -580,15 +580,13 @@ export class CanvasStore {
     if (this.readOnlyReason || this.failedSuspension) return { ok: false, code: 'read-only', error: this.state().error ?? 'canvas store is read-only' }
     if (!this.hasTeam(name)) return { ok: false, code: 'no-team', error: 'no such canvas team' }
     if (label === undefined || label === null || label === '') {
-      if (this.labels[name] === undefined) return { ok: true }
-      Reflect.deleteProperty(this.labels, name)
-      this.persist()
+      if (this.labels.delete(name)) this.persist()
       return { ok: true }
     }
     const clean = parseDisplayLabel(label)
     if (clean === undefined) return { ok: false, code: 'label', error: 'a label is plain text of 1 to 64 characters: no control characters, and not shaped like an address (a/b)' }
-    if (this.labels[name] === clean) return { ok: true }
-    this.labels[name] = clean
+    if (this.labels.get(name) === clean) return { ok: true }
+    this.labels.set(name, clean)
     this.persist()
     return { ok: true }
   }

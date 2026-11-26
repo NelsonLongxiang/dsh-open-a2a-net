@@ -66,6 +66,13 @@ describe('set-label', () => {
     expect((await post({ action: 'set-label', name: 'gamma', clear: true })).json).toMatchObject({ ok: true, label: null, teams: ['alpha', 'beta', 'gamma'] })
     expect(store.labelOf('gamma')).toBeUndefined(); expect(store.list()).toEqual(['alpha', 'beta', 'gamma'])
   })
+  it.each(['__proto__', 'constructor', 'toString', 'hasOwnProperty'])('returns a string when setting and null when clearing a label for %s', async (name) => {
+    expect(store.create(name)).toBe(name)
+    const set = await post({ action: 'set-label', name, label: 'Display team' })
+    expect(set).toMatchObject({ status: 200, json: { ok: true, name, label: 'Display team' } })
+    const cleared = await post({ action: 'set-label', name, clear: true })
+    expect(cleared).toMatchObject({ status: 200, json: { ok: true, name, label: null } })
+  })
   it('the other canvas actions are not owner-gated by this change: remove still works with only the control key', async () => {
     expect((await post({ action: 'remove', name: 'beta' }, {})).json).toMatchObject({ ok: true })
     expect(store.hasTeam('beta')).toBe(false)
