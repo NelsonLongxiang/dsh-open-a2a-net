@@ -26,7 +26,7 @@ const CREDENTIAL_FILE: readonly RegExp[] = [
   // and the ygl workspace database files.
   /\bcli\.json\b/, /\.dsh\/state\//, /\.dsh\/profiles\/[^\s"']*cordis[^\s"'/]*\.ya?ml/, /ygl[^\s"']*\.db\b/,
 ]
-const AUTH_HEADER = /\bAuthorization\s*:|\bBearer\s+[A-Za-z0-9._~+/-]{8,}|\bx-api-key\s*:/i
+const AUTH_HEADER = /\bAuthorization["']?\s*:|\bBearer\s+[A-Za-z0-9._~+/-]{8,}|\bx-api-key["']?\s*:/i
 /** Places other sessions keep their files: Claude Code scratch directories, DSH session logs, shared side-session notes. */
 const OTHER_SESSION: readonly RegExp[] = [/\/(private\/)?tmp\/claude-\d+\//, /\.dsh\/sessions\//, /side-session-notes/, /\.claude\/projects\//]
 
@@ -114,7 +114,8 @@ const SHELLS = new Set(['sh', 'bash', 'zsh'])
 /** Programs that read nothing of their targets (names, builds, tests, bookkeeping). */
 const QUIET = new Set(['ls', 'find', 'tree', 'stat', 'du', 'df', 'echo', 'printf', 'pwd', 'cd', 'mkdir', 'touch', 'rm', 'rmdir', 'test', '[', 'true', 'false', 'date', 'which', 'whoami', 'env', 'export', 'npm', 'pnpm', 'npx', 'yarn', 'vitest', 'jest', 'tsc', 'eslint', 'prettier', 'make', 'gh', 'sleep', 'kill', 'ps', 'lsof', 'pgrep', 'pkill', 'git', 'basename', 'dirname', 'realpath', 'readlink', 'chmod', 'chown', 'ln', 'type', 'command', 'wait', 'set', 'unset', 'read'])
 const GIT_READS = new Set(['add', 'show', 'diff', 'cat-file', 'archive', 'stash', 'hash-object', 'grep', 'log'])
-const AUTH_REQUEST_CODE = /\b(fetch\s*\(|https?\.request|axios|got\(|XMLHttpRequest|requests\.|urlopen|urllib|aiohttp|http\.client|curl|wget)\b/
+// A request call in program text. No trailing \b after a call's `(`: fetch("https://…") has a quote there, and a word boundary needs a word character on one side (#947 review B1).
+const AUTH_REQUEST_CODE = /\b(?:fetch\s*\(|got\s*\(|https?\.(?:request|get)\b|(?:axios|XMLHttpRequest|urlopen|urllib|aiohttp|httpx|HttpClient|curl|wget)\b|requests\.|http\.client|Invoke-(?:WebRequest|RestMethod))/
 const READ_CODE = /\b(readFileSync?|readFile|createReadStream|copyFile(Sync)?|cpSync|open\s*\(|tools\.(read|read_image|grep|bash)|\.read\s*\(|execSync|spawnSync|execFile|exec\s*\()|\b(cat|head|tail|cp|scp|base64|source)\s/
 
 /** Split a command at ; newline && || | & that are outside quotes, so a quoted script stays one piece. */
@@ -139,9 +140,34 @@ function segments(command: string): string[] {
   return out
 }
 
-/** The commands run inside $( ) or backticks, wherever they sit (a double-quoted $( ) still runs). */
+/**
+ * The commands a shell would run inside $( ) or backticks. Quote-aware (#947 review B2): inside single quotes nothing is expanded,
+ * so a note that quotes $(cat …) is text; a double-quoted $( ) does run; a backslash-escaped one does not; $( ) nests.
+ */
 function substitutions(command: string): string[] {
-  return [...command.matchAll(/\$\(([^()]*)\)|`([^`]*)`/g)].map(m => m[1] ?? m[2] ?? '')
+  const out: string[] = []
+  let single = false, double = false
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]!
+    if (single) { if (ch === "'") single = false; continue }
+    if (ch === '\\') { i++; continue }
+    if (ch === "'" && !double) { single = true; continue }
+    if (ch === '"') { double = !double; continue }
+    if (ch === '$' && command[i + 1] === '(') {
+      let depth = 1, j = i + 2
+      for (; j < command.length && depth > 0; j++) { if (command[j] === '(') depth++; else if (command[j] === ')') depth-- }
+      out.push(command.slice(i + 2, depth === 0 ? j - 1 : j))
+      i = j - 1
+      continue
+    }
+    if (ch === '`') {
+      const end = command.indexOf('`', i + 1)
+      const stop = end < 0 ? command.length : end
+      out.push(command.slice(i + 1, stop))
+      i = stop
+    }
+  }
+  return out
 }
 
 /** Whether a shell command, read word by word, reads, sends or copies a protected target, or makes a request with a credential header. */
@@ -211,7 +237,15 @@ function codeCard(code: string, kind: CredentialKind): boolean {
 }
 
 /** Tools whose arguments are notes, descriptions or reports: text the host passes on, never a target. */
-const isNoteTool = (tool: string): boolean => /^(a2a|superagent)_/.test(tool) || tool === 'todo_write'
+const NOTE_TOOLS: ReadonlySet<string> = new Set([
+  'todo_write',
+  'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_ticket_request', 'a2a_ticket_note', 'a2a_outbound_request',
+  'a2a_decision_decide', 'a2a_decision_propose', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_status', 'a2a_task_read', 'a2a_tasks', 'a2a_teams', 'a2a_probe', 'a2a_report',
+  'superagent_note', 'superagent_reply', 'superagent_read', 'superagent_status', 'superagent_route', 'superagent_split', 'superagent_request', 'superagent_assign', 'superagent_org_read',
+  'superagent_decision_propose', 'superagent_issue_propose', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw',
+])
+/** Only the tools that carry text a person or the host reads. The file-transfer tools (a2a_file_*) read and write files, so a prefix is not enough (#947 review N1); a tool not named here keeps the old rule. */
+const isNoteTool = (tool: string): boolean => NOTE_TOOLS.has(tool)
 
 /**
  * Which of the hits make the owner's card (#895). Structured tools are read by field: the file a read or write names is
