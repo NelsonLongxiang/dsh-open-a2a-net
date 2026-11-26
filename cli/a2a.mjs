@@ -57,7 +57,7 @@ CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) 
 superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
 user:     user issue [--name N] [--days D] [--dsh-home DIR] · user import --token-file F · user pair [--name N] [--days D] · user list · user revoke <id> · user nodes
           · user teams · user state --team ID · user decisions · user decide <card id> (--approve | --option TEXT|o2|2) [--note T]
-          · user request --team ID <text…> · user answer --team ID <ticket id> [<text…>] [--option O] · user api <GET|POST> <path> [--data JSON|@file]
+          · user request --team ID <text…> · user request status --team ID <trigger id> · user answer --team ID <ticket id> [<text…>] [--option O] · user api <GET|POST> <path> [--data JSON|@file]
           · user node status [--all] · user node install <tgz> [--restart] [--force-deps] · user node rollback [backup id] [--restart] · user node restart
           · user builder inventory [--all] · user builder list [--all]   (the team builders, read-only)
           (the control API's user scope: acts as the owner on --home, with the owner delegate saved for that home)
@@ -1050,6 +1050,12 @@ async function cmdUser() {
     const card = cards.find(c => c.id === id)
     if (card === undefined) die(`[user] no waiting decision ${id}`)
     printOut(await userCall('POST', '/__dsh_a2a/superagent/decisions', { teamId: card.teamId, id, how: has('--approve') ? 'approve' : 'choose', ...(flag('--option') !== undefined ? { option: flag('--option') } : {}), ...(flag('--note') !== undefined ? { note: flag('--note') } : {}) }), () => console.log(`[user] ${id} decided`))
+    return
+  }
+  if (sub === 'request' && words.length === 2 && words[0] === 'status' && /^wb-[0-9a-f-]{36}$/.test(words[1])) {
+    // #929: where a request went — the tickets it became, their stage and latest report (a request whose text is just `status wb-…` is the only one this takes for a query)
+    if (team === undefined) usage('usage: a2a user request status --team ID <trigger id>')
+    printOut(await userCall('POST', '/__dsh_a2a/superagent', { action: 'request-status', teamId: team, trigger_id: words[1] }), out => { console.log(`[user] ${String(out.triggerId)} · ${String(out.status)}`); for (const t of out.tickets ?? []) console.log(`  ${String(t.id)}  ${String(t.stage?.stage ?? '')}${t.stage?.outcome !== undefined ? ' ' + String(t.stage.outcome) : ''}${t.asking === true ? ' (asking)' : ''}  ${String(t.title)}${t.report !== undefined ? `\n    last report: ${String(t.report.state)} · ${String(t.report.summary)}` : ''}`) })
     return
   }
   if (sub === 'request') { const text = words.join(' '); if (text === '' || team === undefined) usage('usage: a2a user request --team ID <text…>'); printOut(await userCall('POST', '/__dsh_a2a/superagent', { action: 'request', teamId: team, text }), out => console.log(`[user] ${String(out.result)} · trigger ${String(out.triggerId)} · thread ${String(out.thread)}`)); return }

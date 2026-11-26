@@ -2782,6 +2782,30 @@ export class SuperagentHost {
     } catch (error) { return { ok: false, error: String(error) } }
   }
 
+  /**
+   * #929 gap 2: where a request went. `request` hands back a trigger id and a thread and nothing about what became of it; this
+   * answers from the store: the tickets that message started or reached, each with its stage and what it last reported, or that
+   * the router has not judged it yet, that the Source's scope filter turned it away, or that it was judged and no ticket came of it. Read only: it changes nothing and says
+   * nothing a team state read would not (a report summary is cut to 500 characters).
+   * @param triggerId - the id `request` returned (wb-…).
+   * @returns the request's standing, or a refusal when the id is not a workbench trigger or no request has it.
+   */
+  requestStatus(triggerId: string): Record<string, unknown> {
+    if (!/^wb-[0-9a-f-]{36}$/.test(triggerId)) return { ok: false, code: 'trigger', error: 'trigger must be the id a request returned (wb-…)' }
+    if (this.store.triggers.get(triggerId) === undefined) return { ok: false, code: 'unknown', error: 'no request on this team has that trigger id' }
+    const disposition = this.store.triggers.disposition(triggerId)
+    const tickets = this.store.tickets.list()
+      .filter(ticket => ticket.origin.triggerId === triggerId || ticket.origin.triggerIds.includes(triggerId) || ticket.inputs.some(input => input.kind === 'trigger' && input.triggerId === triggerId))
+      .map(ticket => {
+        const report = ticket.assignments.findLast(assignment => assignment.report)?.report
+        const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
+        return { id: ticket.id, title: ticket.title, stage, ...(report !== undefined ? { report: { state: report.state, summary: clip(report.summary, 500), at: report.at } } : {}), ...(ticket.attention !== undefined && ticket.ended === undefined ? { asking: true } : {}) }
+      })
+    // ticketed: it started or reached a ticket; filtered: the Source's scope filter turned it away; no-ticket: the router decided and no ticket came of it; pending: nobody has decided yet
+    const status = tickets.length > 0 ? 'ticketed' : disposition?.filtered !== undefined ? 'filtered' : disposition?.decisionId !== undefined ? 'no-ticket' : 'pending'
+    return { ok: true, triggerId, status, tickets }
+  }
+
   private workbenchTrigger(body: string, thread?: string, via?: WorkbenchVia): Trigger {
     const threadId = thread ?? `wb-${randomUUID()}`
     const id = `wb-${randomUUID()}`
