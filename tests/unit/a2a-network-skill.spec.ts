@@ -85,3 +85,8 @@ it('runs the real package-copy entry and resolves modified skill local navigatio
   }
   expect(localLinks).toBeGreaterThan(12)
 })
+
+it('documents the observer card group and node-operation declaration sync', () => {
+  for (const name of ['a2a_card_cast', 'a2a_card_queue', 'observerCast', 'observerCardDraft', 'castOff', 'member-off', '待投卡', 'insert', 'queue', 'trigger', 'release']) expect(detail).toContain(name)
+  for (const name of ['#936', '#937', 'deps-changed', 'declaration.drift', '--force-deps', 'user node status', 'user node rollback']) expect(cli).toContain(name)
+})
