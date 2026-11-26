@@ -23,6 +23,7 @@
  * Runs on the SDK subpaths only — no @deepseek-ai/* imports.
  */
 import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign as edSign, createPrivateKey } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -54,7 +55,7 @@ CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) 
 独立节点: serve [--config node.json] [--host 127.0.0.1|0.0.0.0] [--port N] [--home DIR]   (the network layer without a DSH instance)
 文件通道: file send <path…> <team> [--note TEXT] · file fetch <ref> [--out DIR] · file grants · file revoke <sha256> <to>   (#91: bytes never ride a message)
 superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
-user:     user issue [--name N] [--days D] [--dsh-home DIR] · user import --token-file F · user list · user revoke <id> · user nodes
+user:     user issue [--name N] [--days D] [--dsh-home DIR] · user import --token-file F · user pair [--name N] [--days D] · user list · user revoke <id> · user nodes
           · user teams · user state --team ID · user decisions · user decide <card id> (--approve | --option TEXT|o2|2) [--note T]
           · user request --team ID <text…> · user answer --team ID <ticket id> <text…> · user api <GET|POST> <path> [--data JSON|@file]
           · user node status [--all] · user node install <tgz> [--restart] [--force-deps] · user node rollback [backup id] [--restart] · user node restart
@@ -120,7 +121,7 @@ admission: admission <caller> [--local] [--json]   how <caller> would be admitte
 /** The capabilities a CLI identity may declare on its card (superagent-root-team S5). */
 // piSeat: docs/design/superagent-pi-platform.md P1 — this identity is a Pi seat (it may join a superagent team as a member).
 const DECLARABLE = ['progressReceipts', 'teamRoster', 'directedSeats', 'reworkReturns', 'piSeat']
-const VALUE_FLAGS = new Set(['--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir', '--recommended', '--level', '--event', '--run', '--name', '--days', '--dsh-home', '--team', '--option', '--data', '--token-file'])
+const VALUE_FLAGS = new Set(['--poll-ms', '--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir', '--recommended', '--level', '--event', '--run', '--name', '--days', '--dsh-home', '--team', '--option', '--data', '--token-file'])
 const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class', '--pi-seat', '--transient', '--approve', '--restart', '--all', '--force-deps'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
@@ -836,7 +837,7 @@ const writeDelegates = (book) => { mkdirSync(IDENTITY_DIR, { recursive: true });
 const homeKey = () => home().replace(/\/+$/, '')
 const userHeaders = (base = homeKey()) => {
   const saved = readDelegates().homes[base]
-  if (saved === undefined || typeof saved.token !== 'string') die(`[user] no owner delegate saved for ${base}: run 'a2a-net user issue' on that node (or 'user import --token-file F --home ${base}')`)
+  if (saved === undefined || typeof saved.token !== 'string') die(`[user] no owner delegate saved for ${base}: run 'a2a-net user pair --home ${base}' (or 'user issue' on that node, or 'user import --token-file F --home ${base}')`)
   const key = typeof saved.key === 'string' && flag('--key') === undefined && envValue('A2A_KEY') === undefined ? { 'X-API-Key': saved.key } : {}
   return { ...keyHeaders(), ...key, 'X-DSH-Owner-Delegate': saved.token }
 }
@@ -886,13 +887,31 @@ async function cmdUserNode(words) {
     if (arg === undefined) usage('usage: a2a user node install <package.tgz> [--restart] [--force-deps]')
     const tgz = readFileSync(arg)
     const sha256 = createHash('sha256').update(tgz).digest('hex')
-    console.error(`[node] ${homeKey()}: installing ${basename(arg)} sha256 ${sha256} over ${String(before.version)}`)
-    await finish(await userCall('POST', PATH, { action: 'install', sha256, tgz: tgz.toString('base64'), restart: has('--restart'), forceDeps: has('--force-deps') }), before)
+    const declare = npmDeclaration(arg, tgz)
+    console.error(`[node] ${homeKey()}: installing ${basename(arg)} sha256 ${sha256} over ${String(before.version)}; the profile will declare it ${declare === 'npm' ? 'by its npm version' : 'as file: the kept tarball'}`)
+    await finish(await userCall('POST', PATH, { action: 'install', sha256, tgz: tgz.toString('base64'), restart: has('--restart'), forceDeps: has('--force-deps'), declare }), before)
     return
   }
   if (op === 'rollback') { await finish(await userCall('POST', PATH, { action: 'rollback', ...(arg !== undefined ? { id: arg } : {}), restart: has('--restart') }), before); return }
   if (op === 'restart') { await finish(await userCall('POST', PATH, { action: 'restart' }), before); return }
   usage('usage: a2a user node status [--all] · node install <tgz> [--restart] [--force-deps] · node rollback [backup id] [--restart] · node restart')
+}
+
+/**
+ * #936: how the node's profile should declare a tarball being installed: `npm` when it is byte for byte the registry's
+ * own package for its version (same sha512 integrity), else `file`. Any failure on the way (no tar, no network, a version
+ * npm does not have) answers `file`, which always matches what is installed.
+ */
+function npmDeclaration(path, tgz) {
+  try {
+    const manifest = JSON.parse(execFileSync('tar', ['-xzOf', path, 'package/package.json'], { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'ignore'] }))
+    if (manifest.name !== '@nelsonlongxiang/dsh-open-a2a-net' || typeof manifest.version !== 'string' || !/^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/.test(manifest.version)) return 'file'
+    const published = execFileSync('npm', ['view', `${manifest.name}@${manifest.version}`, 'dist.integrity'], { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    return published === `sha512-${createHash('sha512').update(tgz).digest('base64')}` ? 'npm' : 'file'
+  } catch {
+    console.error('[node] could not compare the tarball with the npm registry; the profile will declare it as file:')
+    return 'file'
+  }
 }
 
 // #903 S1: the team builders of a node, read-only — the inventory a builder sees and the builder sessions. --all reads
@@ -977,6 +996,40 @@ async function cmdUser() {
     console.log(`[user] token saved for ${homeKey()}`)
     return
   }
+  if (sub === 'pair') {
+    // #933: device-code pairing. The node answers a short code; the owner allows it on that node's team page (their browser
+    // login), and the token is handed once to this terminal, which saves it to the delegate book. The token is never printed.
+    const name = flag('--name') ?? `terminal@${homeKey()}`
+    const days = Number(flag('--days') ?? '30')
+    const pollMs = Math.max(200, Number(flag('--poll-ms') ?? '2000'))
+    const url = `${homeKey()}/__dsh_a2a/owner-delegates/pair`
+    const post = async (body) => replyOf(await homeFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }))
+    const started = await post({ action: 'start', name, days })
+    if (started.ok !== true || typeof started.id !== 'string' || typeof started.secret !== 'string') die(`[user] ${homeKey()} did not start a pairing: ${String(started.error ?? started.code ?? 'no answer')}`)
+    console.error(`[user] pairing with ${homeKey()} as "${name}": code ${String(started.code)}, valid until ${String(started.expiresAt)}.`)
+    console.error('[user] open that node\'s team page, check the code matches, and allow it there. Waiting…')
+    const until = Date.parse(String(started.expiresAt)) + 5000
+    while (Date.now() < until) {
+      await new Promise(r => setTimeout(r, pollMs))
+      let poll
+      try { poll = await post({ action: 'poll', id: started.id, secret: started.secret }) } catch { continue }
+      if (poll.state === 'waiting' || poll.state === 'retry') continue
+      if (poll.state === 'approved' && typeof poll.token === 'string' && /^dshod_[A-Za-z0-9_-]{20,}$/.test(poll.token)) {
+        try {
+          const book = readDelegates()
+          book.homes[homeKey()] = { ...(book.homes[homeKey()] ?? {}), token: poll.token, id: String(poll.delegateId ?? ''), name }
+          writeDelegates(book)
+        } catch (error) {
+          // The token is spent and cannot be shown; the delegate is live on the node: name it so the owner can revoke it.
+          die(`[user] paired with ${homeKey()}, but the token could not be saved to ${DELEGATES} (${String(error?.message ?? error)}); revoke delegate ${String(poll.delegateId)} on that node and pair again`)
+        }
+        console.log(`[user] paired with ${homeKey()}: delegate ${String(poll.delegateId)} (${name}); token saved to ${DELEGATES}`)
+        return
+      }
+      die(`[user] pairing with ${homeKey()} ${poll.state === 'denied' ? 'was refused on the node' : poll.state === 'expired' ? 'expired before it was allowed' : 'is no longer known to the node'}`)
+    }
+    die(`[user] pairing with ${homeKey()} expired before it was allowed`)
+  }
   if (sub === 'nodes') {
     const book = readDelegates()
     for (const [url, row] of Object.entries(book.homes)) console.log(`${url}  ${String(row.name ?? '')}  ${row.expiresAt === null ? 'no end' : String(row.expiresAt ?? '?')}`)
@@ -1009,7 +1062,7 @@ async function cmdUser() {
     printOut(await userCall(method.toUpperCase(), path, body))
     return
   }
-  usage('usage: a2a user issue|import|nodes|node|builder|list|revoke|teams|state|decisions|decide|request|answer|api … (see a2a help)')
+  usage('usage: a2a user issue|import|pair|nodes|node|builder|list|revoke|teams|state|decisions|decide|request|answer|api … (see a2a help)')
 }
 
 async function cmdSuperagent() {

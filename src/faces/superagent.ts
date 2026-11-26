@@ -28,6 +28,7 @@ import { verifyCard } from '../card.ts'
 import { claimCovers } from '../task-auth.ts'
 import { browserOwnerProof, touchesRules } from '../superagent/host/owner-proof.ts'
 import { issueOwnerDelegate, parseOwnerDelegates, revokeOwnerDelegate } from '../superagent/host/owner-delegate.ts'
+import { OwnerPairings } from '../superagent/host/owner-pairing.ts'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { canvasOwnerFingerprint, splitCanvasOwner } from '../canvas-id.ts'
@@ -393,12 +394,31 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
       }),
     }), 'a2a: superagent teams face')
   }
+  if (d.ownerDelegatesPath !== undefined) registerOwnerDelegateFaces(webServer, { ctx, controlRoute, readJsonBody, ownerDelegatesPath: d.ownerDelegatesPath })
+}
+
+/**
+ * The owner-delegate faces: list, issue and revoke on the control route, and (#933) terminal pairing — the owner allows or
+ * refuses a pairing there, while the terminal starts and polls on its own open route.
+ * @param webServer - the host's web server.
+ * @param d - the context, the control-route guard, the body reader and the delegate store.
+ */
+export function registerOwnerDelegateFaces(webServer: WebServer, d: Pick<SuperagentFaceDeps, 'ctx' | 'controlRoute' | 'readJsonBody'> & { readonly ownerDelegatesPath: string }): void {
+  const { ctx, controlRoute, readJsonBody } = d
   const delegatesPath = d.ownerDelegatesPath
-  if (delegatesPath !== undefined) {
+  {
     // The control API's user scope (owner-delegate.ts): list for the control key; issue and revoke for the browser owner
     // only, so a remote node's owner can hand its agent a delegate without a shell on that node.
     const read = (path: string): string | undefined => { try { return readFileSync(path, 'utf8') } catch { return undefined } }
     const write = (path: string, text: string): void => { const tmp = `${path}.${process.pid}.tmp`; writeFileSync(tmp, text, { encoding: 'utf8', mode: 0o600 }); renameSync(tmp, path) }
+    // #933: terminal pairing (owner-pairing.ts). The owner allows a pairing on this page; the delegate is issued then and its
+    // token handed once to the terminal holding the pairing's secret. A delegate approved but never collected is revoked.
+    const pairings = new OwnerPairings()
+    const issueFor = (name: string, days: number): { token: string; id: string } => {
+      const out = issueOwnerDelegate(delegatesPath, name, days, { read, write, random: () => ({ token: `dshod_${randomBytes(32).toString('base64url')}`, id: randomUUID() }), now: () => new Date() })
+      return { token: out.token, id: out.record.id }
+    }
+    const sweepPairings = (): void => { pairings.sweep() }
     ctx.effect(() => webServer.register({
       kind: 'exact',
       path: '/__dsh_a2a/owner-delegates',
@@ -406,7 +426,8 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
         const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }); res.end(payload) }
         if (req.method === 'GET') {
           const text = read(delegatesPath)
-          send(200, { delegates: (text === undefined ? [] : parseOwnerDelegates(text)).map(({ sha256: _sha, ...row }) => row) })
+          sweepPairings()
+          send(200, { delegates: (text === undefined ? [] : parseOwnerDelegates(text)).map(({ sha256: _sha, ...row }) => row), pairings: pairings.list() })
           return
         }
         readJsonBody(req, res, (body) => {
@@ -430,9 +451,36 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
             send(200, { ok: revokeOwnerDelegate(delegatesPath, id, { read, write, now: () => new Date() }) })
             return
           }
-          send(400, { ok: false, error: 'action must be issue or revoke' })
+          // #933: only the browser owner allows or refuses a terminal pairing (a delegate never mints a delegate).
+          if (fields.action === 'pair-approve' || fields.action === 'pair-deny') {
+            sweepPairings()
+            const id = typeof fields.id === 'string' ? fields.id : ''
+            if (fields.action === 'pair-deny') { send(200, pairings.deny(id)); return }
+            const approved = pairings.approve(id)
+            send(approved.ok ? 200 : 404, approved)
+            return
+          }
+          send(400, { ok: false, error: 'action must be issue, revoke, pair-approve or pair-deny' })
         })
       }),
     }), 'a2a: owner delegates face')
+    // #933: a terminal starts a pairing and polls for its answer. Open by nature (the terminal has no credential yet); the
+    // limits are in OwnerPairings: few pending, ten minutes, a per-address start budget, the owner matching the code, and a
+    // secret only the terminal holds. Answers are never cached; the token appears only in the one approved poll.
+    ctx.effect(() => webServer.register({
+      kind: 'exact',
+      path: '/__dsh_a2a/owner-delegates/pair',
+      handler: (req: IncomingMessage, res: ServerResponse) => {
+        const send = (status: number, value: unknown): void => { const payload = JSON.stringify(value); res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), 'Cache-Control': 'no-store' }); res.end(payload) }
+        if (req.method !== 'POST') { send(405, { ok: false, error: 'POST start or poll' }); return }
+        readJsonBody(req, res, (body) => {
+          const fields = body as { action?: unknown; name?: unknown; days?: unknown; id?: unknown; secret?: unknown }
+          sweepPairings()
+          if (fields.action === 'start') { const out = pairings.start(req.socket.remoteAddress ?? '', fields.name, fields.days); send(out.ok ? 200 : out.code === 'input' ? 400 : 429, out); return }
+          if (fields.action === 'poll') { const answer = pairings.poll(fields.id, fields.secret, issueFor); send(answer.state === 'retry' ? 503 : 200, answer); return }
+          send(400, { ok: false, error: 'action must be start or poll' })
+        })
+      },
+    }), 'a2a: owner delegate pairing face')
   }
 }
