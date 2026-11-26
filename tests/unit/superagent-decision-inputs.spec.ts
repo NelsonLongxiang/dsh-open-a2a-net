@@ -154,6 +154,22 @@ describe('D3: an option that needs input is chosen only with it', () => {
     expect(m.h.store.tickets.get(ticket)!.attention).toBeDefined()
     await m.h.stop()
   })
+  it('#929: a question with inputs names its card, and an option answers it with the owner\'s words', async () => {
+    const m = await team()
+    const ticket = await m.openTicket()
+    expect(await m.call('a2a_ticket_report', 'session-m', { ticket_id: ticket, state: 'waiting', summary: 's', question: '要哪个？', ...base, inputs: { 乙: { kind: 'text', prompt: 'p' } } })).toMatchObject({ ok: true })
+    const refused = m.h.answer(ticket, '选乙') as { ok: boolean; code?: string; card?: string; options?: string[] }
+    expect(refused).toMatchObject({ ok: false, code: 'needs-input' })
+    expect(typeof refused.card).toBe('string')
+    expect(refused.options).toContain('乙')
+    // The option alone is not enough for an option that needs words; the card stays open.
+    expect(m.h.answer(ticket, '', '乙')).toMatchObject({ ok: false, code: 'needs-input' })
+    expect(m.h.answer(ticket, '写错了', '丁')).toMatchObject({ ok: false, code: 'choice' })
+    expect(m.h.decisions.get(refused.card!)!.decided).toBeUndefined()
+    expect(m.h.answer(ticket, '因为乙更稳', '乙')).toMatchObject({ ok: true, card: refused.card })
+    expect(m.h.decisions.get(refused.card!)!.decided!.text).toContain('说明：因为乙更稳')
+    await m.h.stop()
+  })
 })
 
 describe('D2: remote members, Pi or DSH', () => {

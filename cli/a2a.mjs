@@ -57,7 +57,7 @@ CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) 
 superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
 user:     user issue [--name N] [--days D] [--dsh-home DIR] · user import --token-file F · user pair [--name N] [--days D] · user list · user revoke <id> · user nodes
           · user teams · user state --team ID · user decisions · user decide <card id> (--approve | --option TEXT|o2|2) [--note T]
-          · user request --team ID <text…> · user answer --team ID <ticket id> <text…> · user api <GET|POST> <path> [--data JSON|@file]
+          · user request --team ID <text…> · user answer --team ID <ticket id> [<text…>] [--option O] · user api <GET|POST> <path> [--data JSON|@file]
           · user node status [--all] · user node install <tgz> [--restart] [--force-deps] · user node rollback [backup id] [--restart] · user node restart
           · user builder inventory [--all] · user builder list [--all]   (the team builders, read-only)
           (the control API's user scope: acts as the owner on --home, with the owner delegate saved for that home)
@@ -1053,7 +1053,7 @@ async function cmdUser() {
     return
   }
   if (sub === 'request') { const text = words.join(' '); if (text === '' || team === undefined) usage('usage: a2a user request --team ID <text…>'); printOut(await userCall('POST', '/__dsh_a2a/superagent', { action: 'request', teamId: team, text }), out => console.log(`[user] ${String(out.result)} · trigger ${String(out.triggerId)} · thread ${String(out.thread)}`)); return }
-  if (sub === 'answer') { const [ticket, ...rest] = words; const text = rest.join(' '); if (ticket === undefined || text === '' || team === undefined) usage('usage: a2a user answer --team ID <ticket id> <text…>'); printOut(await userCall('POST', '/__dsh_a2a/superagent', { action: 'answer', teamId: team, ticket_id: ticket, ticketId: ticket, text }), () => console.log(`[user] answered ${ticket}`)); return }
+  if (sub === 'answer') { const [ticket, ...rest] = words; const text = rest.join(' '); const option = flag('--option'); if (ticket === undefined || (text === '' && option === undefined) || team === undefined) usage('usage: a2a user answer --team ID <ticket id> [<text…>] [--option TEXT|o2|2] (an option answers a question that is a card; text alone leaves a ticket with no question a note)'); printOut(await userCall('POST', '/__dsh_a2a/superagent', { action: 'answer', teamId: team, ticket_id: ticket, ticketId: ticket, text, ...(option !== undefined ? { option } : {}) }), out => console.log(out.noted === true ? `[user] left a note on ${ticket}` : out.card !== undefined && out.ok === true ? `[user] answered ${ticket} by deciding ${out.card}` : `[user] answered ${ticket}`)); return }
   if (sub === 'api') {
     const [method, path] = words
     if (method === undefined || path === undefined || !path.startsWith('/')) usage('usage: a2a user api <GET|POST> <path> [--data JSON|@file]')

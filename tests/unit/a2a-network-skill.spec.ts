@@ -85,3 +85,7 @@ it('runs the real package-copy entry and resolves modified skill local navigatio
   }
   expect(localLinks).toBeGreaterThan(12)
 })
+
+it('documents user answer with options and notes (#929)', () => {
+  for (const name of ['user answer --team ID <ticket id> [<text…>] [--option TEXT|o2|2]', '[属主留言]', 'no-question', 'needing words']) expect(cli).toContain(name)
+})
