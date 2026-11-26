@@ -104,6 +104,10 @@ it('limits the casting and declaration promises the code actually keeps (#944 re
   expect(cli).not.toContain('Both profile files are written all or nothing; any other line stays byte for byte')
 })
 
+it('documents the narrowed credential audit (#895)', () => {
+  for (const clause of ['x-api-key header', 'recordOnly', 'actually reads, sends or copies a protected credential file', 'read word by word', 'not exempt because it sits under a worktree']) expect(detail).toContain(clause)
+})
+
 it('documents user request status (#929 gap 2)', () => {
   for (const name of ['user request status --team ID <trigger id>', '`ticketed`', '`pending`', '`filtered`', '`no-ticket`']) expect(cli).toContain(name)
 })
