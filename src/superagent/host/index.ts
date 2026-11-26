@@ -19,6 +19,7 @@ import { dirname, join } from 'node:path'
 import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candidate, type Outbox, type Reason, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
+import { failedReplyRetry, validReplyRetry, REPLY_RETRY_MAX_AGE_MS } from './reply-backoff.ts'
 import { ProgressReceipts } from './progress.ts'
 import { SplitBook } from './split.ts'
 import { progressState } from './progress.ts'
@@ -2281,14 +2282,41 @@ export class SuperagentHost {
       const github = row.message.channel.source === GITHUB_SOURCE
       // Design github-issues G5: a reply on an issue's thread goes back as a comment while the source is on.
       if (this.settingsValue.paused || (github ? this.settingsValue.sources.github !== true : !this.a2a.allowed(row.message as never))) continue
+      // #918: a failed A2A reply stays pending, but not eligible on every five-second pass.
+      if (!github && row.retry !== undefined) {
+        const nowMs = Date.parse(this.now())
+        if (!validReplyRetry(row.retry) || !Number.isFinite(nowMs)) continue
+        if (nowMs - Date.parse(row.retry.firstFailedAt) >= REPLY_RETRY_MAX_AGE_MS) {
+          this.store.atomic(() => { const current = this.store.messages.get(row.message.id); if (current?.status === 'pending') this.store.messages.save({ ...current, retry: undefined, status: 'dropped', droppedAt: this.now(), reason: 'reply-unsent-24h' }) })
+          continue
+        }
+        if (nowMs < Date.parse(row.retry.nextAt)) continue
+      }
+      // Persist the next eligible time BEFORE side effects: a restart in the send/catch window cannot bypass cooldown.
+      if (!github) this.store.atomic(() => {
+        const current = this.store.messages.get(row.message.id)
+        if (current?.status === 'pending') this.store.messages.save({ ...current, retry: failedReplyRetry(current.retry, Date.parse(this.now())) })
+      })
       this.sending.add(row.message.id)
       void (github ? this.issues.send(row.message.channel.address, row.message.text) : this.a2a.send(row.message as never)).then(result => {
         this.store.atomic(() => {
           const now = this.store.messages.get(row.message.id)
           if (now === undefined || now.status !== 'pending') return
-          this.store.messages.save(result === 'sent' ? { ...now, status: 'sent', sentAt: this.now() } : { ...now, status: 'dropped', droppedAt: this.now(), reason: 'gone' })
+          this.store.messages.save(result === 'sent' ? { ...now, retry: undefined, status: 'sent', sentAt: this.now() } : { ...now, retry: undefined, status: 'dropped', droppedAt: this.now(), reason: 'gone' })
         })
-      }, (error: unknown) => { this.d.logger.warn('superagent: a2a reply %s not sent yet: %s', row.message.id, String(error)) })
+      }, (_error: unknown) => {
+        // Extend from failure completion too: a slow failed attempt must not consume its own cooldown.
+        if (!github) this.store.atomic(() => {
+          const current = this.store.messages.get(row.message.id)
+          if (current?.status !== 'pending' || current.retry === undefined || !validReplyRetry(current.retry)) return
+          const failedAt = Date.parse(this.now())
+          const delay = Date.parse(current.retry.nextAt) - Date.parse(current.retry.lastFailedAt)
+          this.store.messages.save({ ...current, retry: { ...current.retry, lastFailedAt: new Date(failedAt).toISOString(), nextAt: new Date(failedAt + delay).toISOString() } })
+        })
+        // The Source health owns the safe refusal reason. Command errors can contain private reply text.
+        this.d.logger.warn('superagent: reply %s remains pending; retry is delayed', row.message.id)
+      })
+        .catch(() => { this.d.logger.warn('superagent: reply status could not be persisted; original checkpoint retained') })
         .finally(() => { this.sending.delete(row.message.id) })
     }
   }
@@ -2887,6 +2915,9 @@ export class SuperagentHost {
       modelResults: Object.fromEntries(this.modelResults),
       ...(this.prs.problem !== undefined ? { pullRequestProblem: this.prs.problem } : {}),
       ...(this.issues.problem !== undefined ? { githubIssuesProblem: this.issues.problem } : {}),
+      // #918: metadata only; neither the reply body nor command errors belong in this retry view.
+      replyRetries: this.store.messages.list().filter(row => row.status === 'pending' && row.message.channel.source === 'a2a' && row.retry !== undefined)
+        .map(row => ({ id: row.message.id, task: row.message.channel.address.task, retry: row.retry, valid: validReplyRetry(row.retry!) })),
       reviews: this.reviews.list(),
       outbound: this.outbound.list(),
       executor: { canvas: this.settingsValue.canvas ?? null, members: this.settings.members, remoteMembers: this.settings.remoteMembers, bindings: this.executor.list(), queued: this.executor.queued().map(q => { const since = this.queuedSince(q); return { ...q, reason: queueReason(q.reason, since === undefined ? undefined : Math.floor((Date.parse(this.now()) - Date.parse(since)) / 60_000)), since: since ?? null } }) },

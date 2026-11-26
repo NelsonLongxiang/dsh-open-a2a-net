@@ -71,6 +71,7 @@ a2a-watch 在 `mode: observe` 时有意不照这一步：setup 未完成也照�
   - 4（gone）→ 判 gone；
   - 5（这个 task 已有另一张回执），且是首条外发 → 按 sent 处理，并补写记录；
   - 其他失败 → 抛错，由 Outbox 重试。KV `a2a-send-failed` 记下第一次失败的时间，满 24 小时就判 gone，并报 `a2a-reply` error（S25 O5）。
+- **宿主 Outbox 退避（#918）**：每条 A2A pending 回复在实际发送前，把尝试次数、首次失败窗口和下一次可尝试时间写入同一条消息记录；失败后按 30 秒、60 秒、120 秒、240 秒、最多 5 分钟等待，宿主的 5 秒 pass 不会在冷却期重复发 CLI。恢复成功或原 gone 结果清理退避；24 小时未送出的原截止保持，冷却不会延长它。重启沿用原记录，记录损坏则保持 pending 并在只读 `replyRetries` 标为 invalid，等待核账，不当作发送许可。重试视图只含消息 id、task 和时间／次数，不含正文、命令行或错误原文。此策略只属于宿主 Outbox，不改 standalone Source 的回执格式、原任务/context 或成员准入。
 - **task id 不合规**：task id 无法承载回执（不是 CLI 的 task id 字符，或者 `receipt-<id>` 超过 80 个字符）时，立即判 gone，不会重试一整天。
 - **KV 上限**：`a2a-answered` 最多 2000 条，`a2a-send-failed` 最多 1000 条，都是 7 天过期，写入时清理。
 - **续户口**：reply 模式下执行 `publish --owes`（S33）；切回 observe 后，下一次续户口执行 `publish`，声明随之撤回。
