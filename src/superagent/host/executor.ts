@@ -75,7 +75,7 @@ const PREPARE_OUTPUT_TAIL = 2_000
 
 /** `sh -c` in the workspace, with the ticket's variables added to this process's environment. */
 export const defaultPrepare: PrepareRunner = (command, cwd, env, timeoutMs) => new Promise((resolve) => {
-  execFile('sh', ['-c', command], { cwd, env: { ...process.env, ...env }, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+  execFile('sh', ['-c', command], { cwd, env: { ...process.env, ...env }, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
     const output = `${String(stdout)}${String(stderr)}`.slice(-PREPARE_OUTPUT_TAIL)
     if (error === null) { resolve({ ok: true, output }); return }
     const why = (error as { killed?: boolean }).killed === true ? `timed out after ${String(Math.round(timeoutMs / 1000))} s` : `exit ${String((error as { code?: unknown }).code ?? '?')}`
