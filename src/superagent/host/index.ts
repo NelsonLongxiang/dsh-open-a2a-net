@@ -39,7 +39,7 @@ import { SettingsHistory } from './settings-history.ts'
 import { HealthReminders, HEALTH_TICK_MS, cleanName, type HealthProblem } from './health-reminders.ts'
 import { DecisionPush, PUSH_TICK_MS } from './decision-push.ts'
 import { QuestionGate, questionToken } from './question-gate.ts'
-import { AUTO_ACK_TEXT, DECISION_FILES_MAX, DecisionBook, decisionFiles, DECISION_NOTE_MAX, inputFor, needsInput, recommendedNeedsInput, oneClick, parseDecision, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
+import { AUTO_ACK_TEXT, DECISION_FILES_MAX, DecisionBook, decisionFiles, DECISION_NOTE_MAX, inputFor, needsInput, recommendedNeedsInput, oneClick, parseDecision, resolveOption, ticketCardId, type DecisionFile, type DecisionSpec, type StoredCard } from './decisions.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
@@ -1954,9 +1954,11 @@ export class SuperagentHost {
       if (recommendedNeedsInput(card)) return { ok: false, code: 'needs-input', error: 'the recommended option needs you to fill something in: choose it and fill it in' }
       chosen = card.recommended
     } else if (how === 'choose') {
-      if (typeof option === 'string' && card.options.includes(option)) chosen = option
+      // #923: the option by its exact text, its id (o2) or its number (2).
+      const named = resolveOption(card.options, option)
+      if (named !== undefined) chosen = named
       else if (option === undefined || option === null || option === '') { if (words === '') return { ok: false, code: 'choice', error: 'choose an option, or write your decision' }; chosen = '' }
-      else return { ok: false, code: 'choice', error: 'that is not one of the options' }
+      else return { ok: false, code: 'choice', error: `that is not one of the options: give its text, its id (o1..o${String(card.options.length)}) or its number (1..${String(card.options.length)})` }
     } else return { ok: false, code: 'how', error: 'how must be approve or choose' }
     // #888 D3: an option that needs input is chosen only with it (the owner's own free-text decision, no option, stays open).
     const required = chosen === '' ? undefined : inputFor(card, chosen)
@@ -1968,11 +1970,15 @@ export class SuperagentHost {
     // The first line stays exactly 决定：<option>; readers of decided.text depend on it.
     const answer = [...(chosen !== '' ? [`决定：${chosen}`] : []), ...(words !== '' ? [`说明：${words}`] : []), ...attached.map(file => file.ref)].join('\n')
     const withFiles = attached.length > 0 ? { files: attached } : {}
+    // #935 review B1/B2: the option is recorded by its position, so readers never guess it back from the text, where a
+    // note or a words-only decision can look like another option.
+    const optionAt = chosen === '' ? -1 : card.options.indexOf(chosen)
+    const choice = optionAt >= 0 ? { option: optionAt } : {}
     const at = this.now()
     const { title: _title, ...stored } = card
     // A health reminder's decision is a dismissal: it opens no ticket and answers no question (reliability R7).
     if (card.source === 'health') {
-      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      this.decisions.decide(card.id, { at, text: answer, ...choice, ...withFiles }, stored)
       this.healthReminders.decided(card.id, chosen, Date.parse(at))
       // Owner ruling 2026-11-23 (ticket 4351d67f): on a credential-access card the owner's own choice acts. Only this
       // owner route reaches here; the timeout writes 「知道了」 without it, and an approver may decide outbound cards only.
@@ -1981,14 +1987,14 @@ export class SuperagentHost {
     }
     // Staffing changes (S1a): the team's confirmation of a change; the host's executor carries it out once all agree.
     if (card.source === 'staffing') {
-      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      this.decisions.decide(card.id, { at, text: answer, ...choice, ...withFiles }, stored)
       this.d.staffingDecided?.(card.by, this, chosen === STAFFING_CONFIRM)
       return { ok: true, confirmed: chosen === STAFFING_CONFIRM }
     }
     // Design M12: the owner takes, or not, one request from a sender the bot list does not hold.
     if (card.source === 'sender') {
       if (chosen === '') return { ok: false, code: 'choice', error: 'choose whether to take this request' }
-      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      this.decisions.decide(card.id, { at, text: answer, ...choice, ...withFiles }, stored)
       if (chosen === SENDER_DECLINE) { this.pass(); return { ok: true, taken: false } }
       const trigger = this.store.triggers.get(card.by)
       if (chosen === SENDER_TAKE_LIST && trigger !== undefined && !this.settingsValue.bots.a2a.includes(trigger.actor.id)) {
@@ -2000,7 +2006,7 @@ export class SuperagentHost {
     }
     // Design tool-requests T4: a tool request is applied to the team's grants, not ticketed.
     if (card.source === 'tool') {
-      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      this.decisions.decide(card.id, { at, text: answer, ...choice, ...withFiles }, stored)
       if (chosen.startsWith('批准')) this.grantTool(card.by)
       return { ok: true, granted: chosen.startsWith('批准') }
     }
@@ -2008,19 +2014,19 @@ export class SuperagentHost {
     if (card.source === 'outbound') {
       // Refuse before consuming the decision: re-enabling the Source can then approve this same card.
       if (chosen === OUTBOUND_APPROVE && (!this.settingsValue.sources.a2a || this.settingsValue.paused)) return { ok: false, code: 'a2a-off', error: '团队来源已停用或暂停；原卡仍待批准，没有发出。' }
-      this.decisions.decide(card.id, { at, text: answer, ...withFiles }, stored)
+      this.decisions.decide(card.id, { at, text: answer, ...choice, ...withFiles }, stored)
       void this.outbound.decided(card.id, chosen === OUTBOUND_APPROVE, this.settingsValue.canvas ?? '', ticketId => this.store.tickets.get(ticketId)?.title).catch(error => this.d.logger.warn('superagent: approved outbound %s needs reconciliation: %s', card.id, String(error)))
       return { ok: true, approved: chosen === OUTBOUND_APPROVE }
     }
     if (card.ticketId !== undefined) {
       const out = this.answer(card.ticketId, answer)
       if (!out.ok) return out
-      this.decisions.decide(card.id, { at, text: answer, triggerId: out.triggerId, ...withFiles }, stored)
+      this.decisions.decide(card.id, { at, text: answer, ...choice, triggerId: out.triggerId, ...withFiles }, stored)
       return { ok: true, ticket_id: card.ticketId, trigger_id: out.triggerId }
     }
     const filed = this.request(`[决策卡]（${card.source === 'router' ? '总工' : '观察者'}提出）${card.question}\n${answer}`)
     if (!filed.ok) return { ok: false, code: 'refused', error: filed.error }
-    this.decisions.decide(card.id, { at, text: answer, triggerId: filed.triggerId, ...withFiles }, stored)
+    this.decisions.decide(card.id, { at, text: answer, ...choice, triggerId: filed.triggerId, ...withFiles }, stored)
     return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
   }
 
