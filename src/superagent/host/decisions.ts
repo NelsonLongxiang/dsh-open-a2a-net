@@ -80,7 +80,7 @@ export interface StoredCard extends DecisionSpec {
   readonly id: string
   readonly question: string
   readonly reason?: string
-  readonly source: 'router' | 'observer' | 'ticket' | 'health' | 'tool' | 'outbound' | 'staffing' | 'sender'
+  readonly source: 'router' | 'observer' | 'ticket' | 'health' | 'tool' | 'outbound' | 'staffing' | 'sender' | 'peer-channel'
   readonly by: string
   readonly ticketId?: string
   /** Server-owned immutable payload of an outbound approval, never supplied by the recovery caller. */
@@ -330,7 +330,7 @@ export class DecisionBook {
   }
 
   /** A card of the router's or an observer's own. An identical open question returns the existing card. */
-  propose(input: { source: 'router' | 'observer' | 'health' | 'tool' | 'outbound' | 'staffing' | 'sender'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[]; outbound?: StoredCard['outbound']; observerTarget?: ObserverCardBinding['target'] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
+  propose(input: { source: 'router' | 'observer' | 'health' | 'tool' | 'outbound' | 'staffing' | 'sender' | 'peer-channel'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[]; outbound?: StoredCard['outbound']; observerTarget?: ObserverCardBinding['target'] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
     const question = input.question.trim()
     if (question === '' || question.length > QUESTION_MAX) return { ok: false, code: 'question', error: `question is required, at most ${String(QUESTION_MAX)} characters` }
     // #888 D2: only the router's and an observer's own cards may ask the owner to fill something in; host-fixed cards never.
@@ -342,7 +342,8 @@ export class DecisionBook {
     const decided = !final(input.source) ? undefined : this.cards.filter(card => card.decided !== undefined && !autoDecided(card) && final(card.source) && card.question === question).sort((a, b) => b.decided!.at.localeCompare(a.decided!.at))[0]
     if (decided !== undefined) return { ok: false, code: 'decided', error: `the owner already decided this (${decided.decided!.at.slice(0, 10)}): ${decided.decided!.text}. A decision is final: act on it, do not ask again.` }
     const mine = this.open().filter(card => card.source === input.source && card.by === input.by)
-    const repeated = mine.find(card => card.question === question)
+    const repeated = mine.find(card => card.question === question && (input.source !== 'peer-channel' ||
+      JSON.stringify(card.observerBinding?.target) === JSON.stringify(input.observerTarget)))
     if (repeated !== undefined) return { ok: true, id: repeated.id, reused: true }
     if (mine.length >= OPEN_CARDS_MAX) return { ok: false, code: 'too-many-open', error: `you already have ${String(mine.length)} decisions waiting for the owner` }
     const id = `d-${randomUUID()}`

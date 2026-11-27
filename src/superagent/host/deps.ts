@@ -75,6 +75,11 @@ export interface SuperagentHostDeps {
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
   /** Put text into a live local session as a follow-up; false when the session is not live here. */
   readonly deliverToSession: (sessionId: string, text: string) => boolean
+  readonly peerTeamAddress?: (canvas: string) => string
+  readonly peerHostMatches?: (url: string, key: string) => Promise<boolean>
+  readonly peerSharedFiles?: (sender: string, recipient: string) => boolean
+  readonly deliverPeerMessage?: (sessionId: string, message: import('./peer-channel.ts').PeerMessage, binding: string) => import('./peer-channel.ts').PeerMessageStatus
+  readonly peerDeliveryStatus?: (sessionId: string, message: import('./peer-channel.ts').PeerMessage, binding: string) => import('./peer-channel.ts').PeerMessageStatus
   /** Stop a session's running turn; true when one was running. */
   readonly cancelTurn?: (sessionId: string) => boolean
   /** What a session's ended turn left: whether its shell jobs have ended, and its last words. */

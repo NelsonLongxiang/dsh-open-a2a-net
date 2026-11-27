@@ -228,6 +228,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     execute: async (args: { kind: string; trigger_id?: string; ticket_id?: string; task_id?: string }, exec): Promise<Record<string, JsonValue>> => {
       const h = asRouter(exec)
       if (h === undefined) return { ...notRouter }
+      if (args.kind === 'peer-channel-audit') return json(h.peerChannelAdmin(callerOf(exec), 'audit', args.ticket_id)) as Record<string, JsonValue>
       if (args.kind === 'decision-receipts') return json(h.observerDecisionReceipts(String((exec.agent as { id: unknown } | undefined)?.id ?? ''))) as Record<string, JsonValue>
       // #881 v2 B1: before every other branch, never wrongId, no similar or available ids.
       if (args.kind === 'outbound_result') return json(h.outboundResult(String((exec.agent as { id: unknown } | undefined)?.id ?? ''), String(args.ticket_id ?? ''), String(args.task_id ?? ''))) as Record<string, JsonValue>
@@ -314,6 +315,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       ticket_id: { type: 'string', required: true, description: 'The ticket this report is about: the id on its assignment card.' },
       state: { type: 'string', required: true, description: 'progress | waiting | ready | blocked | failed | dropped' },
       summary: { type: 'string', required: true, description: 'What changed, with evidence; links for results.' },
+      peer_channel: { type: 'object', additionalProperties: true, description: 'Request seven days of messaging to one teammate on this held ticket. Summary is the reason. Leave custom decision fields empty.' },
       question: { type: 'string', description: 'One concrete question for the ticket owner; empty to keep, "null" to clear. A question needs options and recommended.' },
       options: { type: 'array', items: { type: 'string' }, description: 'With a question: the 2 to 6 choices the owner decides between.' },
       recommended: { type: 'string', description: 'With a question: the option you recommend, copied exactly from options.' },
@@ -326,7 +328,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('ticket report', value) },
     presentCall: args => ({ card: 'generic', title: `ticket report: ${String(args.state)}`, kind: 'other', rawInput: args }),
-    execute: async (args: { ticket_id: string; state: string; summary: string; question?: string; answers?: string; pull_request?: string; options?: string[]; recommended?: string; level?: string; inputs?: Record<string, unknown>; files?: string[]; ygl?: string[] }, exec): Promise<Record<string, JsonValue>> => {
+    execute: async (args: { ticket_id: string; state: string; summary: string; question?: string; answers?: string; pull_request?: string; options?: string[]; recommended?: string; level?: string; inputs?: Record<string, unknown>; files?: string[]; ygl?: string[]; peer_channel?: { to?: string } }, exec): Promise<Record<string, JsonValue>> => {
       const h = host(exec)
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
       if (h === undefined || me === undefined || h.roleOf(me) !== 'member') return { ok: false, code: 'not-member', error: 'a2a_ticket_report serves only the superagent team members the owner named' }
@@ -335,6 +337,11 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       if (ticketId === undefined) return { ok: false, code: 'missing', error: 'ticket_id is required: the id on the ticket\'s assignment card' }
       const said = str(args.summary)
       if (said === undefined) return { ok: false, code: 'missing', error: 'summary is required' }
+      if (args.peer_channel !== undefined) {
+        if (typeof args.peer_channel?.to !== 'string' || args.question !== undefined || args.options !== undefined || args.level !== undefined ||
+          args.inputs !== undefined || args.files !== undefined || args.recommended !== undefined || args.pull_request !== undefined) return { ok: false, code: 'peer-channel-arguments' }
+        return json(await h.proposePeerChannel(me, ticketId, args.peer_channel.to, said)) as Record<string, JsonValue>
+      }
       const ygl = Array.isArray(args.ygl) ? args.ygl.map(id => String(id).trim()).filter(id => id !== '') : []
       if (ygl.length > 40 || ygl.some(id => id.length > 120)) return { ok: false, code: 'ygl', error: 'ygl takes at most 40 ids of at most 120 characters' }
       const remind = h.settings.serves?.members.includes(me) === true ? undefined : h.yglReadyRefusal(me, ticketId, args.state, ygl)
@@ -655,22 +662,49 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     },
   }))
 
+  ctx.tools.register(defineTool({
+    name: 'a2a_team_message',
+    description: 'Send context to an approved teammate. Use a stable message_id. With status=true only look up the existing attempt. Queued says nothing about reading or accepting work.',
+    parameters: {
+      to: { type: 'string', required: true, description: 'The approved teammate’s unique name or session identity.' },
+      ticket_id: { type: 'string', description: 'Required if more than one held ticket grants this destination.' },
+      message_id: { type: 'string', required: true, description: 'Stable id for this exact message.' },
+      text: { type: 'string', description: 'Context to send.' },
+      file: { type: 'object', additionalProperties: true, description: 'File reference metadata only, on confirmed shared storage.' },
+      status: { type: 'boolean', description: 'Look up the existing attempt without sending.' },
+    },
+    output: { ...anyProps, render: (_args, value) => said('team message', value) },
+    presentCall: () => ({ card: 'generic', title: 'Team message', kind: 'other', rawInput: null }),
+    execute: async (args: { status?: boolean }, exec): Promise<Record<string, JsonValue>> => {
+      const h = host(exec), me = callerOf(exec)
+      if (!h || !me || h.roleOf(me) !== 'member') return { ok: false, code: 'not-granted' }
+      return json(await h.teamMessage(me, args, args.status === true)) as Record<string, JsonValue>
+    },
+  }))
+
   // Design outbound-requests O3: an approver the owner named decides outbound cards it did not raise, with a reason.
   ctx.tools.register(defineTool({
     name: 'a2a_decision_decide',
     description: 'Named approvers decide outbound cards as before. Team observers may decide an eligible local card using its generation from a2a_ticket_read kind=cards. Give one existing option and a reason.',
     parameters: {
-      card_id: { type: 'string', required: true, description: 'The card\'s id.' },
+      card_id: { type: 'string', required: true, description: 'The card id, or the grant id when revoking.' },
+      revoke_grant: { type: 'boolean', description: 'Observer only. Revoke the named team message grant.' },
       generation: { type: 'string', description: 'Exact version from kind=cards for an observer decision.' },
-      option: { type: 'string', required: true, description: 'One of the card\'s options.' },
+      option: { type: 'string', required: true, description: 'One of the card’s options. For revoke_grant, use revoke.' },
       reason: { type: 'string', required: true, description: 'Why, in a sentence or two; it is recorded with the decision.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_decision_decide', value) },
     presentCall: args => ({ card: 'generic', title: `a2a_decision_decide ${String(args.card_id)}`, kind: 'other', rawInput: args }),
-    execute: async (args: { card_id?: string; generation?: string; option?: string; reason?: string }, exec): Promise<Record<string, JsonValue>> => {
+    execute: async (args: { card_id?: string; generation?: string; option?: string; reason?: string; revoke_grant?: boolean }, exec): Promise<Record<string, JsonValue>> => {
       const h = host(exec), me = callerOf(exec)
       if (h === undefined || me === undefined) return { ok: false, code: 'not-team', error: 'a2a_decision_decide serves only the sessions of a superagent team on this host' }
-      const out = h.observerOrApproverDecide(me, String(args.card_id ?? ''), args.generation, args.option, args.reason)
+      if (args.revoke_grant === true) {
+        if (!h.isObserver(me) || typeof args.reason !== 'string' || !args.reason.trim()) return { ok: false, code: 'not-authorized' }
+        return json(h.peerChannelAdmin(me, 'revoke', args.card_id, args.reason)) as Record<string, JsonValue>
+      }
+      const id = String(args.card_id ?? '')
+      if (h.isObserver(me) && h.isPeerChannelCard(id) && !await h.checkPeerDecision(id, args.option)) return { ok: false, code: 'not-granted' }
+      const out = h.observerOrApproverDecide(me, id, args.generation, args.option, args.reason)
       // Approving is not delivering (live check): the host sends it now, and the answer reaches the asking ticket as a note.
       return (out.approved === true ? { ...out, note: 'Approved. The host sends the text from the team\'s A2A identity now; whether it went out, and the other team\'s receipt, reach the asking ticket as notes.' } : out) as Record<string, JsonValue>
     },
@@ -697,6 +731,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       const me = exec.agent === undefined ? undefined : String((exec.agent as { id: unknown }).id)
       if (h !== undefined && me !== undefined && args.kind === 'decision-receipts') return json(h.observerDecisionReceipts(me, args.ticket_id)) as Record<string, JsonValue>
       if (h === undefined || me === undefined || h.roleOf(me) !== 'member' || !h.settings.members.includes(me)) return { ok: false, code: 'not-member', error: 'a2a_ticket_read serves only the members on this host of a superagent team' }
+      if (args.kind === 'peer-channels' || args.kind === 'peer-channel-audit') return json(h.peerChannelAdmin(me, args.kind === 'peer-channels' ? 'list' : 'audit', args.ticket_id)) as Record<string, JsonValue>
       if (args.kind === 'cards') return json(h.observerDecisionCards(me)) as Record<string, JsonValue>
       // #881 v2 B1: the outbound result status, before every other branch; the host decides who may see what.
       if (args.kind === 'outbound_result') return json(h.outboundResult(me, String(args.ticket_id ?? ''), String(args.task_id ?? ''))) as Record<string, JsonValue>

@@ -132,7 +132,9 @@ export const BUILDER_ISSUE_TOOLS: readonly string[] = ['superagent_issue_propose
 export const BUILDER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, ...SELF_TOOLS, ...SELF_REFLECT_TOOLS, ...BUILDER_CHECK_TOOLS, 'read', 'glob', 'grep', 'skill', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', ...BUILDER_ISSUE_TOOLS]
 
 /** The tools only a team's sessions have: a session with no role is not offered them. */
-export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS.filter(name => !SCHEDULE_TOOLS.includes(name) && !SELF_TOOLS.includes(name) && !SELF_REFLECT_TOOLS.includes(name) && !YGL_READ_TOOLS.includes(name) && !ROUTER_READ_TOOLS.includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_ticket_note', 'a2a_card_cast', 'a2a_card_queue', 'a2a_card_draft', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', ...BUILDER_ISSUE_TOOLS]
+const PEER_CHANNEL_TOOL = 'a2a_team_message'
+
+export const TEAM_TOOLS: readonly string[] = [...ROUTER_TOOLS.filter(name => !SCHEDULE_TOOLS.includes(name) && !SELF_TOOLS.includes(name) && !SELF_REFLECT_TOOLS.includes(name) && !YGL_READ_TOOLS.includes(name) && !ROUTER_READ_TOOLS.includes(name)), 'a2a_ticket_read', 'a2a_ticket_report', PEER_CHANNEL_TOOL, 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_ticket_request', 'a2a_decision_propose', 'a2a_ticket_note', 'a2a_card_cast', 'a2a_card_queue', 'a2a_card_draft', 'a2a_decision_decide', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', ...BUILDER_ISSUE_TOOLS]
 
 /**
  * Design tool-requests T6 (owner 2026-11-11: granting tools one by one was too much to operate). A member or an observer may
@@ -232,6 +234,7 @@ export function scopeKeyOf(ctx: unknown): object | undefined {
 export interface RoleToolsDeps {
   /** A local session's role in the team (or the team this host serves). */
   readonly roleOf: (sessionId: string) => Role | undefined
+  readonly peerMessageOf?: (sessionId: string) => boolean
   /** Tools the owner granted this session's team for its role (design tool-requests T1). */
   readonly grantedOf?: (sessionId: string) => readonly string[]
   /** The tools the owner blocked for this team's members and observers (T6). */
@@ -274,6 +277,9 @@ export class RoleTools {
   /** The global guard: a role session (or its subagent) calls only its role's tools. */
   guard(name: string, agent: RoleAgent | undefined, args?: unknown): string | undefined {
     const held = this.roleSessionOf(agent)
+    if (name === PEER_CHANNEL_TOOL) {
+      return (held?.role === 'member' || held?.role === 'observer') && held.session === String(agent?.id) && this.d.peerMessageOf?.(held.session) === true ? undefined : '[superagent] not-granted'
+    }
     if (held === undefined) return undefined
     const refusal = roleToolRefusal(held.role, name, args, this.d.grantedOf?.(held.session) ?? [], this.d.blockedOf?.(held.session) ?? [])
     // T6: a member's refusal is the boundary or the owner's block, which a card would only ask about again.
@@ -291,7 +297,8 @@ export class RoleTools {
     const role = this.d.roleOf(id)
     const granted = role === undefined ? [] : (this.d.grantedOf?.(id) ?? []).filter(name => grantableTool(role, name))
     const blocked = role === undefined || role === 'router' ? [] : this.d.blockedOf?.(id) ?? []
-    const key = `${granted.join(',')}|${blocked.join(',')}`
+    const peerMessage = (role === 'member' || role === 'observer') && this.d.peerMessageOf?.(id) === true
+    const key = `${granted.join(',')}|${blocked.join(',')}|${peerMessage}`
     const current = this.applied.get(id)
     // A restriction made while some of this plugin's own tools were not yet visible in the session's scope (a session restored
     // as the host starts) would hide them for good, since nothing about the role changed (a router left without superagent_*
@@ -311,7 +318,7 @@ export class RoleTools {
     const has = (name: string): boolean => { try { return tools.get(name, scope) !== undefined } catch { return false } }
     if (role === 'member' || role === 'observer') {
       // T6: a member or an observer sees everything its scope has but the boundary and the owner's blocks.
-      const deny = [...new Set([...MEMBER_DENY, ...TEAM_TOOLS, ...YGL_WORK_TOOLS, ...blocked])].filter(name => (memberBoundary(role, name) || (blocked.includes(name) && blockableTool(role, name))) && has(name))
+      const deny = [...new Set([...MEMBER_DENY, ...TEAM_TOOLS, ...YGL_WORK_TOOLS, ...blocked])].filter(name => (name === PEER_CHANNEL_TOOL ? !peerMessage : memberBoundary(role, name) || (blocked.includes(name) && blockableTool(role, name))) && has(name))
       try { this.applied.set(id, { role, key, dispose: deny.length === 0 ? () => {} : tools.restrict({ deny }) }) } catch (error) { this.d.logger.warn('superagent: tools of %s not restricted: %s', id, String(error)) }
       return
     }

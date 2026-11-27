@@ -47,6 +47,7 @@ import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, YGL_TREES, blockableTool
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
 import { armAutoApprove, CREDENTIAL_ACK_MINUTES_DEFAULT, DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 import { armObserverDecisionRule, isObserverAnswerReceipt, observerAnswerNote, observerCardView, observerOptions, observerRefusal, OBSERVER_DECISION_WINDOW_MS, OBSERVER_QUOTA_WINDOW_MS, type ObserverDecision } from './observer-decisions.ts'
+import { PEER_CHANNEL_APPROVE, PEER_CHANNEL_DECLINE, PEER_CHANNEL_LIFETIME, PeerChannelBook, peerGrantView, peerMessageId, peerObject, peerPayload, readPeerMessage, validPeerGrantView, type PeerChannelTarget, type PeerGrant, type PeerGrantView, type PeerMessage, type PeerMessageStatus } from './peer-channel.ts'
 import { searchTeam } from './search.ts'
 import { A2aReceipts, END_RECEIPT_GRACE_MS } from './receipts.ts'
 export { END_RECEIPT_GRACE_MS } from './receipts.ts'
@@ -240,6 +241,7 @@ export class SuperagentHost {
 
   constructor(private readonly d: SuperagentHostDeps) {
     const dir = this.stateDir = d.stateDir ?? join(d.home, 'superagent')
+    this.peerChannels = new PeerChannelBook(join(dir, 'peer-channels.json'))
     this.settingsPath = join(dir, 'settings.json')
     this.settingsValue = this.loadSettings()
     this.store = new JsonRepositories(join(dir, 'state.json'))
@@ -994,9 +996,11 @@ export class SuperagentHost {
   }
 
   /** A member by its session id, the first eight of it, or its name; undefined when none matches, or more than one. */
-  resolveMember(value: string): string | undefined {
+  resolveMember(value: string): string | undefined { return this.resolveSeat(value, this.pool()) }
+
+  private resolveSeat(value: string, members: readonly string[]): string | undefined {
     const wanted = value.trim().toLowerCase()
-    const matches = this.pool().filter(id => {
+    const matches = members.filter(id => {
       const short = id.replace(/^session-/, '')
       // The raw name still matches, and so does the name as shown (the router only ever sees that one); two members that
       // read the same either way match together, so neither is picked. A name cleaned to nothing is reached by its id.
@@ -1894,8 +1898,295 @@ export class SuperagentHost {
     return checked.ok ? this.decide(id, 'choose', option, `审批人 ${this.displayName(session)}：${checked.reason}`) : checked
   }
 
+  private readonly peerChannels: PeerChannelBook
+  private readonly servedPeerGrants = new Map<string, { binding: string; grants: PeerGrantView[] }>()
+
+  private peerTeam(): string | undefined {
+    const canvas = this.settingsValue.canvas
+    return canvas === undefined ? undefined : this.d.peerTeamAddress?.(canvas)
+  }
+
+  private resolvePeer(value: string): string | undefined {
+    return this.resolveSeat(value, [...this.settings.members, ...this.settings.remoteMembers.map(row => row.ref)]
+      .filter(id => this.peerChannels.binding(id) !== undefined))
+  }
+
+  private peerRemote(member: string) {
+    return this.settings.remoteMembers.find(row => row.ref === member && row.platform !== PI_PLATFORM && row.url !== '')
+  }
+
+  private syncPeerBindings(): void {
+    const team = this.peerTeam(), served = this.settingsValue.serves
+    const members = new Map<string, string>()
+    const eligible = (id: string, remote: boolean) => presetRefusal(undefined, [id], this.d.presetOf ?? (() => undefined), remote) === undefined
+    if (team !== undefined) {
+      for (const id of this.settings.members) if (id !== this.settingsValue.router && eligible(id, false)) members.set(id, team)
+      for (const remote of this.settings.remoteMembers) {
+        if (remote.platform !== PI_PLATFORM && remote.url !== '') members.set(remote.ref, JSON.stringify([team, remote.key, remote.url]))
+      }
+    }
+    if (served?.team !== undefined) {
+      for (const id of served.members) if (eligible(id, true)) members.set('served:' + id, JSON.stringify([served.team, served.key, served.url]))
+    }
+    this.peerChannels.syncMembers(members)
+  }
+
+  private peerAssignment(sender: string, ticketId: string): string | undefined {
+    const ticket = this.store.tickets.get(ticketId)
+    if (!ticket || ticket.ended || this.store.loadError !== undefined) return undefined
+    const binding = this.executor.bindingFor(sender, ticketId)
+    return ticket.assignments.find(row => row.id === binding?.assignmentId && row.state === 'running')?.id
+  }
+
+  private peerTargetCurrent(target: PeerChannelTarget): boolean {
+    return !this.settingsValue.paused && this.peerChannels.ready && this.peerTeam() === target.team && this.peerAssignment(target.sender, target.ticketId) === target.assignment &&
+      this.peerChannels.binding(target.sender) === target.senderBinding && this.peerChannels.binding(target.recipient) === target.recipientBinding
+  }
+
+  async proposePeerChannel(sender: string, ticketId: string, to: string, reason: string): Promise<Record<string, unknown>> {
+    if (!reason.trim() || reason.length > 500) return { ok: false, code: 'reason' }
+    if (this.settingsValue.paused) return { ok: false, code: 'paused' }
+    const served = this.settingsValue.serves
+    if (served?.members.includes(sender)) return this.forwardPeerChannel(sender, 'peer-channel-propose', { ticket_id: ticketId, to, reason })
+    this.syncPeerBindings()
+    const recipient = this.resolvePeer(to), team = this.peerTeam(), assignment = this.peerAssignment(sender, ticketId)
+    const senderBinding = this.peerChannels.binding(sender)
+    const recipientBinding = recipient === undefined ? undefined : this.peerChannels.binding(recipient)
+    if (!recipient || recipient === sender || !team || !assignment || !senderBinding || !recipientBinding) return { ok: false, code: 'not-granted' }
+    const remote = this.peerRemote(recipient), remoteSender = this.peerRemote(sender)
+    let senderReceivingBinding: string | undefined
+    if (remoteSender !== undefined) {
+      if (await this.d.peerHostMatches?.(remoteSender.url, remoteSender.key) !== true) return { ok: false, code: 'unavailable' }
+      const answer = await this.postPeerMember(remoteSender, 'peer-channel-binding', team)
+      if (answer.ok !== true || typeof answer.binding !== 'string') return { ok: false, code: 'unavailable' }
+      senderReceivingBinding = answer.binding
+    }
+    let receivingBinding: string | undefined
+    if (remote !== undefined) {
+      if (await this.d.peerHostMatches?.(remote.url, remote.key) !== true) return { ok: false, code: 'unavailable' }
+      const answer = await this.postPeerMember(remote, 'peer-channel-binding', team)
+      if (answer.ok !== true || typeof answer.binding !== 'string') return { ok: false, code: 'unavailable' }
+      receivingBinding = answer.binding
+    }
+    const target: PeerChannelTarget = { kind: 'peer-channel', team, ticketId, assignment, sender, senderBinding, recipient, recipientBinding,
+      ...(receivingBinding !== undefined ? { receivingBinding } : {}), ...(senderReceivingBinding !== undefined ? { senderReceivingBinding } : {}) }
+    this.syncPeerBindings()
+    if (!this.decisions.observerStorageReady || !this.peerTargetCurrent(target)) return { ok: false, code: 'not-granted' }
+    try {
+      return this.decisions.propose({ source: 'peer-channel', by: sender, at: this.now(), question: this.displayName(sender) + ' 申请与 ' +
+        this.displayName(recipient) + ' 就工单 ' + ticketId + ' 交流七天。', reason: reason.trim(),
+        spec: { level: 'P1', options: [PEER_CHANNEL_APPROVE, PEER_CHANNEL_DECLINE], recommended: PEER_CHANNEL_APPROVE }, observerTarget: target })
+    } catch { return { ok: false, code: 'storage' } }
+  }
+
+  private async postPeerMember(remote: RemoteMember, op: string, team: string, message?: PeerMessage): Promise<Record<string, unknown>> {
+    try { return await this.d.signedPost?.(remote.url, '/a2a/superagent-member', { op, member: remote.ref.replace(/@[0-9a-f]{8}$/, ''), team, ...(message !== undefined ? { message } : {}) }) ?? { ok: false, code: 'unavailable' } }
+    catch { return { ok: false, code: 'unknown' } }
+  }
+
+  private async forwardPeerChannel(sender: string, op: string, report?: unknown): Promise<Record<string, unknown>> {
+    const served = this.settingsValue.serves
+    this.syncPeerBindings()
+    const memberBinding = this.peerChannels.binding('served:' + sender)
+    if (!memberBinding || !served?.members.includes(sender) || !this.d.signedPost || !this.d.handleOf) return { ok: false, code: 'not-granted' }
+    if (await this.d.peerHostMatches?.(served.url, served.key) !== true || this.settingsValue.serves !== served || this.peerChannels.binding('served:' + sender) !== memberBinding) return { ok: false, code: 'unavailable' }
+    try { return await this.d.signedPost(served.url, '/a2a/superagent-team', { op, member: this.d.handleOf(sender), report: { ...peerObject(report), memberBinding } }) }
+    catch { return { ok: false, code: 'unknown' } }
+  }
+
+  private refreshPeerTool(sender: string): void {
+    const remote = this.peerRemote(sender), team = this.peerTeam()
+    if (remote && team) void this.postPeerMember(remote, 'peer-channel-refresh', team)
+    try { this.d.onRolesChanged?.() } catch { /* The next tool sync will read the committed grant. */ }
+  }
+
+  async checkPeerDecision(id: string, option: unknown): Promise<boolean> {
+    const card = this.decisions.get(id)
+    if (card !== undefined && resolveOption(card.options, option) === PEER_CHANNEL_DECLINE) return true
+    const target = this.decisions.get(id)?.observerBinding?.target
+    if (target?.kind !== 'peer-channel') return false
+    this.syncPeerBindings()
+    if (!this.peerTargetCurrent(target)) return false
+    const remoteSender = this.peerRemote(target.sender)
+    if (remoteSender !== undefined) {
+      if (await this.d.peerHostMatches?.(remoteSender.url, remoteSender.key) !== true) return false
+      const sender = await this.postPeerMember(remoteSender, 'peer-channel-binding', target.team)
+      if (sender.ok !== true || typeof sender.binding !== 'string' || sender.binding !== target.senderReceivingBinding) return false
+    }
+    const remote = this.peerRemote(target.recipient)
+    if (remote === undefined) return target.receivingBinding === undefined
+    if (await this.d.peerHostMatches?.(remote.url, remote.key) !== true) return false
+    const answer = await this.postPeerMember(remote, 'peer-channel-binding', target.team)
+    return answer.ok === true && typeof answer.binding === 'string' && answer.binding === target.receivingBinding
+  }
+
+  private issuePeerGrant(target: PeerChannelTarget, card: StoredCard, by: string, at: string): boolean {
+    this.syncPeerBindings()
+    if (!card.observerBinding || !this.peerTargetCurrent(target)) return false
+    this.peerChannels.approve(target, card.observerBinding.generation, card.id, by, Date.parse(at))
+    this.refreshPeerTool(target.sender)
+    return this.eligiblePeerGrants(target.sender, Date.parse(this.now()), target.senderReceivingBinding).some(row => row.id === card.observerBinding?.generation)
+  }
+
+  private eligiblePeerGrants(sender: string, now: number, memberBinding?: string): PeerGrant[] {
+    this.syncPeerBindings()
+    if (!Number.isFinite(now) || this.settingsValue.paused) return []
+    return this.peerChannels.grants().filter(row => row.sender === sender && row.senderReceivingBinding === memberBinding && !row.revoked && now >= row.approvedAt &&
+      now < row.approvedAt + PEER_CHANNEL_LIFETIME && this.peerTargetCurrent(row))
+  }
+
+  peerGrantViews(sender: string): readonly PeerGrantView[] {
+    const now = Date.parse(this.now())
+    if (!this.settingsValue.serves?.members.includes(sender)) return this.eligiblePeerGrants(sender, now).map(peerGrantView)
+    this.syncPeerBindings()
+    const cached = this.servedPeerGrants.get(sender)
+    return cached !== undefined && cached.binding === this.peerChannels.binding('served:' + sender) ? cached.grants.filter(grant => grant.expiresAt > now) : []
+  }
+
+  async refreshPeerGrants(sender: string): Promise<readonly PeerGrantView[]> {
+    if (!this.settingsValue.serves?.members.includes(sender)) return this.peerGrantViews(sender)
+    this.syncPeerBindings()
+    const binding = this.peerChannels.binding('served:' + sender)
+    if (!binding) return []
+    const answer = await this.forwardPeerChannel(sender, 'peer-channel-list')
+    this.syncPeerBindings()
+    if (binding !== this.peerChannels.binding('served:' + sender)) return []
+    this.servedPeerGrants.set(sender, { binding, grants: answer.ok === true && Array.isArray(answer.grants) ? answer.grants.filter(validPeerGrantView).map(({ id, ticketId, recipient, expiresAt }) => ({ id, ticketId, recipient, expiresAt })) : [] })
+    this.d.onRolesChanged?.()
+    return this.peerGrantViews(sender)
+  }
+
+  peerChannelAdmin(by: string | undefined, op: unknown, id: unknown, reason?: unknown): Record<string, unknown> {
+    if (by !== undefined && !this.isObserver(by) && (by !== this.settingsValue.router || op !== 'audit')) return { ok: false, code: 'not-authorized' }
+    if (!this.peerChannels.ready) return { ok: false, code: 'storage' }
+    if (op === 'revoke' && typeof id === 'string') {
+      const grant = this.peerChannels.grants().find(row => row.id === id)
+      const explanation = typeof reason === 'string' ? reason.trim() : ''
+      if (explanation.length > 500) return { ok: false, code: 'reason' }
+      try {
+        if (!grant || !this.peerChannels.revoke(id, by ?? 'owner', Date.parse(this.now()), explanation)) return { ok: false, code: 'not-granted' }
+        this.refreshPeerTool(grant.sender)
+        return { ok: true }
+      } catch { return { ok: false, code: 'storage' } }
+    }
+    if (op === 'audit' && typeof id === 'string') {
+      if (!this.store.tickets.get(id)) return { ok: false, code: 'not-yours' }
+      return { ok: true, messages: this.peerChannels.audit(id).map(({ payload, status }) => ({ ...payload, status })) }
+    }
+    return op === 'list' ? { ok: true, grants: this.peerChannels.grants().map(row => ({ ...peerGrantView(row), sender: row.sender, revoked: row.revoked ?? null })) } : { ok: false, code: 'op' }
+  }
+
+  async teamMessage(sender: string, raw: unknown, reconcile = false, memberBinding?: string): Promise<Record<string, unknown>> {
+    if (this.settingsValue.serves?.members.includes(sender)) return this.forwardPeerChannel(sender, reconcile ? 'peer-channel-status' : 'peer-channel-message', raw)
+    const args = peerObject(raw)
+    if (typeof args?.to !== 'string' || !peerMessageId(args.message_id) || (args.ticket_id !== undefined && typeof args.ticket_id !== 'string')) return { ok: false, code: 'arguments' }
+    let now = Date.parse(this.now())
+    this.syncPeerBindings()
+    const owner = 'out:' + sender, id = args.message_id, to = this.resolvePeer(args.to)
+    const prior = this.peerChannels.find(owner, id)
+    if (prior !== undefined && (!this.peerAssignment(sender, prior.payload.ticketId) || prior.payload.recipient !== (to ?? args.to) ||
+      (args.ticket_id !== undefined && prior.payload.ticketId !== args.ticket_id))) return { ok: false, code: 'not-granted' }
+    const active = this.eligiblePeerGrants(sender, now, memberBinding)
+    if (reconcile) {
+      if (!prior) return { ok: false, code: 'not-granted' }
+      const grant = active.find(row => row.id === prior.payload.grantId)
+      if (prior.status === 'unknown' && grant !== undefined) {
+        const remote = this.peerRemote(grant.recipient)
+        const status = remote !== undefined ? (await this.postPeerMember(remote, 'peer-channel-status', grant.team, prior.payload)).status
+          : this.d.peerDeliveryStatus?.(grant.recipient, prior.payload, grant.recipientBinding)
+        if (status === 'queued' || status === 'refused') try { this.peerChannels.finish(owner, id, status) } catch { /* unknown */ }
+      }
+      return { ok: true, status: this.peerChannels.find(owner, id)?.status ?? 'unknown', messageId: id }
+    }
+    const payload = peerPayload(args)
+    if (!payload) return { ok: false, code: 'payload' }
+    if (prior !== undefined) {
+      if (!active.some(row => row.id === prior.payload.grantId)) return { ok: false, code: 'not-granted' }
+      return JSON.stringify(peerPayload(prior.payload)) === JSON.stringify(payload)
+        ? { ok: true, status: prior.status, messageId: id, replayed: true } : { ok: false, code: 'conflict' }
+    }
+    const matching = active.filter(row => row.recipient === to && (args.ticket_id === undefined || row.ticketId === args.ticket_id))
+    if (new Set(matching.map(row => row.ticketId)).size > 1) return { ok: false, code: 'ticket-required' }
+    const grant = matching.sort((a, b) => b.approvedAt - a.approvedAt)[0]
+    if (!grant) return { ok: false, code: 'not-granted' }
+    const remote = this.peerRemote(grant.recipient)
+    if (remote !== undefined) {
+      if (await this.d.peerHostMatches?.(remote.url, remote.key) !== true) return { ok: false, code: 'unavailable' }
+      now = Date.parse(this.now())
+      if (!this.eligiblePeerGrants(sender, now, memberBinding).some(row => row.id === grant.id)) return { ok: false, code: 'not-granted' }
+      // Another call may have reserved this id while the remote card was being checked.
+      const concurrent = this.peerChannels.find(owner, id)
+      if (concurrent !== undefined) return concurrent.payload.grantId === grant.id && JSON.stringify(peerPayload(concurrent.payload)) === JSON.stringify(payload)
+        ? { ok: true, status: concurrent.status, messageId: id, replayed: true } : { ok: false, code: 'conflict' }
+    }
+    if (payload.file !== undefined && (remote !== undefined || this.d.peerSharedFiles?.(sender, grant.recipient) !== true)) return { ok: false, code: 'shared-files-unverified' }
+    const message: PeerMessage = { id, grantId: grant.id, team: grant.team, ticketId: grant.ticketId, sender, recipient: grant.recipient,
+      ...(grant.receivingBinding !== undefined ? { receivingBinding: grant.receivingBinding } : {}), at: now, ...payload }
+    // Authorization and audit commit precede the first queue operation, without an async gap.
+    try { this.peerChannels.reserve(owner, message) } catch { return { ok: false, code: 'storage' } }
+    try {
+      let status: PeerMessageStatus
+      if (remote === undefined) status = this.d.deliverPeerMessage?.(grant.recipient, message, grant.recipientBinding) ?? 'refused'
+      else {
+        const answer = await this.postPeerMember(remote, 'peer-channel-message', grant.team, message)
+        status = answer.ok === true && answer.status === 'queued' ? 'queued'
+          : answer.ok === true && answer.status === 'refused' || answer.ok === false &&
+            ['not-team', 'not-member', 'not-granted', 'untrusted-origin', 'op', 'unavailable', 'storage'].includes(String(answer.code)) ? 'refused' : 'unknown'
+      }
+      if (status !== 'unknown') this.peerChannels.finish(owner, id, status)
+    } catch { /* The persisted unknown is reconciled by message id, never resent. */ }
+    return { ok: true, status: this.peerChannels.find(owner, id)?.status ?? 'unknown', messageId: id }
+  }
+
+  async peerRemoteOperation(op: string, handle: string, key: string, raw: unknown): Promise<Record<string, unknown>> {
+    const member = this.settings.remoteMembers.find(row => row.platform !== PI_PLATFORM && row.key === key && row.ref.replace(/@[0-9a-f]{8}$/, '') === handle)
+    if (!member) return { ok: false, code: 'not-member' }
+    const binding = peerObject(raw)?.memberBinding
+    if (typeof binding !== 'string') return { ok: false, code: 'not-granted' }
+    if (op === 'peer-channel-list') return { ok: true, grants: this.eligiblePeerGrants(member.ref, Date.parse(this.now()), binding).map(peerGrantView) }
+    if (op === 'peer-channel-message' || op === 'peer-channel-status') return this.teamMessage(member.ref, raw, op === 'peer-channel-status', binding)
+    if (op === 'peer-channel-propose') {
+      const args = peerObject(raw)
+      if (typeof args?.ticket_id !== 'string' || typeof args.to !== 'string' || typeof args.reason !== 'string') return { ok: false, code: 'arguments' }
+      return this.proposePeerChannel(member.ref, args.ticket_id, args.to, args.reason)
+    }
+    return { ok: false, code: 'op' }
+  }
+
+  peerMemberDelivery(op: unknown, member: unknown, signerKey: string, team: unknown, raw: unknown): Record<string, unknown> {
+    const served = this.settingsValue.serves
+    if (!served || served.key !== signerKey || served.team === undefined || served.team !== team) return { ok: false, code: 'not-team' }
+    const local = typeof member === 'string' ? this.d.localSessionOf?.(member) : undefined
+    this.syncPeerBindings()
+    const binding = local === undefined ? undefined : this.peerChannels.binding('served:' + local)
+    if (!local || !binding || !served.members.includes(local)) return { ok: false, code: 'not-member' }
+    if (op === 'peer-channel-binding') return { ok: true, binding }
+    if (op === 'peer-channel-refresh') { void this.refreshPeerGrants(local); return { ok: true } }
+    const message = readPeerMessage(raw)
+    if (!message || message.file !== undefined || message.team !== team || message.receivingBinding !== binding ||
+      message.recipient.replace(/@[0-9a-f]{8}$/, '') !== member) return { ok: false, code: 'not-granted' }
+    const owner = 'in:' + signerKey + ':' + local + ':' + message.grantId
+    const prior = this.peerChannels.find(owner, message.id)
+    if (prior && JSON.stringify(prior.payload) !== JSON.stringify(message)) return { ok: false, code: 'conflict' }
+    if (op === 'peer-channel-status') {
+      if (prior?.status === 'unknown' && this.d.peerDeliveryStatus?.(local, message, binding) === 'queued') {
+        try { this.peerChannels.finish(owner, message.id, 'queued') } catch { /* unknown */ }
+      }
+      return { ok: true, status: this.peerChannels.find(owner, message.id)?.status ?? 'unknown' }
+    }
+    if (op !== 'peer-channel-message') return { ok: false, code: 'op' }
+    if (prior) return { ok: true, status: prior.status, replayed: true }
+    try { this.peerChannels.reserve(owner, message) } catch { return { ok: false, code: 'storage' } }
+    try {
+      const status = this.d.deliverPeerMessage?.(local, message, binding) ?? 'refused'
+      if (status !== 'unknown') this.peerChannels.finish(owner, message.id, status)
+    } catch { /* accepted but unconfirmed remains unknown */ }
+    return { ok: true, status: this.peerChannels.find(owner, message.id)?.status ?? 'unknown' }
+  }
+
   private observerTargetAvailable(card: StoredCard): boolean {
     const target = card.observerBinding?.target
+    if (target?.kind === 'peer-channel') { this.syncPeerBindings(); return this.peerTargetCurrent(target) }
     if (target?.kind === 'router-receipt') return card.source === 'router' && this.settingsValue.router === target.session
     if (target?.kind === 'credential-ack') return card.source === 'health' && card.by === 'credential:' + target.supervised && card.options[target.optionIndex] === '知道了'
     if (target?.kind !== 'ticket-answer' || card.source !== 'ticket' || card.ticketId !== target.ticketId) return false
@@ -1957,7 +2248,8 @@ export class SuperagentHost {
     if (decision === undefined || (decision.state !== 'pending' && decision.state !== 'attempting')) return
     try {
       if (decision.state === 'attempting') {
-        this.decisions.updateObserverDecision(card, { ...decision, state: this.ticketObserverReceipt(decision) ? 'applied' : 'unknown' })
+        const peerApplied = decision.target.kind === 'peer-channel' && this.peerChannels.grants().some(row => row.id === decision.generation && row.cardId === card.id && row.by === decision.session)
+        this.decisions.updateObserverDecision(card, { ...decision, state: this.ticketObserverReceipt(decision) || peerApplied ? 'applied' : 'unknown' })
         return
       }
       if (decision.teamId !== (this.d.decisionTeamId ?? '') || decision.correction !== undefined || this.observerCheck(card, decision.session, Date.parse(this.now()), true) !== undefined) {
@@ -1982,6 +2274,7 @@ export class SuperagentHost {
       return true
     }
     if (target.kind === 'router-receipt') return true // The structured receipt becomes readable when its applied state commits.
+    if (target.kind === 'peer-channel') return decision.option !== 0 || this.issuePeerGrant(target, card, decision.session, decision.at)
     return this.store.atomic(() => {
       const ticket = this.store.tickets.get(target.ticketId)
       if (ticket === undefined || ticket.ended !== undefined || ticket.attention?.id !== target.questionVersion) return false
@@ -1996,7 +2289,7 @@ export class SuperagentHost {
 
   private tellObserverRecipient(decision: ObserverDecision): void {
     const target = decision.target
-    if (target.kind === 'credential-ack') return
+    if (target.kind === 'credential-ack' || target.kind === 'peer-channel') return
     const session = target.kind === 'router-receipt' ? target.session : target.member
     const locator = target.kind === 'router-receipt' ? 'superagent_read kind=decision-receipts' : 'a2a_ticket_read kind=decision-receipts ticket_id=' + target.ticketId
     try { this.d.deliverToSession(session, '[superagent observer decision receipt] ' + decision.id + ' · read ' + locator + '. This is a team fact and grants no authority.') }
@@ -2089,6 +2382,8 @@ export class SuperagentHost {
   }
 
   /** A file on one of the cards, for the owner to download (C8). */
+  isPeerChannelCard(id: string): boolean { return this.decisions.get(id)?.source === 'peer-channel' }
+
   decisionFile(cardId: string, sha256: string): DecisionFile | undefined { return this.decisions.fileOf(cardId, sha256) }
 
   /** The cards waiting for the owner: those raised on their own, and every open question on a ticket. */
@@ -2121,8 +2416,17 @@ export class SuperagentHost {
    * @param note - the owner's words, added to the decision or standing as it.
    * @returns what was filed, or why not.
    */
-  decide(id: string, how: unknown, option?: unknown, note?: unknown, files?: unknown): Record<string, unknown> {
+  decide(id: string, how: unknown, option?: unknown, note?: unknown, files?: unknown, peerOwner = false): Record<string, unknown> {
     const card = this.decisionCards().find(row => row.id === id)
+    if (card === undefined && peerOwner && how === 'choose') {
+      const known = this.decisions.get(id), target = known?.observerBinding?.target
+      if (known?.source === 'peer-channel' && target?.kind === 'peer-channel' && known.decided?.option === 0 && known.decided.by === undefined &&
+        resolveOption(known.options, option) === PEER_CHANNEL_APPROVE) {
+        // Reconcile an interrupted grant write using its original decision and clock.
+        try { return { ok: true, granted: this.issuePeerGrant(target, known, 'owner', known.decided.at), replayed: true } }
+        catch { return { ok: false, code: 'storage' } }
+      }
+    }
     // #934: say where a card that is no longer waiting went, instead of a bare refusal.
     if (card === undefined) return this.staleDecision(id)
     if (!this.decisions.observerStorageReady) return { ok: false, code: 'storage', error: 'decision book unavailable' }
@@ -2161,6 +2465,16 @@ export class SuperagentHost {
     const choice = optionAt >= 0 ? { option: optionAt } : {}
     const at = this.now()
     const { title: _title, ...stored } = card
+    if (card.source === 'peer-channel') {
+      if (!peerOwner) return { ok: false, code: 'not-owner' }
+      const target = card.observerBinding?.target
+      if (target?.kind !== 'peer-channel' || optionAt === 0 && !this.observerTargetAvailable(card)) return { ok: false, code: 'not-granted' }
+      if (optionAt < 0 || attached.length > 0) return { ok: false, code: 'choice' }
+      try {
+        this.decisions.decide(card.id, { at, text: answer, ...choice }, stored)
+        return { ok: true, granted: optionAt === 0 && this.issuePeerGrant(target, card, 'owner', at) }
+      } catch { return { ok: false, code: 'storage' } }
+    }
     // A health reminder's decision is a dismissal: it opens no ticket and answers no question (reliability R7).
     if (card.source === 'health') {
       this.decisions.decide(card.id, { at, text: answer, ...choice, ...withFiles }, stored)
@@ -2352,6 +2666,7 @@ export class SuperagentHost {
    * ticket gets a new one on another member (owner ruling Q2: stop and requeue), and the member is told to stop.
    */
   poolChanged(): void {
+    this.syncPeerBindings()
     // v5 acceptance F3: with no canvas bound (or the bound one gone) the pool reads empty; that is not the owner taking
     // members away — running work stays where it is until a canvas is bound again.
     if (!this.teamBound()) {
@@ -2403,6 +2718,7 @@ export class SuperagentHost {
     const stored: TeamSettings = { ...next, members: [], remoteMembers: [] }
     try { writeFileSync(temporary, JSON.stringify(stored), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.settingsPath) } finally { rmSync(temporary, { force: true }) }
     this.settingsValue = stored
+    this.syncPeerBindings()
     try { this.d.onRolesChanged?.() } catch (error) { this.d.logger.warn('superagent: role change not applied: %s', String(error)) }
   }
 

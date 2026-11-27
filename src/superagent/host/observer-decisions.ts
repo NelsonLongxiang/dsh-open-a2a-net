@@ -1,5 +1,6 @@
 import { type StoredCard, needsInput, ticketCardId } from './decisions.ts'
 import type { TicketInput } from '../upstream/dsh-superagent/src/core/index.ts'
+import { PEER_CHANNEL_APPROVE, PEER_CHANNEL_DECLINE, type PeerChannelTarget, validPeerTarget } from './peer-channel.ts'
 
 const LEVEL = { P0: 0, P1: 1, P2: 2, P3: 3 } as const
 export const OBSERVER_DECISION_WINDOW_MS = 24 * 3_600_000
@@ -16,6 +17,7 @@ export type ObserverDecisionTarget =
   | { readonly kind: 'router-receipt'; readonly session: string }
   | { readonly kind: 'ticket-answer'; readonly ticketId: string; readonly questionVersion: string; readonly member: string }
   | { readonly kind: 'credential-ack'; readonly supervised: string; readonly optionIndex: number; readonly preview: string }
+  | PeerChannelTarget
 
 export interface ObserverCardBinding {
   readonly generation: string
@@ -66,7 +68,7 @@ export function isObserverAnswerReceipt(input: TicketInput, decision: ObserverDe
 export function validObserverCardState(card: StoredCard): boolean {
   const binding = card.observerBinding
   const decision = card.observerDecision
-  if (binding === undefined) return decision === undefined
+  if (binding === undefined) return card.source !== 'peer-channel' && decision === undefined
   if (binding === null || typeof binding !== 'object' || typeof binding.generation !== 'string' || typeof binding.proposer !== 'string'
     || !Number.isFinite(Date.parse(binding.createdAt)) || !Array.isArray(card.options)) return false
   const target = binding.target
@@ -74,7 +76,10 @@ export function validObserverCardState(card: StoredCard): boolean {
   if (target.kind === 'router-receipt') { if (card.source !== 'router' || typeof target.session !== 'string' || binding.proposer !== target.session) return false }
   else if (target.kind === 'ticket-answer') { if (card.source !== 'ticket' || typeof target.ticketId !== 'string' || card.ticketId !== target.ticketId || typeof target.questionVersion !== 'string' || typeof target.member !== 'string') return false }
   else if (target.kind === 'credential-ack') { if (card.source !== 'health' || typeof target.supervised !== 'string' || typeof target.preview !== 'string' || !Number.isInteger(target.optionIndex) || card.options[target.optionIndex] !== '知道了') return false }
-  else return false
+  else if (target.kind === 'peer-channel') {
+    if (!validPeerTarget(target) || card.source !== 'peer-channel' || card.level !== 'P1' || card.by !== target.sender || binding.proposer !== target.sender ||
+      card.options.length !== 2 || card.options[0] !== PEER_CHANNEL_APPROVE || card.options[1] !== PEER_CHANNEL_DECLINE || card.recommended !== PEER_CHANNEL_APPROVE || needsInput(card) || card.files?.length) return false
+  } else return false
   if (decision === undefined) return true
   // A repeated ticket question archives its previous row under the decision ID without changing the original card ID.
   if (target.kind === 'ticket-answer' && typeof card.question !== 'string') return false
@@ -132,7 +137,8 @@ export function observerRefusal(card: StoredCard, check: ObserverDecisionCheck, 
   if (!Number.isFinite(check.now) || !Number.isFinite(armed) || !Number.isFinite(created) || armed > check.now || created > check.now || created <= armed) return 'card-age'
   if (card.level === 'P0' || LEVEL[card.level] === undefined || LEVEL[card.level] < LEVEL[rule.maxLevel]) return 'level'
   if (needsInput(card)) return 'needs-input'
-  if (binding.proposer === check.session || (binding.target.kind === 'credential-ack' && binding.target.supervised === check.session)) return 'own'
+  if (binding.proposer === check.session || (binding.target.kind === 'credential-ack' && binding.target.supervised === check.session) ||
+    (binding.target.kind === 'peer-channel' && binding.target.recipient === check.session)) return 'own'
   if (!check.targetAvailable) return 'target'
   if (!recovering && check.used >= rule.perHour) return 'cap'
   return undefined
