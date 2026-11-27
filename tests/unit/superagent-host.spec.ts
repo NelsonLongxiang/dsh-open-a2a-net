@@ -6,7 +6,7 @@ import { mkdtempSync } from '../temp-dirs.ts'
 import { describe, expect, it, vi } from 'vitest'
 // #782-era ledger (2026-11-22, contended Windows host): full-suite load exceeded the 5s default in these specs; raised ceiling only, assertions unchanged.
 vi.setConfig({ testTimeout: 25_000 })
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Engine, MemoryRepositories, ticketStage, type Candidate, type EngineOptions, type Repositories, type Trigger } from '../../src/superagent/upstream/dsh-superagent/src/core/index.ts'
@@ -57,7 +57,10 @@ describe('JsonRepositories', () => {
   })
   it('persists every committed unit of work and reloads it', () => {
     const path = tmp()
-    const first = scenario(new JsonRepositories(path))
+    const repo = new JsonRepositories(path)
+    expect(repo.historyFileBytes()).toBe(0)
+    const first = scenario(repo)
+    expect(repo.historyFileBytes()).toBe(statSync(path).size)
     const again = new JsonRepositories(path)
     expect(again.loadError).toBeUndefined()
     expect({ tickets: again.tickets.list(), threads: again.threads.list(), t1: again.decisions.byThread('workbench:t1') })

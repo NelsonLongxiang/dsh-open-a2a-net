@@ -6,7 +6,7 @@
  * Outbox's queued messages live in the same document, so a decision and the reply it queued commit together.
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/store
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { latestAssignment, type Decision, type OutboundMessage, type ReplyStatus, type Repositories, type Thread, type Ticket, type Trigger, type TriggerDisposition } from '../upstream/dsh-superagent/src/core/index.ts'
@@ -41,6 +41,15 @@ export class JsonRepositories implements Repositories {
   /** @param path - the JSON document; '' keeps the store in memory (tests). */
   constructor(private readonly path: string) {
     this.loadError = this.load()
+  }
+
+  /** Measure the committed history file using metadata only. Missing files have no persisted bytes. */
+  historyFileBytes(): number {
+    if (this.path === '') return 0
+    const stat = lstatSync(this.path, { throwIfNoEntry: false })
+    if (stat === undefined) return 0
+    if (!stat.isFile()) throw new Error('team history path is not a regular file')
+    return stat.size
   }
 
   private maps(): Map<string, unknown>[] {

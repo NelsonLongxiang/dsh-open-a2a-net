@@ -35,6 +35,7 @@ import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { canvasOwnerFingerprint, splitCanvasOwner } from '../canvas-id.ts'
 import type { StaffingExecutor, StaffingChange } from '../superagent/host/staffing.ts'
 import type { SidebarSends } from '../sidebar-sends.ts'
+import type { TranscriptCache } from '../session-log-page.ts'
 
 /** What the superagent faces need from the host's closure. */
 export interface SuperagentFaceDeps {
@@ -42,6 +43,7 @@ export interface SuperagentFaceDeps {
   readonly config: Config
   readonly superagentHost: SuperagentHost
   readonly superagentTeams: SuperagentTeams
+  readonly transcriptCache: TranscriptCache
   /** #953: a canvas team's display label, when the owner set one. */
   readonly canvasLabel?: (canvas: string) => string | undefined
   readonly controlRoute: (handler: (req: IncomingMessage, res: ServerResponse) => void) => (req: IncomingMessage, res: ServerResponse) => void
@@ -89,6 +91,28 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
     if (!proof.ok) { send(proof.status, proof); return false }
     return true
   }
+  ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: '/__dsh_a2a/superagent/diagnostics',
+    handler: controlRoute((req, res) => {
+      const send = (status: number, value: unknown): void => {
+        res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+        res.end(JSON.stringify(value))
+      }
+      if (!requireBrowserOwner(req, send, false)) return
+      if (req.method !== 'GET') { send(405, { code: 'method' }); return }
+      try {
+        const sessions = ctx.get('sessions')
+        if (sessions === undefined) { send(503, { code: 'diagnostics-unavailable' }); return }
+        const liveSessions = sessions.list().length
+        const parsedTranscriptBytesEstimate = d.transcriptCache.parsedBytesEstimate()
+        const teamHistoryFileBytes = superagentTeams.all().reduce((bytes, team) => bytes + team.store.historyFileBytes(), 0)
+        send(200, { liveSessions, parsedTranscriptBytesEstimate, teamHistoryFileBytes, unreleasedQueryLeases: '未采集' })
+      } catch {
+        send(503, { code: 'diagnostics-unavailable' })
+      }
+    }),
+  }), 'a2a: owner aggregate diagnostics')
   {
     // superagent design v4, PR-B: the owner's workbench face of the engine (owner control route only).
     // GET: the engine state; POST: settings (router, allowed senders, Sources, pause), request (the workbench Source),
