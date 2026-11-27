@@ -57,7 +57,7 @@ CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) 
 superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
 user:     user issue [--name N] [--days D] [--dsh-home DIR] · user import --token-file F · user pair [--name N] [--days D] · user list · user revoke <id> · user nodes
           · user teams · user state --team ID · user decisions · user decide <card id> (--approve | --option TEXT|o2|2) [--note T]
-          · user request --team ID <text…> · user request status --team ID <trigger id> · user answer --team ID <ticket id> [<text…>] [--option O] · user api <GET|POST> <path> [--data JSON|@file]
+          · user canvas label <name> (<label…> | --clear) · user request --team ID <text…> · user request status --team ID <trigger id> · user sessions [--team T] · user session read <id> [--before N] [--limit N] [--chars N] · user session prompt <id> (--steer|--queue) [--request-id R] -- <text…> · user answer --team ID <ticket id> [<text…>] [--option O] · user api <GET|POST> <path> [--data JSON|@file]
           · user node status [--all] · user node install <tgz> [--restart] [--force-deps] · user node rollback [backup id] [--restart] · user node restart
           · user builder inventory [--all] · user builder list [--all]   (the team builders, read-only)
           (the control API's user scope: acts as the owner on --home, with the owner delegate saved for that home)
@@ -121,8 +121,8 @@ admission: admission <caller> [--local] [--json]   how <caller> would be admitte
 /** The capabilities a CLI identity may declare on its card (superagent-root-team S5). */
 // piSeat: docs/design/superagent-pi-platform.md P1 — this identity is a Pi seat (it may join a superagent team as a member).
 const DECLARABLE = ['progressReceipts', 'teamRoster', 'directedSeats', 'reworkReturns', 'piSeat']
-const VALUE_FLAGS = new Set(['--poll-ms', '--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir', '--recommended', '--level', '--event', '--run', '--name', '--days', '--dsh-home', '--team', '--option', '--data', '--token-file'])
-const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class', '--pi-seat', '--transient', '--approve', '--restart', '--all', '--force-deps'])
+const VALUE_FLAGS = new Set(['--poll-ms', '--declare', '--note', '--out', '--home', '--key', '--uuid', '--root', '--timeout', '--interval', '--context', '--task', '--after', '--limit', '--before', '--chars', '--request-id', '--to', '--outcome', '--by', '--by-name', '--by-team', '--by-role', '--by-seat-id', '--artifacts', '--question-id', '--options', '--default', '--progress', '--state', '--ahead', '--tickets', '--ticket', '--question', '--answers', '--pull-request', '--trigger', '--text', '--dir', '--recommended', '--level', '--event', '--run', '--name', '--days', '--dsh-home', '--team', '--option', '--data', '--token-file'])
+const SWITCHES = new Set(['--json', '--force', '--help', '-h', '--new', '--peek', '--wait', '--hook', '--renew', '--sync', '--attention', '--acknowledged', '--owes', '--local', '--exit-class', '--pi-seat', '--transient', '--approve', '--restart', '--all', '--force-deps', '--steer', '--queue', '--clear'])
 
 /** A hook must never break the session it runs in: in --hook mode every failure is silent. */
 const HOOK_MODE = process.argv.includes('--hook')
@@ -1039,7 +1039,7 @@ async function cmdUser() {
   if (sub === 'revoke') { const [id] = words; if (id === undefined) usage('usage: a2a user revoke <id>'); printOut(await userCall('POST', '/__dsh_a2a/owner-delegates', { action: 'revoke', id }), out => console.log(out.ok ? `[user] ${id} revoked` : `[user] no live delegate ${id}`)); return }
   if (sub === 'node') { await cmdUserNode(words); return }
   if (sub === 'builder') { await cmdUserBuilder(words); return }
-  if (sub === 'teams') { printOut(await userCall('GET', '/__dsh_a2a/superagent/teams'), out => { for (const t of out.teams ?? []) console.log(`${String(t.id || '(primary)').padEnd(24)} ${String(t.address ?? '')}  ${t.open ? 'open' : 'closed'}`) }); return }
+  if (sub === 'teams') { printOut(await userCall('GET', '/__dsh_a2a/superagent/teams'), out => { for (const t of out.teams ?? []) console.log(`${String(t.id || '(primary)').padEnd(24)} ${String(t.address ?? '')}  ${t.open ? 'open' : 'closed'}${typeof t.label === 'string' ? `  ${t.label}` : ''}`) }); return }
   const team = flag('--team')
   if (sub === 'state') { printOut(await userCall('GET', `/__dsh_a2a/superagent${team !== undefined ? `?teamId=${encodeURIComponent(team)}` : ''}`), out => { for (const t of out.tickets ?? []) if (!t.ended) console.log(`${String(t.id)}  ${String(t.stage?.stage ?? '?')}${t.attention ? ' [question]' : ''}  ${String(t.title)}`) }); return }
   if (sub === 'decisions') { printOut(await userCall('GET', '/__dsh_a2a/superagent/decisions'), out => { for (const c of out.decisions ?? []) console.log(`${String(c.id)}  ${String(c.level)}  [${String(c.team ?? '')}] ${String(c.question)}${(c.options ?? []).map((o, i) => `\n    ${i + 1}) ${String(o)}`).join('')}\n    recommended: ${c.recommendedId !== undefined ? `${String(c.recommendedId).slice(1)}) ` : ''}${String(c.recommended ?? '')}`) }); return }
@@ -1060,6 +1060,46 @@ async function cmdUser() {
   }
   if (sub === 'request') { const text = words.join(' '); if (text === '' || team === undefined) usage('usage: a2a user request --team ID <text…>'); printOut(await userCall('POST', '/__dsh_a2a/superagent', { action: 'request', teamId: team, text }), out => console.log(`[user] ${String(out.result)} · trigger ${String(out.triggerId)} · thread ${String(out.thread)}`)); return }
   if (sub === 'answer') { const [ticket, ...rest] = words; const text = rest.join(' '); const option = flag('--option'); if (ticket === undefined || (text === '' && option === undefined) || team === undefined) usage('usage: a2a user answer --team ID <ticket id> [<text…>] [--option TEXT|o2|2] (an option answers a question that is a card; text alone leaves a ticket with no question a note)'); printOut(await userCall('POST', '/__dsh_a2a/superagent', { action: 'answer', teamId: team, ticket_id: ticket, ticketId: ticket, text, ...(option !== undefined ? { option } : {}) }), out => console.log(out.noted === true ? `[user] left a note on ${ticket}` : out.card !== undefined && out.ok === true ? `[user] answered ${ticket} by deciding ${out.card}` : `[user] answered ${ticket}`)); return }
+  // #953: a canvas team's display label (display only; the team's name stays its address). Owner delegate or browser login.
+  if (sub === 'canvas') {
+    const [op, name, ...rest] = words
+    const label = rest.join(' ')
+    if (op !== 'label' || name === undefined || has('--clear') === (label !== '')) usage('usage: a2a user canvas label <canvas name> (<label…> | --clear)   (the label is display only; put a label that starts with - after --)')
+    printOut(await userCall('POST', '/__dsh_a2a/canvas', { action: 'set-label', name, ...(has('--clear') ? { clear: true } : { label }) }), out => {
+      console.log(out.label === null ? `[user] ${name}: label cleared, shown as ${name}` : `[user] ${name}: label "${String(out.label)}" (address unchanged)`)
+    })
+    return
+  }
+  // #951 S1: the owner's hand on a seat's session. Each needs the owner delegate (or a browser login) on top of the control key.
+  if (sub === 'sessions') {
+    printOut(await userCall('GET', `/__dsh_a2a/user/sessions${team !== undefined ? `?team=${encodeURIComponent(team)}` : ''}`), out => {
+      console.log(`[user] ${String(out.count)} sessions${out.truncated === true ? ' (list cut)' : ''}`)
+      for (const s of out.sessions ?? []) console.log(`  ${String(s.id)}  ${s.live ? 'live' : s.joined ? 'cold' : '-'}${s.joined ? '' : ' (not joined)'}${s.archived ? ' archived' : ''}  ${String(s.status ?? '-')} q${String(s.queued ?? '-')}  ${String(s.role ?? '-')}  ${String(s.name)}`)
+    })
+    return
+  }
+  if (sub === 'session') {
+    const [op, id, ...rest] = words
+    if (op === 'read') {
+      if (id === undefined) usage('usage: a2a user session read <session id> [--before N] [--limit N] [--chars N]')
+      const query = ['--before', '--limit', '--chars'].flatMap(name => flag(name) === undefined ? [] : [`${name.slice(2)}=${encodeURIComponent(flag(name))}`])
+      printOut(await userCall('GET', `/__dsh_a2a/user/session?id=${encodeURIComponent(id)}${query.length > 0 ? `&${query.join('&')}` : ''}`), out => {
+        console.log(`[user] ${String(out.id)} · entries ${String(out.from)}–${String(Number(out.to) - 1)} of ${String(out.total)}${out.stale === true ? ' (the log changed: this is the newest page)' : ''}${Number(out.from) > 0 ? ` · older: --before ${String(out.from)}` : ''}`)
+        for (const e of out.entries ?? []) console.log(`  [${String(e.i)}] ${String(e.role)}: ${String(e.text)}`)
+      })
+      return
+    }
+    if (op === 'prompt') {
+      const text = rest.join(' ')
+      if (id === undefined || text === '' || has('--steer') === has('--queue')) usage('usage: a2a user session prompt <session id> (--steer | --queue) [--request-id R] -- <text…>   (exactly one of --steer and --queue; the text goes after --)')
+      const requestId = flag('--request-id')
+      printOut(await userCall('POST', '/__dsh_a2a/user/session/prompt', { id, mode: has('--steer') ? 'steer' : 'queue', text, ...(requestId !== undefined ? { request_id: requestId } : {}) }), out => {
+        console.log(`[user] ${String(out.delivered)} to ${String(out.id)}${out.replayed === true ? ' (replayed: this request id was already delivered)' : ''}`)
+      })
+      return
+    }
+    usage('usage: a2a user session read <id> … | a2a user session prompt <id> (--steer|--queue) -- <text…>')
+  }
   if (sub === 'api') {
     const [method, path] = words
     if (method === undefined || path === undefined || !path.startsWith('/')) usage('usage: a2a user api <GET|POST> <path> [--data JSON|@file]')
@@ -1733,13 +1773,13 @@ function printDelivery(verb, res, out) {
 function stateCanvasTeams(s) {
   const rows = []
   const owner = String(s.ownerHost ?? home())
-  for (const team of s.canvas?.teams ?? []) rows.push({ team: String(team.id ?? team.team ?? String(s.zone ?? 'dsh') + '/canvas/' + team.name), name: String(team.name), kind: 'canvas', owner, memberCount: (team.members ?? []).length, where: 'local canvas', members: (team.members ?? []).map(m => typeof m === 'string' ? m : m.team ?? m.id) })
+  for (const team of s.canvas?.teams ?? []) rows.push({ team: String(team.id ?? team.team ?? String(s.zone ?? 'dsh') + '/canvas/' + team.name), name: String(team.name), ...(typeof team.label === 'string' && team.label !== '' ? { label: team.label } : {}), kind: 'canvas', owner, memberCount: (team.members ?? []).length, where: 'local canvas', members: (team.members ?? []).map(m => typeof m === 'string' ? m : m.team ?? m.id) })
   const seen = new Set()
   for (const peer of s.peerOrg ?? []) for (const team of peer.org ?? []) {
     const key = String(peer.url) + ':' + String(team.team)
     if (seen.has(key)) continue
     seen.add(key)
-    rows.push({ team: String(team.id || team.team), name: String(team.name), kind: 'canvas', owner: String(peer.url), memberCount: (team.members ?? []).length, where: 'remote canvas', members: team.members ?? [] })
+    rows.push({ team: String(team.id || team.team), name: String(team.name), ...(typeof team.label === 'string' && team.label !== '' ? { label: team.label } : {}), kind: 'canvas', owner: String(peer.url), memberCount: (team.members ?? []).length, where: 'remote canvas', members: team.members ?? [] })
   }
   return rows
 }
@@ -1830,9 +1870,9 @@ async function main() {
       ...(s.remote ?? []).map(x => ({ team: String(x.team ?? ''), name: String(x.name ?? ''), where: `remote · ${String(x.via ?? '')}` })),
       ...stateCanvasTeams(s).map(({ members, ...row }) => row),
     ]
-    const hits = rows.filter(r => q === '' || r.team.toLowerCase().includes(q) || r.name.toLowerCase().includes(q))
+    const hits = rows.filter(r => q === '' || r.team.toLowerCase().includes(q) || r.name.toLowerCase().includes(q) || String(r.label ?? '').toLowerCase().includes(q))
     if (has('--json')) { console.log(JSON.stringify(hits, null, 2)); return }
-    for (const r of hits) console.log(`${r.team.padEnd(28)} ${r.name.slice(0, 24).padEnd(26)} [${r.where}${r.kind === 'canvas' ? ` owner=${r.owner} members=${String(r.memberCount)}` : ''}]`)
+    for (const r of hits) console.log(`${r.team.padEnd(28)} ${String(r.label ?? r.name).slice(0, 24).padEnd(26)} [${r.where}${r.kind === 'canvas' ? ` owner=${r.owner} members=${String(r.memberCount)}` : ''}]`)
     if (hits.length === 0) console.log(q === '' ? '(no teams)' : `(no team matches "${q}")`)
     return
   }

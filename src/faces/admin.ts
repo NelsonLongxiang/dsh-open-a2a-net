@@ -41,6 +41,7 @@ import type { JoinedSessions } from '../joined-store.ts'
 import type { LayoutStore } from '../layout-store.ts'
 import { parseSeatNames, writeHomeA2a, type OwnerSettings } from '../owner-settings.ts'
 import { Config as ConfigSchema } from '../config.ts'
+import { browserOwnerProof } from '../superagent/host/owner-proof.ts'
 import { rosterOp } from '../roster-op.ts'
 import type { CliHomeDecision } from '../cli-home.ts'
 import { addCanvasMember } from '../canvas-member-write.ts'
@@ -303,6 +304,8 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
               team: canvasTeamOf(name),
               // #282 S2: the owner-qualified routing id.
               id: `${canvasTeamOf(name)}@${d.ownCanvasFingerprint}`,
+              // #953: the display label, when the owner set one; the name above stays the address.
+              ...(canvasStore.labelOf(name) !== undefined ? { label: canvasStore.labelOf(name) } : {}),
               // gh#152: members as the local tiers read them (gh#131). One
               // of this host's own handles renders as the local session it
               // names — join/live facts instead of an opaque remote chip — and
@@ -947,6 +950,20 @@ export function registerAdminFaces(webServer: WebServer, d: AdminFaceDeps): void
             payload = JSON.stringify(stored !== undefined ? { ok: true, name: stored, created: !before.has(stored), teams: canvasStore.list() }
               : requireNew && before.has(name.trim()) ? { ok: false, created: false, error: `a canvas team named ${name.trim()} already exists: pick another name`, teams: canvasStore.list() }
               : { ok: false, created: false, error: 'invalid, roster-reserved name or team cap reached' })
+          } else if (action === 'set-label') {
+            // #953: a team's display label is the owner's to set (an owner delegate or the browser login on top of the control key);
+            // the name, which is the routable address, never changes.
+            let connection: unknown
+            try { connection = ctx.get('connection') } catch { /* refused below */ }
+            const proof = browserOwnerProof(connection, req)
+            if (!proof.ok) { const refusal = JSON.stringify(proof); res.writeHead(proof.status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(refusal) }); res.end(refusal); return }
+            const name = typeof body.name === 'string' ? body.name : ''
+            const clear = (body as { clear?: unknown }).clear === true
+            const raw = (body as { label?: unknown }).label
+            // A missing label is a mistake, not a clear: clearing is asked for with clear: true.
+            const out = !clear && (raw === undefined || raw === null || raw === '') ? { ok: false as const, code: 'label' as const, error: 'label is required (or clear: true to remove it)' } : canvasStore.setLabel(name, clear ? undefined : raw)
+            logger.info('canvas label owner operation set-label team=%s clear=%s ok=%s', name, clear, out.ok)
+            payload = JSON.stringify(out.ok ? { ok: true, name, label: canvasStore.labelOf(name) ?? null, teams: canvasStore.list() } : out)
           } else if (action === 'remove') {
             const name = typeof body.name === 'string' ? body.name : ''
             payload = JSON.stringify({ ok: canvasStore.remove(name), teams: canvasStore.list() })

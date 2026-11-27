@@ -41,6 +41,8 @@ export interface SuperagentFaceDeps {
   readonly config: Config
   readonly superagentHost: SuperagentHost
   readonly superagentTeams: SuperagentTeams
+  /** #953: a canvas team's display label, when the owner set one. */
+  readonly canvasLabel?: (canvas: string) => string | undefined
   readonly controlRoute: (handler: (req: IncomingMessage, res: ServerResponse) => void) => (req: IncomingMessage, res: ServerResponse) => void
   readonly readJsonBody: (req: IncomingMessage, res: ServerResponse, use: (body: { readonly id?: unknown; readonly name?: unknown; readonly action?: unknown }) => void, maxBytes?: number) => void
   readonly recordActivity: (dir: 'in' | 'out' | 'fwd', team: string, peer: string, ok: boolean) => void
@@ -370,7 +372,7 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
         if (req.method === 'GET') {
           // ?session=<id>: also the requests that session's team tab sent to other instances, with their receipts.
           const asked = new URL(req.url ?? '/', 'http://localhost').searchParams.get('session') ?? ''
-          send(200, { teams: [...superagentTeams.rows().map(row => ({ ...row, ...(row.canvas !== undefined ? { address: `${config.team}/canvas/${row.canvas}` } : {}) })), ...linkedTeams()],
+          send(200, { teams: [...superagentTeams.rows().map(row => ({ ...row, ...(row.canvas !== undefined ? { address: `${config.team}/canvas/${row.canvas}`, ...(d.canvasLabel?.(row.canvas) !== undefined ? { label: d.canvasLabel(row.canvas) } : {}) } : {}) })), ...linkedTeams()],
             ...(asked !== '' && sidebarSends !== undefined ? { sent: sidebarSends.of(asked) } : {}) })
           return
         }

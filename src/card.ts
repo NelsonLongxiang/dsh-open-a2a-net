@@ -7,6 +7,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/card
  */
 
+import { parseDisplayLabel } from './owner-settings.ts'
 import { createPublicKey, sign as edSign, verify as edVerify, type KeyObject } from 'node:crypto'
 import type { A2aPeerCard, A2aSessionTeamInfo, A2aTeamMembership, ZoneRecord } from './types.ts'
 
@@ -205,15 +206,17 @@ export function verifyCard(candidate: unknown, now: number): CardVerification {
   // gh#41: the unsigned canvas-org listing (full card only) passes through
   // with the same drop-on-malformed posture as sessionTeams — cards from
   // pre-0.6.26 nodes carry none.
-  const canvasOrg: Array<{ name: string; team: string; members: string[]; superagentTeam?: true; root?: true; admits?: string[]; identity?: string }> = []
+  const canvasOrg: Array<{ name: string; team: string; members: string[]; superagentTeam?: true; root?: true; admits?: string[]; identity?: string; label?: string }> = []
   if (Array.isArray((wire as { canvasOrg?: unknown }).canvasOrg)) {
     for (const entry of (wire as { canvasOrg: unknown[] }).canvasOrg) {
-      const org = entry as Partial<{ name: unknown; team: unknown; members: unknown; superagentTeam: unknown; root: unknown; admits: unknown; identity: unknown }> | null
+      const org = entry as Partial<{ name: unknown; team: unknown; members: unknown; superagentTeam: unknown; root: unknown; admits: unknown; identity: unknown; label: unknown }> | null
       if (typeof org?.team !== 'string' || org.team === '') continue
       canvasOrg.push({
         name: typeof org.name === 'string' ? org.name : '',
         team: org.team,
         members: Array.isArray(org.members) ? org.members.filter((m): m is string => typeof m === 'string') : [],
+        // #953: the publisher's display label for the team (display only; name stays the address); same rules as a local label.
+        ...(parseDisplayLabel(org.label) !== undefined ? { label: parseDisplayLabel(org.label)! } : {}),
         // Design v5 (v5-B2): the publisher's superagent team canvas, open to requests from its linked callers.
         ...(org.superagentTeam === true ? { superagentTeam: true as const } : {}),
         // superagent-root-team R7: a root team (one level: a root is never another root's child).
