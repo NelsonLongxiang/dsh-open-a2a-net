@@ -71,16 +71,6 @@ it('adds only the shared boundary to original worker personas and leaves the bui
   expect(digest(builder)).toBe('5ac7ace8c82506d373d1576312b5fc7a1d9156677469f347e23990f9866dd2a6')
 })
 
-it('gives office dispatch and decision cards their concrete approval criteria', () => {
-  expect(prompt).toContain('the end result, the one action that needs approval, and what the member must return')
-  expect(prompt).toContain('Cite the standing team rule for boundaries')
-  const observer = presetPrompt('observer')
-  for (const clause of ['investigation, offline calculation and implementation on a copy', 'changing an official sheet, writing to an official dataset, or delivering externally',
-    'locations, before and after values, and the effect on quantities and amounts', 'choices would leave the result the same', 'approval from the person with authority']) {
-    expect(observer).toContain(clause)
-  }
-})
-
 it('retains upstream member initiative as a proposal, never a self-assignment or an external send', () => {
   const member = presetPrompt('member')
   expect(member).toContain('propose it with a2a_ticket_request')
@@ -99,6 +89,16 @@ describe.each(['router', 'member', 'observer'])('%s host-managed transport contr
     expect(rendered).not.toContain('{{')
     expect(rendered).toMatchSnapshot()
   })
+})
+
+it('gives office dispatch and decision cards their concrete approval criteria', () => {
+  expect(prompt).toContain('the end result, the one action that needs approval, and what the member must return')
+  expect(prompt).toContain('Cite the standing team rule for boundaries')
+  const observer = presetPrompt('observer')
+  for (const clause of ['investigation, offline calculation and implementation on a copy', 'changing an official sheet, writing to an official dataset, or delivering externally',
+    'locations, before and after values, and the effect on quantities and amounts', 'choices would leave the result the same', 'approval from the person with authority']) {
+    expect(observer).toContain(clause)
+  }
 })
 
 const channels = [
