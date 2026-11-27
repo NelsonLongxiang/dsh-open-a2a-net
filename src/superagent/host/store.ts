@@ -8,13 +8,14 @@
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import type { ReplyRetry } from './reply-backoff.ts'
 import { dirname } from 'node:path'
 import { latestAssignment, type Decision, type OutboundMessage, type ReplyStatus, type Repositories, type Thread, type Ticket, type Trigger, type TriggerDisposition } from '../upstream/dsh-superagent/src/core/index.ts'
 
 const clone = <T>(value: T): T => (value === undefined ? value : structuredClone(value))
 
 /** One queued Channel message and what became of it. */
-export interface StoredMessage { readonly message: OutboundMessage; status: ReplyStatus; readonly queuedAt: string; sentAt?: string; droppedAt?: string; reason?: string }
+export interface StoredMessage { readonly message: OutboundMessage; status: ReplyStatus; readonly queuedAt: string; sentAt?: string; droppedAt?: string; reason?: string; retry?: ReplyRetry }
 
 /** The on-disk document. Arrays keep insertion order (tickets are listed newest first by reversing it). */
 interface Snapshot {
