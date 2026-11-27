@@ -9,6 +9,7 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/superagent/host/owner-pairing
  */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
+import { validOwnerScope, type OwnerAction } from './owner-delegate-scope.ts'
 
 /** How long a pairing waits for the owner and for its terminal, in milliseconds (10 minutes). */
 export const PAIRING_TTL_MS = 10 * 60_000
@@ -19,15 +20,15 @@ export const PAIRING_STARTS_PER_ADDRESS = 5, PAIRING_START_WINDOW_MS = 10 * 60_0
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
 /** What the owner sees of a pairing on the team page: never its secret, never a token. */
-export interface PairingView { readonly id: string; readonly code: string; readonly name: string; readonly days: number; readonly at: string; readonly expiresAt: string; readonly state: 'waiting' | 'approved' }
+export interface PairingView { readonly id: string; readonly code: string; readonly name: string; readonly days: number; readonly at: string; readonly expiresAt: string; readonly state: 'waiting' | 'approved'; readonly scope?: readonly OwnerAction[] }
 
 interface Pairing {
   readonly id: string; readonly code: string; readonly name: string; readonly days: number; readonly at: number; readonly expires: number
-  readonly secretHash: Buffer; state: 'waiting' | 'approved' | 'denied'
+  readonly secretHash: Buffer; readonly scope?: readonly OwnerAction[]; state: 'waiting' | 'approved' | 'denied'
 }
 
 /** A poll's answer. `not-found` covers an unknown id and a wrong secret alike. */
-export type PairingPoll = { readonly state: 'waiting'; readonly expiresAt: string } | { readonly state: 'approved'; readonly token: string; readonly delegateId: string } | { readonly state: 'retry'; readonly error: string } | { readonly state: 'denied' | 'expired' | 'not-found' }
+export type PairingPoll = { readonly state: 'waiting'; readonly expiresAt: string } | { readonly state: 'approved'; readonly token: string; readonly delegateId: string; readonly scope?: readonly OwnerAction[] } | { readonly state: 'retry'; readonly error: string } | { readonly state: 'denied' | 'expired' | 'not-found' }
 
 const hash = (secret: string): Buffer => createHash('sha256').update(secret, 'utf8').digest()
 
@@ -62,7 +63,9 @@ export class OwnerPairings {
    * @param days - how long the delegate will live (1..365).
    * @returns the id, code, secret and expiry, or why not.
    */
-  start(address: string, name: unknown, days: unknown): { ok: true; id: string; code: string; secret: string; expiresAt: string } | { ok: false; code: string; error: string } {
+  start(address: string, name: unknown, days: unknown, scope?: unknown): { ok: true; id: string; code: string; secret: string; expiresAt: string; scope?: readonly OwnerAction[] } | { ok: false; code: string; error: string } {
+    if (scope !== undefined && !validOwnerScope(scope)) return { ok: false, code: 'input', error: 'scope must be an array of supported owner actions' }
+    const scoped = scope === undefined ? {} : { scope: [...scope] }
     const label = typeof name === 'string' ? name.trim() : ''
     if (label === '' || label.length > 80 || /[\u0000-\u001f\u007f]/.test(label)) return { ok: false, code: 'input', error: 'name is required, at most 80 characters, no control characters' }
     const life = days === undefined ? 30 : days
@@ -73,15 +76,15 @@ export class OwnerPairings {
     if ([...this.pairings.values()].filter(p => p.expires > at && p.state === 'waiting').length >= PAIRINGS_PENDING_MAX) return { ok: false, code: 'busy', error: `${String(PAIRINGS_PENDING_MAX)} pairings already wait for the owner; try again when one is answered or expires` }
     this.starts.set(address, [...recent, at])
     const { id, secret, code } = this.random()
-    this.pairings.set(id, { id, code, name: label, days: life, at, expires: at + PAIRING_TTL_MS, secretHash: hash(secret), state: 'waiting' })
-    return { ok: true, id, code, secret, expiresAt: new Date(at + PAIRING_TTL_MS).toISOString() }
+    this.pairings.set(id, { id, code, name: label, days: life, at, expires: at + PAIRING_TTL_MS, secretHash: hash(secret), state: 'waiting', ...scoped })
+    return { ok: true, id, code, secret, expiresAt: new Date(at + PAIRING_TTL_MS).toISOString(), ...scoped }
   }
 
   /** The waiting and approved-uncollected pairings, for the owner's page. */
   list(): PairingView[] {
     const at = this.now()
     return [...this.pairings.values()].filter(p => p.expires > at && p.state !== 'denied')
-      .map(p => ({ id: p.id, code: p.code, name: p.name, days: p.days, at: new Date(p.at).toISOString(), expiresAt: new Date(p.expires).toISOString(), state: p.state === 'approved' ? 'approved' as const : 'waiting' as const }))
+      .map(p => ({ id: p.id, code: p.code, name: p.name, days: p.days, at: new Date(p.at).toISOString(), expiresAt: new Date(p.expires).toISOString(), state: p.state === 'approved' ? 'approved' as const : 'waiting' as const, ...(p.scope === undefined ? {} : { scope: p.scope }) }))
   }
 
   /**
@@ -108,7 +111,7 @@ export class OwnerPairings {
    * its token is answered; if issuing fails the pairing stays approved and the answer is `retry`. A refusal is said once;
    * after that, and for any unknown id or wrong secret, the answer is `not-found`.
    */
-  poll(id: unknown, secret: unknown, issue: (name: string, days: number) => { readonly token: string; readonly id: string }): PairingPoll {
+  poll(id: unknown, secret: unknown, issue: (name: string, days: number, scope?: readonly OwnerAction[]) => { readonly token: string; readonly id: string; readonly scope?: readonly OwnerAction[] }): PairingPoll {
     if (typeof id !== 'string' || typeof secret !== 'string') return { state: 'not-found' }
     const p = this.pairings.get(id)
     if (p === undefined) return { state: 'not-found' }
@@ -117,10 +120,10 @@ export class OwnerPairings {
     if (p.expires <= this.now()) { this.pairings.delete(id); return { state: 'expired' } }
     if (p.state === 'denied') { this.pairings.delete(id); return { state: 'denied' } }
     if (p.state === 'approved') {
-      let issued: { readonly token: string; readonly id: string }
-      try { issued = issue(p.name, p.days) } catch (error) { return { state: 'retry', error: String((error as Error).message ?? error) } }
+      let issued: ReturnType<typeof issue>
+      try { issued = issue(p.name, p.days, p.scope) } catch (error) { return { state: 'retry', error: String((error as Error).message ?? error) } }
       this.pairings.delete(id)
-      return { state: 'approved', token: issued.token, delegateId: issued.id }
+      return { state: 'approved', token: issued.token, delegateId: issued.id, ...(issued.scope === undefined ? {} : { scope: issued.scope }) }
     }
     return { state: 'waiting', expiresAt: new Date(p.expires).toISOString() }
   }

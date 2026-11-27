@@ -29,6 +29,15 @@ describe('#933 pairing banner', () => {
     expect(banner.root.textContent).toContain(XSS)
     expect(banner.waiting()).toBe(1)
   })
+  it('shows the requested scope before approval and the scope of issued delegates', async () => {
+    const banner = createPairingsBanner({
+      list: async () => ({ pairings: [row({ scope: ['session.read'] })], delegates: [{ name: 'Market', scope: ['team.read'] }] }),
+      act: async () => ({ status: 200, body: { ok: true } }),
+    })
+    await banner.refresh()
+    expect(banner.root.textContent).toContain('委托范围：session.read')
+    expect(banner.root.textContent).toContain('Market · team.read')
+  })
   it('allow and deny send the pairing id to the host and say what happened', async () => {
     let rows: unknown[] = [row()]
     const { banner, act } = mount(() => rows)

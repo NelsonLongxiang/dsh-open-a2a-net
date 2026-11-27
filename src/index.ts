@@ -157,7 +157,7 @@ import { defaultGh } from './superagent/host/pr-follow.ts'
 import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
-import { browserOwnerProof, configureOwnerDelegates, touchesRules } from './superagent/host/owner-proof.ts'
+import { browserOwnerProof, configureOwnerDelegates, scopedOwnerControl, touchesRules } from './superagent/host/owner-proof.ts'
 import { OwnerDelegates } from './superagent/host/owner-delegate.ts'
 import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, exportYglBin, startWhenYglKnown, yglCapabilities, yglSettled } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
@@ -167,6 +167,7 @@ import { registerTaskRead } from './tools/task-read.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerUserSessionFaces } from './faces/user-sessions.ts'
+import { scopeRefusal } from './superagent/host/owner-delegate-scope.ts'
 import { registerFileFaces } from './faces/files.ts'
 import { registerSuperagentFaces } from './faces/superagent.ts'
 import {RequestRecoveryStore} from './request-recovery.ts'
@@ -483,7 +484,13 @@ export function apply(ctx: Context, config: Config): void {
    */
   function controlRoute(handler: (req: IncomingMessage, res: ServerResponse) => void): (req: IncomingMessage, res: ServerResponse) => void {
     return (req: IncomingMessage, res: ServerResponse): void => {
-      if (!controlAuthorized(req)) {
+      const scoped = scopedOwnerControl(req)
+      if (scoped === false) {
+        res.writeHead(403, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(scopeRefusal))
+        return
+      }
+      if (scoped !== true && !controlAuthorized(req)) {
         rejectControl(req, res)
         return
       }

@@ -348,6 +348,8 @@ The state face's ledger: `tasks` (pending, each with `settleable`), `tasksStaleC
 `endedBy` (`receipt` | `echo` | `abandoned` | `cancelled` | `evicted`), `late: true` when a receipt arrived after the
 caller ended it, and `direction` when known — plus `archivedCount` and `archivedSplit` (count per outcome).
 
+A browser owner can pass `scope` when issuing a delegate or starting a pairing for approval. The response echoes the exact array. A scoped delegate replaces the control key for its allowed methods and paths only. An unscoped delegate keeps the existing control-key requirement. `X-DSH-On-Behalf-Of` accepts JSON with `id` (up to 64 characters) and `name` (up to 32), for audit and prompt attribution. Escape non-ASCII characters in the JSON for HTTP header compatibility. The declared person has no effect on authorization.
+
 ## Stages (visualization surfaces)
 
 A full-page workbench mounts beside the model tools: `/__dsh_a2a_nexus` (the
