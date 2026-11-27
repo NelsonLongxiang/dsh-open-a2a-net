@@ -49,6 +49,8 @@ taskKind('roster-ab12cd34-1770000000000') // { kind: 'roster', host: 'ab12cd34' 
 
 名册席位可带 `teamLabel?: string`，取该席位所属画布团队的显示名。`name` 仍是席位名，`team` 仍是画布路由地址。无显示名时，宿主在完整快照里省略 `teamLabel`。消费方应以新快照为准，省略时清掉旧显示名并回退到现有展示。解码器按画布显示名的校验规则忽略无效的 `teamLabel`，仍保留席位。
 
+成员席位的 `blocked?: number` 和 `waiting?: number` 分别统计当前持有、仍开放的工单中，当前执行分派的最新回报为 `blocked` 或 `waiting` 的工单。运行中和挂起均计，同一工单只计一次。这两项是 `active` 的细分，单纯排队的工单仍由 `queued` 表示。新节点对成员席位报零值，总工、观察者席位省略这两项。旧节点省略时按未提供显示。解码器保留有效的非负安全整数，忽略无效计数字段并保留席位。
+
 ## 能力
 
 `CAPABILITIES` 列出四个已定义能力（`progressReceipts`、`teamRoster`、`directedSeats`、`reworkReturns`）；`declares(card, name)` 只在名片 `capabilities[name]` **恰为 true** 时为真（字符串 `"true"` 不算）。
