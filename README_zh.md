@@ -6,7 +6,7 @@
 
 **新版重点：Superagent 把需求变成团队工单——总工受理、成员分工、进展可追踪，需要你拍板的事以决策卡呈现。**
 
-> **版本说明：** [发布记录](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/5e550134ecf1dc55075bc905355e45440ee1219b/docs/release.md#082正式版已发布到-npm-的-latest-标签)中的 npm `latest` 为 0.8.2。团队能力仍取决于宿主配置。当前检出的 CLI 帮助也含待发布改动，包括终端配对和 #937 的 profile 依赖声明同步。
+> **正式版说明：** 2026-11-27 核对 npm `latest` 为 **0.8.3**。稳定包已提供 Superagent；使用前在宿主绑定团队、配置成员、规则与接单来源，具体能力以所装版本随包文档为准。
 
 面向 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的开源插件。A2A 底座负责会话和主机之间的发现、寻址、路由与回执；新版 **Superagent** 在这层网络之上组织需求、工单、固定成员和人的决策，而不只是让多个对话互发消息。
 
@@ -40,7 +40,7 @@
 - **外部入口需主动开启。** A2A 团队接单按 bot 列表与接单模式控制；GitHub Issue 作为需求来源需属主启用并配置仓库、允许用户，默认关闭。没有启用就不承诺自动监听所有 Issue。
 - **团队不自行扩大权限。** 规则变更要人确认；成员不能擅自增加工单范围、创建会话或直接跨团队派活。跨团队请求需按团队配置审批。
 
-完整机制见 [0.8.2 随包发布的 Superagent 指南](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/5465acecb8312f5c38c2bf80fd82a9110df0879e/src/skill/references/superagent.md)。仍标为进行中的 Root teams 不作为本页成熟能力承诺。
+完整机制见 [0.8.3 随包发布的 Superagent 指南](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/1c96510912c4a87786d3fc2ee513cac0bb87904f/src/skill/references/superagent.md)。跨团队与根团队协调需按版本完成显式链接、准入与相应配置。
 
 ### 与普通画布组队有什么不同？
 
