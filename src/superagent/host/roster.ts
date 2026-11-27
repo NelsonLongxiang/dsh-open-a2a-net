@@ -19,6 +19,8 @@ export interface RosterSeat {
   seatId?: string
   name?: string
   team: string
+  /** Optional display name of the canvas team. The team address remains in team. */
+  teamLabel?: string
   role: 'router' | 'member' | 'observer'
   online: boolean
   active: number
@@ -28,7 +30,7 @@ export interface RosterSeat {
 
 export interface RosterDeps {
   /** The team's canvas and the seats on it, by role (session ids); undefined when the team is bound to no canvas. */
-  readonly team: () => { canvas: string; router?: string; members: readonly string[]; observers: readonly string[] } | undefined
+  readonly team: () => { canvas: string; teamLabel?: string; router?: string; members: readonly string[]; observers: readonly string[] } | undefined
   /** The canvas's remote members (pinned refs). */
   readonly remotes: (canvas: string) => readonly string[]
   readonly declares: (ref: string, capability: string) => boolean
@@ -63,7 +65,7 @@ export function rosterSeats(d: Pick<RosterDeps, 'team' | 'handleOf' | 'nameOf' |
     const name = d.nameOf(id)
     const load = role === 'member' ? d.loadOf(id) : { active: 0, queued: 0 }
     const seatId = d.seatIdOf?.(id)
-    seats.push({ seat, ...(seatId !== undefined ? { seatId } : {}), ...(name !== undefined && name !== '' ? { name: name.slice(0, 200) } : {}), team: canvasAddress, role, online: d.online(id), active: load.active, queued: load.queued, ...(load.since !== undefined ? { lastActiveAt: load.since } : {}) })
+    seats.push({ seat, ...(seatId !== undefined ? { seatId } : {}), ...(name !== undefined && name !== '' ? { name: name.slice(0, 200) } : {}), team: canvasAddress, ...(team.teamLabel !== undefined ? { teamLabel: team.teamLabel } : {}), role, online: d.online(id), active: load.active, queued: load.queued, ...(load.since !== undefined ? { lastActiveAt: load.since } : {}) })
   }
   add(team.router, 'router')
   for (const id of team.members) add(id, 'member')

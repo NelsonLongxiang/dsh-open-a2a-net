@@ -2298,6 +2298,7 @@ export function apply(ctx: Context, config: Config): void {
       cliDeposits.mail(handle, 'superagent', text, undefined, { taskId: ticketId, ...(run !== undefined ? { contextId: run } : {}) })
       return true
     },
+    canvasLabel: name => canvasStore.labelOf(name),
     canvasTeam: name => {
       if (!canvasStore.hasTeam(name)) return undefined
       const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))

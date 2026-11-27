@@ -80,6 +80,14 @@ describe('sdk/wire: the roster line', () => {
     const bad = '[A2A roster] ab12cd34 t\n' + JSON.stringify({ host: 'ab12cd34deadbeef', at: 't', seats: [{ seat: 'dsh/11112222', seatId: 'seat/坏', role: 'member', online: true, active: 0, queued: 0 }] })
     expect(parseRoster(bad)?.seats[0]).not.toHaveProperty('seatId')
   })
+  it('preserves a valid teamLabel without changing the seat name or team address', () => {
+    const seat = { seat: 'dsh/11112222', name: '成员二', team: 'dsh/canvas/ops', role: 'member', online: true, active: 0, queued: 0 }
+    const line = (teamLabel: unknown) => '[A2A roster] ab12cd34 t\n' + JSON.stringify({ host: 'ab12cd34deadbeef', at: 't', seats: [{ ...seat, teamLabel }] })
+    expect(parseRoster(line('业务支持队'))?.seats).toEqual([{ ...seat, teamLabel: '业务支持队' }])
+    for (const invalid of [undefined, null, 9, '', 'dsh/canvas/other', 'a\nb', '长'.repeat(65)]) {
+      expect(parseRoster(line(invalid))?.seats).toEqual([seat])
+    }
+  })
   it('rejects a body whose host does not match the head fp8, and other text', () => {
     expect(parseRoster('[A2A roster] ab12cd34 t\n' + JSON.stringify({ host: 'ff990011', at: 't', seats: [] }))).toBeUndefined()
     expect(parseRoster('anything else')).toBeUndefined()
@@ -109,15 +117,15 @@ describe('sdk/wire: packaging', () => {
     expect(built).not.toMatch(/cordis|dsh-superagent|node:fs|node:crypto|node:http|node:path/)
     for (const match of built.matchAll(/from "([^"]+)"/g)) expect(match[1].startsWith('./') || match[1].startsWith('../')).toBe(true)
   })
-  it('the source import graph of sdk/wire reaches only src/dispatch.ts and src/receipt.ts', () => {
+  it('the source import graph of sdk/wire reaches only pure protocol and display label modules', () => {
     const root = join(dirname(fileURLToPath(import.meta.url)), '../..')
     const read = (p: string): string => readFileSync(join(root, p), 'utf8')
-    const sources = ['src/sdk/wire.ts', 'src/dispatch.ts', 'src/receipt.ts'].map(read)
+    const sources = ['src/sdk/wire.ts', 'src/dispatch.ts', 'src/receipt.ts', 'src/display-label.ts'].map(read)
     for (const source of sources) {
       const imports = [...source.matchAll(/from '([^']+)'/g)].map(m => m[1])
       for (const spec of imports) {
         expect(spec.startsWith('./') || spec.startsWith('../')).toBe(true)
-        expect(spec.endsWith('dispatch.ts') || spec.endsWith('receipt.ts')).toBe(true)
+        expect(['../dispatch.ts', '../receipt.ts', '../display-label.ts', './dispatch.ts', './receipt.ts'].includes(spec)).toBe(true)
       }
       expect(source).not.toMatch(/@deepseek-ai|cordis|node:/)
     }
