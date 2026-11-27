@@ -251,6 +251,8 @@ describe('the team\'s agent presets: shipped in the bundle layer, required of a 
     const presets: Record<string, string> = { 'session-r': 'superagent-router', 'session-m': 'superagent-member', 'session-s': 'standard' }
     const of = (id: string) => presets[id]
     expect(presetRefusal('session-r', ['session-m'], of)).toBeUndefined()
+    presets['session-m'] = 'superagent-member-work'
+    expect(presetRefusal('session-r', ['session-m'], of)).toBeUndefined()
     expect(presetRefusal('session-s', ['session-m'], of)).toContain('superagent-router')
     expect(presetRefusal('session-r', ['session-s'], of)).toContain('superagent-member')
     expect(presetRefusal('session-r', ['session-cold'], of)).toBeUndefined()

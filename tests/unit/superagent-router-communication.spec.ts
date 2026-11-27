@@ -27,14 +27,15 @@ const digest = (text: string) => createHash('sha256').update(text).digest('hex')
 
 it('ships generated inline router text without changing preset ids or composition', () => {
   expect(patch).toBe(renderPresetPatch())
-  expect(PRESET_PROMPT_PARTS).toEqual({ router: ['router', 'team-transport'], member: ['member', 'team-transport'], observer: ['observer', 'team-transport'] })
-  expect(presets.map(row => row.config!.id)).toEqual(['superagent-router', 'superagent-member', 'superagent-observer', 'superagent-builder'])
+  expect(PRESET_PROMPT_PARTS).toEqual({ router: ['router', 'team-transport'], member: ['member', 'team-transport'], 'member-work': ['member', 'member-work', 'team-transport'], observer: ['observer', 'team-transport'] })
+  expect(presets.map(row => row.config!.id)).toEqual(['superagent-router', 'superagent-member', 'superagent-member-work', 'superagent-observer', 'superagent-builder'])
   expect(prompt).toBe(presetPrompt('router'))
   const expectedComposition = {
     // #900: the Windows ygl MCP row runs this node on the resolved entry script (router, member, observer).
     'superagent-router': 'f12ec5d5dc39720854535dce63a9ea7906bfddf93500c4af4f3bc525e637fcb0',
     // Owner 2026-11-19: members and observers gain the PTC executor (code mode by default); router and builder unchanged.
     'superagent-member': 'cf8a0b18e2dc9ff834a8b0b3e5de626684f01255414d25660aa2276876e4a884',
+    'superagent-member-work': 'cf8a0b18e2dc9ff834a8b0b3e5de626684f01255414d25660aa2276876e4a884',
     'superagent-observer': 'cf8a0b18e2dc9ff834a8b0b3e5de626684f01255414d25660aa2276876e4a884',
     // #83: the builder gains the read-only search and skill rows, so its composition digest moves with them.
     'superagent-builder': '4e36bbf212a2b60b8f677618d92f2b3450d48a6e61f328d3d2d25d6f1c961775',
@@ -69,6 +70,17 @@ it('adds only the shared boundary to original worker personas and leaves the bui
   expect(builder).toContain('A skill is guidance you read: it gives you no tool')
   // Owner 2026-11-25 (forward personas): the builder's rules lead with the allowed path; the pinned clauses above are unchanged.
   expect(digest(builder)).toBe('5ac7ace8c82506d373d1576312b5fc7a1d9156677469f347e23990f9866dd2a6')
+})
+
+it('adds office rules to the member persona without changing its tool composition', () => {
+  const member = presets.find(row => row.config?.id === 'superagent-member')!
+  const office = presets.find(row => row.config?.id === 'superagent-member-work')!
+  const tools = (row: Row) => row.config!.plugins.filter((plugin: Row) => plugin.id !== 'persona')
+  expect(tools(office)).toEqual(tools(member))
+  const fragment = readFileSync(new URL('src/superagent/prompts/member-work.md', root), 'utf8').trim()
+  const officePrompt = persona(office).prefix as string
+  expect(officePrompt).toBe(presetPrompt('member-work'))
+  expect(officePrompt.replace(fragment + '\n\n', '')).toBe(persona(member).prefix)
 })
 
 it('retains upstream member initiative as a proposal, never a self-assignment or an external send', () => {
