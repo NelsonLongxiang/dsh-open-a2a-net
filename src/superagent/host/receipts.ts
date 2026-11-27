@@ -29,6 +29,8 @@ import type { SuperagentHostDeps, PersonMessage, WorkbenchVia } from './deps.ts'
 
 /** How long an ended ticket's request waits for the router's own result before the host sends the ending receipt. */
 export const END_RECEIPT_GRACE_MS = 5 * 60_000
+
+export const COMPLETED_WITHOUT_TICKET = 'completedWithoutTicket'
 /**
  * Tickets that ended longer ago than this get no ending receipt (the requester's acknowledged row is gone by then). Only a
  * fallback since 2026-11-18: when the task ledger has the request's row, the row decides (owner ruling, one book).
@@ -244,10 +246,17 @@ export class A2aReceipts {
       for (const decision of decisions) {
         if (decision.kind !== 'ignore') continue
         decision.triggerIds.forEach((triggerId, i) => {
-          const reason = decision.reason.find(r => r.triggerId === triggerId) ?? decision.reason[decision.reason.length === decision.triggerIds.length ? i : 0]
+          const reason = decision.reason.find(r => r.triggerId === triggerId)
+            ?? decision.reason.find(r => r.triggerId === undefined && r.code === COMPLETED_WITHOUT_TICKET)
+            ?? decision.reason[decision.reason.length === decision.triggerIds.length ? i : 0]
           // A message routed into a ticket is answered when its member has it (above); so is one fanned out into one and only
           // set aside by the router.
           if (reason?.code === 'routed' || (reason?.code === 'said' && intoTicket(triggerId))) return
+          if (reason?.code === COMPLETED_WITHOUT_TICKET && reason.values?.text) {
+            const explanation = reason.values.text
+            if (!intoTicket(triggerId)) consider(triggerId, () => ({ outcome: 'completed', text: clip(explanation, 1_000) }))
+            return
+          }
           if (reason?.code === 'botNotListed' && this.d.senderHold !== undefined) {
             const held = this.d.senderHold(triggerId)
             if (held === 'hold') { holding.push(triggerId); return }

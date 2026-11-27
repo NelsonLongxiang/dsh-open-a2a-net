@@ -109,7 +109,7 @@ The three presets mount the ygl-trees MCP server as `ygl` (`ygl-trees mcp`, foun
 
 ## Asking another team
 
-A team session does not message other teams itself. When a ticket needs another team, it calls `a2a_outbound_request { ticket_id, address, text, why }`. The router may ask on any open ticket; a member or an observer only on the ticket it holds. The address is another team's: `<zone>/<id8>`, or `<zone>/canvas/<name>`, optionally with `@<fp8>`. The team's A2A Source must be on.
+A team session does not message other teams itself. When a ticket needs another team, it calls `a2a_outbound_request { ticket_id, address, text, why }`. The router may ask on any open ticket; a member or an observer only on the ticket it holds. The address can be `<zone>/<id8>` or `<zone>/canvas/<name>`, optionally with `@<fp8>`, or a remote CLI handle `<zone>/<16 hex>` whose local canvas link and admission the host verifies. The team's A2A Source must be on.
 
 The request becomes a P0 card with source `outbound`. It is decided by the owner on the team page, or by an approver: a member or observer the owner lists in the team setting `approvers` (owner-only). An approver lists the waiting outbound cards with `a2a_ticket_read` kind `outbound` and decides with `a2a_decision_decide { card_id, option, reason }`. It can decide only outbound cards, never one it raised itself, and always with a reason.
 

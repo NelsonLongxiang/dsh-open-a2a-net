@@ -1840,12 +1840,21 @@ export class SuperagentHost {
    * @returns what the refusal should add, for the session to read.
    */
   /** Design outbound-requests O1, O2: a team session asks for a message to another team on a ticket; a P0 card decides it. */
-  requestOutbound(session: string, ask: OutboundAsk): Record<string, unknown> {
-    const ticket = typeof ask.ticket_id === 'string' ? this.store.tickets.get(ask.ticket_id.trim()) : undefined
-    const checked = this.outbound.check(session, ask, { role: this.toolRoleOf(session), a2aOn: this.settingsValue.sources.a2a, own: ownAddresses(this.d.handleOf, this.settingsValue.canvas, [this.settingsValue.router, ...this.pool(), ...this.settings.observers]),
-      ticket: ticket === undefined ? undefined : { open: !ticket.ended, title: ticket.title, holder: this.executor.list().find(b => b.ticketId === ticket.id)?.member } })
+  async requestOutbound(session: string, ask: OutboundAsk): Promise<Record<string, unknown>> {
+    const check = () => {
+      const ticket = typeof ask.ticket_id === 'string' ? this.store.tickets.get(ask.ticket_id.trim()) : undefined
+      return this.outbound.check(session, ask, { role: this.toolRoleOf(session), a2aOn: this.settingsValue.sources.a2a, own: ownAddresses(this.d.handleOf, this.settingsValue.canvas, [this.settingsValue.router, ...this.pool(), ...this.settings.observers]),
+        ticket: ticket === undefined ? undefined : { open: !ticket.ended, title: ticket.title, holder: this.executor.list().find(b => b.ticketId === ticket.id)?.member } })
+    }
+    let checked = check()
     if (!checked.ok) return checked
-    const out = this.decisions.propose({ source: 'outbound', by: session, at: this.now(), question: `${this.displayName(session)} ${checked.question}`, ...(checked.reason !== undefined ? { reason: checked.reason } : {}), spec: { level: 'P0', options: [OUTBOUND_APPROVE, OUTBOUND_DECLINE], recommended: OUTBOUND_APPROVE }, outbound: { ticketId: checked.ticketId, address: checked.address, text: checked.text, team: this.settingsValue.canvas ?? '', title: ticket!.title } })
+    if (CLI_HANDLE_RE.test(checked.address)) {
+      if (!await this.a2a.admitsOutboundCli(checked.address)) return { ok: false, code: 'address', error: 'the CLI handle must have a local canvas link and pass admission' }
+      // Ownership or capacity may have changed while admission was checked.
+      checked = check()
+      if (!checked.ok) return checked
+    }
+    const out = this.decisions.propose({ source: 'outbound', by: session, at: this.now(), question: `${this.displayName(session)} ${checked.question}`, ...(checked.reason !== undefined ? { reason: checked.reason } : {}), spec: { level: 'P0', options: [OUTBOUND_APPROVE, OUTBOUND_DECLINE], recommended: OUTBOUND_APPROVE }, outbound: { ticketId: checked.ticketId, address: checked.address, text: checked.text, team: this.settingsValue.canvas ?? '', title: checked.title } })
     if (out.ok && out.reused !== true) this.outbound.waiting(out.id, checked.ticketId, checked.address, checked.text, session)
     return out.ok ? { ok: true, card_id: out.id } : out
   }

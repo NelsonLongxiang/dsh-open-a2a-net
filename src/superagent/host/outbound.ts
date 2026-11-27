@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { TRUSTED_PROOFS } from '../a2a-watch.ts'
+import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
 import {recoveryDigest,verifyRecoveryProposal,type RecoveryProposal,type RecoveryBinding} from '../../request-recovery.ts'
 import {holdsRow,parseReceipt} from '../../receipt.ts'
 import {writeTaskLedger} from '../../task-ledger-persistence.ts'
@@ -207,7 +208,7 @@ export class OutboundRequests {
    * Check a request (O1, O2) and shape its card, or say why not.
    * @returns the card's question and reason, or a refusal.
    */
-  check(session: string, ask: OutboundAsk, ctx: OutboundContext): { ok: true; ticketId: string; address: string; text: string; question: string; reason?: string } | { ok: false; code: string; error: string } {
+  check(session: string, ask: OutboundAsk, ctx: OutboundContext): { ok: true; ticketId: string; address: string; text: string; title: string; question: string; reason?: string } | { ok: false; code: string; error: string } {
     const ticketId = typeof ask.ticket_id === 'string' ? ask.ticket_id.trim() : ''
     const address = typeof ask.address === 'string' ? ask.address.trim() : ''
     const text = typeof ask.text === 'string' ? ask.text.trim() : ''
@@ -216,13 +217,13 @@ export class OutboundRequests {
     if (!ctx.a2aOn) return { ok: false, code: 'a2a-off', error: 'the team\'s A2A Source is off, so the team has no identity to send from; the owner turns it on in the team settings' }
     if (ctx.ticket === undefined || !ctx.ticket.open) return { ok: false, code: 'ticket', error: 'name an open ticket of this team' }
     if (ctx.role !== 'router' && ctx.ticket.holder !== session) return { ok: false, code: 'not-yours', error: 'a member asks only on a ticket it holds' }
-    if (!OUTBOUND_ADDRESS.test(address)) return { ok: false, code: 'address', error: 'address is another team\'s: <zone>/<id8> or <zone>/canvas/<name>, optionally @<fp8>' }
+    if (!OUTBOUND_ADDRESS.test(address) && !CLI_HANDLE_RE.test(address)) return { ok: false, code: 'address', error: 'use <zone>/<id8> or <zone>/canvas/<name> (optionally @<fp8>), or a linked CLI handle <zone>/<16 hex>' }
     if (ctx.own.some(own => address === own || address.split('@')[0] === own.split('@')[0])) return { ok: false, code: 'own', error: 'that is this team or one of its sessions; ask your team through its ticket instead' }
     if(this.list().some(r=>r.narrowRecovery&&r.ticketId===ticketId&&r.address===address&&r.text===text))return {ok:false,code:'outbound-recovery-fenced',error:'该原业务已有窄恢复链，不能另建外发卡或重派；请按原恢复 task 对账。'}
     if (text === '' || text.length > OUTBOUND_TEXT_MAX) return { ok: false, code: 'text', error: `text is required, at most ${String(OUTBOUND_TEXT_MAX)} characters` }
     if (this.list().filter(r => r.ticketId === ticketId && (r.state === 'waiting' || r.state === 'sending' || r.state === 'unknown' || r.state === 'sent')).length >= OUTBOUND_PER_TICKET) return { ok: false, code: 'too-many', error: `a ticket has at most ${String(OUTBOUND_PER_TICKET)} outbound requests waiting or unanswered` }
     const question = `以本团队名义向 ${address} 发出请求吗？（工单「${clip(ctx.ticket.title, 80)}」）\n发出的原文：\n${text}`
-    return { ok: true, ticketId, address, text, question, ...(why !== '' ? { reason: clip(why, 1000) } : {}) }
+    return { ok: true, ticketId, address, text, title: ctx.ticket.title, question, ...(why !== '' ? { reason: clip(why, 1000) } : {}) }
   }
 
   /** A card was raised for a checked request. */

@@ -1022,6 +1022,31 @@ describe('design M12: a request from an unlisted sender waits on the owner', () 
     await settle()
     expect(receiptFor(third)).toBeUndefined()
     expect(h.engine.candidate('3')).toMatchObject({ strength: 'explicit' })
+
+    const { routeItem } = await import('../../src/superagent/host/tools.ts')
+    const explanation = '仅确认收到，无需开单'
+    const confirmed = receive('4', 'dsh/cccccccc')
+    await settle()
+    expect(h.decide(cardOf('4')!.id, 'choose', '接这一单')).toMatchObject({ ok: true, taken: true })
+    await settle()
+    expect(routeItem(h, { trigger_id: '4', kind: 'complete', reason: explanation })).toMatchObject({ ok: true })
+    await settle()
+    const completed = receiptFor(confirmed)!
+    expect(completed[completed.indexOf('--outcome') + 1]).toBe('completed')
+    expect(completed.at(-1)).toBe(explanation)
+    expect(h.store.tickets.list()).toHaveLength(0)
+
+    const refused = receive('5', 'dsh/dddddddd')
+    await settle()
+    expect(h.decide(cardOf('5')!.id, 'choose', '接这一单')).toMatchObject({ ok: true, taken: true })
+    await settle()
+    // The same words carry a different outcome when the router explicitly declines.
+    expect(routeItem(h, { trigger_id: '5', kind: 'ignore', reason: explanation })).toMatchObject({ ok: true })
+    await settle()
+    const rejected = receiptFor(refused)!
+    expect(rejected[rejected.indexOf('--outcome') + 1]).toBe('rejected')
+    expect(h.store.tickets.list()).toHaveLength(0)
+    await h.stop()
   })
 
   it('does not hold an old message, and at most ten wait at a time', async () => {

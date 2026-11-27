@@ -129,7 +129,7 @@ describe('every exit that shows a member\'s name shows it cleaned (#861 review)'
     o.start()
     const job = accept(o, '数据', 'session-m')
     await vi.waitFor(() => { expect(o.executor.list().find(b => b.ticketId === job)?.member).toBe('session-m') })
-    const raised = o.requestOutbound('session-m', { ticket_id: job, address: 'dsh/canvas/other', text: '请给我们接口数据', why: '工单要用' }) as { card_id: string }
+    const raised = await o.requestOutbound('session-m', { ticket_id: job, address: 'dsh/canvas/other', text: '请给我们接口数据', why: '工单要用' }) as { card_id: string }
     exits.push(['outbound card', o.decisionCards().find(c => c.id === raised.card_id)?.question, SHOWN])
     expect(o.approverDecide('session-o', raised.card_id, OUTBOUND_APPROVE, '对方是合作团队')).toMatchObject({ ok: true })
     exits.push(['approver note', strings((o as unknown as { decisions: { get(id: string): unknown } }).decisions.get(raised.card_id)).find(s => s.includes('审批人')), OPS])

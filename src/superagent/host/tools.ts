@@ -15,6 +15,7 @@ import type { SuperagentHost } from './index.ts'
 import { OBSERVER_OPEN_MAX, proposerKind } from './policy.ts'
 import { grantableTool, memberBoundary, roleTools } from './role-tools.ts'
 import { parseDecision } from './decisions.ts'
+import { COMPLETED_WITHOUT_TICKET } from './receipts.ts'
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
@@ -80,7 +81,8 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
       if (memberName === undefined && named === undefined && host.membersProfiled() && !host.splits.isSplitting(triggerId)) return { ok: false, trigger_id: triggerId, code: 'member', error: `this team's members have roles and rules: name the one this work fits as member. ${host.memberListLine()}` }
       const acknowledgement = str(item.acknowledgement), name = str(item.name), note = str(item.note)
       outcome = { kind: 'accept', title, scope, reason, ...(acknowledgement !== undefined ? { acknowledgement } : {}), ...(name !== undefined ? { name } : {}), ...(note !== undefined ? { note } : {}), ...(rules.length > 0 ? { rules } : {}) }
-    } else if (kind === 'ignore') outcome = candidate?.strength === 'inferred' && rules.length === 0 && item.rules !== undefined
+    } else if (kind === 'complete') outcome = { kind: 'ignore', reason: { code: COMPLETED_WITHOUT_TICKET, values: { text: reason } } }
+    else if (kind === 'ignore') outcome = candidate?.strength === 'inferred' && rules.length === 0 && item.rules !== undefined
       ? { kind: 'ignore', reason, audit: { assessed: true, rules: [] } }
       : { kind: 'ignore', reason }
     else if (kind === 'stop') {
@@ -90,7 +92,7 @@ export function routeItem(host: SuperagentHost, item: RouteItem): Record<string,
       const proposer = candidate?.triggers.map(t => proposerKind(t.actor)).find(k => k !== undefined)
       if (proposer !== undefined) return { ok: false, trigger_id: triggerId, code: `${proposer}-stop`, error: `${proposer === 'observer' ? "an observer's" : "a member's"} request cannot stop a ticket: accept, attach or ignore it` }
       outcome = { kind: 'stop', ticketId, reason }
-    } else return { ok: false, trigger_id: triggerId, code: 'kind', error: 'kind must be accept, attach, stop or ignore' }
+    } else return { ok: false, trigger_id: triggerId, code: 'kind', error: 'kind must be accept, attach, stop, complete or ignore' }
     const decision = host.engine.decide(triggerId, { ...outcome, ...(evalId !== undefined ? { evalId } : {}) })
     // The repository stays with the host (the engine has no such field); it is set before the first Assignment launches.
     const repoSet = decision.kind === 'accept' && decision.ticketId !== undefined && repo !== undefined
@@ -196,7 +198,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
 
   ctx.tools.register(defineTool({
     name: 'superagent_route',
-    description: 'Team router only: decide candidates by trigger_id. Each item is one of accept (one ticket for the request: title, scope, reason, acknowledgement in the request language; no implementation plan), attach (ticket_id of an open ticket the message points at or asks for again — a duplicate is attached, never accepted twice), stop (ticket_id a person asked to stop) or ignore (reason). Items are processed independently.',
+    description: 'Team router only: decide candidates by trigger_id. Each item is one of accept (one ticket for the request: title, scope, reason, acknowledgement in the request language; no implementation plan), attach (ticket_id of an open ticket the message points at or asks for again — a duplicate is attached, never accepted twice), stop (ticket_id a person asked to stop), complete (confirm receipt or completion without opening a ticket, with reason in the request language), or ignore (decline with reason). Items are processed independently.',
     parameters: {
       items: { type: 'array', required: true, items: { type: 'object', additionalProperties: true }, description: 'Routing items: { trigger_id, kind, title?, scope?, reason?, acknowledgement?, ticket_id?, name?, note?, rules?, repo? }. repo (owner/name, a repository the team members work in) sends an accepted ticket to a member working in that repository. member names the member the work fits; the ticket then waits for that member. For an inferred candidate, rules names the enabled rules it matches (required to accept; observe mode records it as would-accept); rules: [] records an assessed ignore.' },
     },
@@ -638,7 +640,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
   // Design outbound-requests O1, O2: asking another team on a ticket, through a P0 card the owner or an approver decides.
   ctx.tools.register(defineTool({
     name: 'a2a_outbound_request',
-    description: 'Team session only: ask another team for something this ticket needs. You do not message other teams yourself: this raises a P0 decision card with the address and your exact text, and the host sends it from the team\'s A2A identity once the owner, or an approver the owner named, approves. Their formal receipt comes back to the ticket as a note. The router may ask on any open ticket; a member or an observer only on the ticket it holds. address: another team\'s, <zone>/<id8> or <zone>/canvas/<name> (optionally @<fp8>).',
+    description: 'Team session only: ask another team for something this ticket needs. You do not message other teams yourself: this raises a P0 decision card with the address and your exact text, and the host sends it from the team\'s A2A identity once the owner, or an approver the owner named, approves. Their formal receipt comes back to the ticket as a note. The router may ask on any open ticket; a member or an observer only on the ticket it holds. address: <zone>/<id8> or <zone>/canvas/<name> (optionally @<fp8>), or a linked and admitted CLI handle <zone>/<16 hex>.',
     parameters: {
       ticket_id: { type: 'string', required: true, description: 'The open ticket this is for.' },
       address: { type: 'string', required: true, description: 'The other team\'s A2A address.' },
@@ -650,7 +652,7 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
     execute: async (args: { ticket_id?: string; address?: string; text?: string; why?: string }, exec): Promise<Record<string, JsonValue>> => {
       const h = host(exec), me = callerOf(exec)
       if (h === undefined || me === undefined) return { ok: false, code: 'not-team', error: 'a2a_outbound_request serves only the sessions of a superagent team on this host' }
-      return h.requestOutbound(me, args) as Record<string, JsonValue>
+      return await h.requestOutbound(me, args) as Record<string, JsonValue>
     },
   }))
 
