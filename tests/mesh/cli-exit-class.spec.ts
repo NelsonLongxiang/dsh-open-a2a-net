@@ -65,13 +65,14 @@ describe('superagent p3 G3: --exit-class', () => {
       expect(gone.code).toBe(4)
       expect((await cli(writer, ['route', handleOf(SRC), 'another message', '--task', 'w-1', '--context', 'ctx-1', '--json'])).code).toBe(1)
       // a body above the host's route cap (-32001) can never be resent: gone on the delivery path too
-      // (Windows caps a command line near 32k: the argument itself would fail with ENAMETOOLONG before the CLI runs)
+      // Windows caps the entire command line near 32k; splitting arguments cannot fit this body there.
       if (process.platform !== 'win32') {
-        const big = 'x'.repeat(600_000)
-        const tooLarge = await cli(writer, ['route', handleOf(SRC), big, '--task', 'w-4', ...X])
+        // route joins the words with spaces. Keep each word below Linux's 128 KiB per-argument cap.
+        const big = Array<string>(6).fill('x'.repeat(100_000))
+        const tooLarge = await cli(writer, ['route', handleOf(SRC), ...big, '--task', 'w-4', ...X])
         expect(JSON.parse(tooLarge.stdout)).toMatchObject({ code: -32001, class: 'gone' })
         expect(tooLarge.code).toBe(4)
-        expect((await cli(writer, ['route', handleOf(SRC), big, '--task', 'w-5', '--json'])).code).toBe(1)
+        expect((await cli(writer, ['route', handleOf(SRC), ...big, '--task', 'w-5', '--json'])).code).toBe(1)
       }
       // the switch needs --json
       expect((await cli(writer, ['route', handleOf(SRC), 'x', '--exit-class'])).code).toBe(2)
