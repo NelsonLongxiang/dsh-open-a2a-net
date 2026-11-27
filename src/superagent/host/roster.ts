@@ -19,16 +19,21 @@ export interface RosterSeat {
   seatId?: string
   name?: string
   team: string
+  /** Optional display name of the canvas team. The team address remains in team. */
+  teamLabel?: string
   role: 'router' | 'member' | 'observer'
   online: boolean
   active: number
   queued: number
+  /** Current report counts for member seats. Omitted when the role does not hold work. */
+  blocked?: number
+  waiting?: number
   lastActiveAt?: string
 }
 
 export interface RosterDeps {
   /** The team's canvas and the seats on it, by role (session ids); undefined when the team is bound to no canvas. */
-  readonly team: () => { canvas: string; router?: string; members: readonly string[]; observers: readonly string[] } | undefined
+  readonly team: () => { canvas: string; teamLabel?: string; router?: string; members: readonly string[]; observers: readonly string[] } | undefined
   /** The canvas's remote members (pinned refs). */
   readonly remotes: (canvas: string) => readonly string[]
   readonly declares: (ref: string, capability: string) => boolean
@@ -37,7 +42,7 @@ export interface RosterDeps {
   readonly nameOf: (sessionId: string) => string | undefined
   readonly online: (sessionId: string) => boolean
   readonly seatIdOf?: (sessionId: string) => string | undefined
-  readonly loadOf: (sessionId: string) => { active: number; queued: number; since?: string }
+  readonly loadOf: (sessionId: string) => { active: number; queued: number; blocked?: number; waiting?: number; since?: string }
   readonly hostFingerprint: () => string | undefined
   /**
    * Keep the peers' verified cards fresh. Whether a remote member is confirmed and declares teamRoster is read from the
@@ -63,7 +68,12 @@ export function rosterSeats(d: Pick<RosterDeps, 'team' | 'handleOf' | 'nameOf' |
     const name = d.nameOf(id)
     const load = role === 'member' ? d.loadOf(id) : { active: 0, queued: 0 }
     const seatId = d.seatIdOf?.(id)
-    seats.push({ seat, ...(seatId !== undefined ? { seatId } : {}), ...(name !== undefined && name !== '' ? { name: name.slice(0, 200) } : {}), team: canvasAddress, role, online: d.online(id), active: load.active, queued: load.queued, ...(load.since !== undefined ? { lastActiveAt: load.since } : {}) })
+    seats.push({
+      seat, ...(seatId !== undefined ? { seatId } : {}), ...(name !== undefined && name !== '' ? { name: name.slice(0, 200) } : {}),
+      team: canvasAddress, ...(team.teamLabel !== undefined ? { teamLabel: team.teamLabel } : {}), role, online: d.online(id),
+      active: load.active, queued: load.queued, ...(load.blocked !== undefined ? { blocked: load.blocked } : {}),
+      ...(load.waiting !== undefined ? { waiting: load.waiting } : {}), ...(load.since !== undefined ? { lastActiveAt: load.since } : {}),
+    })
   }
   add(team.router, 'router')
   for (const id of team.members) add(id, 'member')

@@ -72,6 +72,7 @@ Each host with a superagent team reports its seats to every **canvas remote memb
 
   - `seat` is the seat's A2A handle, the same id `by` uses.
   - `active` is the tickets the seat holds now; `queued` is the tickets waiting for it.
+  - Optional `blocked` and `waiting` count open, held tickets whose current assignment report has the corresponding state. They include running and parked assignments and are subsets of `active`. A new host reports zero when there are no matching member tickets. Router and observer seats omit both counts because they do not hold execution tickets.
 - **When.** Every 5 minutes, and 30 seconds after a change: a seat joins or leaves, goes on or off line, or its load changes. Each report is a full snapshot, not a diff.
 - **What it is trusted for.** The market accepts it only from a registered peer, only with Sig3, and only for seats the signing host serves. It is information for people, never authority: nothing a node reports can grant itself work.
 

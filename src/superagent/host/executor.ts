@@ -325,13 +325,26 @@ export class MemberExecutor implements Executor {
   }
   /**
    * A member's load for the roster report (superagent-market-progress-roster P3): the tickets it holds (running or
-   * parked), the tickets waiting that stay with it, and when its latest hold began.
+   * parked), the tickets queued for it, and when its latest hold began. Blocked and waiting count the current report
+   * on each held assignment, so an earlier assignment's report cannot carry over to a new holder.
    */
-  loadOf(member: string): { active: number; queued: number; since?: string } {
+  loadOf(member: string): { active: number; queued: number; blocked: number; waiting: number; since?: string } {
     const held = [...this.bindings, ...this.parked].filter(b => b.member === member)
     const queued = new Set(this.waiting.filter(w => this.ticketMembers[w.ticketId]?.member === member).map(w => w.ticketId)).size
+    const tickets = new Set<string>()
+    let blocked = 0, waiting = 0
+    for (const binding of held) {
+      if (tickets.has(binding.ticketId)) continue
+      tickets.add(binding.ticketId)
+      const ticket = this.d.ticket(binding.ticketId)
+      if (ticket === undefined || ticket.ended !== undefined) continue
+      const assignment = ticket.assignments.find(row => row.id === binding.assignmentId)
+      if (assignment?.state !== 'running') continue
+      if (assignment.report?.state === 'blocked') blocked++
+      if (assignment.report?.state === 'waiting') waiting++
+    }
     const since = held.map(b => b.at).sort().at(-1)
-    return { active: new Set(held.map(b => b.ticketId)).size, queued, ...(since !== undefined ? { since } : {}) }
+    return { active: tickets.size, queued, blocked, waiting, ...(since !== undefined ? { since } : {}) }
   }
   /** How many tickets wait for a member ahead of this one; undefined when it is not waiting (superagent-market-progress-roster P1). */
   queueAhead(ticketId: string): number | undefined {

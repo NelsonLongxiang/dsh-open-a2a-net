@@ -241,6 +241,15 @@
             config:
               fetch: true
               searchTimeoutMs: 60000
+    - id: superagent-member-work-preset
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: superagent-member-work
+        name: superagent 团队成员（办公模式）
+        description: 与 superagent 团队成员使用同一套工具，办公任务先做调查、离线试算和副本修改，正式生效时提交具体改单。
+        order: 92.1
+        plugins:
+          @a2a-member-work-plugins
     - id: superagent-observer-preset
       name: '@deepseek-ai/dsh-agent-preset'
       config:

@@ -32,7 +32,7 @@ export class SuperagentTeams {
   private build(id: string | undefined): SuperagentHost {
     return new SuperagentHost({
       ...this.deps,
-      ...(id !== undefined ? { stateDir: join(this.teamsDir, id) } : {}),
+      ...(id !== undefined ? { stateDir: join(this.teamsDir, id), decisionTeamId: id } : {}),
       canvasTaken: (canvas, self) => this.all().some(team => team !== self && team.settings.canvas === canvas),
     })
   }
@@ -62,6 +62,10 @@ export class SuperagentTeams {
   /** Every team's health problems, each with the team it belongs to (reliability R6). */
   health(): Array<Record<string, unknown>> {
     return [['', this.primary] as const, ...this.extras].flatMap(([id, team]) => team.health().map(problem => ({ ...problem, teamId: id, team: team.settings.canvas ?? '' })))
+  }
+
+  observerDecisionBoard(): Array<Record<string, unknown>> {
+    return [['', this.primary] as const, ...this.extras].flatMap(([id, team]) => team.observerDecisionBoard().map(row => ({ ...row, teamId: id, team: team.settings.canvas ?? '' })))
   }
 
   /** Every team's waiting decisions, each with the team it belongs to. */

@@ -58,6 +58,12 @@ describe('T8: the envelope', () => {
     const out = decisionCardText('decided', 2, 't', card({ decided: { at: '2026-11-20T01:00:00Z', text: '决定：乙' } }))
     expect(bodyOf((out as { text: string }).text).card).toMatchObject({ decided_at: '2026-11-20T01:00:00Z', decided_option: '乙' })
   })
+  it('mirrors the observer decision as the original router option text', () => {
+    const out = decisionCardText('decided', 2, 't', card({ source: 'router', decided: { at: '2026-11-20T01:00:00Z', text: '决定：乙', option: 1, by: 'observer' }, observerDecision: { reason: 'private fixture' } }))
+    const projected = bodyOf((out as { text: string }).text).card
+    expect(projected).toMatchObject({ proposer_kind: 'router', decided_at: '2026-11-20T01:00:00Z', decided_option: '乙' })
+    expect(JSON.stringify(projected)).not.toContain('private fixture')
+  })
   it('#766 review 1: a decision in words only goes as decided_option null, never an empty string', () => {
     const out = decisionCardText('decided', 2, 't', card({ decided: { at: '2026-11-20T01:00:00Z', text: '说明：只写了话' } }))
     expect(out.ok).toBe(true)

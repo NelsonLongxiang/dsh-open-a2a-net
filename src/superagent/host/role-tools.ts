@@ -27,6 +27,8 @@ export type Role = 'router' | 'member' | 'observer' | 'builder'
  */
 export const ROUTER_PRESET = 'superagent-router'
 export const MEMBER_PRESET = 'superagent-member'
+export const MEMBER_WORK_PRESET = 'superagent-member-work'
+export const MEMBER_PRESETS: ReadonlySet<string> = new Set([MEMBER_PRESET, MEMBER_WORK_PRESET])
 /** A member who may also open tickets (design D15): the preset is what makes a session one. */
 export const OBSERVER_PRESET = 'superagent-observer'
 /** The team builder (组队顾问, docs/design/superagent-builder.md TB1): no team role; it reads and proposes, the owner decides. */

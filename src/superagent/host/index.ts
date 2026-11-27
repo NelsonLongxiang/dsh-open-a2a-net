@@ -46,6 +46,7 @@ import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, YGL_TREES, blockableTool, grantClass, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
 import { armAutoApprove, CREDENTIAL_ACK_MINUTES_DEFAULT, DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
+import { armObserverDecisionRule, isObserverAnswerReceipt, observerAnswerNote, observerCardView, observerOptions, observerRefusal, OBSERVER_DECISION_WINDOW_MS, OBSERVER_QUOTA_WINDOW_MS, type ObserverDecision } from './observer-decisions.ts'
 import { searchTeam } from './search.ts'
 import { A2aReceipts, END_RECEIPT_GRACE_MS } from './receipts.ts'
 export { END_RECEIPT_GRACE_MS } from './receipts.ts'
@@ -58,6 +59,13 @@ import { RootDispatch, childLabel, isChildTeam } from './root-dispatch.ts'
 import { splitTeamRef } from '../../canvas-member.ts'
 
 /** superagent-root-team R7: the rule a child team on this instance gets for its root's requests. */
+function workbenchRequestError(body: string, thread?: string): string | undefined {
+  if (body === '') return 'text is required'
+  if (body.length > 20_000) return 'text is longer than 20000 characters'
+  if (thread !== undefined && !/^wb-[0-9a-f-]{36}$/.test(thread)) return 'thread must be a workbench thread id'
+  return undefined
+}
+
 const ROOT_RULE = 'root-dispatch'
 
 /** A session's name for the market (roster, receipt `by`): without the ` (<id8>)` the host adds for the router's cards; the seat carries the handle. */
@@ -281,7 +289,12 @@ export class SuperagentHost {
       logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.teamSend !== undefined ? { teamSend: d.teamSend } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
     })
     this.roster = new RosterReports({
-      team: () => { const s = this.settings; return s.canvas === undefined ? undefined : { canvas: s.canvas, ...(s.router !== undefined ? { router: s.router } : {}), members: s.members.filter(id => !s.observers.includes(id)), observers: s.observers } },
+      team: () => {
+        const s = this.settings
+        if (s.canvas === undefined) return undefined
+        const teamLabel = d.canvasLabel?.(s.canvas)
+        return { canvas: s.canvas, teamLabel, router: s.router, members: s.members.filter(id => !s.observers.includes(id)), observers: s.observers }
+      },
       remotes: canvas => (d.canvasTeam?.(canvas)?.remote ?? []).map(r => r.ref),
       declares: (ref, capability) => d.memberDeclares?.(ref, capability) === true,
       send: async (ref, text, taskId) => { if (d.rosterSend === undefined) throw new Error('no roster send on this host'); await d.rosterSend(ref, text, taskId) },
@@ -327,7 +340,7 @@ export class SuperagentHost {
     this.settingsHistory = new SettingsHistory(join(dir, 'settings-history.json'))
     // The book prunes decided cards by age: on the host's clock, the one the cards are stamped with (a real clock here would
     // drop a card the host decided "just now" whenever the two disagree, e.g. a host or test with an injected clock).
-    this.decisions = new DecisionBook(join(dir, 'decisions.json'), ticketId => { const ticket = this.store.tickets.get(ticketId); return ticket !== undefined && ticket.ended === undefined }, () => Date.parse(this.now()))
+    this.decisions = new DecisionBook(join(dir, 'decisions.json'), ticketId => { const ticket = this.store.tickets.get(ticketId); return ticket !== undefined && ticket.ended === undefined }, () => Date.parse(this.now()), this.settingsValue.observerDecides?.armedAt !== undefined)
     // T8: the book tells the push when a card is raised, decided or dropped (router and observer cards go to the market).
     this.decisions.onChange = (event, card) => { this.decisionPush?.noted(event, card) }
     this.healthReminders = new HealthReminders(
@@ -1202,7 +1215,7 @@ export class SuperagentHost {
 
   /** Raise a card of the router's or an observer's own (decision cards C2, C8). */
   proposeDecision(source: 'router' | 'observer', by: string, question: string, spec: DecisionSpec, reason?: string, files?: readonly DecisionFile[]): Record<string, unknown> {
-    const out = this.decisions.propose({ source, by, question, spec, at: this.now(), ...(reason !== undefined && reason.trim() !== '' ? { reason: reason.trim() } : {}), ...(files !== undefined ? { files } : {}) })
+    const out = this.decisions.propose({ source, by, question, spec, at: this.now(), ...(source === 'router' && by === this.settingsValue.router ? { observerTarget: { kind: 'router-receipt' as const, session: by } } : {}), ...(reason !== undefined && reason.trim() !== '' ? { reason: reason.trim() } : {}), ...(files !== undefined ? { files } : {}) })
     // R7a: an observer's card that names a health problem it was told about counts as acting on it.
     if (out.ok && source === 'observer') { const at = Date.parse(this.now()); this.healthReminders.observerActed(by, `${question}\n${reason ?? ''}`, at); this.questionGate.acted(by, `${question}\n${reason ?? ''}`, at) }
     return out
@@ -1881,6 +1894,177 @@ export class SuperagentHost {
     return checked.ok ? this.decide(id, 'choose', option, `审批人 ${this.displayName(session)}：${checked.reason}`) : checked
   }
 
+  private observerTargetAvailable(card: StoredCard): boolean {
+    const target = card.observerBinding?.target
+    if (target?.kind === 'router-receipt') return card.source === 'router' && this.settingsValue.router === target.session
+    if (target?.kind === 'credential-ack') return card.source === 'health' && card.by === 'credential:' + target.supervised && card.options[target.optionIndex] === '知道了'
+    if (target?.kind !== 'ticket-answer' || card.source !== 'ticket' || card.ticketId !== target.ticketId) return false
+    const ticket = this.store.tickets.get(target.ticketId)
+    return ticket !== undefined && ticket.ended === undefined && ticket.attention?.id === target.questionVersion
+      && !this.questionGate.held(target.ticketId) && this.executor.memberOfTicket(target.ticketId)?.member === target.member
+      && this.settings.members.includes(target.member)
+  }
+
+  private observerCheck(card: StoredCard, session: string, now: number, recovering = false): string | undefined {
+    if (!this.decisions.observerStorageReady || this.store.loadError !== undefined) return 'storage'
+    const stamps = this.decisions.observerHistory().map(row => Date.parse(row.observerDecision!.at))
+    if (stamps.some(at => !Number.isFinite(at) || at > now)) return 'clock'
+    return observerRefusal(card, { observer: this.isObserver(session), session, paused: this.settingsValue.paused,
+      rule: this.settingsValue.observerDecides, now, used: stamps.filter(at => at > now - OBSERVER_QUOTA_WINDOW_MS).length,
+      pending: true, targetAvailable: this.observerTargetAvailable(card),
+    }, recovering)
+  }
+
+  observerDecisionCards(session: string): Record<string, unknown> {
+    if (!this.isObserver(session)) return { ok: false, code: 'not-observer' }
+    const now = Date.parse(this.now())
+    if (!this.decisions.observerStorageReady) return { ok: false, code: 'storage' }
+    return { ok: true, cards: this.decisions.open().map(card => observerCardView(card, this.observerCheck(card, session, now))) }
+  }
+
+  observerOrApproverDecide(session: string, id: string, generation: unknown, option: unknown, reason: unknown): Record<string, unknown> {
+    const card = this.decisions.get(id)
+    if (!this.isObserver(session) || card?.source === 'outbound') return this.approverDecide(session, id, option, reason)
+    if (!this.decisions.observerStorageReady) return { ok: false, code: 'storage' }
+    if (typeof generation !== 'string' || card?.observerBinding?.generation !== generation) return { ok: false, code: 'stale' }
+    const choice = resolveOption(card.options, option)
+    const index = choice === undefined ? -1 : card.options.indexOf(choice)
+    const recorded = card.observerDecision
+    if (recorded !== undefined) return recorded.session === session && recorded.option === index
+      ? { ok: true, decisionId: recorded.id, state: recorded.state, replayed: true } : { ok: false, code: 'stale' }
+    const words = typeof reason === 'string' ? reason.trim() : ''
+    if (words === '' || [...words].length > 500) return { ok: false, code: 'reason' }
+    if (!observerOptions(card).some(item => item.index === index)) return { ok: false, code: 'choice' }
+    const at = this.now()
+    const why = this.observerCheck(card, session, Date.parse(at))
+    if (why !== undefined) return { ok: false, code: why }
+    const decision: ObserverDecision = { id: 'observer-' + generation, teamId: this.d.decisionTeamId ?? '', cardId: card.id, generation, human: false, session, name: this.displayName(session),
+      at, option: index, reason: words, level: card.level, target: card.observerBinding.target, state: 'pending' }
+    try {
+      if (!this.decisions.commitObserverDecision(card, decision)) return { ok: false, code: 'stale' }
+    } catch { return { ok: false, code: 'storage' } }
+    this.advanceObserverDecision(this.decisions.get(id)!)
+    return { ok: true, decisionId: decision.id, state: this.decisions.get(id)?.observerDecision?.state ?? 'unknown' }
+  }
+
+  private ticketObserverReceipt(decision: ObserverDecision): boolean {
+    const target = decision.target
+    return target.kind === 'ticket-answer' && this.store.tickets.get(target.ticketId)?.inputs.some(input => isObserverAnswerReceipt(input, decision, target.questionVersion)) === true
+  }
+
+  private advanceObserverDecision(card: StoredCard): void {
+    const decision = card.observerDecision
+    if (decision === undefined || (decision.state !== 'pending' && decision.state !== 'attempting')) return
+    try {
+      if (decision.state === 'attempting') {
+        this.decisions.updateObserverDecision(card, { ...decision, state: this.ticketObserverReceipt(decision) ? 'applied' : 'unknown' })
+        return
+      }
+      if (decision.teamId !== (this.d.decisionTeamId ?? '') || decision.correction !== undefined || this.observerCheck(card, decision.session, Date.parse(this.now()), true) !== undefined) {
+        this.decisions.updateObserverDecision(card, { ...decision, state: 'failed' })
+        return
+      }
+      if (!this.decisions.updateObserverDecision(card, { ...decision, state: 'attempting' })) return
+      const active = this.decisions.get(card.id)
+      if (active?.observerDecision?.id !== decision.id) return
+      const applied = this.applyObserverDecision(active, decision)
+      if (this.decisions.updateObserverDecision(active, { ...decision, state: applied ? 'applied' : 'failed' }) && applied) this.tellObserverRecipient(decision)
+    } catch { this.d.logger.warn('superagent: observer decision %s requires reconciliation', decision.id) }
+  }
+
+  private applyObserverDecision(card: StoredCard, decision: ObserverDecision): boolean {
+    if (card.observerDecision?.id !== decision.id || card.observerDecision.state !== 'attempting' || decision.human !== false
+      || decision.teamId !== (this.d.decisionTeamId ?? '') || card.observerBinding?.generation !== decision.generation || !this.observerTargetAvailable(card)) return false
+    const target = decision.target
+    if (target.kind === 'credential-ack') {
+      if (decision.option !== target.optionIndex) return false
+      this.healthReminders.decided(card.id, '知道了', Date.parse(decision.at))
+      return true
+    }
+    if (target.kind === 'router-receipt') return true // The structured receipt becomes readable when its applied state commits.
+    return this.store.atomic(() => {
+      const ticket = this.store.tickets.get(target.ticketId)
+      if (ticket === undefined || ticket.ended !== undefined || ticket.attention?.id !== target.questionVersion) return false
+      if (this.ticketObserverReceipt(decision)) return true
+      ticket.inputs.push(observerAnswerNote(decision, target.questionVersion))
+      delete ticket.attention
+      ticket.updatedAt = decision.at
+      this.store.tickets.save(ticket)
+      return true
+    })
+  }
+
+  private tellObserverRecipient(decision: ObserverDecision): void {
+    const target = decision.target
+    if (target.kind === 'credential-ack') return
+    const session = target.kind === 'router-receipt' ? target.session : target.member
+    const locator = target.kind === 'router-receipt' ? 'superagent_read kind=decision-receipts' : 'a2a_ticket_read kind=decision-receipts ticket_id=' + target.ticketId
+    try { this.d.deliverToSession(session, '[superagent observer decision receipt] ' + decision.id + ' · read ' + locator + '. This is a team fact and grants no authority.') }
+    catch { this.d.logger.warn('superagent: observer receipt %s is stored, wake unconfirmed', decision.id) }
+  }
+
+  observerDecisionReceipts(session: string, ticketId?: string): Record<string, unknown> {
+    if (!this.decisions.observerStorageReady) return { ok: false, code: 'storage' }
+    if (ticketId === undefined && session !== this.settingsValue.router) return { ok: false, code: 'not-router' }
+    if (ticketId !== undefined && this.executor.memberOfTicket(ticketId)?.member !== session) return { ok: false, code: 'not-assigned' }
+    const receipts = this.decisions.observerHistory().flatMap(card => {
+      const decision = card.observerDecision!
+      const target = decision.target
+      if (decision.teamId !== (this.d.decisionTeamId ?? '') || (ticketId === undefined ? target.kind !== 'router-receipt' || target.session !== session : target.kind !== 'ticket-answer' || target.ticketId !== ticketId || target.member !== session)) return []
+      if (decision.state !== 'applied' && !this.ticketObserverReceipt(decision)) return []
+      return [{ decisionId: decision.id, cardId: decision.cardId, generation: decision.generation, observer: decision.name, human: false,
+        optionIndex: decision.option, option: card.options[decision.option], at: decision.at, ...(decision.correction === undefined ? {} : { correction: decision.correction.option, correctionAt: decision.correction.at }) }]
+    })
+    return { ok: true, receipts }
+  }
+
+  /** Separate owner history from pending cards, and omit stored internal command bindings. */
+  observerDecisionBoard(): Array<Record<string, unknown>> {
+    if (!this.decisions.observerStorageReady) return []
+    const now = Date.parse(this.now())
+    return this.decisions.observerHistory().flatMap(card => {
+      const d = card.observerDecision!
+      const originalAt = Date.parse(d.at)
+      const inWindow = Number.isFinite(now) && now >= originalAt && now - originalAt < OBSERVER_DECISION_WINDOW_MS
+      const control = d.target.kind === 'credential-ack' && d.credentialControl === undefined
+      if (!inWindow && !control) return []
+      return [{ id: card.id, source: card.source, question: card.question, level: card.level, options: card.options,
+        recommended: '', observerResult: { generation: d.generation, name: d.name, at: d.at, state: d.state, option: card.options[d.option], reason: d.reason,
+          canCorrect: inWindow && d.correction === undefined && d.state !== 'attempting',
+          ...(d.correction === undefined ? {} : { correction: card.options[d.correction.option] }),
+          ...(control ? { controlOptions: card.options.filter(option => option === CREDENTIAL_STOP || option === CREDENTIAL_BLOCK) } : {}),
+        },
+      }]
+    })
+  }
+
+  /** Browser owner only. Recording a correction never invokes the selected action. */
+  ownerObserverDecision(id: string, how: 'observer-correct' | 'credential-control', generation: unknown, option: unknown, reason: unknown): Record<string, unknown> {
+    const card = this.decisions.get(id)
+    const decision = card?.observerDecision
+    if (card === undefined || decision === undefined || typeof generation !== 'string' || decision.generation !== generation) return { ok: false, code: 'stale' }
+    const choice = resolveOption(card.options, option)
+    if (choice === undefined) return { ok: false, code: 'choice' }
+    const index = card.options.indexOf(choice)
+    const at = this.now()
+    try {
+      if (how === 'credential-control') {
+        if (decision.target.kind !== 'credential-ack' || decision.credentialControl !== undefined || !this.observerTargetAvailable(card)
+          || (choice !== CREDENTIAL_STOP && choice !== CREDENTIAL_BLOCK)) return { ok: false, code: 'choice' }
+        if (!this.decisions.updateObserverDecision(card, { ...decision, state: decision.state === 'pending' ? 'failed' : decision.state, credentialControl: { at, option: index } })) return { ok: false, code: 'stale' }
+        return { ok: true, ...this.credentialAction(card.id, decision.target.supervised, card.question, choice) }
+      }
+      const elapsed = Date.parse(at) - Date.parse(decision.at)
+      if (decision.correction !== undefined || decision.state === 'attempting' || !Number.isFinite(elapsed) || elapsed < 0 || elapsed >= OBSERVER_DECISION_WINDOW_MS) return { ok: false, code: 'stale' }
+      if (index === decision.option) return { ok: false, code: 'choice' }
+      const words = typeof reason === 'string' ? reason.trim().slice(0, 500) : ''
+      const corrected = { ...decision, state: decision.state === 'pending' ? 'failed' as const : decision.state, correction: { at, option: index, reason: words } }
+      if (!this.decisions.updateObserverDecision(card, corrected)) return { ok: false, code: 'stale' }
+      // A matching recorded answer can display its correction. No new instruction or ticket is created.
+      return { ok: true, corrected: true }
+    } catch { return { ok: false, code: 'storage', error: '处理结果未确认，请核对原记录。' } }
+  }
+
   requestTool(session: string, role: Role, name: string, why?: string): string {
     const cls = grantClass(role), by = `${cls}:${name}`
     if (this.decisions.open().some(card => card.source === 'tool' && card.by === by)) return `A request to use ${name} is already waiting for the owner as a P0 decision card; try again after it is approved.`
@@ -1915,7 +2099,7 @@ export class SuperagentHost {
       if (this.questionGate.held(ticket.id)) return []
       const id = ticketCardId(ticket.id, ticket.attention.question)
       const card = this.decisions.get(id)
-      if (card?.decided !== undefined) return []
+      if (card?.decided !== undefined || card?.ownerDecisionAttempt !== undefined) return []
       // The person's clock (workbench-market 15) starts when the question reached them, not when the member asked.
       const reached = this.questionGate.reachedAt(ticket.id)
       const since = reached !== undefined ? { at: new Date(reached).toISOString() } : {}
@@ -1941,6 +2125,7 @@ export class SuperagentHost {
     const card = this.decisionCards().find(row => row.id === id)
     // #934: say where a card that is no longer waiting went, instead of a bare refusal.
     if (card === undefined) return this.staleDecision(id)
+    if (!this.decisions.observerStorageReady) return { ok: false, code: 'storage', error: 'decision book unavailable' }
     // The owner's files, staged by the right bar like a request's (C8): reference lines, added below the decision.
     const parsedFiles = decisionFiles(files)
     if (!parsedFiles.ok) return parsedFiles
@@ -2018,13 +2203,24 @@ export class SuperagentHost {
       void this.outbound.decided(card.id, chosen === OUTBOUND_APPROVE, this.settingsValue.canvas ?? '', ticketId => this.store.tickets.get(ticketId)?.title).catch(error => this.d.logger.warn('superagent: approved outbound %s needs reconciliation: %s', card.id, String(error)))
       return { ok: true, approved: chosen === OUTBOUND_APPROVE }
     }
+    const requestText = `[决策卡]（${card.source === 'router' ? '总工' : '观察者'}提出）${card.question}\n${answer}`
+    if (card.ticketId === undefined) {
+      const error = workbenchRequestError(requestText.trim())
+      if (error !== undefined) return { ok: false, code: 'refused', error }
+    }
+    // Owner and Observer both claim the same generation before doing anything outside the book.
+    if (card.observerBinding !== undefined && this.settingsValue.observerDecides?.armedAt !== undefined) {
+      try {
+        if (!this.decisions.reserveOwnerDecision(card, at, choice.option)) return this.staleDecision(card.id)
+      } catch { return { ok: false, code: 'storage', error: 'owner decision could not be reserved' } }
+    }
     if (card.ticketId !== undefined) {
       const out = this.attachAnswer(card.ticketId, answer)
       if (!out.ok) return out
       this.decisions.decide(card.id, { at, text: answer, ...choice, triggerId: out.triggerId, ...withFiles }, stored)
       return { ok: true, ticket_id: card.ticketId, trigger_id: out.triggerId }
     }
-    const filed = this.request(`[决策卡]（${card.source === 'router' ? '总工' : '观察者'}提出）${card.question}\n${answer}`)
+    const filed = this.request(requestText)
     if (!filed.ok) return { ok: false, code: 'refused', error: filed.error }
     this.decisions.decide(card.id, { at, text: answer, ...choice, triggerId: filed.triggerId, ...withFiles }, stored)
     return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
@@ -2048,6 +2244,8 @@ export class SuperagentHost {
       const first = known.decided.text.split('\n')[0] ?? ''
       now = { decided: { at: known.decided.at, by, text: first } }
       where = `it was decided at ${known.decided.at}${by === 'owner' ? '' : ` by the ${by}`}: ${first}`
+    } else if (known?.ownerDecisionAttempt !== undefined) {
+      where = 'the Owner decision is in progress or needs reconciliation'
     } else if (ticketId !== undefined) {
       const ticket = this.store.tickets.get(ticketId)
       const stage = ticket === undefined ? { stage: 'gone' } : ticket.ended !== undefined ? { stage: 'ended', outcome: ticket.ended.outcome } : { stage: this.ticket(ticketId)?.stage ?? null }
@@ -2226,7 +2424,7 @@ export class SuperagentHost {
     let ticket: Ticket
     try { ticket = this.engine.report(binding.ticketId, report) } catch (error) { return { ok: false, code: 'refused', error: error instanceof Error ? error.message : String(error) } }
     const stage = ticket.ended ? { stage: 'ended', outcome: ticket.ended.outcome } : ticketStage(ticket)
-    if (decision !== undefined && typeof report.question === 'string') this.decisions.forTicket({ ticketId: ticket.id, by: member, question: report.question, spec: { level: decision.level, options: decision.options, recommended: decision.recommended, ...(decision.inputs !== undefined ? { inputs: decision.inputs } : {}) }, at: this.now(), ...(decision.files !== undefined ? { files: decision.files } : {}) })
+    if (decision !== undefined && typeof report.question === 'string') this.decisions.forTicket({ ticketId: ticket.id, by: member, question: report.question, questionVersion: ticket.attention?.id, newQuestion: current?.attention?.id !== ticket.attention?.id, spec: { level: decision.level, options: decision.options, recommended: decision.recommended, ...(decision.inputs !== undefined ? { inputs: decision.inputs } : {}) }, at: this.now(), ...(decision.files !== undefined ? { files: decision.files } : {}) })
     // R7b: a new question for a person goes to the observer first; the person path waits while it holds it.
     const asks = typeof report.question === 'string' && report.question.trim() !== '' && ticket.attention !== undefined && ticket.ended === undefined
     const route = asks ? this.questionGate.ask(ticket.id, member, ticket.title, ticket.attention!.question, Date.parse(this.now())) : 'person'
@@ -2374,6 +2572,7 @@ export class SuperagentHost {
 
   pass(): void {
     if (this.store.loadError !== undefined) return
+    for (const card of this.decisions.observerHistory()) this.advanceObserverDecision(card)
     try{this.outbound.flushNarrowNotes()}catch{this.d.logger.warn('superagent: original recovery result note remains pending')}
     try { this.outbound.flushOutboundNotes() } catch (error) { this.d.logger.warn('superagent: outbound answer notes remain owed: %s', String(error)) }
     try { this.readMcpTools() } catch (error) { this.d.logger.warn('superagent: team MCP check failed: %s', String(error)) }
@@ -2469,6 +2668,7 @@ export class SuperagentHost {
       const who = this.displayName(session)
       const what = cardKinds.map(kind => CREDENTIAL_KIND_TEXT[kind]).join('、')
       const out = this.decisions.propose({ source: 'health', by: `credential:${session}`, question: `${who} 的 ${tool} 调用触及${what}（${at}）`, reason: `宿主只记录不拦截；命令预览（已遮蔽）：${preview}`, at,
+        observerTarget: { kind: 'credential-ack', supervised: session, optionIndex: 0, preview },
         spec: { level: 'P1', options: ['知道了', CREDENTIAL_STOP, CREDENTIAL_BLOCK], recommended: '知道了' } })
       if (out.ok) card = out.id
     }
@@ -2701,8 +2901,12 @@ export class SuperagentHost {
     const routerChanged = parsed.settings.router !== this.settingsValue.router
     // #888 D5 B-D5-2: the host stamps when automatic approval took effect; turning it on or widening it restamps.
     const armed = armAutoApprove(this.settingsValue.autoApprove, parsed.settings.autoApprove, this.now())
-    const { autoApprove: _requested, ...withoutAuto } = parsed.settings
-    parsed.settings = { ...withoutAuto, ...(armed !== undefined ? { autoApprove: armed } : {}) } as typeof parsed.settings
+    const observerDecides = armObserverDecisionRule(this.settingsValue.observerDecides, parsed.settings.observerDecides, this.now())
+    if (observerDecides !== undefined && this.settingsValue.observerDecides?.armedAt === undefined) {
+      try { this.decisions.initializeObserverHistory() } catch { return { ok: false, error: 'observer decision history is unavailable' } }
+    }
+    const { autoApprove: _requested, observerDecides: _observer, ...withoutRules } = parsed.settings
+    parsed.settings = { ...withoutRules, ...(armed !== undefined ? { autoApprove: armed } : {}), ...(observerDecides !== undefined ? { observerDecides } : {}) }
     this.writeSettings(parsed.settings)
     // #671: the staffing executor writes its own history line for each rule set it changes, so a write it makes is not also
     // recorded as the owner's edit (that moved the revision twice and left a line for an edit nobody made).
@@ -2776,9 +2980,8 @@ export class SuperagentHost {
   /** The workbench Source: the owner's message, as one Trigger on a new Thread or on the Thread it continues. */
   request(text: string, thread?: string, via?: WorkbenchVia): { ok: true; result: ReceiveResult; triggerId: string; thread: string } | { ok: false; error: string } {
     const body = text.trim()
-    if (body === '') return { ok: false, error: 'text is required' }
-    if (body.length > 20_000) return { ok: false, error: 'text is longer than 20000 characters' }
-    if (thread !== undefined && !/^wb-[0-9a-f-]{36}$/.test(thread)) return { ok: false, error: 'thread must be a workbench thread id' }
+    const error = workbenchRequestError(body, thread)
+    if (error !== undefined) return { ok: false, error }
     const trigger = this.workbenchTrigger(body, thread, via)
     try {
       const result = this.engine.receive(trigger)

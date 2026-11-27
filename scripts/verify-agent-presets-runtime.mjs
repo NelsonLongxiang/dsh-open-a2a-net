@@ -7,8 +7,11 @@ import { resolve, dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const [target, ...extra] = process.argv.slice(2)
-const ptc = extra.length === 1 && extra[0] === '--ptc'
-if (!target || (extra.length && !ptc)) throw Error('usage: node scripts/verify-agent-presets-runtime.mjs <dsh-cli-package.json> [--ptc]')
+const ptc = extra.includes('--ptc')
+const memberSwitch = extra.includes('--member-switch')
+if (!target || new Set(extra).size !== extra.length || extra.some(flag => flag !== '--ptc' && flag !== '--member-switch')) {
+  throw Error('usage: node scripts/verify-agent-presets-runtime.mjs <dsh-cli-package.json> [--ptc] [--member-switch]')
+}
 const resolver = resolve(target)
 const requireDsh = createRequire(resolver)
 const moduleOf = name => import(pathToFileURL(requireDsh.resolve(name)).href)
@@ -22,7 +25,11 @@ const { load } = requireLoader('js-yaml')
 const { entryListSchema, applyEntryPatches } = requireLoader('@deepseek-ai/cordis-plugin-include')
 const rows = applyEntryPatches([], load(readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8'), { schema: entryListSchema }), message => { throw Error(message) })
 const presets = rows.filter(row => row.name === '@deepseek-ai/dsh-agent-preset')
-assert.deepEqual(presets.map(row => row.config.id), ['superagent-router', 'superagent-member', 'superagent-observer', 'superagent-builder'])
+assert.deepEqual(presets.map(row => row.config.id), ['superagent-router', 'superagent-member', 'superagent-member-work', 'superagent-observer', 'superagent-builder'])
+
+const presetPlugins = id => presets.find(row => row.config.id === id).config.plugins
+const toolsOf = id => presetPlugins(id).filter(plugin => plugin.id !== 'persona')
+assert.deepEqual(toolsOf('superagent-member-work'), toolsOf('superagent-member'))
 
 // Mount only the changed persona rows; do not start MCP servers, sessions or the network plugin.
 for (const row of presets) {
@@ -51,6 +58,52 @@ for (const row of presets) {
     assert.ok(renderPrompt(await ctx.systemPrompt.assemble({ scope: key })).includes('DEPLOYMENT_SENTINEL'))
     console.log(row.config.id + ': Loader/persona assembly, scope isolation, runtime context and disposal passed')
   } finally { await ctx.fiber.dispose() }
+}
+
+if (memberSwitch) {
+  const { default: Registry } = await moduleOf('@deepseek-ai/dsh-agent-preset-registry')
+  const ctx = new Context()
+  const selected = new Map()
+  const disposers = []
+  const memberId = 'superagent-member', officeId = 'superagent-member-work'
+  try {
+    await ctx.plugin(SystemPrompt)
+    ctx.systemPrompt.variable('model', () => 'runtime-smoke-model')
+    ctx.provide('agents', { roots: () => [], get: () => undefined,
+      turnBoundaryOf: session => ({ lastTurn: session.lastTurn, openTurnStartSeq: null }) })
+    ctx.provide('sessionProjections', { register: async () => ({ stateOf: session => selected.get(session) ?? null }) })
+    const loader = new Loader(ctx)
+    loader.internal = { import: moduleOf }
+    const registry = new Registry(ctx, { default: memberId, selectedDefault: { get: () => undefined } })
+    for (const id of [memberId, officeId]) {
+      const persona = presetPlugins(id).find(plugin => plugin.id === 'persona')
+      disposers.push(await registry.register({ id, plugins: [persona] }))
+      assert.equal((await registry.resolve(id)).broken, undefined)
+    }
+    const agent = id => {
+      const key = {}, scope = createScope(ctx, key)
+      const session = { lastTurn: 0, append: (_type, value) => { selected.set(session, value.agentPreset) } }
+      return { id, key, ctx: scope.ctx, session }
+    }
+    const officeRules = readFileSync(new URL('../src/superagent/prompts/member-work.md', import.meta.url), 'utf8').trim()
+    const hasOfficeRules = async agent => renderPrompt(await ctx.systemPrompt.assemble({ scope: agent.key })).includes(officeRules)
+    const started = agent('started-member')
+    assert.equal(await registry.select(started, memberId), memberId)
+    assert.equal(await hasOfficeRules(started), false)
+    started.session.lastTurn = 1
+    await assert.rejects(registry.select(started, officeId), /This session has already started/)
+    assert.equal(selected.get(started.session), memberId)
+    assert.equal(await hasOfficeRules(started), false)
+    const fresh = agent('fresh-member')
+    assert.equal(await registry.select(fresh, officeId), officeId)
+    assert.equal(await hasOfficeRules(fresh), true)
+    assert.equal(await registry.select(fresh, memberId), memberId)
+    assert.equal(await hasOfficeRules(fresh), false)
+    console.log('member preset selection: started session stays on its original persona; fresh selection and rollback passed')
+  } finally {
+    for (const dispose of disposers.reverse()) await dispose()
+    await ctx.fiber.dispose()
+  }
 }
 
 if (ptc) {

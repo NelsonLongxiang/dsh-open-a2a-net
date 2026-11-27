@@ -20,6 +20,7 @@ export interface TeamFieldValues {
   readonly blockedTools?: readonly string[]
   /** Minutes before an undecided credential-access card is closed as 「知道了」; absent 15, 0 off. */
   readonly credentialAckMinutes?: number
+  readonly observerDecides?: { readonly maxLevel: 'P1' | 'P2' | 'P3'; readonly perHour: number }
   /** #888 D5: the host takes an eligible card's recommendation after a wait; off unless the owner turns it on. */
   readonly autoApprove?: { readonly enabled: boolean; readonly levels: readonly string[]; readonly sources: readonly string[]; readonly afterMinutes: number; readonly perHour: number; readonly armedAt?: string }
   readonly approvers?: readonly string[]
@@ -192,6 +193,20 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
   const autoPerHour = input('每小时最多自动采纳几张（1–60）', String(aa.perHour), '10')
   autoBox.append(row(autoOn, '打开自动采纳'), row(autoP3, 'P3'), row(autoP2, 'P2'), row(autoRouter, '总工提的卡'), row(autoObserver, '观察者提的卡'), autoMinutes, autoPerHour)
 
+  const observerBox = section('观察者代决', '开启后，观察者可代决新到且符合动作范围的卡。敏感处置与需要填写的卡由属主处理。')
+  const observerOn = check('开启观察者代决', s.observerDecides !== undefined)
+  const observerLevel = el('select', 'wb-sa-select')
+  observerLevel.setAttribute('aria-label', '观察者代决最高级别')
+  for (const level of ['P1', 'P2', 'P3']) {
+    const option = el('option', '', level + ' 及以下')
+    option.value = level
+    observerLevel.append(option)
+  }
+  observerLevel.value = s.observerDecides?.maxLevel ?? 'P1'
+  observerLevel.addEventListener('change', mark)
+  const observerCap = input('每小时观察者代决上限（1–60）', String(s.observerDecides?.perHour ?? 10), '10')
+  observerBox.append(row(observerOn, '开启观察者代决'), observerLevel, observerCap)
+
   const approverBox = section('审批人', '团队想请别的团队做事时，会提一张「对外请求」P0 决策卡。除了你，这里列出的成员或观察者也能代为审批（必须写理由，不能批自己提的卡）。填会话 id，一行一个；总工不能当审批人。这一块的修改需要在已登录的界面里保存。')
   const approvers = area('审批人', (s.approvers ?? []).join('\n'), 2, '一行一个会话 id，例如 session-0123abcd-…')
   approverBox.appendChild(approvers)
@@ -271,7 +286,12 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
     const nextAuto = { enabled: autoOn.checked, levels: [...(autoP2.checked ? ['P2'] : []), ...(autoP3.checked ? ['P3'] : [])], sources: [...(autoRouter.checked ? ['router'] : []), ...(autoObserver.checked ? ['observer'] : [])], afterMinutes, perHour }
     const { armedAt: _stamp, ...currentAuto } = aa
     if (!same(nextAuto, { enabled: currentAuto.enabled, levels: [...currentAuto.levels], sources: [...currentAuto.sources], afterMinutes: currentAuto.afterMinutes, perHour: currentAuto.perHour })) out.autoApprove = nextAuto
+    if (observerOn.checked) {
+      const limit = Number(observerCap.value.trim())
+      if (!Number.isInteger(limit) || limit < 1 || limit > 60) return { error: '每小时观察者代决上限要是 1–60 的整数' }
+      if (s.observerDecides?.maxLevel !== observerLevel.value || s.observerDecides.perHour !== limit) out.observerDecides = { maxLevel: observerLevel.value, perHour: limit }
+    } else if (s.observerDecides !== undefined) out.observerDecides = null
     return { patch: out }
   }
-  return { nodes: [rulesBox, dispatchBox, profilesBox, execBox, botsBox, repoBox, githubBox, toolsBox, autoBox, approverBox, reviewBox], patch }
+  return { nodes: [rulesBox, dispatchBox, profilesBox, execBox, botsBox, repoBox, githubBox, toolsBox, autoBox, observerBox, approverBox, reviewBox], patch }
 }

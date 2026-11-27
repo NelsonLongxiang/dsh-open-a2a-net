@@ -72,8 +72,8 @@ describe('the Windows ygl MCP row of every team preset', () => {
   const value = (node: unknown, ctx: object): unknown => node !== null && typeof node === 'object' && '__jsExpr' in node ? evaluate(ctx, (node as { __jsExpr: string }).__jsExpr) : node
   const winRow = (preset: Row) => (preset.config!.plugins as Row[]).find(p => p.id === 'mcp-ygl-win')!
 
-  it('is in the router, member and observer presets', () => {
-    expect(presets.map(p => p.config!.id)).toEqual(['superagent-router', 'superagent-member', 'superagent-observer'])
+  it('is in the router, both member presets and the observer preset', () => {
+    expect(presets.map(p => p.config!.id)).toEqual(['superagent-router', 'superagent-member', 'superagent-member-work', 'superagent-observer'])
     for (const preset of presets) expect(winRow(preset)).toBeDefined()
   })
 

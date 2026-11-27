@@ -38,6 +38,7 @@ export interface DecisionCard {
   readonly inputs: Readonly<Record<string, CardInput>>
   /** #888 D5: the host took the recommendation on the owner's setting; the owner may still decide it. */
   readonly autoApproved?: { readonly at: string; readonly minutes: number }
+  readonly observerResult?: { generation: string; name: string; at: string; state: string; option: string; reason: string; canCorrect: boolean; correction?: string; controlOptions: string[] }
 }
 
 export interface CardInput { readonly kind: 'text' | 'file' | 'text+file'; readonly prompt: string }
@@ -91,7 +92,13 @@ export function cardOf(raw: unknown): DecisionCard | undefined {
       if (options.includes(key) && typeof v.kind === 'string' && INPUT_KINDS.includes(v.kind) && typeof v.prompt === 'string' && v.prompt !== '') inputs[key] = { kind: v.kind as CardInput['kind'], prompt: v.prompt }
     }
   }
-  if (r.source !== 'router' && r.source !== 'observer' && !(r.source === 'ticket' && Object.keys(inputs).length > 0)) return undefined
+  const result = r.observerResult !== null && typeof r.observerResult === 'object' ? r.observerResult as Json : undefined
+  const observerResult = result === undefined || typeof result.generation !== 'string' || typeof result.name !== 'string' || typeof result.at !== 'string' || typeof result.option !== 'string' ? undefined : {
+    generation: result.generation, name: result.name, at: result.at, state: str(result.state), option: result.option, reason: str(result.reason), canCorrect: result.canCorrect === true,
+    ...(typeof result.correction === 'string' ? { correction: result.correction } : {}),
+    controlOptions: Array.isArray(result.controlOptions) ? result.controlOptions.filter((choice): choice is string => typeof choice === 'string' && options.includes(choice)) : [],
+  }
+  if (observerResult === undefined && r.source !== 'router' && r.source !== 'observer' && !(r.source === 'ticket' && Object.keys(inputs).length > 0)) return undefined
   const files = Array.isArray(r.files) ? r.files.flatMap(f => {
     const x = (f ?? {}) as Json
     return typeof x.sha256 === 'string' && SHA256.test(x.sha256) && typeof x.name === 'string' && typeof x.size === 'number' ? [{ sha256: x.sha256, size: x.size, name: x.name }] : []
@@ -100,6 +107,7 @@ export function cardOf(raw: unknown): DecisionCard | undefined {
     id: str(r.id), teamId: str(r.teamId), team: str(r.team), question: str(r.question), level: str(r.level) || 'P1', options, recommended: str(r.recommended),
     ...(typeof r.reason === 'string' && r.reason !== '' ? { reason: r.reason } : {}), ...(typeof r.title === 'string' && r.title !== '' ? { title: r.title } : {}), files,
     ...(typeof r.address === 'string' && r.address !== '' ? { address: r.address } : {}), inputs,
+    ...(observerResult === undefined ? {} : { observerResult }),
     ...(r.autoApproved !== null && typeof r.autoApproved === 'object' && typeof (r.autoApproved as Json).at === 'string' && typeof (r.autoApproved as Json).minutes === 'number' ? { autoApproved: { at: (r.autoApproved as Json).at as string, minutes: (r.autoApproved as Json).minutes as number } } : {}),
   }
 }
@@ -357,16 +365,44 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
     setTimeout(() => { URL.revokeObjectURL(url) }, 10_000)
   }
 
+  function observerResultNode(card: DecisionCard): HTMLElement {
+    const result = card.observerResult!
+    const node = el('div', 'wb-sa-decision')
+    node.dataset.card = card.id
+    const state = new Map([['pending', '待处理'], ['attempting', '执行中'], ['applied', '已应用'], ['failed', '未应用'], ['unknown', '结果未知']]).get(result.state) ?? '状态未知'
+    node.append(el('div', 'wb-sa-question', card.question), el('div', 'wb-sa-hint', '观察者代决 · ' + result.name + ' · ' + result.at + ' · ' + result.option + ' · ' + state))
+    if (result.reason !== '') node.append(el('div', 'wb-sa-hint', result.reason))
+    if (result.correction !== undefined) node.append(el('div', 'wb-sa-hint', '属主改判：' + result.correction))
+    if (result.canCorrect) {
+      const choices = el('select', 'wb-sa-select')
+      choices.setAttribute('aria-label', '选择改判选项')
+      for (const choice of card.options.filter(option => option !== result.option)) choices.append(el('option', undefined, choice))
+      const correct = el('button', 'wb-btn', '记录改判，不撤回原动作')
+      correct.disabled = busy.has(card.id) || choices.options.length === 0
+      correct.addEventListener('click', () => { void send(card, { how: 'observer-correct', generation: result.generation, option: choices.value }) })
+      node.append(choices, correct)
+    }
+    for (const choice of result.controlOptions) {
+      const control = el('button', 'wb-btn', choice)
+      control.disabled = busy.has(card.id)
+      control.addEventListener('click', () => { void send(card, { how: 'credential-control', generation: result.generation, option: choice }) })
+      node.append(control)
+    }
+    const status = said.get(card.id)
+    if (status !== undefined) node.append(el('div', 'wb-sa-hint', status))
+    return node
+  }
+
   function draw(force = false): void {
     const key = JSON.stringify([cards, [...said], [...busy], failure, loaded, [...attached].map(([id, fs]) => [id, fs.map(f => `${f.name}:${String(f.size)}`)])])
     if (!force && key === shown) return
     shown = key
     // #888 D4: split by whether the recommendation needs input, when any card has inputs.
     // #888 D5: cards the host already took are shown but not counted as waiting.
-    const open = cards.filter(card => card.autoApproved === undefined)
+    const open = cards.filter(card => card.autoApproved === undefined && card.observerResult === undefined)
     const fill = open.filter(recommendedNeedsInput).length
     count.textContent = open.some(c => Object.keys(c.inputs).length > 0) ? `${String(open.length)}（需填写 ${String(fill)} · 可直接定 ${String(open.length - fill)}）` : String(open.length)
-    list.replaceChildren(...cards.map(cardNode))
+    list.replaceChildren(...cards.map(card => card.observerResult === undefined ? cardNode(card) : observerResultNode(card)))
     if (failure !== '') list.append(el('div', 'wb-sa-hint wb-sa-decisions-failed', `${loaded ? '刷新失败，下面是上次读到的卡' : '读不到等你拍板的卡'}：${failure}（下次轮询会再试）`))
     if (cards.length === 0 && failure === '') list.append(el('div', 'wb-sa-hint', loaded ? '没有等你拍板的卡' : '正在读取…'))
   }
@@ -389,7 +425,7 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
     reading = (async () => {
       try {
         const out = await deps.list()
-        const rows = Array.isArray(out.decisions) ? out.decisions : []
+        const rows = [...(Array.isArray(out.decisions) ? out.decisions : []), ...(Array.isArray(out.observerDecisions) ? out.observerDecisions : [])]
         cards = rows.flatMap(row => { const card = cardOf(row); return card === undefined ? [] : [card] })
         loaded = true
         // A card decided elsewhere is gone: what was typed for it goes too.
@@ -407,6 +443,6 @@ export function createDecisionsGroup(deps: DecisionsDeps): DecisionsGroup {
     root, refresh,
     focus(cardId: string) { if (!CARD_ID.test(cardId)) return; wanted = cardId; void refresh() },
     // #888 D5: a card the host already took is shown for a day but is not waiting.
-    waiting: () => cards.filter(card => card.autoApproved === undefined).length,
+    waiting: () => cards.filter(card => card.autoApproved === undefined && card.observerResult === undefined).length,
   }
 }

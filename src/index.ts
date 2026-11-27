@@ -157,7 +157,7 @@ import { defaultGh } from './superagent/host/pr-follow.ts'
 import { createStaffing, staffingTeamRef } from './superagent/host/staffing-wiring.ts'
 import type { StaffingExecutor } from './superagent/host/staffing.ts'
 import { TeamMcpTools } from './superagent/host/team-mcp-tools.ts'
-import { browserOwnerProof, configureOwnerDelegates, touchesRules } from './superagent/host/owner-proof.ts'
+import { browserOwnerProof, configureOwnerDelegates, scopedOwnerControl, touchesRules } from './superagent/host/owner-proof.ts'
 import { OwnerDelegates } from './superagent/host/owner-delegate.ts'
 import { SuperagentTeams, ensureTeamYglHome, ensureTeamYglProject, exportYglBin, startWhenYglKnown, yglCapabilities, yglSettled } from './superagent/host/teams.ts'
 import { registerWireFaces } from './faces/wire.ts'
@@ -167,6 +167,7 @@ import { registerTaskRead } from './tools/task-read.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerUserSessionFaces } from './faces/user-sessions.ts'
+import { scopeRefusal } from './superagent/host/owner-delegate-scope.ts'
 import { registerFileFaces } from './faces/files.ts'
 import { registerSuperagentFaces } from './faces/superagent.ts'
 import {RequestRecoveryStore} from './request-recovery.ts'
@@ -483,7 +484,13 @@ export function apply(ctx: Context, config: Config): void {
    */
   function controlRoute(handler: (req: IncomingMessage, res: ServerResponse) => void): (req: IncomingMessage, res: ServerResponse) => void {
     return (req: IncomingMessage, res: ServerResponse): void => {
-      if (!controlAuthorized(req)) {
+      const scoped = scopedOwnerControl(req)
+      if (scoped === false) {
+        res.writeHead(403, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(scopeRefusal))
+        return
+      }
+      if (scoped !== true && !controlAuthorized(req)) {
         rejectControl(req, res)
         return
       }
@@ -616,7 +623,8 @@ export function apply(ctx: Context, config: Config): void {
   const a2aDirPrivacy = restrictDirToCurrentUser(join(home, 'a2a'))
   if (a2aDirPrivacy.mode === 'windows-acl' && !a2aDirPrivacy.ok) logger.warn('a2a: could not restrict the a2a directory to the current user (%s); its journals keep the inherited ACL', a2aDirPrivacy.error)
   // The control API's user scope: tokens the owner issued with `a2a-net user issue` stand in for the browser owner.
-  configureOwnerDelegates(new OwnerDelegates(join(home, 'a2a', 'owner-delegates.json'), join(home, 'a2a', 'owner-delegates-audit.jsonl')))
+  const ownerDelegates = new OwnerDelegates(join(home, 'a2a', 'owner-delegates.json'), join(home, 'a2a', 'owner-delegates-audit.jsonl'))
+  configureOwnerDelegates(ownerDelegates)
   const peerStore = new PeerStore(config.peers, join(home, 'a2a', 'peers.json'))
   // Node identity (docs/design/node-identity.md, N1): human-named nodes and their prompt versions.
   const nodeStore = new NodeStore(join(home, 'a2a'))
@@ -2169,7 +2177,7 @@ export function apply(ctx: Context, config: Config): void {
             // gh#152: members are read through the local tiers' lens — one of
             // this host's own handles resolves to the session it names, and
             // the two stored shapes of one session publish as ONE handle.
-            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...((team => team?.a2aAddress !== undefined ? { superagentTeam: true as const, identity: team.a2aAddress } : {})(superagentTeams?.all().find(team => team.a2aAddress !== undefined && team.settings.canvas === name))), ...(canvasStore.isRoot(name) ? { root: true as const } : {}), ...((admits => admits.length > 0 ? { admits } : {})(superagentTeams?.all().find(team => team.a2aAddress !== undefined && team.settings.canvas === name)?.admittedRoots() ?? [])) })) } : {}),
+            ...(named ? { canvasOrg: canvasStore.list().map(name => ({ name, team: canvasTeamOf(name), ...(canvasStore.labelOf(name) !== undefined ? { label: canvasStore.labelOf(name) } : {}), members: [...new Set(canvasLocalMembersOf(name))].map(id => sessionNodes.has(id) || joinedSessions.has(id) ? `${config.team}/${id8(id)}` : id) , ...((team => team?.a2aAddress !== undefined ? { superagentTeam: true as const, identity: team.a2aAddress } : {})(superagentTeams?.all().find(team => team.a2aAddress !== undefined && team.settings.canvas === name))), ...(canvasStore.isRoot(name) ? { root: true as const } : {}), ...((admits => admits.length > 0 ? { admits } : {})(superagentTeams?.all().find(team => team.a2aAddress !== undefined && team.settings.canvas === name)?.admittedRoots() ?? [])) })) } : {}),
             ...(named && lanIp !== '' ? { lanIp } : {}),
             ...(PLUGIN_VERSION !== '' ? { version: PLUGIN_VERSION } : {}),
             description: `A2A node exposing team ${config.team}${named ? '' : ' (minimal card — OriginClaim envelope required for the full card: X-A2A-Caller/-Url/-Ts/-Sig signed with your card key)'}`,
@@ -2291,6 +2299,7 @@ export function apply(ctx: Context, config: Config): void {
       cliDeposits.mail(handle, 'superagent', text, undefined, { taskId: ticketId, ...(run !== undefined ? { contextId: run } : {}) })
       return true
     },
+    canvasLabel: name => canvasStore.labelOf(name),
     canvasTeam: name => {
       if (!canvasStore.hasTeam(name)) return undefined
       const ownKey = encodePublicKey(createPublicKey(nodePrivateKey))
@@ -3878,8 +3887,8 @@ export function apply(ctx: Context, config: Config): void {
 
     // gh#77: the session-log faces (local transcript reader + remote-log proxy) live in src/faces/session-log.ts.
     registerSessionLogFaces(webServer, { ctx, config, controlRoute, scanSessionLogList, readSessionLogTail, peerStore, peerFetch, peerRequestHeaders, directoryPeerCandidates, memoizedCardFetch })
-    // #951 S1: the user scope's session routes (list, read a page, prompt a live seat).
-    registerUserSessionFaces(webServer, { ctx, controlRoute, readJsonBody, liveSessions: sessionNodes, joinedSessions, archived: id => archivedSessionFilter()?.(id) === true, sessionLogRoots, scanSessionLogList, nameOf: agent => nodeMetadataOf(agent as Agent).name, teamOf: agent => sessionTeamOf(agent as Agent), taint: id => markLineage(sessionNodes.get(id), 'relay'), roleOf: id => superagentTeams?.ofSession(id)?.roleOf(id) ?? (superagentTeams?.all().some(team => team.isObserver(id)) === true ? 'observer' : null) })
+    // #951 S1: owner operations on local sessions.
+    registerUserSessionFaces(webServer, { ctx, releasePath: join(home, 'a2a', 'user-releases.json'), ownerDelegates, warn: message => logger.warn(message), controlRoute, readJsonBody, liveSessions: sessionNodes, joinedSessions, archived: id => archivedSessionFilter()?.(id) === true, sessionLogRoots, scanSessionLogList, nameOf: agent => nodeMetadataOf(agent as Agent).name, teamOf: agent => sessionTeamOf(agent as Agent), taint: id => markLineage(sessionNodes.get(id), 'relay'), roleOf: id => superagentTeams?.ofSession(id)?.roleOf(id) ?? (superagentTeams?.all().some(team => team.isObserver(id)) === true ? 'observer' : null) })
     registerFileFaces(webServer, { ctx, config, blobStore, ownOrigin: () => originOf(ownCardUrl), canvasStore, verifyOriginClaim, peerKeyAdmits, controlRoute, recordActivity })
   })
 
@@ -3965,6 +3974,7 @@ export function apply(ctx: Context, config: Config): void {
   // superagent's HTTP faces live in src/faces/superagent.ts (#570 line ratchet); registered after cardCache exists: whenWebServerSettled may run its callback at once.
   if (superagentHost !== undefined && superagentTeams !== undefined) whenWebServerSettled((webServer) => {
     registerSuperagentFaces(webServer, {
+      canvasLabel: name => canvasStore.labelOf(name),
       ownerDelegatesPath: join(home, 'a2a', 'owner-delegates.json'),
       sidebarSends,
       ctx, config, superagentHost, superagentTeams, controlRoute, readJsonBody, recordActivity, routeTrunk,
