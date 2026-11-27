@@ -49,6 +49,10 @@ See the [Superagent guide shipped with 0.8.2](https://github.com/NelsonLongxiang
 | Which sessions are reachable, where does this message go, and has a receipt arrived? | Is this request accepted, who owns the ticket, where does it stand, and what needs a person’s decision? |
 | Discover routable teams; the caller organizes the work | The router accepts and assigns work, fixed members execute it, and reports and follow-ups remain attached to tickets |
 
+## General A2A collaboration preset
+
+The bundle also defines `a2a-net-ptc` (**A2A 协作（PTC）**), independent of the four Superagent roles. It uses the host PTC runtime and A2A tools, without local subagents or workflow delegation. It does not join the network, change the default preset or grant permissions. See the [preset and migration guide](docs/guides/a2a-ptc.md); a package containing this change and a compatible DSH runtime are required.
+
 ## The A2A foundation still matters
 
 - Session discovery, direct routing and visual canvas teams on one host or across linked hosts.
