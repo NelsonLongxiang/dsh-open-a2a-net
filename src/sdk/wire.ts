@@ -31,11 +31,12 @@ export function formatDispatch(line: { for?: string; rework?: { of: string } }, 
 }
 
 /** A seat on a roster line, as the requester reads it (the same shape the host sends, superagent-market-progress-roster.md P3). */
-export interface RosterSeat { readonly seat: string; readonly seatId?: string; readonly name?: string; readonly team?: string; readonly teamLabel?: string; readonly role: 'router' | 'member' | 'observer'; readonly online: boolean; readonly active: number; readonly queued: number; readonly lastActiveAt?: string }
+export interface RosterSeat { readonly seat: string; readonly seatId?: string; readonly name?: string; readonly team?: string; readonly teamLabel?: string; readonly role: 'router' | 'member' | 'observer'; readonly online: boolean; readonly active: number; readonly queued: number; readonly blocked?: number; readonly waiting?: number; readonly lastActiveAt?: string }
 
 /** A parsed `[A2A roster]` line: the head's host fp8, and the JSON body's host, at and seats. */
 export interface ParsedRoster { readonly host: string; readonly at: string; readonly seats: readonly RosterSeat[] }
 
+const rosterCount = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 const ROSTER_HEAD = /^\[A2A roster\] ([0-9a-f]{8}) (\S+)$/
 
 /**
@@ -67,6 +68,7 @@ export function parseRoster(text: string): ParsedRoster | undefined {
     const name = typeof row.name === 'string' && row.name !== '' ? row.name : undefined
     const team = typeof row.team === 'string' && row.team !== '' ? row.team : undefined
     const teamLabel = parseDisplayLabel(row.teamLabel)
+    const blocked = rosterCount(row.blocked), waiting = rosterCount(row.waiting)
     const lastActiveAt = typeof row.lastActiveAt === 'string' ? row.lastActiveAt : undefined
     seats.push({
       seat: row.seat,
@@ -76,6 +78,8 @@ export function parseRoster(text: string): ParsedRoster | undefined {
       ...(teamLabel !== undefined ? { teamLabel } : {}),
       role: row.role,
       online: row.online, active: row.active, queued: row.queued,
+      ...(blocked !== undefined ? { blocked } : {}),
+      ...(waiting !== undefined ? { waiting } : {}),
       ...(lastActiveAt !== undefined ? { lastActiveAt } : {}),
     })
   }

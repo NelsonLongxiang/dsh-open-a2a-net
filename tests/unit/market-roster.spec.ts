@@ -16,7 +16,7 @@ const T0 = Date.parse('2026-11-11T14:00:00.000Z')
 function roster(options: { declares?: (ref: string) => boolean; fail?: boolean; warm?: () => void } = {}) {
   let now = T0
   const team: { canvas: string; teamLabel?: string; router: string; members: string[]; observers: string[] } = { canvas: 'ops', router: 'session-r', members: ['session-m1', 'session-m2'], observers: ['session-o'] }
-  const load: Record<string, { active: number; queued: number; since?: string }> = { 'session-m1': { active: 1, queued: 2, since: '2026-11-11T13:50:00.000Z' }, 'session-m2': { active: 0, queued: 0 } }
+  const load: Record<string, { active: number; queued: number; blocked?: number; waiting?: number; since?: string }> = { 'session-m1': { active: 1, queued: 2, since: '2026-11-11T13:50:00.000Z' }, 'session-m2': { active: 0, queued: 0 } }
   const online = new Set(['session-r', 'session-m1', 'session-o'])
   const sent: Array<{ ref: string; text: string; taskId: string }> = []
   const r = new RosterReports({
@@ -98,6 +98,24 @@ describe('the roster report', () => {
     h.advance(ROSTER_SETTLE_MS); await h.r.tick()
     expect(h.sent).toHaveLength(3)
     expect(seats(2)).toEqual(original)
+  })
+
+  it('publishes report-count changes after settling, including zeroes for members', async () => {
+    const h = roster()
+    Object.assign(h.load['session-m1']!, { blocked: 1, waiting: 0 })
+    Object.assign(h.load['session-m2']!, { blocked: 0, waiting: 0 })
+    await h.r.tick()
+    const first = parseRoster(h.sent[0]!.text)!.seats
+    expect(first[0]).not.toHaveProperty('blocked')
+    expect(first[3]).not.toHaveProperty('waiting')
+    expect(first[1]).toMatchObject({ active: 1, queued: 2, blocked: 1, waiting: 0 })
+    expect(first[2]).toMatchObject({ blocked: 0, waiting: 0 })
+    Object.assign(h.load['session-m1']!, { blocked: 0, waiting: 1 })
+    h.advance(1_000); await h.r.tick()
+    h.advance(ROSTER_SETTLE_MS - 1); await h.r.tick()
+    expect(h.sent).toHaveLength(1)
+    h.advance(1); await h.r.tick()
+    expect(parseRoster(h.sent[1]!.text)?.seats[1]).toMatchObject({ active: 1, queued: 2, blocked: 0, waiting: 1 })
   })
 
   it('nothing changed: again only after 5 minutes; a change: 30 seconds after it', async () => {

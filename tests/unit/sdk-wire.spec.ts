@@ -88,6 +88,17 @@ describe('sdk/wire: the roster line', () => {
       expect(parseRoster(line(invalid))?.seats).toEqual([seat])
     }
   })
+  it('preserves optional report counts, including zero, and ignores malformed values', () => {
+    const seat = { seat: 'dsh/11112222', role: 'member', online: true, active: 2, queued: 1 }
+    const line = (blocked: unknown, waiting: unknown) => '[A2A roster] ab12cd34 t' + String.fromCharCode(10)
+      + JSON.stringify({ host: 'ab12cd34deadbeef', at: 't', seats: [{ ...seat, blocked, waiting }] })
+    expect(parseRoster(line(0, 2))?.seats).toEqual([{ ...seat, blocked: 0, waiting: 2 }])
+    for (const invalid of [undefined, null, -1, 1.5, '2', true, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(parseRoster(line(invalid, 1))?.seats).toEqual([{ ...seat, waiting: 1 }])
+      expect(parseRoster(line(1, invalid))?.seats).toEqual([{ ...seat, blocked: 1 }])
+    }
+  })
+
   it('rejects a body whose host does not match the head fp8, and other text', () => {
     expect(parseRoster('[A2A roster] ab12cd34 t\n' + JSON.stringify({ host: 'ff990011', at: 't', seats: [] }))).toBeUndefined()
     expect(parseRoster('anything else')).toBeUndefined()
