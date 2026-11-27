@@ -85,7 +85,8 @@ if (memberSwitch) {
       const session = { lastTurn: 0, append: (_type, value) => { selected.set(session, value.agentPreset) } }
       return { id, key, ctx: scope.ctx, session }
     }
-    const hasOfficeRules = async agent => renderPrompt(await ctx.systemPrompt.assemble({ scope: agent.key })).includes('Office work: finish the investigation')
+    const officeRules = readFileSync(new URL('../src/superagent/prompts/member-work.md', import.meta.url), 'utf8').trim()
+    const hasOfficeRules = async agent => renderPrompt(await ctx.systemPrompt.assemble({ scope: agent.key })).includes(officeRules)
     const started = agent('started-member')
     assert.equal(await registry.select(started, memberId), memberId)
     assert.equal(await hasOfficeRules(started), false)

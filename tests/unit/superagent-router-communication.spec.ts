@@ -77,7 +77,10 @@ it('adds office rules to the member persona without changing its tool compositio
   const office = presets.find(row => row.config?.id === 'superagent-member-work')!
   const tools = (row: Row) => row.config!.plugins.filter((plugin: Row) => plugin.id !== 'persona')
   expect(tools(office)).toEqual(tools(member))
-  const fragment = readFileSync(new URL('src/superagent/prompts/member-work.md', root), 'utf8').trim()
+  const approvedText = readFileSync(new URL('src/superagent/prompts/member-work.md', root), 'utf8')
+  // #972, issue body updated 2026-11-27T06:05:27Z, requires this exact Markdown block.
+  expect(digest(approvedText)).toBe('25bfaa95d05254f3d487e0a890e8c18ce6fe34ab25e63163182224708081f497')
+  const fragment = approvedText.trim()
   const officePrompt = persona(office).prefix as string
   expect(officePrompt).toBe(presetPrompt('member-work'))
   expect(officePrompt.replace(fragment + '\n\n', '')).toBe(persona(member).prefix)
