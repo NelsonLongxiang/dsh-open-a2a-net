@@ -47,6 +47,8 @@ taskKind('roster-ab12cd34-1770000000000') // { kind: 'roster', host: 'ab12cd34' 
 
 `parseRoster(text)` 读 `[A2A roster] <fp8> <时刻>` 加一行 JSON：`{ host, at, seats }`，席位带 `seatId`。头与体的 host 不一致（体的 host 不以头的 fp8 开头）返回 `undefined`——这行不被信任。
 
+名册席位可带 `teamLabel?: string`，取该席位所属画布团队的显示名。`name` 仍是席位名，`team` 仍是画布路由地址。无显示名时，宿主在完整快照里省略 `teamLabel`。消费方应以新快照为准，省略时清掉旧显示名并回退到现有展示。解码器按画布显示名的校验规则忽略无效的 `teamLabel`，仍保留席位。
+
 ## 能力
 
 `CAPABILITIES` 列出四个已定义能力（`progressReceipts`、`teamRoster`、`directedSeats`、`reworkReturns`）；`declares(card, name)` 只在名片 `capabilities[name]` **恰为 true** 时为真（字符串 `"true"` 不算）。
