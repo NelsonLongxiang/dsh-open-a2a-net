@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -170,6 +170,74 @@ describe('observer decision policy', () => {
       expect(bookOf(f.host).get(id)).toMatchObject({ decided: { option: 1, triggerId: 'owner-trigger' } })
       expect(f.host.observerDecisionBoard()).toEqual([])
     } finally { await f.host.stop() }
+  })
+
+  it('keeps an Owner card open when the request is rejected before intake', async () => {
+    const f = fixture()
+    try {
+      const id = f.propose('owner request size')
+      expect(f.host.decide(id, 'choose', '甲', 'x'.repeat(20_000))).toMatchObject({ ok: false, code: 'refused' })
+      expect(bookOf(f.host).open().map(card => card.id)).toContain(id)
+      expect(bookOf(f.host).get(id)?.ownerDecisionAttempt).toBeUndefined()
+      expect(f.host.decide(id, 'choose', '甲', 'short note')).toMatchObject({ ok: true })
+    } finally { await f.host.stop() }
+  })
+
+  it('stops observer decisions when the active policy has lost its saved book', async () => {
+    const f = fixture()
+    const id = f.propose('first decision')
+    const generation = f.cards().find(card => card.cardId === id)!.generation
+    expect(choose(f.host, id, generation)).toMatchObject({ ok: true, state: 'applied' })
+    await f.host.stop()
+    const bookPath = (bookOf(f.host) as unknown as { path: string }).path
+    renameSync(bookPath, bookPath + '.backup')
+    const recovered = f.open()
+    try {
+      expect(recovered.settings.observerDecides?.armedAt).toBe(f.host.settings.observerDecides?.armedAt)
+      expect(bookOf(recovered).observerStorageReady).toBe(false)
+      expect(choose(recovered, id, generation)).toMatchObject({ ok: false, code: 'storage' })
+      expect(f.wake).toHaveBeenCalledTimes(1)
+    } finally { await recovered.stop() }
+  })
+
+  it('does not reinitialize a lost book after the Owner disables the rule', async () => {
+    const f = fixture()
+    const path = (bookOf(f.host) as unknown as { path: string }).path
+    expect(readFileSync(path, 'utf8')).toBe('[]')
+    try {
+      expect(f.host.saveSettings({ observerDecides: null }, () => true).ok).toBe(true)
+    } finally { await f.host.stop() }
+    renameSync(path, path + '.backup')
+    const recovered = f.open()
+    try {
+      expect(bookOf(recovered).observerStorageReady).toBe(false)
+      expect(recovered.saveSettings({ observerDecides: { maxLevel: 'P1', perHour: 1 } }, () => true)).toMatchObject({ ok: false })
+    } finally { await recovered.stop() }
+  })
+
+  it('keeps the Owner reservation when intake does not confirm the outcome', async () => {
+    const f = fixture()
+    try {
+      const id = f.propose('owner result uncertain')
+      vi.spyOn(f.host, 'request').mockReturnValueOnce({ ok: false, error: 'intake outcome unavailable' })
+      expect(f.host.decide(id, 'choose', '甲')).toMatchObject({ ok: false, code: 'refused' })
+      expect(bookOf(f.host).get(id)?.ownerDecisionAttempt).toBeDefined()
+      expect(f.host.decide(id, 'choose', '甲')).toMatchObject({ ok: false, code: 'stale' })
+    } finally { await f.host.stop() }
+  })
+
+  it('refuses stored cards with malformed input requirements', () => {
+    const home = mkdtempSync(join(tmpdir(), 'observer-invalid-inputs-'))
+    const path = join(home, 'decisions.json')
+    const book = new DecisionBook(path, () => true, () => T0)
+    const out = book.propose({ source: 'router', by: router, question: 'requires input', at: new Date(T0).toISOString(),
+      observerTarget: { kind: 'router-receipt', session: router }, spec: { ...spec, inputs: { 乙: { kind: 'text', prompt: 'Owner input' } } } })
+    expect(out.ok).toBe(true)
+    const records = JSON.parse(readFileSync(path, 'utf8'))
+    expect(new DecisionBook(path).observerStorageReady).toBe(true)
+    records[0].inputs = []
+    writeFileSync(path, JSON.stringify(records))
+    expect(new DecisionBook(path).observerStorageReady).toBe(false)
   })
 
   it('rolls back a failed observer decision commit without waking the recipient', async () => {

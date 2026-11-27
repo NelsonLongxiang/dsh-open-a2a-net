@@ -175,6 +175,19 @@ export function decisionFiles(files: unknown): { ok: true; files: DecisionFile[]
   return { ok: true, files: attached }
 }
 
+/** A bound card must retain its authorization fields exactly as saved. Older ticket questions may lack a recommendation. */
+function validRestoredObserverCard(card: StoredCard): boolean {
+  if (!validObserverCardState(card)) return false
+  if (card.observerBinding === undefined) return true
+  const { options, level, recommended, inputs } = card
+  const minimum = card.source === 'ticket' ? 1 : OPTIONS_MIN
+  return typeof card.question === 'string' && card.question.trim() !== '' && LEVELS.includes(level)
+    && options.length >= minimum && options.length <= OPTIONS_MAX && new Set(options).size === options.length
+    && options.every(option => typeof option === 'string' && option !== '' && option === option.trim() && option.length <= OPTION_MAX)
+    && (options.includes(recommended) || card.source === 'ticket' && recommended === '')
+    && inputs !== null && parseInputs(inputs, options).ok
+}
+
 export class DecisionBook {
   private cards: StoredCard[]
   readonly observerStorageReady: boolean
@@ -182,14 +195,36 @@ export class DecisionBook {
    * @param path - the file the cards live in.
    * @param ticketOpen - whether a ticket is still open: a member's card waits only as long as its ticket.
    * @param now - the clock, in milliseconds.
+   * @param observerArmed - whether the team's saved policy already requires a decision book.
    */
-  constructor(private readonly path: string, private readonly ticketOpen: (ticketId: string) => boolean = () => true, private readonly now: () => number = () => Date.now()) {
+  constructor(private readonly path: string, private readonly ticketOpen: (ticketId: string) => boolean = () => true, private readonly now: () => number = () => Date.now(), observerArmed = false) {
     let loaded: StoredCard[] = []
     let readable = true
-    try { if (existsSync(path)) loaded = JSON.parse(readFileSync(path, 'utf8')) as StoredCard[] } catch { readable = false }
-    this.cards = Array.isArray(loaded) ? loaded.filter(card => card !== null && typeof card === 'object' && typeof card.id === 'string') : []
+    try {
+      loaded = JSON.parse(readFileSync(path, 'utf8')) as StoredCard[]
+    } catch (error) {
+      // An armed policy or the permanent initialization marker means a missing book is lost history.
+      readable = (error as NodeJS.ErrnoException).code === 'ENOENT' && !observerArmed && !existsSync(this.observerMarker)
+    }
+    this.cards = Array.isArray(loaded) ? loaded.filter(card => card !== null && typeof card === 'object' && typeof card.id === 'string' && validRestoredObserverCard(card)) : []
     this.observerStorageReady = readable && Array.isArray(loaded) && this.cards.length === loaded.length
-      && new Set(this.cards.map(card => card.id)).size === this.cards.length && this.cards.every(validObserverCardState)
+      && new Set(this.cards.map(card => card.id)).size === this.cards.length
+    if (observerArmed && this.observerStorageReady) {
+      try { this.initializeObserverHistory() } catch { this.observerStorageReady = false }
+    }
+  }
+
+  private get observerMarker(): string { return this.path + '.observer-initialized' }
+
+  /** Establish a durable empty book on first enable. Keep the marker across disable and re-enable. */
+  initializeObserverHistory(): void {
+    if (!this.observerStorageReady) throw new Error('decision book unreadable')
+    if (existsSync(this.observerMarker)) {
+      if (!existsSync(this.path)) throw new Error('decision book missing')
+      return
+    }
+    if (!existsSync(this.path)) this.save()
+    writeFileSync(this.observerMarker, 'observer-history-v1', { mode: 0o600, flag: 'wx', flush: true })
   }
 
   /**
@@ -215,7 +250,7 @@ export class DecisionBook {
   }
 
   private save(): void {
-    if (!this.observerStorageReady) throw new Error('decision book unreadable')
+    if (!this.observerStorageReady || existsSync(this.observerMarker) && !existsSync(this.path)) throw new Error('decision book unreadable')
     this.prune()
     mkdirSync(dirname(this.path), { recursive: true })
     const temporary = `${this.path}.tmp-${randomUUID()}`

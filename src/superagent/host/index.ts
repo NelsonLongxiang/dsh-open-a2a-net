@@ -59,6 +59,13 @@ import { RootDispatch, childLabel, isChildTeam } from './root-dispatch.ts'
 import { splitTeamRef } from '../../canvas-member.ts'
 
 /** superagent-root-team R7: the rule a child team on this instance gets for its root's requests. */
+function workbenchRequestError(body: string, thread?: string): string | undefined {
+  if (body === '') return 'text is required'
+  if (body.length > 20_000) return 'text is longer than 20000 characters'
+  if (thread !== undefined && !/^wb-[0-9a-f-]{36}$/.test(thread)) return 'thread must be a workbench thread id'
+  return undefined
+}
+
 const ROOT_RULE = 'root-dispatch'
 
 /** A session's name for the market (roster, receipt `by`): without the ` (<id8>)` the host adds for the router's cards; the seat carries the handle. */
@@ -333,7 +340,7 @@ export class SuperagentHost {
     this.settingsHistory = new SettingsHistory(join(dir, 'settings-history.json'))
     // The book prunes decided cards by age: on the host's clock, the one the cards are stamped with (a real clock here would
     // drop a card the host decided "just now" whenever the two disagree, e.g. a host or test with an injected clock).
-    this.decisions = new DecisionBook(join(dir, 'decisions.json'), ticketId => { const ticket = this.store.tickets.get(ticketId); return ticket !== undefined && ticket.ended === undefined }, () => Date.parse(this.now()))
+    this.decisions = new DecisionBook(join(dir, 'decisions.json'), ticketId => { const ticket = this.store.tickets.get(ticketId); return ticket !== undefined && ticket.ended === undefined }, () => Date.parse(this.now()), this.settingsValue.observerDecides?.armedAt !== undefined)
     // T8: the book tells the push when a card is raised, decided or dropped (router and observer cards go to the market).
     this.decisions.onChange = (event, card) => { this.decisionPush?.noted(event, card) }
     this.healthReminders = new HealthReminders(
@@ -1918,10 +1925,10 @@ export class SuperagentHost {
   observerOrApproverDecide(session: string, id: string, generation: unknown, option: unknown, reason: unknown): Record<string, unknown> {
     const card = this.decisions.get(id)
     if (!this.isObserver(session) || card?.source === 'outbound') return this.approverDecide(session, id, option, reason)
+    if (!this.decisions.observerStorageReady) return { ok: false, code: 'storage' }
     if (typeof generation !== 'string' || card?.observerBinding?.generation !== generation) return { ok: false, code: 'stale' }
     const choice = resolveOption(card.options, option)
     const index = choice === undefined ? -1 : card.options.indexOf(choice)
-    if (!this.decisions.observerStorageReady) return { ok: false, code: 'storage' }
     const recorded = card.observerDecision
     if (recorded !== undefined) return recorded.session === session && recorded.option === index
       ? { ok: true, decisionId: recorded.id, state: recorded.state, replayed: true } : { ok: false, code: 'stale' }
@@ -2195,6 +2202,11 @@ export class SuperagentHost {
       void this.outbound.decided(card.id, chosen === OUTBOUND_APPROVE, this.settingsValue.canvas ?? '', ticketId => this.store.tickets.get(ticketId)?.title).catch(error => this.d.logger.warn('superagent: approved outbound %s needs reconciliation: %s', card.id, String(error)))
       return { ok: true, approved: chosen === OUTBOUND_APPROVE }
     }
+    const requestText = `[决策卡]（${card.source === 'router' ? '总工' : '观察者'}提出）${card.question}\n${answer}`
+    if (card.ticketId === undefined) {
+      const error = workbenchRequestError(requestText.trim())
+      if (error !== undefined) return { ok: false, code: 'refused', error }
+    }
     // Owner and Observer both claim the same generation before doing anything outside the book.
     if (card.observerBinding !== undefined && this.settingsValue.observerDecides?.armedAt !== undefined) {
       try {
@@ -2207,7 +2219,7 @@ export class SuperagentHost {
       this.decisions.decide(card.id, { at, text: answer, ...choice, triggerId: out.triggerId, ...withFiles }, stored)
       return { ok: true, ticket_id: card.ticketId, trigger_id: out.triggerId }
     }
-    const filed = this.request(`[决策卡]（${card.source === 'router' ? '总工' : '观察者'}提出）${card.question}\n${answer}`)
+    const filed = this.request(requestText)
     if (!filed.ok) return { ok: false, code: 'refused', error: filed.error }
     this.decisions.decide(card.id, { at, text: answer, ...choice, triggerId: filed.triggerId, ...withFiles }, stored)
     return { ok: true, trigger_id: filed.triggerId, thread: filed.thread }
@@ -2889,6 +2901,9 @@ export class SuperagentHost {
     // #888 D5 B-D5-2: the host stamps when automatic approval took effect; turning it on or widening it restamps.
     const armed = armAutoApprove(this.settingsValue.autoApprove, parsed.settings.autoApprove, this.now())
     const observerDecides = armObserverDecisionRule(this.settingsValue.observerDecides, parsed.settings.observerDecides, this.now())
+    if (observerDecides !== undefined && this.settingsValue.observerDecides?.armedAt === undefined) {
+      try { this.decisions.initializeObserverHistory() } catch { return { ok: false, error: 'observer decision history is unavailable' } }
+    }
     const { autoApprove: _requested, observerDecides: _observer, ...withoutRules } = parsed.settings
     parsed.settings = { ...withoutRules, ...(armed !== undefined ? { autoApprove: armed } : {}), ...(observerDecides !== undefined ? { observerDecides } : {}) }
     this.writeSettings(parsed.settings)
@@ -2964,9 +2979,8 @@ export class SuperagentHost {
   /** The workbench Source: the owner's message, as one Trigger on a new Thread or on the Thread it continues. */
   request(text: string, thread?: string, via?: WorkbenchVia): { ok: true; result: ReceiveResult; triggerId: string; thread: string } | { ok: false; error: string } {
     const body = text.trim()
-    if (body === '') return { ok: false, error: 'text is required' }
-    if (body.length > 20_000) return { ok: false, error: 'text is longer than 20000 characters' }
-    if (thread !== undefined && !/^wb-[0-9a-f-]{36}$/.test(thread)) return { ok: false, error: 'thread must be a workbench thread id' }
+    const error = workbenchRequestError(body, thread)
+    if (error !== undefined) return { ok: false, error }
     const trigger = this.workbenchTrigger(body, thread, via)
     try {
       const result = this.engine.receive(trigger)
