@@ -1,4 +1,4 @@
-import { type StoredCard, needsInput } from './decisions.ts'
+import { type StoredCard, needsInput, ticketCardId } from './decisions.ts'
 import type { TicketInput } from '../upstream/dsh-superagent/src/core/index.ts'
 
 const LEVEL = { P0: 0, P1: 1, P2: 2, P3: 3 } as const
@@ -76,8 +76,13 @@ export function validObserverCardState(card: StoredCard): boolean {
   else if (target.kind === 'credential-ack') { if (card.source !== 'health' || typeof target.supervised !== 'string' || typeof target.preview !== 'string' || !Number.isInteger(target.optionIndex) || card.options[target.optionIndex] !== '知道了') return false }
   else return false
   if (decision === undefined) return true
+  // A repeated ticket question archives its previous row under the decision ID without changing the original card ID.
+  if (target.kind === 'ticket-answer' && typeof card.question !== 'string') return false
+  const originalCardId = target.kind === 'ticket-answer' ? ticketCardId(target.ticketId, card.question) : card.id
+  const decisionId = 'observer-' + binding.generation
   return decision !== null && typeof decision === 'object' && decision.generation === binding.generation
-    && decision.id === 'observer-' + binding.generation && typeof decision.teamId === 'string' && decision.cardId === card.id
+    && decision.id === decisionId && typeof decision.teamId === 'string' && decision.cardId === originalCardId
+    && (card.id === originalCardId || target.kind === 'ticket-answer' && card.id === decisionId)
     && Object.hasOwn(LEVEL, decision.level) && decision.level !== 'P0' && decision.level === card.level
     && decision.human === false && typeof decision.session === 'string' && typeof decision.reason === 'string'
     && typeof decision.name === 'string' && Number.isFinite(Date.parse(decision.at))

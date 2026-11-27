@@ -145,6 +145,51 @@ describe('observer decision policy', () => {
     } finally { await f.host.stop() }
   })
 
+  it('restores the archived decision after answering and opening the same question again', async () => {
+    const f = fixture()
+    const ticketId = 'ticket-archive'
+    const question = 'a repeated question'
+    const at = new Date(f.clock.now).toISOString()
+    const book = bookOf(f.host)
+    let original: ReturnType<DecisionBook['observerHistory']>[number]['observerDecision']
+    try {
+      f.host.store.atomic(() => f.host.store.tickets.save({ id: ticketId, title: 'fixture', updatedAt: at, attention: { id: 'q1', question }, inputs: [] } as never))
+      vi.spyOn(f.host.executor, 'memberOfTicket').mockReturnValue({ member: worker })
+      book.forTicket({ ticketId, question, questionVersion: 'q1', by: worker, at, spec })
+      const first = f.cards().find(row => row.eligible)!
+      expect(choose(f.host, first.cardId, first.generation)).toMatchObject({ ok: true, state: 'applied' })
+      original = book.get(first.cardId)?.observerDecision
+      if (original === undefined) throw new Error('missing applied decision')
+      const ticket = f.host.store.tickets.get(ticketId)!
+      f.host.store.atomic(() => f.host.store.tickets.save({ ...ticket, attention: { id: 'q2', question } }))
+      book.forTicket({ ticketId, question, questionVersion: 'q2', newQuestion: true, by: worker, at, spec })
+      expect(book.get(original.id)?.observerDecision).toEqual(original)
+      expect(book.get(first.cardId)?.observerBinding?.generation).not.toBe(first.generation)
+    } finally { await f.host.stop() }
+    if (original === undefined) throw new Error('missing archive fixture')
+    const recovered = f.open()
+    try {
+      vi.spyOn(recovered.executor, 'memberOfTicket').mockReturnValue({ member: worker })
+      recovered.pass()
+      expect(bookOf(recovered).observerStorageReady).toBe(true)
+      expect(bookOf(recovered).observerHistory()).toMatchObject([{ id: original.id, observerDecision: original }])
+      expect(recovered.observerDecisionReceipts(worker, ticketId)).toMatchObject({ receipts: [{ cardId: original.cardId, generation: original.generation }] })
+      expect(f.cards(recovered).find(row => row.cardId === original.cardId)).toMatchObject({ eligible: false, why: 'cap' })
+      expect(f.wake).toHaveBeenCalledTimes(1)
+    } finally { await recovered.stop() }
+
+    const path = join(f.home, 'superagent', 'decisions.json')
+    const records = JSON.parse(readFileSync(path, 'utf8'))
+    records.find((row: { id: string }) => row.id === original.id).observerDecision.cardId = 't-wrong-ticket'
+    writeFileSync(path, JSON.stringify(records))
+    const mismatched = f.open()
+    try {
+      expect(bookOf(mismatched).observerStorageReady).toBe(false)
+      expect(mismatched.observerDecisionCards(observer)).toMatchObject({ ok: false, code: 'storage' })
+      expect(f.wake).toHaveBeenCalledTimes(1)
+    } finally { await mismatched.stop() }
+  })
+
   it('does not expose excluded card text or a file reference', async () => {
     const f = fixture()
     try {
