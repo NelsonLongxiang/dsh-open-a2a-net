@@ -12,6 +12,7 @@ import type WebServer from '@deepseek-ai/dsh-host-webserver'
 import { browserOwnerProof, type DeferredOwnerProof } from '../superagent/host/owner-proof.ts'
 import { readSessionPage, SESSION_ID_SHAPE, TranscriptCache } from '../session-log-page.ts'
 import { OwnerReleases, releaseFile, RELEASE_POLL_MS } from '../user-session-release.ts'
+import { bindOwnerCancel, stopOwnerSession } from '../user-session-stop.ts'
 import type { OwnerDelegates } from '../superagent/host/owner-delegate.ts'
 import { TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_ENTRY_TEXT_CAP, TRANSCRIPT_MAX_LIMIT, TRANSCRIPT_PAGE_CHARS_MAX } from '../session-transcript.ts'
 import { listUserSessions, OWNER_PROMPT_BODY_MAX_BYTES, PromptIdempotency, ownerLiveSeat, ownerSeatState, prepareOwnerPrompt, type PromptAgent, type SeatRole } from '../user-sessions.ts'
@@ -68,6 +69,7 @@ export function registerUserSessionFaces(webServer: WebServer, d: UserSessionFac
     taint: d.taint,
     idem,
   }
+  const stopDeps = { ...hostDeps, idem: new PromptIdempotency() }
   const releases = d.releasePath === undefined ? undefined : new OwnerReleases(releaseFile(d.releasePath), {
     deps: hostDeps,
     delegateActive: id => d.ownerDelegates?.scheduledDelegateActive(id) === true,
@@ -196,6 +198,22 @@ export function registerUserSessionFaces(webServer: WebServer, d: UserSessionFac
       }, OWNER_PROMPT_BODY_MAX_BYTES)
     }),
   }), 'a2a: user session release route')
+
+  d.ctx.effect(() => webServer.register({
+    kind: 'exact',
+    path: '/__dsh_a2a/user/session/stop',
+    handler: d.controlRoute((req, res) => {
+      if (req.method !== 'POST') { sendJson(res, 405, { ok: false, code: 'method', error: 'POST only' }); return }
+      const proof = prove(req, res); if (proof === undefined) return
+      d.readJsonBody(req, res, body => {
+        const fields = body as Record<string, unknown>
+        let cancel: ReturnType<typeof bindOwnerCancel>
+        try { cancel = bindOwnerCancel(d.ctx.get('sessionController' as never)) } catch { /* Unavailable on some hosts. */ }
+        const result = stopOwnerSession(stopDeps, { id: fields.id, requestId: fields.request_id, delegateId: proof.delegate?.id ?? null, onBehalfOf: proof.onBehalfOf }, cancel, proof.commit)
+        sendJson(res, result.status, result.response)
+      })
+    }),
+  }), 'a2a: user session stop route')
 
   d.ctx.effect(() => webServer.register({
     kind: 'exact',
