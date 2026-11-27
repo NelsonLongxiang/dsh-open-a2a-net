@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "d8aefec0b1305400128af85b6817ce0410ae61aaac1badb81423468d77e1ae40",
+    "src/index.ts": "047a7a648c4f66840006832d6468caa5f955f03d43af5e35a919007e68e52167",
     "src/faces/admin.ts": "f819c415b6bba4f114b91d8c996dfbd311e0a8996b3b13f5f527072bd1facf4c",
     "src/canvas-store.ts": "a42b3cdb8b307137c56847510ba071adcc391db88a0544a30925855afcfd08a6",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
@@ -19,9 +19,9 @@
     "nexus-stage/src/planning-overlap.ts": "f4e7ecf5af229f6107191f35be2b5a10ebab921b175ba0950f577458dacc5019",
     "src/recursion-guard.ts": "986d3c0c80655b7957e6bccb362b8e5663b744d8169dbac93010354bcb0a4c37",
     "src/flood-guard.ts": "5aa2646647229114617859b0e1f0f5db504a25063a2cc0af833a46547da725df",
-    "src/faces/wire.ts": "39d016165ec2627d24b36a5ff9540c1f52b0d7260221da99a618d31947734703",
+    "src/faces/wire.ts": "fe4e92259b9275fc59d80a83b6026d98239107c0e8244060d936cee1239605f6",
     "src/faces/canvas-notify.ts": "4d06ea71c72f5a0fd200fbc7cc32c62cfd367af054c22f284be3d242919c1358",
-    "src/task-auth.ts": "bdc867d74eed0528c3bebaf4e55f0c024872cd675ca0181ca30cdac3a0356c5a",
+    "src/task-auth.ts": "cbd1a68b532a1adbf0ba5c1146b274c47d16d50d7270ad87fa46e71ec3a569fd",
     "src/origin-claim.ts": "54079e01ec324ea1054bc892ef403ba813fa52c480bd99ecb9cf8b73190c376a",
     "src/tools/info.ts": "311ab8abc23e5c9eb4ed234eb980f43f2af3c3b6fa60ddbca78fb8103d4b5851",
     "src/tools/act.ts": "20f20e0cc9a610d16efca48555dfb6548ddd2a3859b33e58d258cf5d34b84cf1",
@@ -63,7 +63,7 @@
     {
       "page": "p1-arch",
       "cell": "b3",
-      "ref": "src/index.ts:3329",
+      "ref": "src/index.ts:3360",
       "expect": "function callerLinkedToThisHost(caller: string, callerUrl: string, callerCard: A2aPeerCard | undefined): boolean {"
     },
     {
@@ -147,7 +147,7 @@
     {
       "page": "p1-arch",
       "cell": "c5",
-      "ref": "src/index.ts:3849",
+      "ref": "src/index.ts:3887",
       "expect": "path: '/__dsh_a2a/dispatch',"
     },
     {
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4818",
+      "ref": "src/index.ts:4856",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -267,7 +267,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:4210",
+      "ref": "src/index.ts:4248",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
@@ -279,13 +279,13 @@
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2966",
+      "ref": "src/index.ts:2997",
       "expect": "const result=await receiptOutbox.send(record.taskId)"
     },
     {
       "page": "p1-arch",
       "cell": "f3",
-      "ref": "src/index.ts:2976",
+      "ref": "src/index.ts:3007",
       "expect": "function armReceiptAutosend(target: Agent, taskId: string, callerTeam: string | undefined, deliveredText: string, steerFloor: number): void {"
     },
     {

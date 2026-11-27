@@ -422,6 +422,8 @@ export interface TaskAuthorization {
   readonly via: Via
   /** Signed courier host's card URL for a remote CLI, distinct from the closed-set admission via. */
   readonly carrier_url?: string
+  /** Host card key frozen for a body-bound remote CLI request delivered to a team canvas. */
+  readonly carrier_key?: string
   /** Verified original CLI card key; the carrier host key is a different principal. */
   readonly caller_key?: string
   readonly admission_rule: AdmissionRule
@@ -458,6 +460,7 @@ export interface AuthorizationFacts {
   readonly proof: AuthProof
   readonly claim?: { readonly caller: string; readonly origin: string }
   readonly carrierUrl?: string
+  readonly carrierKey?: string
   readonly callerKey?: string
   readonly ingress: 'wire' | 'local'
   readonly allowlistVersion: string
@@ -477,6 +480,7 @@ export function buildAuthorization(admission: Extract<Admission, { ok: true }>, 
     ingress: facts.ingress,
     via: admission.via,
     ...(facts.carrierUrl !== undefined ? { carrier_url: facts.carrierUrl } : {}),
+    ...(facts.carrierKey !== undefined ? { carrier_key: facts.carrierKey } : {}),
     ...(facts.callerKey!==undefined?{caller_key:facts.callerKey}:{}),
     admission_rule: admission.rule,
     basis: Object.freeze([...admission.basis]),
@@ -505,6 +509,7 @@ export function canonicalAuthorization(auth: TaskAuthorization): string {
     ingress: auth.ingress,
     via: auth.via,
     ...(auth.carrier_url !== undefined ? { carrier_url: auth.carrier_url } : {}),
+    ...(auth.carrier_key !== undefined ? { carrier_key: auth.carrier_key } : {}),
     ...(auth.caller_key!==undefined?{caller_key:auth.caller_key}:{}),
     admission_rule: auth.admission_rule,
     basis: sortedUnique(auth.basis),
@@ -554,6 +559,7 @@ export function parseAuthorization(raw: unknown, now: number = Date.now()): Task
   if (r.via !== VIA_OF[rule]) return undefined
   if (rule === 'remote-ref-cli'||rule==='request-recovery' ? !validCarrierUrl(r.carrier_url) : r.carrier_url !== undefined) return undefined
   if(r.caller_key!==undefined&&(!CLI_HANDLE_RE.test(String(r.caller))||typeof r.caller_key!=='string'||r.caller_key.length===0||r.caller_key.length>512))return undefined
+  if (r.carrier_key !== undefined && (rule !== 'remote-ref-cli' || r.ingress !== 'wire' || r.caller_key === undefined || r.receipt_target !== r.caller || !(r.target as string).includes('/canvas/') || !boundedString(r.carrier_key) || r.carrier_key === r.caller_key)) return undefined
   if (!Array.isArray(r.basis) || r.basis.length > AUTH_BASIS_CAP || !r.basis.every(b => boundedString(b))) return undefined
   if (new Set(r.basis).size !== r.basis.length) return undefined
   if (SHARED_RULES.includes(rule) ? r.basis.length === 0 : r.basis.length !== 0) return undefined
@@ -580,6 +586,7 @@ export function parseAuthorization(raw: unknown, now: number = Date.now()): Task
       caller: r.caller as string, proof: r.proof as AuthProof, ...(claim !== undefined ? { claim } : {}),
       ...(rule === 'remote-ref-cli'||rule==='request-recovery' ? { carrierUrl: r.carrier_url as string } : {}),
       ...(r.caller_key!==undefined?{callerKey:r.caller_key as string}:{}),
+      ...(r.carrier_key !== undefined ? { carrierKey: r.carrier_key as string } : {}),
       ingress: r.ingress, allowlistVersion: r.allowlist_version, target: r.target as string,
       receiptTarget: r.receipt_target as string, receivedAt: r.received_at, targetBusy: r.target_busy === true,
     },

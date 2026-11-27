@@ -73,7 +73,7 @@ export interface A2aSourceDeps {
    * Design v5 (D2): send a `receipt` or `route` on the canvas team's behalf from the host's own process face, when the
    * task came through the team's canvas address; stdout of the CLI contract, or undefined to run the CLI as before.
    */
-  readonly teamSend?: (args: readonly string[]) => Promise<string | undefined>
+  readonly teamSend?: (args: readonly string[], mailbox?: string) => Promise<string | undefined>
 }
 
 /** One CLI run: stdout on exit 0, otherwise an Error carrying `exitCode` (a2a-watch reads it) and the stderr text. */
@@ -175,7 +175,7 @@ export class A2aSource {
       run: async (program, args) => {
         if (program !== 'a2a-net') throw new Error(`the a2a Source runs only a2a-net, not ${program}`)
         if (this.d.homeUrl() === undefined) throw new Error('this host is not listening yet')
-        const sent = await this.d.teamSend?.(args)
+        const sent = await this.d.teamSend?.(args, this.address)
         if (sent !== undefined) return sent
         return await (this.d.run ?? runCli)(args, this.env(), signal)
       },
@@ -249,7 +249,7 @@ export class A2aSource {
       ...(step.ahead !== undefined ? ['--ahead', String(step.ahead)] : []), ...(step.tickets !== undefined && step.tickets.length > 0 ? ['--tickets', JSON.stringify(step.tickets)] : []),
       ...seatArgs(step.by), '--json', '--exit-class', '--', step.summary.replace(/\s+/g, ' ').trim().slice(0, 400) || step.state]
     try {
-      return (await this.d.teamSend(args)) === undefined ? 'gone' : 'sent'
+      return (await this.d.teamSend(args, this.address)) === undefined ? 'gone' : 'sent'
     } catch (error) {
       const code = (error as { exitCode?: unknown }).exitCode
       if (code === EXIT_GONE || code === 2) return 'gone'
