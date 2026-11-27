@@ -120,7 +120,7 @@ export function registerUserSessionFaces(webServer: WebServer, d: UserSessionFac
       const params = new URL(req.url ?? '/', 'http://x').searchParams
       const id = params.get('id') ?? ''
       if (!SESSION_ID_SHAPE.test(id)) { sendJson(res, 400, { ok: false, code: 'id', error: 'id must be a session id (session-…)' }); return }
-      const before = intParam(params.get('before'), 0, 1_000_000_000)
+      const before = intParam(params.get('before'), 0, 999_999_999)
       const limit = intParam(params.get('limit'), 1, TRANSCRIPT_MAX_LIMIT)
       const chars = intParam(params.get('chars'), 1, TRANSCRIPT_PAGE_CHARS_MAX)
       const wrong = before === null ? 'before' : limit === null ? 'limit' : chars === null ? 'chars' : undefined

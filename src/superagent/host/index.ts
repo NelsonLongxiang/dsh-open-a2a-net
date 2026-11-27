@@ -281,7 +281,12 @@ export class SuperagentHost {
       logger: d.logger, ...(d.runCli !== undefined ? { run: d.runCli } : {}), ...(d.teamSend !== undefined ? { teamSend: d.teamSend } : {}), ...(d.a2aPollSeconds !== undefined ? { pollSeconds: d.a2aPollSeconds } : {}),
     })
     this.roster = new RosterReports({
-      team: () => { const s = this.settings; return s.canvas === undefined ? undefined : { canvas: s.canvas, ...(s.router !== undefined ? { router: s.router } : {}), members: s.members.filter(id => !s.observers.includes(id)), observers: s.observers } },
+      team: () => {
+        const s = this.settings
+        if (s.canvas === undefined) return undefined
+        const teamLabel = d.canvasLabel?.(s.canvas)
+        return { canvas: s.canvas, teamLabel, router: s.router, members: s.members.filter(id => !s.observers.includes(id)), observers: s.observers }
+      },
       remotes: canvas => (d.canvasTeam?.(canvas)?.remote ?? []).map(r => r.ref),
       declares: (ref, capability) => d.memberDeclares?.(ref, capability) === true,
       send: async (ref, text, taskId) => { if (d.rosterSend === undefined) throw new Error('no roster send on this host'); await d.rosterSend(ref, text, taskId) },
