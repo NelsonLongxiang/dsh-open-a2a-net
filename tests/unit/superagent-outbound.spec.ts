@@ -101,7 +101,7 @@ describe('approvers in the settings (O3)', () => {
 })
 
 describe('the whole way, on a team (O1–O5)', () => {
-  it('a member asks, a non-approver and the asker cannot decide, an approver approves, it is sent, the receipt comes back', async () => {
+  it.each(['dsh/canvas/other', 'dsh/aaaaaaaa', 'worker/0123456789abcdef'])('a member can request approval and send to %s', async address => {
     const { SuperagentHost } = await import('../../src/superagent/host/index.ts')
     const { routeItem } = await import('../../src/superagent/host/tools.ts')
     const calls: string[][] = []
@@ -112,7 +112,12 @@ describe('the whole way, on a team (O1–O5)', () => {
       runCli: async (args: string[], env: NodeJS.ProcessEnv) => {
         calls.push(args)
         if (args[0] === 'init') { mkdirSync(env.A2A_CLI_HOME!, { recursive: true }); writeFileSync(join(env.A2A_CLI_HOME!, 'cli.json'), JSON.stringify({ handle: 'superagent-team/0123456789abcdef' })); return '{}' }
-        if (args[0] === 'admission') return JSON.stringify({ admitted: true, rule: 'cli-deposit' })
+        if (args[0] === 'admission') {
+          if (args[1] === 'worker/0123456789abcdef') return JSON.stringify({ admitted: true, rule: 'remote-ref-cli' })
+          if (args[1] === 'worker/1111111111111111') return JSON.stringify({ admitted: true, rule: 'scope-off' })
+          if (args[1] === 'worker/2222222222222222') return JSON.stringify({ admitted: false })
+          return JSON.stringify({ admitted: true, rule: 'cli-deposit' })
+        }
         return args[0] === 'route' ? JSON.stringify({ delivered: true, task_id: args[args.indexOf('--task') + 1] }) : '{}'
       },
     } as never)
@@ -123,8 +128,15 @@ describe('the whole way, on a team (O1–O5)', () => {
     const ticket = (routeItem(h, { trigger_id: asked.triggerId, kind: 'accept', title: '数据', scope: 's', reason: 'r', member: 'session-m' } as never) as { ticket_id: string }).ticket_id
     await vi.waitFor(() => { expect(h.executor.list().find(b => b.ticketId === ticket)?.member).toBeDefined() })
     const holder = h.executor.list().find(b => b.ticketId === ticket)!.member
-    expect(h.requestOutbound(holder, { ticket_id: ticket, address: 'dsh/canvas/team', text: 'x', why: 'w' })).toMatchObject({ code: 'own' })
-    const raised = h.requestOutbound(holder, { ticket_id: ticket, address: 'dsh/canvas/other', text: '请给我们接口数据', why: '工单要用' }) as { ok: boolean; card_id: string }
+    expect(await h.requestOutbound(holder, { ticket_id: ticket, address: 'dsh/canvas/team', text: 'x', why: 'w' })).toMatchObject({ code: 'own' })
+    if (address.startsWith('worker/')) {
+      for (const unavailable of ['worker/1111111111111111', 'worker/2222222222222222']) {
+        expect(await h.requestOutbound(holder, { ticket_id: ticket, address: unavailable, text: 'x', why: 'w' })).toMatchObject({ ok: false, code: 'address' })
+      }
+      expect(h.decisionCards().filter(c => c.source === 'outbound')).toHaveLength(0)
+      expect(calls.some(a => a[0] === 'route')).toBe(false)
+    }
+    const raised = await h.requestOutbound(holder, { ticket_id: ticket, address, text: '请给我们接口数据', why: '工单要用' }) as { ok: boolean; card_id: string }
     expect(raised.ok).toBe(true)
     expect(h.decisionCards().find(c => c.id === raised.card_id)).toMatchObject({ source: 'outbound', level: 'P0' })
     // An approver finds the waiting card through a2a_ticket_read kind outbound; a member that is no approver cannot.
@@ -140,10 +152,10 @@ describe('the whole way, on a team (O1–O5)', () => {
     if (other === 'session-m') expect(h.approverDecide('session-m', raised.card_id, OUTBOUND_APPROVE, 'r')).toMatchObject({ code: 'not-approver' })
     if (holder === 'session-o') { await h.stop(); return }
     expect(h.approverDecide('session-o', raised.card_id, OUTBOUND_APPROVE, '对方是合作团队')).toMatchObject({ ok: true, approved: true })
-    await vi.waitFor(() => { expect(calls.some(a => a[0] === 'route' && a[1] === 'dsh/canvas/other')).toBe(true) })
+    await vi.waitFor(() => { expect(calls.some(a => a[0] === 'route' && a[1] === address)).toBe(true) })
     const route = calls.find(a => a[0] === 'route')!
-    expect(route.at(-1)).toContain('请给我们接口数据')
-    expect(route.at(-1)).toContain('[来自 superagent 团队 team 的请求')
+    expect(route.at(-1)).toBe('[来自 superagent 团队 team 的请求 · 工单「数据」]\n请给我们接口数据')
+    expect(calls.filter(args => args[0] === 'admission' && args[1] === address)).toHaveLength(address.startsWith('worker/') ? 2 : 0)
     await vi.waitFor(() => { expect((h.state().outbound as Array<{ state: string }>)[0]!.state).toBe('sent') })
     expect(h.approverDecide('session-o', raised.card_id, OUTBOUND_DECLINE, 'r')).toMatchObject({ ok: false })
     await h.stop()
