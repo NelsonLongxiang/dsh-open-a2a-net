@@ -1308,6 +1308,10 @@ describe('design v5: the team is a canvas team', () => {
     presets['session-c'] = 'superagent-member'
     expect(h.assignedWork('assign', 'dsh/cccccccc', KEY_A, 'work')).toEqual({ ok: true })
     expect(h.state().servesProblem).toBeUndefined()
+    presets['session-c'] = 'superagent-member-work'
+    expect(h.serveTeam({ url: 'http://127.0.0.1:8', key: KEY_A }, ['session-c'], () => true, id => presets[id])).toEqual({ ok: true })
+    expect(h.assignedWork('assign', 'dsh/cccccccc', KEY_A, 'office work')).toEqual({ ok: true })
+    expect(h.state().servesProblem).toBeUndefined()
   })
 
   it('one session, one team role: the team canvas takes no CLI handle and no off-preset session; a team session joins no other canvas', async () => {

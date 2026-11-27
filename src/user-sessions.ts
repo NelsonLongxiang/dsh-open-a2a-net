@@ -31,7 +31,7 @@ export const OWNER_PROMPT_BODY_MAX_BYTES = 100_000
 export const OWNER_PROMPT_IDEM_TTL_MS = 10 * 60_000
 export const OWNER_PROMPT_IDEM_MAX = 256
 
-const REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/
+export const OWNER_REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/
 
 export type OwnerPromptMode = 'steer' | 'queue' | 'trigger'
 
@@ -184,7 +184,7 @@ export function validateOwnerPromptFields(input: Pick<OwnerPromptInput, 'mode' |
   if (typeof text !== 'string' || text.trim() === '') return refuse(400, 'text', 'text must be a non-empty string')
   const chars = [...text].length
   if (chars > OWNER_PROMPT_TEXT_MAX) return refuse(400, 'text-too-long', 'text is at most ' + String(OWNER_PROMPT_TEXT_MAX) + ' characters')
-  if (requestId !== undefined && (typeof requestId !== 'string' || !REQUEST_ID.test(requestId))) return refuse(400, 'request-id', 'request_id must be 1 to 64 of letters, digits, . _ : -')
+  if (requestId !== undefined && (typeof requestId !== 'string' || !OWNER_REQUEST_ID.test(requestId))) return refuse(400, 'request-id', 'request_id must be 1 to 64 of letters, digits, . _ : -')
   return { ok: true as const, mode: mode as OwnerPromptMode, text, requestId, chars, digest: sha256(text) }
 }
 
