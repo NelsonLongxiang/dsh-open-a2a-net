@@ -77,7 +77,8 @@ export function validObserverCardState(card: StoredCard): boolean {
   else return false
   if (decision === undefined) return true
   return decision !== null && typeof decision === 'object' && decision.generation === binding.generation
-    && decision.id === 'observer-' + binding.generation && typeof decision.teamId === 'string' && typeof decision.cardId === 'string'
+    && decision.id === 'observer-' + binding.generation && typeof decision.teamId === 'string' && decision.cardId === card.id
+    && Object.hasOwn(LEVEL, decision.level) && decision.level !== 'P0' && decision.level === card.level
     && decision.human === false && typeof decision.session === 'string' && typeof decision.reason === 'string'
     && typeof decision.name === 'string' && Number.isFinite(Date.parse(decision.at))
     && Number.isInteger(decision.option) && typeof card.options[decision.option] === 'string'

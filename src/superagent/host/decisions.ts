@@ -190,7 +190,7 @@ function validRestoredObserverCard(card: StoredCard): boolean {
 
 export class DecisionBook {
   private cards: StoredCard[]
-  readonly observerStorageReady: boolean
+  private readonly observerStorageReadable: boolean
   /**
    * @param path - the file the cards live in.
    * @param ticketOpen - whether a ticket is still open: a member's card waits only as long as its ticket.
@@ -207,22 +207,23 @@ export class DecisionBook {
       readable = (error as NodeJS.ErrnoException).code === 'ENOENT' && !observerArmed && !existsSync(this.observerMarker)
     }
     this.cards = Array.isArray(loaded) ? loaded.filter(card => card !== null && typeof card === 'object' && typeof card.id === 'string' && validRestoredObserverCard(card)) : []
-    this.observerStorageReady = readable && Array.isArray(loaded) && this.cards.length === loaded.length
+    this.observerStorageReadable = readable && Array.isArray(loaded) && this.cards.length === loaded.length
       && new Set(this.cards.map(card => card.id)).size === this.cards.length
     if (observerArmed && this.observerStorageReady) {
-      try { this.initializeObserverHistory() } catch { this.observerStorageReady = false }
+      try { this.initializeObserverHistory() } catch { this.observerStorageReadable = false }
     }
   }
 
   private get observerMarker(): string { return this.path + '.observer-initialized' }
 
+  get observerStorageReady(): boolean {
+    return this.observerStorageReadable && (!existsSync(this.observerMarker) || existsSync(this.path))
+  }
+
   /** Establish a durable empty book on first enable. Keep the marker across disable and re-enable. */
   initializeObserverHistory(): void {
     if (!this.observerStorageReady) throw new Error('decision book unreadable')
-    if (existsSync(this.observerMarker)) {
-      if (!existsSync(this.path)) throw new Error('decision book missing')
-      return
-    }
+    if (existsSync(this.observerMarker)) return
     if (!existsSync(this.path)) this.save()
     writeFileSync(this.observerMarker, 'observer-history-v1', { mode: 0o600, flag: 'wx', flush: true })
   }
@@ -250,7 +251,7 @@ export class DecisionBook {
   }
 
   private save(): void {
-    if (!this.observerStorageReady || existsSync(this.observerMarker) && !existsSync(this.path)) throw new Error('decision book unreadable')
+    if (!this.observerStorageReady) throw new Error('decision book unreadable')
     this.prune()
     mkdirSync(dirname(this.path), { recursive: true })
     const temporary = `${this.path}.tmp-${randomUUID()}`

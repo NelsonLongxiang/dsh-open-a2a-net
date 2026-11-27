@@ -270,6 +270,49 @@ describe('observer decision policy', () => {
     expect(new DecisionBook(path).open()[0]?.observerBinding).toEqual(book.open()[0]?.observerBinding)
   })
 
+  it('rejects an Owner decision before any intake when a different saved card is corrupt', async () => {
+    const f = fixture()
+    const broken = f.propose('corrupt bound card')
+    const book = bookOf(f.host)
+    const owner = book.propose({ source: 'observer', by: observer, question: 'Owner-only card', spec, at: new Date(f.clock.now).toISOString() })
+    if (!owner.ok) throw new Error(owner.error)
+    const path = join(f.home, 'superagent', 'decisions.json')
+    await f.host.stop()
+    const stored = JSON.parse(readFileSync(path, 'utf8'))
+    stored.find((card: { id: string }) => card.id === broken).inputs = []
+    writeFileSync(path, JSON.stringify(stored))
+    const recovered = f.open()
+    try {
+      const request = vi.spyOn(recovered, 'request')
+      expect(recovered.decisionCards().map(card => card.id)).toContain(owner.id)
+      expect(recovered.decide(owner.id, 'choose', '甲')).toMatchObject({ ok: false, code: 'storage' })
+      expect(request).not.toHaveBeenCalled()
+      expect(readFileSync(path, 'utf8')).toBe(JSON.stringify(stored))
+    } finally { await recovered.stop() }
+  })
+
+  it.each([undefined, 'P2', 'invalid'])('refuses recovery when the saved decision level is %s', async level => {
+    const f = fixture()
+    const id = f.propose('pending decision with a damaged level')
+    const book = bookOf(f.host)
+    const card = book.get(id)!
+    const { generation, target } = card.observerBinding!
+    expect(book.commitObserverDecision(card, { id: 'observer-' + generation, teamId: '', cardId: id, generation, session: observer,
+      name: observer, human: false, at: new Date(f.clock.now).toISOString(), option: 0, level: 'P1', reason: 'fixture', target, state: 'pending' })).toBe(true)
+    const path = join(f.home, 'superagent', 'decisions.json')
+    await f.host.stop()
+    const stored = JSON.parse(readFileSync(path, 'utf8'))
+    stored.find((row: { id: string }) => row.id === id).observerDecision.level = level
+    writeFileSync(path, JSON.stringify(stored))
+    const recovered = f.open()
+    try {
+      recovered.pass()
+      expect(recovered.observerDecisionCards(observer)).toMatchObject({ ok: false, code: 'storage' })
+      expect(f.wake).not.toHaveBeenCalled()
+      expect(readFileSync(path, 'utf8')).toBe(JSON.stringify(stored))
+    } finally { await recovered.stop() }
+  })
+
   it('disables observer decisions when the stored book is malformed', () => {
     const home = mkdtempSync(join(tmpdir(), 'observer-broken-'))
     const path = join(home, 'state', 'decisions.json')

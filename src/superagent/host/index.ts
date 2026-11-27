@@ -2125,6 +2125,7 @@ export class SuperagentHost {
     const card = this.decisionCards().find(row => row.id === id)
     // #934: say where a card that is no longer waiting went, instead of a bare refusal.
     if (card === undefined) return this.staleDecision(id)
+    if (!this.decisions.observerStorageReady) return { ok: false, code: 'storage', error: 'decision book unavailable' }
     // The owner's files, staged by the right bar like a request's (C8): reference lines, added below the decision.
     const parsedFiles = decisionFiles(files)
     if (!parsedFiles.ok) return parsedFiles
