@@ -54,3 +54,9 @@ taskKind('roster-ab12cd34-1770000000000') // { kind: 'roster', host: 'ab12cd34' 
 ## 能力
 
 `CAPABILITIES` 列出四个已定义能力（`progressReceipts`、`teamRoster`、`directedSeats`、`reworkReturns`）；`declares(card, name)` 只在名片 `capabilities[name]` **恰为 true** 时为真（字符串 `"true"` 不算）。
+
+## `sdk/user`
+
+市场侧先用 `checkUserScopeEcho(requested, started.scope)` 核验配对开始应答，只有数组按原样回显才领取委托。领取后用 `acceptScopedUserDelegate(requested, collected)` 核验最终回显，再将返回的 `delegate` 交给 `createUserClient({ baseUrl, delegate, onBehalfOf })`。不带范围的原有委托仍可通过 `createUserClient({ baseUrl, controlKey, delegate })` 使用。
+
+客户端提供会话列表、分页读取、插话、排队、停止和团队决卡。返回结构化错误，写操作不重试，会话正文不缓存。凭据由调用方持有。节点拒绝范围外动作，调用方的人员授权须在市场服务端判定。
