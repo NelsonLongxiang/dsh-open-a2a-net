@@ -57,7 +57,7 @@ CLI 专有: skills [name] [--json] [--root DIR] · tools (this alignment table) 
 superagent: superagent request <text…> [--thread ID] · superagent reevaluate <trigger id> · superagent state   (owner credential: the team's workbench Source)
 user:     user issue [--name N] [--days D] [--dsh-home DIR] · user import --token-file F · user pair [--name N] [--days D] · user list · user revoke <id> · user nodes
           · user teams · user state --team ID · user decisions · user decide <card id> (--approve | --option TEXT|o2|2) [--note T]
-          · user canvas label <name> (<label…> | --clear) · user request --team ID <text…> · user request status --team ID <trigger id> · user sessions [--team T] · user session read <id> [--before N] [--limit N] [--chars N] · user session prompt <id> (--steer|--queue) [--request-id R] -- <text…> · user answer --team ID <ticket id> [<text…>] [--option O] · user api <GET|POST> <path> [--data JSON|@file]
+          · user canvas label <name> (<label…> | --clear) · user request --team ID <text…> · user request status --team ID <trigger id> · user sessions [--team T] · user session read <id> [--before N] [--limit N] [--chars N] · user session prompt <id> (--steer|--queue) [--request-id R] -- <text…> · user session stop <id> [--request-id R] · user answer --team ID <ticket id> [<text…>] [--option O] · user api <GET|POST> <path> [--data JSON|@file]
           · user node status [--all] · user node install <tgz> [--restart] [--force-deps] · user node rollback [backup id] [--restart] · user node restart
           · user builder inventory [--all] · user builder list [--all]   (the team builders, read-only)
           (the control API's user scope: acts as the owner on --home, with the owner delegate saved for that home)
@@ -1089,6 +1089,12 @@ async function cmdUser() {
       })
       return
     }
+    if (op === 'stop') {
+      if (id === undefined || rest.length !== 0) usage('usage: a2a user session stop <session id> [--request-id R]')
+      const requestId = flag('--request-id')
+      printOut(await userCall('POST', '/__dsh_a2a/user/session/stop', { id, ...(requestId === undefined ? {} : { request_id: requestId }) }))
+      return
+    }
     if (op === 'prompt') {
       const text = rest.join(' ')
       if (id === undefined || text === '' || has('--steer') === has('--queue')) usage('usage: a2a user session prompt <session id> (--steer | --queue) [--request-id R] -- <text…>   (exactly one of --steer and --queue; the text goes after --)')
@@ -1098,7 +1104,7 @@ async function cmdUser() {
       })
       return
     }
-    usage('usage: a2a user session read <id> … | a2a user session prompt <id> (--steer|--queue) -- <text…>')
+    usage('usage: a2a user session read <id> … | a2a user session prompt <id> (--steer|--queue) -- <text…> | a2a user session stop <id> [--request-id R]')
   }
   if (sub === 'api') {
     const [method, path] = words
