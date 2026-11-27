@@ -36,7 +36,8 @@ test('original editable sources disclose simulated examples rather than product 
     assert.ok(!/虚构|fictional/i.test(svg))
     assert.ok(svg.includes('非实际产品界面'))
     assert.ok(svg.includes('Not a product UI capture'))
-    assert.ok(svg.includes('OPT-IN 0.8 PREVIEW'))
+    assert.ok(svg.includes('SUPERAGENT TEAMS'))
+    assert.ok(!svg.includes('OPT-IN 0.8 PREVIEW'))
     assert.ok(!svg.includes('<image') && !svg.includes('<script'))
     assert.ok(!/https?:\/\//.test(svg.replace('http://www.w3.org/2000/svg','')))
   }
@@ -50,8 +51,11 @@ test('both locale readmes use only the curated original artwork and state the st
     assert.deepEqual(refs.map(m=>m[2]),manifest)
     for (const m of refs) assert.ok(m[1].toLowerCase().includes(note.toLowerCase()))
     const intro = text.split('\n').slice(0,12).join('\n')
-    // 0.8.2 is npm latest: the intro names it (not the old 0.7.0 default), and the install is the plain package name, not a preview tag
-    assert.ok(intro.includes('Superagent') && intro.includes('0.8.2') && !intro.includes('0.7.0'))
+    // Stable positioning is explicit; dated release facts must not imply a preview-only installation.
+    assert.ok(intro.includes('Superagent'))
+    assert.ok(intro.includes(file === 'README.md' ? 'Stable release' : '正式版说明'))
+    assert.ok(intro.includes('0.8.3') && !intro.includes('0.7.0'))
+    assert.ok(!intro.includes('opt-in') && !intro.includes('预览版'))
     const pkgName = JSON.parse(readFileSync(resolve(root,'package.json'),'utf8')).name
     assert.ok(text.split('\n').includes(`dsh plugin --profile web add ${pkgName}`))
     assert.ok(!text.includes(`${pkgName}@preview`))

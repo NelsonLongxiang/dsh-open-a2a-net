@@ -6,7 +6,7 @@ English | [中文](README_zh.md)
 
 **Superagent turns requests into team tickets. A router accepts work, fixed members execute it, progress stays visible, and owner decisions arrive as option-based cards.**
 
-> **Version boundary:** npm `latest` is 0.8.2 in the [published release record](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/5e550134ecf1dc55075bc905355e45440ee1219b/docs/release.md#082正式版已发布到-npm-的-latest-标签). Team features still depend on the host configuration. The checkout’s CLI can describe commands that are awaiting release, including device-code pairing and the profile dependency updates in #937.
+> **Stable release:** npm `latest` is **0.8.3** as checked on 2026-11-27. Superagent is available in the stable package; bind the team and configure its members, rules and sources on your host. Use the documentation shipped with your installed version.
 
 An open-source plugin for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). The A2A foundation handles discovery, addressing, routing and receipts between sessions and hosts. **Superagent** adds requests, scoped tickets, fixed members and human decisions on top—not just messages between multiple chats.
 
@@ -40,7 +40,7 @@ This is a workflow illustration, not a completed case study or a promise to acce
 - **External intake is opt-in.** A2A intake is controlled by the bot list and accept mode. GitHub Issue intake is off by default and requires owner-configured repositories and allowed users; this is not automatic monitoring of every issue.
 - **No silent expansion of authority.** Rule changes need human confirmation. Members cannot widen tickets, open sessions or directly dispatch to other teams; outbound team requests follow the configured approval flow.
 
-See the [Superagent guide shipped with 0.8.2](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/5465acecb8312f5c38c2bf80fd82a9110df0879e/src/skill/references/superagent.md). Root teams are still marked in progress and are not represented here as a mature capability.
+See the [Superagent guide shipped with 0.8.3](https://github.com/NelsonLongxiang/dsh-open-a2a-net/blob/1c96510912c4a87786d3fc2ee513cac0bb87904f/src/skill/references/superagent.md). Cross-team and root-team coordination depend on explicit links, admission and the deployed configuration.
 
 ### How is this different from an ordinary canvas team?
 
