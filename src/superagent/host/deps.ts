@@ -170,7 +170,7 @@ export interface SuperagentHostDeps {
   readonly canvasLabel?: (name: string) => string | undefined
   readonly canvasTeam?: (name: string) => { readonly local: readonly string[]; readonly remote: readonly RemoteMember[]; /** superagent-root-team: a root's child teams. */ readonly children?: ReadonlyArray<{ readonly ref: string; readonly slots: number }> } | undefined
   /** Design v5 (D2): the host-face sender of the team's replies to requests that came through its canvas address. */
-  readonly teamSend?: (args: readonly string[]) => Promise<string | undefined>
+  readonly teamSend?: (args: readonly string[], mailbox?: string) => Promise<string | undefined>
   /**
    * superagent-market-progress-roster P3: whether a canvas remote member (its pinned ref) declares a capability on its
    * verified card, and the roster report's send — a fire-and-forget direct message from this host's process face (no

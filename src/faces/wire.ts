@@ -805,11 +805,11 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           }
           // Design v5 (v5-B2): a superagent team answers this host's own request from its process face, on its canvas's
           // behalf — admitted for that request's receipt alone (teamReceiptBasis), whatever the target session's links.
-          const teamAnswer = !admission.ok && echoed === null && earlyClaim.ok ? parseReceipt(message) : null
-          if (teamAnswer !== null && earlyClaim.ok) {
-            const basis = d.teamReceiptBasis?.(teamAnswer.taskId, caller, team, teamAnswer.envelope?.onBehalfOf, earlyClaim)
-            if (basis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'peer-org', basis: [basis] }
-          }
+          const teamAnswer = earlyClaim.ok && earlyClaim.cli !== true && isRootOriginUrl(earlyClaim.callerUrl)
+            ? (echoed ?? parseReceipt(message)) : null
+          const teamReceiptBasis = teamAnswer !== null && earlyClaim.ok
+            ? d.teamReceiptBasis?.(teamAnswer.taskId, caller, team, teamAnswer.envelope?.onBehalfOf, earlyClaim) : undefined
+          if (!admission.ok && teamReceiptBasis !== undefined) admission = { ok: true, via: 'peer-org', rule: 'peer-org', basis: [teamReceiptBasis] }
           // Owner ruling 2026-11-14 (option B): a request (never a receipt) from a session on a linked host to a superagent
           // team's canvas address passes the host gate; whether the team takes it is the team owner's decision (M12 card).
           if (!admission.ok && echoed === null && teamAnswer === null && earlyClaim.ok && parseReceipt(message) === null) {
@@ -859,7 +859,7 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
           // A verified claim proves the caller only when its signed zone covers it (review of PR #134 P1),
           // and the host face only when it was signed from this very host (round 2: a zone name is not an origin).
           const callerProof: AuthProof = !claim.ok ? 'legacy-window'
-            : admission.rule === 'remote-ref-cli'||admission.rule==='request-recovery' ? 'origin-claim'
+            : admission.rule === 'remote-ref-cli' || admission.rule === 'request-recovery' || teamReceiptBasis !== undefined ? 'origin-claim'
               : claim.cli === true ? (claimCovers(caller, claim.caller) ? 'cli-identity' : 'claim-mismatch')
               : claim.bound !== true ? 'unbound'
                 : !isRootOriginUrl(claim.callerUrl) ? 'claim-mismatch'
@@ -1059,7 +1059,17 @@ export function registerWireFaces(webServer: WebServer, d: WireDeps): void {
             if (answered === null && cliDeposits.owes(mailTeam)) {
               // p1-mailbox-owes (S33, D-2): delivered, not final — the caller books a debt, this host keeps the owed
               // inbound row (the per-target cap counts it) and records no outcome, so a resend reads pending.
-              taskLedger.trackInbound(taskId, addressed, caller, contextId === '' ? undefined : contextId, true, briefOf(message))
+              // Preserve the exact return address and both verified keys for a team canvas's reply.
+              const auth = mailTeam !== team && admission.rule === 'remote-ref-cli' &&
+                claim.ok && claim.bound && claim.bodyBound === true && claim.cli !== true &&
+                isRootOriginUrl(claim.callerUrl) && cliProof?.key !== undefined
+                ? buildAuthorization(admission, {
+                  caller, proof: callerProof, ingress: 'wire', target: addressed, receiptTarget: caller,
+                  claim: { caller: claim.caller, origin: cliProof.origin }, carrierUrl: cliProof.origin,
+                  carrierKey: claim.card.publicKey, callerKey: cliProof.key,
+                  allowlistVersion: admittedAt.version, receivedAt: admittedAt.at,
+                }) : undefined
+              taskLedger.trackInbound(taskId, addressed, caller, contextId === '' ? undefined : contextId, true, briefOf(message), auth)
               // Design v5 (R5): a sync route to the team answers at once — the team works asynchronously.
               if (mailTeam !== team) {
                 const teamPayload = JSON.stringify({ routed: true, delivered: true, receipt: 'mailbox', team, task_id: taskId, context_id: contextId, task_status: 'TASK_STATE_DELIVERED', note: `delivered to the superagent team ${addressed} — it works asynchronously; its result arrives as this task's receipt` })

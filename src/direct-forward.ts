@@ -246,5 +246,6 @@ export function teamReceiptBasis(row: TaskRecord | undefined, caller: string, ta
   if (row.sender === undefined || row.sender.id !== target) return undefined
   if (!claim.bound || claim.bodyBound !== true || row.peerKey === undefined || claim.card.publicKey !== row.peerKey) return undefined
   if (caller.includes('/') || (row.peerHost !== undefined && caller !== row.peerHost)) return undefined
+  if (row.forwarded === true && row.peerHost === undefined) return undefined
   return `peer-org:${row.team}`
 }
