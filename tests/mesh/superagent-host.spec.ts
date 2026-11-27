@@ -273,6 +273,63 @@ describe('superagent engine in the a2a host', () => {
     } finally { await m.dispose() }
   }, 45_000)
 
+  it.each(['observe', 'enforce'] as const)('returns approved canvas outbound receipts through the original host in %s mode (#984)', async settlementAuth => {
+    const [aPort, bPort] = await Promise.all([reservePort(), reservePort()])
+    const url = (port: number) => 'http://127.0.0.1:' + port
+    const options = { teamScopeRouting: true, teamScopeInfo: true, forwardDirect: true, cardCacheTtlMs: 0, settlementAuth }
+    const a = await mount(mkdtempSync(join(tmpdir(), 'sa-984-origin-')), { ...options, team: 'alpha', session: 'sa-984-a', originClaimUrl: url(aPort), peers: [url(bPort)] }, aPort)
+    const b = await mount(mkdtempSync(join(tmpdir(), 'sa-984-target-')), { ...options, team: 'beta', session: 'sa-984-b', originClaimUrl: url(bPort), peers: [url(aPort)] }, bPort)
+    const network = async () => await (await fetch(url(aPort) + '/__dsh_a2a/state')).json() as Record<string, any>
+    try {
+      expect(await a.team(R_ID, [M_ID], { sources: { a2a: true } })).toMatchObject({ ok: true })
+      await vi.waitFor(async () => expect((await a.state()).a2a.health['a2a-deposit']?.state).toBe('ready'), { timeout: 15_000 })
+      const requester = (await a.state()).a2a.address as string
+      expect(await b.team(R_ID, [], { sources: { a2a: true }, bots: { a2a: [requester] }, acceptMode: 'auto', rules: [{ name: 'fixture', text: 'Accept test requests.' }] })).toMatchObject({ ok: true })
+      await vi.waitFor(async () => expect((await b.state()).a2a.health['a2a-deposit']?.state).toBe('ready'), { timeout: 15_000 })
+      expect(await b.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'requesters', id: requester, home: url(aPort) })).toMatchObject({ ok: true })
+      expect(await a.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'destinations', id: requester })).toMatchObject({ ok: true })
+      expect(await a.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'destinations', id: 'beta/a0000000', peer: url(bPort) })).toMatchObject({ ok: true })
+
+      const request = await a.sa({ action: 'request', text: 'Open an origin ticket' })
+      await vi.waitFor(() => expect(a.R.steered.some(text => text.includes(request.triggerId))).toBe(true), { timeout: 8_000 })
+      const opened = await a.tool('superagent_route', a.R, { items: [{ trigger_id: request.triggerId, kind: 'accept', title: 'Origin ticket', scope: 'fixture', reason: 'owner fixture', member: M_ID }] })
+      const ticket = opened.results[0].ticket_id
+      const address = 'beta/canvas/team'
+      const text = 'Approved request for the remote canvas team'
+      const raised = await a.tool('a2a_outbound_request', a.M, { ticket_id: ticket, address, text, why: 'fixture' })
+      expect(raised).toMatchObject({ ok: true })
+      expect(await a.post('/__dsh_a2a/superagent/decisions', { id: raised.card_id, how: 'choose', option: '批准：以团队名义发出' })).toMatchObject({ ok: true, approved: true })
+      const outbound = async () => (await a.state()).outbound.find((row: any) => row.card === raised.card_id)
+      await vi.waitFor(async () => {
+        const row = await outbound()
+        expect(row, JSON.stringify(row)).toMatchObject({ state: 'sent', attempts: [{ delivery: 'accepted' }] })
+      }, { timeout: 15_000 })
+      const task = (await outbound()).task
+      await vi.waitFor(() => expect(b.R.steered.some(message => message.includes('[superagent candidate]') && message.includes(text))).toBe(true), { timeout: 25_000 })
+      const candidate = b.R.steered.find(message => message.includes('[superagent candidate]') && message.includes(text))!
+      const accepted = await b.tool('superagent_route', b.R, { items: [{ trigger_id: triggerIn(candidate), kind: 'accept', title: 'Remote ticket', scope: 'fixture', reason: 'fixture', rules: ['fixture'] }] })
+      expect(accepted.results[0]).toMatchObject({ ok: true, ticket_id: expect.any(String) })
+      await vi.waitFor(async () => {
+        expect((await network()).tasks.find((row: any) => row.taskId === task)).toMatchObject({ status: 'pending', acknowledgedAt: expect.any(Number) })
+        expect(await outbound()).toMatchObject({ state: 'sent' })
+        const notes = (await a.state()).tickets.find((row: any) => row.id === ticket).inputs
+        expect(notes.filter((row: any) => row.kind === 'note' && row.text.includes(task) && row.text.includes('尚未结束'))).toHaveLength(1)
+      }, { timeout: 30_000 })
+      expect((await network()).settlement.refusals.filter((row: any) => row.taskId === task)).toEqual([])
+
+      expect(await b.sa({ action: 'stop', ticket_id: accepted.results[0].ticket_id, reason: 'End the remote fixture ticket' })).toMatchObject({ ok: true })
+      await vi.waitFor(async () => {
+        expect((await network()).archived.filter((row: any) => row.taskId === task)).toMatchObject([{ disposition: 'result', outcome: 'abandoned', settledBy: { chain_role: 'host-face' } }])
+        expect(await outbound()).toMatchObject({ state: 'answered', task, noted: true })
+        const notes = (await a.state()).tickets.find((row: any) => row.id === ticket).inputs
+        expect(notes.filter((row: any) => row.kind === 'note' && row.text.startsWith('对外请求（' + address + '，task ' + task + '）的回执：'))).toHaveLength(1)
+      }, { timeout: 30_000 })
+      expect((await network()).settlement.refusals.filter((row: any) => row.taskId === task)).toEqual([])
+    } finally {
+      await Promise.all([a.dispose(), b.dispose()])
+    }
+  }, 90_000)
+
   it.each(['home', 'foreign'] as const)('R2: %s-owned canvas binds the exact wire fingerprint without redirecting a foreign owner to home', async owner => {
     const home = mkdtempSync(join(tmpdir(), 'sa-owned-recovery-'))
     const m = await mount(home, { teamScopeRouting: true, forwardDirect: false })

@@ -2362,7 +2362,7 @@ export function apply(ctx: Context, config: Config): void {
     // Decision cards C8: a proposer's files go on the file channel, granted to its team's canvas, as a2a_file_send stages them.
     stageFiles: (id, paths, canvas) => stageCardFiles({ blobStore, from: originOf(ownCardUrl), cwd: (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd, team: `${config.team}/canvas/${canvas}`, by: id }, paths),
     memberTurn: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : memberTurnFrom(id, sessionEventsOf(agent), ctx.get('jobs' as never), message => logger.warn(message)) },
-    teamSend: args => teamCanvasSend(args),
+    teamSend: teamCanvasSend,
     // #888 D3: a file input must still be on the file channel when the owner decides.
     blobExists: sha256 => blobStore.list().some(grant => grant.sha256 === sha256),
     // #881 v2: a body reaches a session only after it is durably marked restricted (and tainted).
@@ -2524,7 +2524,7 @@ export function apply(ctx: Context, config: Config): void {
     return seen !== undefined && seen.expiresAt > Date.now() && seen.capabilities[name] === true
   }
 
-  async function teamCanvasSend(args: readonly string[]): Promise<string | undefined> {
+  async function teamCanvasSend(args: readonly string[], mailbox?: string): Promise<string | undefined> {
     const verb = args[0]
     if (verb !== 'receipt' && verb !== 'route') return undefined
     const dash = args.indexOf('--')
@@ -2533,8 +2533,32 @@ export function apply(ctx: Context, config: Config): void {
     const fail = (code: number, error: string): never => { const e = new Error(error) as Error & { exitCode: number }; e.exitCode = code; throw e }
     if (verb === 'receipt') {
       const task = args[1] ?? '', to = flagOf('--to') ?? ''
-      const row = taskLedger.find(task)
-      if (row === undefined || teamMailboxOf(row.team) === undefined || to === '' || remoteCliTarget(to, handle => cliDeposits.get(handle) !== undefined)) return undefined
+      const pending = taskLedger.find(task)
+      const row = pending ?? taskLedger.archive().find(entry => entry.taskId === task && entry.direction === 'inbound' && entry.endedBy === 'receipt' && entry.auth?.carrier_key !== undefined)
+      const teamMailbox = row === undefined ? undefined : teamMailboxOf(row.team)
+      if (row === undefined || teamMailbox === undefined || to === '') return undefined
+      const remoteReturn = row.auth?.carrier_key !== undefined || remoteCliTarget(to, handle => cliDeposits.get(handle) !== undefined)
+      const auth = row.auth
+      let remoteHome: string | undefined
+      if (remoteReturn) {
+        // A claimed remote canvas return must never fall through to the uncorrelated CLI transport.
+        const home = auth?.carrier_url
+        const allowed = () => mailbox === teamMailbox && teamMailboxOf(row.team) === mailbox &&
+          auth !== undefined && auth.admission_rule === 'remote-ref-cli' && auth.ingress === 'wire' && auth.proof === 'origin-claim' &&
+          row.direction === 'inbound' && row.receiptExpected !== false && auth.target === row.team &&
+          auth.receipt_target === to && auth.caller === to && row.peer === 'local:' + to &&
+          CLI_HANDLE_RE.test(to) && home !== undefined && auth.claim?.origin === home && auth.carrier_key !== undefined &&
+          auth.caller_key !== undefined && cliDeposits.get(to) === undefined && canvasStore.cliHomeOf(to) === home &&
+          !config.isolated && recheckRemoteCliAuthorization(admissionRecords, auth).ok &&
+          resolutionPeers().some(url => originOf(url) === home)
+        if (!allowed() || home === undefined) return fail(1, 'original canvas receipt return is not authorized')
+        const [card, recipient] = await Promise.all([fetchPeerCard(home), client.fetchCard(home + '/a2a/cli/' + encodeURIComponent(to))])
+        if (card === undefined || card.publicKey !== auth?.carrier_key || recipient?.team !== to || recipient.publicKey !== auth.caller_key ||
+          !allowed() || taskLedger.find(task) !== pending) return fail(1, 'original canvas receipt return could not be verified')
+        cardCache.set(home, { at: Date.now(), card })
+        if (peerAdmissionLinkState(home).link !== 'linked') return fail(1, 'original canvas receipt return is no longer linked')
+        remoteHome = home
+      }
       // Review of #442: switches are read before `--` only — the text after it may be anything.
       const switches = dash >= 0 ? args.slice(0, dash) : args
       const acknowledged = switches.includes('--acknowledged'), attention = switches.includes('--attention')
@@ -2556,10 +2580,17 @@ export function apply(ctx: Context, config: Config): void {
       const receiptTask = receiptTaskId(task, fields.disposition, extras.fields.question, extras.fields.progress)
       if (receiptTask.length > 80) return fail(2, `receipt: its task id ${receiptTask} is longer than 80 characters`)
       try {
-        const out = await dispatchAnywhere(to, receipt, session, row.contextId, new AbortController().signal, true, receiptTask)
-        // This host's own inbound row (a requester on another host or a CLI here): the receipt it sent settles it.
-        // An acknowledgement or a question marks it instead (settleOwnInbound leaves such a row owed).
-        if (row.direction === 'inbound' && !acknowledged && !progress) settleOwnInbound(receipt, to, { caller: session, proof: 'in-process', ingress: 'local' })
+        const signal = new AbortController().signal
+        const out = remoteHome === undefined
+          ? await dispatchAnywhere(to, receipt, session, row.contextId, signal, true, receiptTask)
+          : await dispatchPeerCandidate(remoteHome, to, receipt, row.contextId, signal, session, true, receiptTask)
+        if (!out.ok) return fail(1, out.error)
+        if (remoteHome !== undefined && (out.settlementRefused === true || out[RECEIPT_CONFIRMED] !== true)) return fail(1, 'original canvas receipt settlement was not confirmed')
+        // An interim receipt marks the original task without ending it.
+        if (row.direction === 'inbound' && !acknowledged && !progress &&
+          !settleOwnInbound(receipt, to, { caller: session, proof: 'in-process', ingress: 'local' }) && remoteHome !== undefined) {
+          return fail(1, 'original canvas receipt local settlement could not be recorded')
+        }
         return JSON.stringify({ delivered: true, class: 'sent', task_id: receiptTask, team: to, ...(typeof (out as { context_id?: unknown }).context_id === 'string' ? { context_id: (out as { context_id: string }).context_id } : {}) })
       } catch (error) {
         const code = (error as { code?: unknown }).code
@@ -3751,12 +3782,19 @@ export function apply(ctx: Context, config: Config): void {
       restrictedSession: id => nodeTaint.isRestricted(id),
       taskLedger,
       receiptReplayAllowed:(message,caller,team,claim)=>{
-        const parsed=parseReceipt(message);if(!parsed||!claim.bound||claim.bodyBound!==true||!claimCovers(caller,claim.caller)||!isRootOriginUrl(claim.callerUrl))return false
-        const row=taskLedger.archive().find(r=>r.taskId===parsed.taskId)
-        if(!row||row.endedBy!=='receipt'||row.peerKey!==claim.card.publicKey)return false
-        const creditor=row.auth?.receipt_target??row.sender?.id
-        if(creditor!==team)return false
-        return judgeSettlement(row,{caller,proof:'origin-claim',claimKey:claim.card.publicKey,claimOrigin:originOf(claim.callerUrl),ingress:'wire'},{hostLabel:session,membersOf:()=>undefined,...(parsed.envelope?.onBehalfOf?{onBehalfOf:parsed.envelope.onBehalfOf}:{})}).ok
+        const parsed = parseReceipt(message)
+        if (!parsed || !claim.bound || claim.bodyBound !== true || !isRootOriginUrl(claim.callerUrl)) return false
+        const row = taskLedger.archive().find(entry => entry.taskId === parsed.taskId)
+        if (!row || row.endedBy !== 'receipt' || row.peerKey !== claim.card.publicKey) return false
+        const creditor = row.auth?.receipt_target ?? row.sender?.id
+        if (creditor !== team) return false
+        const onBehalfOf = parsed.envelope?.onBehalfOf
+        // A team canvas receipt carries the pinned process label rather than a zone-qualified session.
+        const forwardedCanvasHost = row.forwarded === true && row.sender?.kind === 'cli' && row.team.includes('/canvas/') &&
+          row.peerHost === caller && onBehalfOf === row.team && claim.cli !== true
+        if (!forwardedCanvasHost && !claimCovers(caller, claim.caller)) return false
+        return judgeSettlement(row, { caller, proof: 'origin-claim', claimKey: claim.card.publicKey, claimOrigin: originOf(claim.callerUrl), ingress: 'wire' },
+          { hostLabel: session, membersOf: () => undefined, ...(onBehalfOf !== undefined ? { onBehalfOf } : {}) }).ok
       },
       refuseIfFlooded,
       refuseIfQueueFull,
@@ -5062,7 +5100,7 @@ const routeVerdict = (team: string, failures: readonly string[], candidateCount:
     if (!result.ok && result.code === WIRE_ERROR_REPLAY_REJECTED && taskIdFromCaller !== undefined && taskIdFromCaller !== '' && parseReceipt(message) !== null) {
       const fingerprint = peerPayloadFingerprint({ caller: callerSession ?? session, message, noWait: asyncMode, team })
       const reading = readReceiptReplay(await client.queryOutcome(url, taskIdFromCaller, fingerprint, signal))
-      if (reading === 'delivered') return { ok: true, team, reply: 'receipt already delivered: the receiver answered an idempotency replay for this transport id', task_id: taskIdFromCaller, context_id: contextId ?? '', task_status: 'TASK_STATE_COMPLETED', receipt: 'none' }
+      if (reading === 'delivered') return { ok: true, team, reply: 'receipt already delivered: the receiver answered an idempotency replay for this transport id', task_id: taskIdFromCaller, context_id: contextId ?? '', task_status: 'TASK_STATE_COMPLETED', receipt: 'none', [RECEIPT_CONFIRMED]: true }
       if (reading === 'retry') return { ...result, [RECEIPT_RETRYABLE]: true }
       if (reading === 'unknown') return { ...result, acceptance:'unknown', error:'receipt replay is not delivery evidence; reconcile the original transport, do not resend the work' }
       return { ...result, error: `${result.error} (the receiver recorded the prior attempt of this receipt as failed)` }
