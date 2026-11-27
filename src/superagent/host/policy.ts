@@ -19,6 +19,7 @@ import { createHash } from 'node:crypto'
 import type { GateResult, Mandate, Policy, PolicyEffect, SourceScope, Thread, Ticket, Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
 import { scope as a2aScope } from '../a2a-watch.ts'
 import { parseMcpServers, type TeamMcpServer } from './team-mcp.ts'
+import { parseObserverDecisionRule, type ObserverDecisionRule } from './observer-decisions.ts'
 
 /** The Sources this host runs. */
 export const SOURCES = ['workbench', 'a2a', 'github'] as const
@@ -110,6 +111,7 @@ export interface TeamSettings {
    * when turned on, P3 only, 30 minutes, no sources). `armedAt` is the host's own stamp, never taken from a request.
    */
   readonly autoApprove?: AutoApprove
+  readonly observerDecides?: ObserverDecisionRule
   /** How long the router may take over a candidate before its Eval expires (upstream: re-queued twice, then unavailable). */
   readonly evalTimeoutMs: number
   /** Pause processing (upstream docs/003): Sources still record Triggers; Evals, dispatch and replies wait. */
@@ -339,6 +341,12 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
     else if (!Array.isArray(raw) || raw.length > 64 || raw.some(x => typeof x !== 'string' || !/^session-[A-Za-z0-9-]{1,64}$/.test(x))) return { ok: false, error: 'castOff must list at most 64 session ids of this team' }
     else castOff = [...new Set(raw as string[])]
   }
+  let observerDecides = current.observerDecides
+  if ('observerDecides' in r) {
+    const parsed = parseObserverDecisionRule(r.observerDecides)
+    if (typeof parsed === 'string') return { ok: false, error: parsed }
+    observerDecides = parsed
+  }
   let autoApprove = current.autoApprove
   if ('autoApprove' in r) {
     const parsed = parseAutoApprove(r.autoApprove, current.autoApprove)
@@ -506,7 +514,7 @@ export function parseSettings(raw: unknown, current: TeamSettings): { ok: true; 
   const observers = current.observers ?? []
   const dispatch = 'dispatch' in r ? r.dispatch : current.dispatch ?? ''
   if (typeof dispatch !== 'string' || dispatch.length > DISPATCH_MAX) return { ok: false, error: `dispatch must be text of at most ${String(DISPATCH_MAX)} characters` }
-  return { ok: true, settings: { ...(autoApprove !== undefined ? { autoApprove } : {}), ...(credentialAckMinutes !== undefined ? { credentialAckMinutes } : {}), ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), ...(approvers !== undefined ? { approvers } : {}), ...(blockedTools !== undefined ? { blockedTools } : {}), evalTimeoutMs, paused, ...(progressOff === true ? { progressOff: true as const } : {}), ...(observerCast === true ? { observerCast: true as const } : {}), ...(observerCardDraft === true ? { observerCardDraft: true as const } : {}), ...(observerTriggerRouter === true ? { observerTriggerRouter: true as const } : {}), ...(castOff !== undefined ? { castOff } : {}), ...(idleSweep === true ? { idleSweep: true as const } : {}), ...(decisionPush === true ? { decisionPush: true as const } : {}), ...(mcp !== undefined ? { mcp } : {}) } }
+  return { ok: true, settings: { ...(autoApprove !== undefined ? { autoApprove } : {}), ...(observerDecides !== undefined ? { observerDecides } : {}), ...(credentialAckMinutes !== undefined ? { credentialAckMinutes } : {}), ...(canvas !== undefined ? { canvas } : {}), ...(router !== undefined ? { router } : {}), ...(reviewer !== undefined ? { reviewer } : {}), members, remoteMembers: current.remoteMembers, ...(current.serves !== undefined ? { serves: current.serves } : {}), repos, allowed: { workbench, a2a, github }, bots: { a2a: bots }, acceptMode, rules, observers, profiles, dispatch: dispatch.trim(), maxConcurrent, ...(prepare !== undefined ? { prepare } : {}), ...(models !== undefined ? { models } : {}), ...(prompts !== undefined ? { prompts } : {}), sources: { workbench: wb, a2a: a, github: gh }, ...(githubIntake !== undefined ? { github: githubIntake } : {}), ...(extraTools !== undefined ? { extraTools } : {}), ...(approvers !== undefined ? { approvers } : {}), ...(blockedTools !== undefined ? { blockedTools } : {}), evalTimeoutMs, paused, ...(progressOff === true ? { progressOff: true as const } : {}), ...(observerCast === true ? { observerCast: true as const } : {}), ...(observerCardDraft === true ? { observerCardDraft: true as const } : {}), ...(observerTriggerRouter === true ? { observerTriggerRouter: true as const } : {}), ...(castOff !== undefined ? { castOff } : {}), ...(idleSweep === true ? { idleSweep: true as const } : {}), ...(decisionPush === true ? { decisionPush: true as const } : {}), ...(mcp !== undefined ? { mcp } : {}) } }
 }
 
 const QUALIFIED_REF = /^[^/\s@]+\/[0-9a-f]{8}@[0-9a-f]{8}$/
@@ -525,7 +533,7 @@ export function parseRemoteMember(raw: unknown): RemoteMember | undefined {
  */
 export function parseStoredSettings(raw: unknown): { ok: true; settings: TeamSettings } | { ok: false; error: string } {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'settings must be an object' }
-  const { members: _members, remoteMembers: _remote, observers: _observers, serves, repos, profiles, ...rest } = raw as Record<string, unknown>
+  const { members: _members, remoteMembers: _remote, observers: _observers, serves, repos, profiles, observerDecides: savedObserverRule, ...rest } = raw as Record<string, unknown>
   // Repositories are checked against the pool when the owner writes them; here only their shape, for whoever they name.
   const named = repos !== null && typeof repos === 'object' && !Array.isArray(repos) ? Object.keys(repos) : []
   const profiled = profiles !== null && typeof profiles === 'object' && !Array.isArray(profiles) ? Object.keys(profiles) : []
@@ -545,7 +553,10 @@ export function parseStoredSettings(raw: unknown): { ok: true; settings: TeamSet
     const { armedAt: _ignored, ...plain } = autoApprove
     autoApprove = valid ? { ...plain, armedAt: stamp as string } : { ...plain, enabled: false }
   }
-  return { ok: true, settings: { ...parsed.settings, ...(autoApprove !== undefined ? { autoApprove } : {}), members: [], remoteMembers: [], observers: [], ...(served !== undefined ? { serves: served } : {}) } }
+  const rule = parseObserverDecisionRule(savedObserverRule)
+  const stamp = savedObserverRule !== null && typeof savedObserverRule === 'object' ? (savedObserverRule as { armedAt?: unknown }).armedAt : undefined
+  const observerDecides = typeof rule === 'object' && typeof stamp === 'string' && Number.isFinite(Date.parse(stamp)) ? { ...rule, armedAt: stamp } : undefined
+  return { ok: true, settings: { ...parsed.settings, ...(autoApprove !== undefined ? { autoApprove } : {}), ...(observerDecides !== undefined ? { observerDecides } : {}), members: [], remoteMembers: [], observers: [], ...(served !== undefined ? { serves: served } : {}) } }
 }
 
 /**

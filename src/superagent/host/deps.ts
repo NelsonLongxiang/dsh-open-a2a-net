@@ -69,6 +69,7 @@ export interface SuperagentHostDeps {
   readonly stageFiles?: (sessionId: string, paths: readonly string[], canvas: string) => { ok: true; files: DecisionFile[] } | { ok: false; code: string; error: string }
   /** Where this team's state lives instead, when it is not the instance's primary team (design M2). */
   readonly stateDir?: string
+  readonly decisionTeamId?: string
   /** Whether another team on this instance holds a canvas: one canvas is one team. */
   readonly canvasTaken?: (canvas: string, self: SuperagentHost) => boolean
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }

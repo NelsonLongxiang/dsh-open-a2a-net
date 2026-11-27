@@ -10,6 +10,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { parseFileRef } from '../../blob-store.ts'
+import { validObserverCardState, type ObserverCardBinding, type ObserverDecision } from './observer-decisions.ts'
 
 export type DecisionLevel = 'P0' | 'P1' | 'P2' | 'P3'
 const LEVELS: readonly string[] = ['P0', 'P1', 'P2', 'P3']
@@ -87,8 +88,11 @@ export interface StoredCard extends DecisionSpec {
   readonly at: string
   /** Files the proposer put on the card (C8). */
   readonly files?: readonly DecisionFile[]
+  readonly observerBinding?: ObserverCardBinding
+  readonly observerDecision?: ObserverDecision
+  readonly ownerDecisionAttempt?: { readonly at: string; readonly generation: string; readonly option?: number }
   /** `by: 'host'` only on the host's automatic decision (#888 D5); the owner's own decision never carries it. */
-  readonly decided?: { readonly at: string; readonly text: string; readonly triggerId?: string; readonly files?: readonly DecisionFile[]; readonly by?: 'host'; /** #935 review: the chosen option's position in `options`, recorded when an option was chosen (absent for words only, and on older records). */ readonly option?: number }
+  readonly decided?: { readonly at: string; readonly text: string; readonly triggerId?: string; readonly files?: readonly DecisionFile[]; readonly by?: 'host' | 'observer'; /** #935 review: the chosen option's position in `options`, recorded when an option was chosen (absent for words only, and on older records). */ readonly option?: number }
   /** The host closed this card as 「知道了」 on a timeout (owner 2026-11-23): the audit record; it stays when the owner decides again. */
   readonly autoAck?: { readonly at: string; readonly by: 'host'; readonly rule: 'credential-ack-timeout'; readonly minutes: number }
   /**
@@ -171,17 +175,57 @@ export function decisionFiles(files: unknown): { ok: true; files: DecisionFile[]
   return { ok: true, files: attached }
 }
 
+/** A bound card must retain its authorization fields exactly as saved. Older ticket questions may lack a recommendation. */
+function validRestoredObserverCard(card: StoredCard): boolean {
+  if (!validObserverCardState(card)) return false
+  if (card.observerBinding === undefined) return true
+  const { options, level, recommended, inputs } = card
+  const minimum = card.source === 'ticket' ? 1 : OPTIONS_MIN
+  return typeof card.question === 'string' && card.question.trim() !== '' && LEVELS.includes(level)
+    && options.length >= minimum && options.length <= OPTIONS_MAX && new Set(options).size === options.length
+    && options.every(option => typeof option === 'string' && option !== '' && option === option.trim() && option.length <= OPTION_MAX)
+    && (options.includes(recommended) || card.source === 'ticket' && recommended === '')
+    && inputs !== null && parseInputs(inputs, options).ok
+}
+
 export class DecisionBook {
   private cards: StoredCard[]
+  private readonly observerStorageReadable: boolean
   /**
    * @param path - the file the cards live in.
    * @param ticketOpen - whether a ticket is still open: a member's card waits only as long as its ticket.
    * @param now - the clock, in milliseconds.
+   * @param observerArmed - whether the team's saved policy already requires a decision book.
    */
-  constructor(private readonly path: string, private readonly ticketOpen: (ticketId: string) => boolean = () => true, private readonly now: () => number = () => Date.now()) {
+  constructor(private readonly path: string, private readonly ticketOpen: (ticketId: string) => boolean = () => true, private readonly now: () => number = () => Date.now(), observerArmed = false) {
     let loaded: StoredCard[] = []
-    try { if (existsSync(path)) loaded = JSON.parse(readFileSync(path, 'utf8')) as StoredCard[] } catch { loaded = [] }
-    this.cards = Array.isArray(loaded) ? loaded : []
+    let readable = true
+    try {
+      loaded = JSON.parse(readFileSync(path, 'utf8')) as StoredCard[]
+    } catch (error) {
+      // An armed policy or the permanent initialization marker means a missing book is lost history.
+      readable = (error as NodeJS.ErrnoException).code === 'ENOENT' && !observerArmed && !existsSync(this.observerMarker)
+    }
+    this.cards = Array.isArray(loaded) ? loaded.filter(card => card !== null && typeof card === 'object' && typeof card.id === 'string' && validRestoredObserverCard(card)) : []
+    this.observerStorageReadable = readable && Array.isArray(loaded) && this.cards.length === loaded.length
+      && new Set(this.cards.map(card => card.id)).size === this.cards.length
+    if (observerArmed && this.observerStorageReady) {
+      try { this.initializeObserverHistory() } catch { this.observerStorageReadable = false }
+    }
+  }
+
+  private get observerMarker(): string { return this.path + '.observer-initialized' }
+
+  get observerStorageReady(): boolean {
+    return this.observerStorageReadable && (!existsSync(this.observerMarker) || existsSync(this.path))
+  }
+
+  /** Establish a durable empty book on first enable. Keep the marker across disable and re-enable. */
+  initializeObserverHistory(): void {
+    if (!this.observerStorageReady) throw new Error('decision book unreadable')
+    if (existsSync(this.observerMarker)) return
+    if (!existsSync(this.path)) this.save()
+    writeFileSync(this.observerMarker, 'observer-history-v1', { mode: 0o600, flag: 'wx', flush: true })
   }
 
   /**
@@ -201,15 +245,20 @@ export class DecisionBook {
     const decided = this.cards.filter(card => card.decided !== undefined).sort((a, b) => b.decided!.at.localeCompare(a.decided!.at))
     const keepDecided = new Set(decided.filter(card => Date.parse(card.decided!.at) >= cutoff).slice(0, DECIDED_KEEP_MAX).map(card => card.id))
     const before = this.cards.length
-    this.cards = this.cards.filter(card => card.decided !== undefined ? keepDecided.has(card.id) : card.source !== 'ticket' || card.ticketId === undefined || this.ticketOpen(card.ticketId))
+    const keepObserverSince = this.now() - 24 * 3_600_000
+    this.cards = this.cards.filter(card => card.observerDecision !== undefined && (card.observerDecision.state === 'pending' || card.observerDecision.state === 'attempting' || Date.parse(card.observerDecision.at) > keepObserverSince) || (card.decided !== undefined ? keepDecided.has(card.id) : card.source !== 'ticket' || card.ticketId === undefined || this.ticketOpen(card.ticketId)))
     return before - this.cards.length
   }
 
   private save(): void {
+    if (!this.observerStorageReady) throw new Error('decision book unreadable')
     this.prune()
     mkdirSync(dirname(this.path), { recursive: true })
     const temporary = `${this.path}.tmp-${randomUUID()}`
-    try { writeFileSync(temporary, JSON.stringify(this.cards), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.path) } finally { rmSync(temporary, { force: true }) }
+    try { writeFileSync(temporary, JSON.stringify(this.cards), { mode: 0o600, flag: 'wx', flush: true }); renameSync(temporary, this.path) } catch (error) {
+      try { rmSync(temporary, { force: true }) } catch { /* The original write failure determines the result. */ }
+      throw error
+    }
   }
 
   get(id: string): StoredCard | undefined { return this.cards.find(card => card.id === id) }
@@ -223,7 +272,7 @@ export class DecisionBook {
     const card = this.get(id)
     return [...(card?.files ?? []), ...(card?.decided?.files ?? [])].find(file => file.sha256 === sha256)
   }
-  open(): StoredCard[] { return this.cards.filter(card => card.decided === undefined) }
+  open(): StoredCard[] { return this.cards.filter(card => card.decided === undefined && card.ownerDecisionAttempt === undefined) }
 
   /** Cards the host closed on a timeout since \`sinceMs\` that the owner has not decided since (they may still decide). */
   autoAcked(sinceMs: number): StoredCard[] {
@@ -281,7 +330,7 @@ export class DecisionBook {
   }
 
   /** A card of the router's or an observer's own. An identical open question returns the existing card. */
-  propose(input: { source: 'router' | 'observer' | 'health' | 'tool' | 'outbound' | 'staffing' | 'sender'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[]; outbound?: StoredCard['outbound'] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
+  propose(input: { source: 'router' | 'observer' | 'health' | 'tool' | 'outbound' | 'staffing' | 'sender'; by: string; question: string; reason?: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[]; outbound?: StoredCard['outbound']; observerTarget?: ObserverCardBinding['target'] }): { ok: true; id: string; reused?: true } | { ok: false; code: string; error: string } {
     const question = input.question.trim()
     if (question === '' || question.length > QUESTION_MAX) return { ok: false, code: 'question', error: `question is required, at most ${String(QUESTION_MAX)} characters` }
     // #888 D2: only the router's and an observer's own cards may ask the owner to fill something in; host-fixed cards never.
@@ -297,18 +346,58 @@ export class DecisionBook {
     if (repeated !== undefined) return { ok: true, id: repeated.id, reused: true }
     if (mine.length >= OPEN_CARDS_MAX) return { ok: false, code: 'too-many-open', error: `you already have ${String(mine.length)} decisions waiting for the owner` }
     const id = `d-${randomUUID()}`
-    this.cards.push({ id, question, ...(input.reason !== undefined ? { reason: input.reason } : {}), source: input.source, by: input.by, at: input.at, ...input.spec, ...(input.outbound !== undefined ? { outbound: { ...input.outbound } } : {}), ...(input.files !== undefined && input.files.length > 0 ? { files: input.files } : {}) })
+    this.cards.push({ id, question, ...(input.reason !== undefined ? { reason: input.reason } : {}), source: input.source, by: input.by, at: input.at, ...input.spec, ...(input.observerTarget === undefined ? {} : { observerBinding: { generation: randomUUID(), createdAt: input.at, proposer: input.by, target: input.observerTarget } }), ...(input.outbound !== undefined ? { outbound: { ...input.outbound } } : {}), ...(input.files !== undefined && input.files.length > 0 ? { files: input.files } : {}) })
     this.save()
     this.changed('created', this.get(id))
     return { ok: true, id }
   }
 
   /** The card of a member's question on a ticket. */
-  forTicket(input: { ticketId: string; by: string; question: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[] }): void {
+  forTicket(input: { ticketId: string; by: string; question: string; spec: DecisionSpec; at: string; files?: readonly DecisionFile[]; questionVersion?: string; newQuestion?: boolean }): void {
     const id = ticketCardId(input.ticketId, input.question)
-    if (this.get(id) !== undefined) return
-    this.cards.push({ id, question: input.question, source: 'ticket', by: input.by, ticketId: input.ticketId, at: input.at, ...input.spec, ...(input.files !== undefined && input.files.length > 0 ? { files: input.files } : {}) })
-    this.save()
+    const previous = this.get(id)
+    if (previous !== undefined && (input.questionVersion === undefined || !input.newQuestion && previous.observerBinding?.target.kind === 'ticket-answer' && previous.observerBinding.target.questionVersion === input.questionVersion
+      && JSON.stringify([previous.level, previous.options, previous.recommended, previous.inputs, previous.by]) === JSON.stringify([input.spec.level, input.spec.options, input.spec.recommended, input.spec.inputs, input.by]))) return
+    // Keep a previous observer decision for history and quota, while the legacy card ID points to the newly opened question.
+    const next = this.cards.flatMap(card => card.id !== id ? [card] : card.observerDecision === undefined ? [] : [{ ...card, id: card.observerDecision.id }])
+    const binding: ObserverCardBinding | undefined = input.questionVersion === undefined ? undefined : {
+      generation: randomUUID(), createdAt: input.at, proposer: input.by,
+      target: { kind: 'ticket-answer', ticketId: input.ticketId, questionVersion: input.questionVersion, member: input.by },
+    }
+    this.replaceCards([...next, { id, question: input.question, source: 'ticket', by: input.by, ticketId: input.ticketId, at: input.at, ...input.spec,
+      ...(binding === undefined ? {} : { observerBinding: binding }), ...(input.files !== undefined && input.files.length > 0 ? { files: input.files } : {}) }])
+  }
+
+  private replaceCards(next: StoredCard[]): void {
+    const previous = this.cards
+    this.cards = next
+    try { this.save() } catch (error) { this.cards = previous; throw error }
+  }
+
+  observerHistory(): StoredCard[] { return this.cards.filter(card => card.observerDecision !== undefined) }
+
+  reserveOwnerDecision(card: StoredCard, at: string, option?: number): boolean {
+    const current = this.get(card.id)
+    if (current?.observerBinding === undefined || current.observerBinding.generation !== card.observerBinding?.generation
+      || current.decided !== undefined || current.ownerDecisionAttempt !== undefined) return false
+    this.replaceCards(this.cards.map(row => row === current ? { ...row, ownerDecisionAttempt: { at, generation: current.observerBinding!.generation, option } } : row))
+    return true
+  }
+
+  commitObserverDecision(card: StoredCard, decision: ObserverDecision): boolean {
+    if (!this.observerStorageReady || card.decided !== undefined || card.ownerDecisionAttempt !== undefined || card.autoApproved !== undefined || this.get(card.id) !== card || card.observerBinding?.generation !== decision.generation) return false
+    const decided = { at: decision.at, by: 'observer' as const, option: decision.option, text: '决定：' + card.options[decision.option] }
+    const recorded = { ...card, decided, observerDecision: decision }
+    this.replaceCards(this.cards.map(row => row === card ? recorded : row))
+    this.changed('decided', recorded)
+    return true
+  }
+
+  updateObserverDecision(card: StoredCard, decision: ObserverDecision): boolean {
+    if (!this.observerStorageReady || this.get(card.id) !== card || card.observerDecision?.id !== decision.id) return false
+    // Updating delivery or the local correction does not produce another market event.
+    this.replaceCards(this.cards.map(row => row === card ? { ...row, observerDecision: decision } : row))
+    return true
   }
 
   /** Take an undecided card back (reliability R7: a problem that went away recalls its reminder). */
@@ -324,8 +413,11 @@ export class DecisionBook {
   /** Record what was decided; a question that had no card gets one, so it cannot be answered twice. */
   decide(id: string, decided: NonNullable<StoredCard['decided']>, fallback?: Omit<StoredCard, 'decided'>): void {
     const known = this.cards.some(card => card.id === id)
-    this.cards = known ? this.cards.map(card => card.id === id ? { ...card, decided } : card) : [...this.cards, ...(fallback !== undefined ? [{ ...fallback, decided }] : [])]
-    this.save()
+    this.replaceCards(known ? this.cards.map(card => {
+      if (card.id !== id) return card
+      const { ownerDecisionAttempt: _claim, ...previous } = card
+      return { ...previous, decided }
+    }) : [...this.cards, ...(fallback !== undefined ? [{ ...fallback, decided }] : [])])
     this.changed('decided', this.get(id))
   }
 }

@@ -82,10 +82,10 @@ export interface SuperagentFaceDeps {
  */
 export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceDeps): void {
   const { ctx, config, superagentHost, superagentTeams, controlRoute, readJsonBody, recordActivity, routeTrunk, sessionNodes, sessionPresetOf, sessionTeamOf, joinedSessions, archivedSessionFilter, verifyOriginClaim, fetchPeerCard, peerStore, cardCache, ownCanvasFingerprint, peerAdmissionLinkState, blobStore, sidebarSends } = d
-  const requireBrowserOwner = (req: IncomingMessage, send: (status: number, value: unknown) => void): boolean => {
+  const requireBrowserOwner = (req: IncomingMessage, send: (status: number, value: unknown) => void, delegate = true): boolean => {
     let connection: unknown
     try { connection = ctx.get('connection') } catch { /* inactive provider: the unavailable proof below refuses */ }
-    const proof = browserOwnerProof(connection, req)
+    const proof = browserOwnerProof(connection, req, { delegate })
     if (!proof.ok) { send(proof.status, proof); return false }
     return true
   }
@@ -118,7 +118,8 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
               const save = (): void => { send(200, sa.saveSettings(fields.settings, id => joinedSessions.has(id) && archivedSessionFilter()?.(id) !== true, sessionPresetOf, 'owner')) }
               // A shell on this machine passes the control route; a rule change needs what only the owner's browser holds (design D10).
               if (!touchesRules(fields.settings)) { save(); return }
-              if (requireBrowserOwner(req, send)) save()
+              const observerRule = fields.settings !== null && typeof fields.settings === 'object' && Object.hasOwn(fields.settings, 'observerDecides')
+              if (requireBrowserOwner(req, send, !observerRule)) save()
               return
             } else if (fields.action === 'sync-github-allowed') {
               // Design github-issues G6, G7: add the repositories' collaborators with push access to allowed.github; owner only.
@@ -291,12 +292,20 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
         // Each card names its team's canvas address: the right bar stages the owner's files to it (C8).
         if (req.method === 'GET') {
           if (needsTeamDelegateProof(req) && !requireBrowserOwner(req, send)) return
-          send(200, { decisions: superagentTeams.decisionCards().map(card => ({ ...card, ...inputFlags(card), ...optionIdFlags(card), ...(typeof card.team === 'string' && card.team !== '' ? { address: `${config.team}/canvas/${card.team}` } : {}) })), health: superagentTeams.health() }); return }
+          let connection: unknown
+          try { connection = ctx.get('connection') } catch { /* No browser Owner service. */ }
+          const owner = browserOwnerProof(connection, req, { delegate: false }).ok
+          send(200, { ...(owner ? { observerDecisions: superagentTeams.observerDecisionBoard() } : {}), decisions: superagentTeams.decisionCards().map(card => ({ ...card, ...inputFlags(card), ...optionIdFlags(card), ...(typeof card.team === 'string' && card.team !== '' ? { address: `${config.team}/canvas/${card.team}` } : {}) })), health: superagentTeams.health() }); return }
         readJsonBody(req, res, (body) => {
-          const fields = body as { teamId?: unknown; id?: unknown; how?: unknown; option?: unknown; note?: unknown; files?: unknown }
+          const fields = body as { teamId?: unknown; id?: unknown; how?: unknown; generation?: unknown; option?: unknown; note?: unknown; files?: unknown }
           const team = superagentTeams.get(typeof fields.teamId === 'string' ? fields.teamId : undefined)
           if (team === undefined) { send(404, { ok: false, error: 'no such team on this instance' }); return }
           // A member's shell on this machine passes the control route; deciding is the owner's alone (C5).
+          if (fields.how === 'observer-correct' || fields.how === 'credential-control') {
+            if (!requireBrowserOwner(req, send, false)) return
+            send(200, team.ownerObserverDecision(typeof fields.id === 'string' ? fields.id : '', fields.how, fields.generation, fields.option, fields.note))
+            return
+          }
           if (!requireBrowserOwner(req, send)) return
           send(200, team.decide(typeof fields.id === 'string' ? fields.id : '', fields.how, fields.option, fields.note, fields.files))
         })

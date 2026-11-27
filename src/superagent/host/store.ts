@@ -80,9 +80,12 @@ export class JsonRepositories implements Repositories {
     mkdirSync(dirname(this.path), { recursive: true })
     const temporary = `${this.path}.tmp-${randomUUID()}`
     try {
-      writeFileSync(temporary, JSON.stringify(doc), { mode: 0o600, flag: 'wx' })
+      writeFileSync(temporary, JSON.stringify(doc), { mode: 0o600, flag: 'wx', flush: true })
       renameSync(temporary, this.path)
-    } finally { rmSync(temporary, { force: true }) }
+    } catch (error) {
+      try { rmSync(temporary, { force: true }) } catch { /* Keep the original failure. */ }
+      throw error
+    }
   }
 
   /** A unit of work: rolled back in memory when it throws, written to disk once the outermost one succeeds. */

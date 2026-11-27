@@ -66,6 +66,25 @@ describe('scoped owner delegate', () => {
     } finally { await f.n.dispose() }
   })
 
+  it('keeps the observer decision board on the browser-owner view', async () => {
+    const f = await fixture()
+    try {
+      const decisions = '/__dsh_a2a/superagent/decisions'
+      const reader = f.issue(['team.read'])
+      const read = await f.send(decisions, { token: reader.token })
+      expect(read.status).toBe(200)
+      const view = await read.json()
+      expect(view).toHaveProperty('decisions')
+      expect(view).not.toHaveProperty('observerDecisions')
+      const control = await f.send(decisions, { key: true })
+      expect(control.status).toBe(200)
+      expect(await control.json()).not.toHaveProperty('observerDecisions')
+      const denied = await f.send(decisions, { token: f.issue(['session.read']).token, key: true })
+      expect(denied.status).toBe(403)
+      expect(await denied.json()).toMatchObject({ code: 'owner-delegate-scope' })
+    } finally { await f.n.dispose() }
+  })
+
   it('attributes an accepted prompt and refuses malformed attribution before delivery or audit', async () => {
     const f = await fixture()
     try {
