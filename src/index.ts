@@ -623,7 +623,8 @@ export function apply(ctx: Context, config: Config): void {
   const a2aDirPrivacy = restrictDirToCurrentUser(join(home, 'a2a'))
   if (a2aDirPrivacy.mode === 'windows-acl' && !a2aDirPrivacy.ok) logger.warn('a2a: could not restrict the a2a directory to the current user (%s); its journals keep the inherited ACL', a2aDirPrivacy.error)
   // The control API's user scope: tokens the owner issued with `a2a-net user issue` stand in for the browser owner.
-  configureOwnerDelegates(new OwnerDelegates(join(home, 'a2a', 'owner-delegates.json'), join(home, 'a2a', 'owner-delegates-audit.jsonl')))
+  const ownerDelegates = new OwnerDelegates(join(home, 'a2a', 'owner-delegates.json'), join(home, 'a2a', 'owner-delegates-audit.jsonl'))
+  configureOwnerDelegates(ownerDelegates)
   const peerStore = new PeerStore(config.peers, join(home, 'a2a', 'peers.json'))
   // Node identity (docs/design/node-identity.md, N1): human-named nodes and their prompt versions.
   const nodeStore = new NodeStore(join(home, 'a2a'))
@@ -3886,8 +3887,8 @@ export function apply(ctx: Context, config: Config): void {
 
     // gh#77: the session-log faces (local transcript reader + remote-log proxy) live in src/faces/session-log.ts.
     registerSessionLogFaces(webServer, { ctx, config, controlRoute, scanSessionLogList, readSessionLogTail, peerStore, peerFetch, peerRequestHeaders, directoryPeerCandidates, memoizedCardFetch })
-    // #951 S1: the user scope's session routes (list, read a page, prompt a live seat).
-    registerUserSessionFaces(webServer, { ctx, controlRoute, readJsonBody, liveSessions: sessionNodes, joinedSessions, archived: id => archivedSessionFilter()?.(id) === true, sessionLogRoots, scanSessionLogList, nameOf: agent => nodeMetadataOf(agent as Agent).name, teamOf: agent => sessionTeamOf(agent as Agent), taint: id => markLineage(sessionNodes.get(id), 'relay'), roleOf: id => superagentTeams?.ofSession(id)?.roleOf(id) ?? (superagentTeams?.all().some(team => team.isObserver(id)) === true ? 'observer' : null) })
+    // #951 S1: owner operations on local sessions.
+    registerUserSessionFaces(webServer, { ctx, releasePath: join(home, 'a2a', 'user-releases.json'), ownerDelegates, warn: message => logger.warn(message), controlRoute, readJsonBody, liveSessions: sessionNodes, joinedSessions, archived: id => archivedSessionFilter()?.(id) === true, sessionLogRoots, scanSessionLogList, nameOf: agent => nodeMetadataOf(agent as Agent).name, teamOf: agent => sessionTeamOf(agent as Agent), taint: id => markLineage(sessionNodes.get(id), 'relay'), roleOf: id => superagentTeams?.ofSession(id)?.roleOf(id) ?? (superagentTeams?.all().some(team => team.isObserver(id)) === true ? 'observer' : null) })
     registerFileFaces(webServer, { ctx, config, blobStore, ownOrigin: () => originOf(ownCardUrl), canvasStore, verifyOriginClaim, peerKeyAdmits, controlRoute, recordActivity })
   })
 
