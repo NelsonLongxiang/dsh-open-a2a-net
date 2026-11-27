@@ -18,7 +18,7 @@ import { SESSION_ID_SHAPE } from './session-log-page.ts'
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     /** An owner's delegate (or the owner at the control API) putting a line into a seat; set by the host only (#951). */
-    'a2a-owner-proxy': { kind: 'a2a-owner-proxy'; delegateId?: string; delegateName: string; mode: 'steer' | 'queue' }
+    'a2a-owner-proxy': { kind: 'a2a-owner-proxy'; delegateId?: string; delegateName: string; mode: OwnerPromptMode }
   }
 }
 
@@ -31,6 +31,8 @@ export const OWNER_PROMPT_IDEM_TTL_MS = 10 * 60_000
 export const OWNER_PROMPT_IDEM_MAX = 256
 
 const REQUEST_ID = /^[A-Za-z0-9._:-]{1,64}$/
+
+export type OwnerPromptMode = 'steer' | 'queue' | 'trigger'
 
 export type SeatRole = 'router' | 'observer' | 'member' | null
 
@@ -82,16 +84,55 @@ export interface UserSessionsDeps {
 
 /** Whether and how busy a live seat is: its status and the messages waiting in its inbox (best effort: undefined when the host hides them). */
 export function seatState(agent: unknown): { status?: string; queued?: number } {
-  const a = agent as { status?: unknown; inbox?: { nextTurn?: readonly unknown[]; nextStep?: readonly unknown[] } } | undefined
-  let queued: number | undefined
-  try { if (Array.isArray(a?.inbox?.nextTurn) && Array.isArray(a?.inbox?.nextStep)) queued = a.inbox.nextTurn.length + a.inbox.nextStep.length } catch { queued = undefined }
-  let status: string | undefined
-  try { status = typeof a?.status === 'string' ? a.status : undefined } catch { status = undefined }
+  const nextTurn = inboxQueue(agent, 'nextTurn')
+  const nextStep = inboxQueue(agent, 'nextStep')
+  const queued = nextTurn !== undefined && nextStep !== undefined ? nextTurn.length + nextStep.length : undefined
+  const status = readSeatStatus(agent)
   return { ...(status !== undefined ? { status } : {}), ...(queued !== undefined ? { queued } : {}) }
 }
 
+export function readSeatStatus(agent: unknown): string | undefined {
+  try {
+    const status = (agent as { status?: unknown } | undefined)?.status
+    return typeof status === 'string' ? status : undefined
+  } catch { return undefined }
+}
+
+/** Read one queue independently so an unavailable field never looks like an empty queue. */
+function inboxQueue(agent: unknown, key: 'nextTurn' | 'nextStep'): readonly unknown[] | undefined {
+  try {
+    const queue = (agent as { inbox?: Partial<Record<typeof key, unknown>> } | undefined)?.inbox?.[key]
+    return Array.isArray(queue) ? queue : undefined
+  } catch { return undefined }
+}
+
+/** Project only queue counts and source kinds. Never forward a source object or a message. */
+export function ownerSeatState(agent: unknown) {
+  const status = readSeatStatus(agent)
+  const nextTurn = inboxQueue(agent, 'nextTurn')
+  const nextStep = inboxQueue(agent, 'nextStep')
+  const inbox = {
+    ...(nextTurn !== undefined ? { nextTurn: nextTurn.length } : {}),
+    ...(nextStep !== undefined ? { nextStep: nextStep.length } : {}),
+  }
+  const kinds = new Map<string, number>()
+  if (nextTurn === undefined || nextStep === undefined) {
+    return { ...(status !== undefined ? { status } : {}), inbox, available: false }
+  }
+  for (const queue of [nextTurn, nextStep]) {
+    for (const message of queue) {
+      const kind = (message as { source?: { kind?: unknown } } | null | undefined)?.source?.kind
+      if (typeof kind === 'string') kinds.set(kind, (kinds.get(kind) ?? 0) + 1)
+    }
+  }
+  return {
+    ...(status !== undefined ? { status } : { available: false }),
+    inbox: { ...inbox, total: nextTurn.length + nextStep.length, kinds: Object.fromEntries(kinds) },
+  }
+}
+
 /** The marker line: who put this in, in what mode. Delegate names are the owner's own words; control characters and brackets are replaced. */
-export function ownerPromptMarker(name: string, mode: 'steer' | 'queue'): string {
+export function ownerPromptMarker(name: string, mode: OwnerPromptMode): string {
   return `[属主代输入 · ${name.replace(/[\u0000-\u001f\u007f\]\[]/g, ' ').trim().slice(0, 64)} · ${mode}]`
 }
 
@@ -120,7 +161,30 @@ export interface PreparedOwnerPrompt {
 }
 export interface ReplayedOwnerPrompt { readonly ok: true; readonly replay: Record<string, unknown> }
 
+/** Validate the target for owner operations that require a live, joined seat. */
+export function ownerLiveSeat(deps: Pick<UserSessionsDeps, 'live' | 'joined' | 'archived'>, id: unknown): { ok: true; id: string } | UserRefusal {
+  if (typeof id !== 'string' || !SESSION_ID_SHAPE.test(id)) return refuse(400, 'id', 'id must be a session id (session-…)')
+  const live = deps.live(id)
+  const joined = deps.joined(id)
+  if (!live && !joined) return refuse(404, 'unknown-session', 'no such session on this host')
+  if (deps.archived(id)) return refuse(409, 'archived', 'the session is archived')
+  if (live && !joined) return refuse(409, 'not-joined', 'the session is running but has not joined the network; a prompt goes only to joined sessions')
+  if (!live) return refuse(409, 'not-live', 'the session is joined but not running; wake it first (a prompt does not start one)')
+  return { ok: true, id }
+}
+
 const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex')
+
+/** Validate the prompt fields shared by immediate delivery and release scheduling. */
+export function validateOwnerPromptFields(input: Pick<OwnerPromptInput, 'mode' | 'text' | 'requestId'>) {
+  const { mode, text, requestId } = input
+  if (mode !== 'steer' && mode !== 'queue' && mode !== 'trigger') return refuse(400, 'mode', "mode must be 'steer', 'queue' or 'trigger'")
+  if (typeof text !== 'string' || text.trim() === '') return refuse(400, 'text', 'text must be a non-empty string')
+  const chars = [...text].length
+  if (chars > OWNER_PROMPT_TEXT_MAX) return refuse(400, 'text-too-long', 'text is at most ' + String(OWNER_PROMPT_TEXT_MAX) + ' characters')
+  if (requestId !== undefined && (typeof requestId !== 'string' || !REQUEST_ID.test(requestId))) return refuse(400, 'request-id', 'request_id must be 1 to 64 of letters, digits, . _ : -')
+  return { ok: true as const, mode: mode as OwnerPromptMode, text, requestId, chars, digest: sha256(text) }
+}
 
 /**
  * Check an owner prompt; write nothing. The cases, one status and code each: id spelled wrong 400 id; neither live nor
@@ -132,31 +196,24 @@ const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8
  * @returns a refusal, a replay of the earlier answer, or the audit fields and the delivery to run after the audit is written.
  */
 export function prepareOwnerPrompt(deps: UserSessionsDeps, input: OwnerPromptInput): UserRefusal | PreparedOwnerPrompt | ReplayedOwnerPrompt {
-  const id = input.id
-  if (typeof id !== 'string' || !SESSION_ID_SHAPE.test(id)) return refuse(400, 'id', 'id must be a session id (session-…)')
-  const live = deps.live(id)
-  const joined = deps.joined(id)
-  if (!live && !joined) return refuse(404, 'unknown-session', 'no such session on this host')
-  if (deps.archived(id)) return refuse(409, 'archived', 'the session is archived')
-  if (live && !joined) return refuse(409, 'not-joined', 'the session is running but has not joined the network; a prompt goes only to joined sessions')
-  if (!live) return refuse(409, 'not-live', 'the session is joined but not running; wake it first (a prompt does not start one)')
-  const mode = input.mode
-  if (mode !== 'steer' && mode !== 'queue') return refuse(400, 'mode', "mode must be 'steer' or 'queue'")
-  const text = input.text
-  if (typeof text !== 'string' || text.trim() === '') return refuse(400, 'text', 'text must be a non-empty string')
-  const chars = [...text].length
-  if (chars > OWNER_PROMPT_TEXT_MAX) return refuse(400, 'text-too-long', `text is at most ${String(OWNER_PROMPT_TEXT_MAX)} characters`)
-  const requestId = input.requestId
-  if (requestId !== undefined && (typeof requestId !== 'string' || !REQUEST_ID.test(requestId))) return refuse(400, 'request-id', 'request_id must be 1 to 64 of letters, digits, . _ : -')
-  const digest = sha256(text)
+  const target = ownerLiveSeat(deps, input.id)
+  if (!target.ok) return target
+  const { id } = target
+  const validated = validateOwnerPromptFields(input)
+  if (!validated.ok) return validated
+  const { mode, text, requestId, chars, digest } = validated
   const key = sha256(JSON.stringify([input.delegate.id ?? 'browser-owner', id, mode, digest]))
   if (typeof requestId === 'string') {
     const earlier = deps.idem.lookup(requestId)
     if (earlier !== undefined) return earlier.key === key ? { ok: true, replay: { ...earlier.response, replayed: true } } : refuse(409, 'request-id-conflict', 'this request_id was used for different content')
   }
   const seat = seatState(deps.agent(id))
+  if (mode === 'trigger') {
+    if (seat.status === 'running') return refuse(409, 'busy', 'trigger requires an idle session')
+    if (seat.status !== 'idle') return refuse(409, 'no-idle-signal', 'this host cannot confirm that the session is idle')
+  }
   const response: Record<string, unknown> = {
-    ok: true, id, mode, delivered: mode === 'steer' ? 'steered' : 'queued', role: deps.role(id),
+    ok: true, id, mode, delivered: mode === 'queue' ? 'queued' : 'steered', role: deps.role(id),
     ...seat, ...(typeof requestId === 'string' ? { request_id: requestId } : {}),
   }
   const audit = { action: `prompt-${mode}`, target: id, phase: 'accepted', chars, bytes: Buffer.byteLength(text, 'utf8'), sha256: digest, ...(typeof requestId === 'string' ? { request_id: requestId } : {}) }
@@ -172,7 +229,8 @@ export function prepareOwnerPrompt(deps: UserSessionsDeps, input: OwnerPromptInp
     if (typeof requestId === 'string') deps.idem.register(requestId, key, response)
     try {
       if (typeof input.callerTaint !== 'string' || input.callerTaint !== '') deps.taint(id)
-      if (mode === 'steer') agent.steer(message); else agent.followup(message)
+      if (mode === 'queue') agent.followup(message); else agent.steer(message)
+      if (mode === 'trigger') response.woken = readSeatStatus(deps.agent(id)) === 'running'
     } catch (error) {
       if (typeof requestId === 'string') deps.idem.revoke(requestId)
       return refuse(500, 'deliver-failed', `delivery failed: ${error instanceof Error ? error.message : String(error)}`)

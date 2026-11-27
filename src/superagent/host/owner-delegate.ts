@@ -82,6 +82,20 @@ export class OwnerDelegates {
     return { ok: true, id: found.id, name: found.name }
   }
 
+  /** Re-read the book before a scheduled action so revocation or expiry stops it. */
+  scheduledDelegateActive(id: string): boolean {
+    try {
+      const found = parseOwnerDelegates(readFileSync(this.storePath, 'utf8')).find(row => row.id === id)
+      return found !== undefined && found.revokedAt === null
+        && (found.expiresAt === null || Date.parse(found.expiresAt) > this.now().getTime())
+    } catch { return false }
+  }
+
+  /** Write a release timer audit without presenting a new owner proof. */
+  auditReleaseTimer(extra: Readonly<Record<string, unknown>>): boolean {
+    return this.audit({ id: null, name: 'host-timer' }, { method: 'TIMER', url: '/__dsh_a2a/user/session/release' }, { ...extra, actor: { id: null, name: 'host-timer' } })
+  }
+
   /**
    * Record one accepted use. An audit that cannot be written refuses the use (the owner must be able to see it).
    * @param who - the delegate.
