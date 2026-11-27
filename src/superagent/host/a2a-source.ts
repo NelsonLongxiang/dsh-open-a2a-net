@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
 import { EXIT_GONE, EXIT_RECEIPT_CONFLICT, HEALTH, KIND, KV, LINK_RULES, createA2aKind, replyAllowed, seatArgs, sendReply, watch, type A2aConfig, type ReceiptOutcome, type ReceiptSeat, type SendOptions } from '../a2a-watch.ts'
 import type { Commands, Health, OutboundMessage, ReceiveResult, SourceContext, TicketView, Trigger } from '../source-types.ts'
 /** The declarations last handed to a publish (superagent-root-team S5). */
@@ -313,11 +314,22 @@ export class A2aSource {
     return await this.routeAs(address, text, undefined, task, true)
   }
 
+  /** Require the host's proof of an operator-established link and pinned home for a remote CLI target. */
+  async admitsOutboundCli(address: string): Promise<boolean> {
+    try {
+      const result = JSON.parse(await this.context.commands.run('a2a-net', ['admission', address, '--json'])) as { admitted?: unknown; rule?: unknown }
+      return result.admitted === true && result.rule === 'remote-ref-cli'
+    } catch { return false }
+  }
+
   /** Send one persisted approved outbound attempt; no automatic retry under another task id. */
   async askApproved(address: string, text: string, task: string, sender: string): Promise<string | undefined> {
     if (sender === '' || this.address !== sender) throw new RouteRefused('团队发送身份变化，未执行 route。', task, 'not-sent')
-    // A reviewer admission asks about the reverse reply link, not outbound authority.
-    // The approved card authorizes only the sender scope; wire signature/deposit/receiver admission still apply.
+    if (CLI_HANDLE_RE.test(address)) {
+      if (!await this.admitsOutboundCli(address)) throw new RouteRefused('CLI target no longer has a verified canvas link and admission.', task, 'not-sent')
+      if (this.address !== sender) throw new RouteRefused('团队发送身份变化，未执行 route。', task, 'not-sent')
+    }
+    // The card authorizes only sender scope; wire signature, deposit and receiver admission still apply.
     return await this.routeAs(address, text, undefined, task)
   }
 

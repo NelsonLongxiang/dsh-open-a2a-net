@@ -146,6 +146,15 @@ describe('persisted single-use approved attempts', () => {
     await expect(x.a2a.askApproved('beta/aaaaaaaa', 'original', task, sender)).resolves.toBe(task)
     expect(x.calls).toHaveLength(1)
   })
+  it('does not route an approved CLI target after its local admission is revoked', async () => {
+    const address = 'worker/0123456789abcdef'
+    let linked = true
+    const x = held(async () => JSON.stringify(linked ? { admitted: true, rule: 'remote-ref-cli' } : { admitted: false }))
+    await expect(x.a2a.admitsOutboundCli(address)).resolves.toBe(true)
+    linked = false
+    await expect(x.a2a.askApproved(address, 'original', task, sender)).rejects.toMatchObject({ task, delivery: 'not-sent' })
+    expect(x.calls).toEqual([['admission', address, '--json'], ['admission', address, '--json']])
+  })
   it('contradictory accepted or unsettled output never counts as not-sent', () => {
     for (const contradiction of [{ routed: true }, { delivered: true }, { code: -32005 }, { task_status: 'TASK_STATE_DELIVERED' }, { acceptance: 'unknown' }]) {
       expect(cliRefusal(JSON.stringify({ error: 'no', task_id: task, delivery: 'not-sent', ...contradiction }))).not.toHaveProperty('delivery')
