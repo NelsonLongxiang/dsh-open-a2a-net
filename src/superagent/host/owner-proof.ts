@@ -9,6 +9,7 @@
  */
 import type { IncomingMessage } from 'node:http'
 import { OWNER_DELEGATE_HEADER, type OwnerDelegates } from './owner-delegate.ts'
+import { ON_BEHALF_OF_HEADER, ownerRouteAction, readOnBehalfOf, scopeRefusal, type OnBehalfOf } from './owner-delegate-scope.ts'
 
 // The host's owner-delegate book (owner-delegate.ts), set once at boot; none configured means no delegate is accepted.
 let delegates: Pick<OwnerDelegates, 'check' | 'audit'> | undefined
@@ -47,14 +48,35 @@ export interface DeferredOwnerProof {
   readonly ok: true
   /** The verified delegate; undefined when the owner is logged in at the browser (the line then reads id null, name browser-owner). */
   readonly delegate: { readonly id: string; readonly name: string } | undefined
+  readonly onBehalfOf?: OnBehalfOf
   readonly commit: (extra: Readonly<Record<string, unknown>>) => boolean
 }
 
 export type BrowserOwnerProof = { readonly ok: true } | {
   readonly ok: false
-  readonly status: 401 | 403 | 503
-  readonly code: 'owner-proof' | 'owner-auth-unavailable' | 'owner-delegate'
+  readonly status: 400 | 401 | 403 | 503
+  readonly code: 'owner-proof' | 'owner-auth-unavailable' | 'owner-delegate' | 'owner-delegate-scope' | 'on-behalf-of'
   readonly error: string
+}
+
+const scopedControlRequests = new WeakSet<object>()
+
+/** Return a scoped token's decision for an explicitly mapped control route, with no audit side effect. */
+export function scopedOwnerControl(request: Pick<IncomingMessage, 'headers' | 'url' | 'method'>): boolean | undefined {
+  const action = ownerRouteAction(request)
+  const token = request.headers[OWNER_DELEGATE_HEADER]
+  if (action === undefined || typeof token !== 'string') return undefined
+  const found = delegates?.check(token)
+  if (!found?.ok || found.scope === undefined) return undefined
+  const allowed = found.scope.includes(action)
+  if (allowed) scopedControlRequests.add(request)
+  return allowed
+}
+
+/** Scoped reads and reads with delegated attribution require and audit owner proof. */
+export function needsTeamDelegateProof(request: IncomingMessage): boolean {
+  return scopedControlRequests.has(request) || scopedOwnerControl(request) !== undefined
+    || (request.headers[OWNER_DELEGATE_HEADER] !== undefined && request.headers[ON_BEHALF_OF_HEADER] !== undefined)
 }
 
 const unavailable = (): BrowserOwnerProof => ({ ok: false, status: 503, code: 'owner-auth-unavailable', error: '当前 DSH 的浏览器主人鉴权服务不可用，未执行操作；请升级或恢复宿主鉴权服务后重试。' })
@@ -66,10 +88,9 @@ const unavailable = (): BrowserOwnerProof => ({ ok: false, status: 503, code: 'o
 export function browserOwnerProof(connection: unknown, request: Pick<IncomingMessage, 'headers'> & Partial<Pick<IncomingMessage, 'method' | 'url'>>, options: { readonly delegate?: boolean; readonly deferAudit: true }): DeferredOwnerProof | Extract<BrowserOwnerProof, { ok: false }>
 export function browserOwnerProof(connection: unknown, request: Pick<IncomingMessage, 'headers'> & Partial<Pick<IncomingMessage, 'method' | 'url'>>, options?: { readonly delegate?: boolean }): BrowserOwnerProof
 export function browserOwnerProof(connection: unknown, request: Pick<IncomingMessage, 'headers'> & Partial<Pick<IncomingMessage, 'method' | 'url'>>, options: { readonly delegate?: boolean; readonly deferAudit?: boolean } = {}): BrowserOwnerProof | DeferredOwnerProof {
-  const deferred = (who: { readonly id: string | null; readonly name: string }, delegate: DeferredOwnerProof['delegate']): DeferredOwnerProof =>
-    ({ ok: true, delegate, commit: extra => delegates?.audit(who, { method: request.method, url: request.url }, extra) === true })
-  // The owner's delegate (the control API's user scope) stands in for the browser owner on these operations. It never
-  // opens the control route by itself: the callers here already sit behind the control key. An unknown, revoked or
+  const deferred = (who: { readonly id: string | null; readonly name: string }, delegate: DeferredOwnerProof['delegate'], onBehalfOf?: OnBehalfOf): DeferredOwnerProof =>
+    ({ ok: true, delegate, ...(onBehalfOf === undefined ? {} : { onBehalfOf }), commit: extra => delegates?.audit(who, { method: request.method, url: request.url }, { ...extra, ...(onBehalfOf === undefined ? {} : { onBehalfOf }) }) === true })
+  // Only a scoped delegate opens an explicitly mapped control route. An unknown, revoked or
   // expired token refuses outright instead of falling back to the browser login it was meant to replace.
   const presented = request.headers[OWNER_DELEGATE_HEADER]
   if (options.delegate !== false && presented !== undefined) {
@@ -77,8 +98,12 @@ export function browserOwnerProof(connection: unknown, request: Pick<IncomingMes
     const found = delegates?.check(token)
     if (found === undefined || !found.ok) return { ok: false, status: 403, code: 'owner-delegate', error: `属主代理凭证无效（${found === undefined ? 'unconfigured' : found.reason}），未执行操作。` }
     // A deferred proof writes nothing yet: the route validates first and commits the line only for what it accepted (#951).
-    if (options.deferAudit === true) return deferred(found, { id: found.id, name: found.name })
-    if (delegates?.audit(found, { method: request.method, url: request.url }) !== true) return { ok: false, status: 503, code: 'owner-delegate', error: '属主代理的审计记录写不进去，未执行操作。' }
+    const action = ownerRouteAction(request)
+    if (found.scope !== undefined && (action === undefined || !found.scope.includes(action))) return scopeRefusal
+    const onBehalfOf = readOnBehalfOf(request.headers[ON_BEHALF_OF_HEADER])
+    if (onBehalfOf === null) return { ok: false, status: 400, code: 'on-behalf-of', error: '代办人请求头必须包含有效的 id 和 name。' }
+    if (options.deferAudit === true) return deferred(found, { id: found.id, name: found.name }, onBehalfOf)
+    if (delegates?.audit(found, { method: request.method, url: request.url }, onBehalfOf === undefined ? undefined : { onBehalfOf }) !== true) return { ok: false, status: 503, code: 'owner-delegate', error: '属主代理的审计记录写不进去，未执行操作。' }
     return { ok: true }
   }
   try {
