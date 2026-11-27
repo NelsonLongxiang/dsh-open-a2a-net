@@ -60,6 +60,20 @@ describe('#933 pairing routes', () => {
     expect(readFileSync(store, 'utf8')).not.toContain(token)
     expect((await call(PAIR, 'POST', { action: 'poll', id, secret })).body).toEqual({ state: 'not-found' })
   })
+  it('preserves scope in issuance, pairing approval UI data and token collection', async () => {
+    const scope = ['session.read', 'session.list', 'session.read']
+    expect((await call(DELEGATES, 'POST', { action: 'issue', name: 'market', scope: null }, owner)).status).toBe(400)
+    expect((await call(PAIR, 'POST', { action: 'start', name: 'market', scope: ['session.*'] })).status).toBe(400)
+    const issued = await call(DELEGATES, 'POST', { action: 'issue', name: 'market', scope: [] }, owner)
+    expect(issued.body.delegate).toMatchObject({ scope: [] })
+    const started = await call(PAIR, 'POST', { action: 'start', name: 'market', scope })
+    expect(started.body.scope).toEqual(scope)
+    const { id, secret } = started.body
+    expect((await call(DELEGATES, 'GET', undefined, owner)).body.pairings).toEqual([expect.objectContaining({ id, scope })])
+    await call(DELEGATES, 'POST', { action: 'pair-approve', id }, owner)
+    expect((await call(PAIR, 'POST', { action: 'poll', id, secret })).body).toMatchObject({ state: 'approved', scope })
+    expect(parseOwnerDelegates(readFileSync(store, 'utf8')).map(row => row.scope)).toEqual([[], scope])
+  })
   it('allowing needs the browser owner: no login is refused, and an owner delegate cannot stand in', async () => {
     const { id } = (await call(PAIR, 'POST', { action: 'start', name: 'x', days: 1 })).body as { id: string }
     expect((await call(DELEGATES, 'POST', { action: 'pair-approve', id })).status).toBe(401)

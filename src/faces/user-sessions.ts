@@ -208,7 +208,7 @@ export function registerUserSessionFaces(webServer: WebServer, d: UserSessionFac
         const fields = body as Record<string, unknown>
         const prepared = prepareOwnerPrompt(hostDeps, {
           id: fields.id, mode: fields.mode, text: fields.text, requestId: fields.request_id,
-          callerTaint: '', delegate: proof.delegate ?? { id: null, name: 'browser-owner' },
+          callerTaint: '', delegate: proof.delegate ?? { id: null, name: 'browser-owner' }, onBehalfOf: proof.onBehalfOf,
         })
         if (!prepared.ok) { sendJson(res, prepared.status, prepared); return }
         if (prepared.replay !== undefined) { sendJson(res, 200, prepared.replay); return }

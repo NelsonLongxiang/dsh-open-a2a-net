@@ -14,11 +14,12 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { MessageId, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SESSION_ID_SHAPE } from './session-log-page.ts'
+import type { OnBehalfOf } from './superagent/host/owner-delegate-scope.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     /** An owner's delegate (or the owner at the control API) putting a line into a seat; set by the host only (#951). */
-    'a2a-owner-proxy': { kind: 'a2a-owner-proxy'; delegateId?: string; delegateName: string; mode: OwnerPromptMode }
+    'a2a-owner-proxy': { kind: 'a2a-owner-proxy'; delegateId?: string; delegateName: string; mode: OwnerPromptMode; onBehalfOf?: OnBehalfOf }
   }
 }
 
@@ -132,8 +133,8 @@ export function ownerSeatState(agent: unknown) {
 }
 
 /** The marker line: who put this in, in what mode. Delegate names are the owner's own words; control characters and brackets are replaced. */
-export function ownerPromptMarker(name: string, mode: OwnerPromptMode): string {
-  return `[属主代输入 · ${name.replace(/[\u0000-\u001f\u007f\]\[]/g, ' ').trim().slice(0, 64)} · ${mode}]`
+export function ownerPromptMarker(name: string, mode: OwnerPromptMode, onBehalfOf?: OnBehalfOf): string {
+  return `[属主代输入 · ${name.replace(/[\u0000-\u001f\u007f\]\[]/g, ' ').trim().slice(0, 64)} · ${onBehalfOf === undefined ? '' : onBehalfOf.name + ' · '}${mode}]`
 }
 
 export interface OwnerPromptInput {
@@ -141,6 +142,7 @@ export interface OwnerPromptInput {
   readonly mode: unknown
   readonly text: unknown
   readonly requestId?: unknown
+  readonly onBehalfOf?: OnBehalfOf
   /**
    * The calling session's taint: '' when clean. Required with no default, so a caller that forgets it does not compile; a
    * value that is not a string is read as tainted. The HTTP routes cannot see an outside caller's taint and pass '': that is the owner's
@@ -202,7 +204,8 @@ export function prepareOwnerPrompt(deps: UserSessionsDeps, input: OwnerPromptInp
   const validated = validateOwnerPromptFields(input)
   if (!validated.ok) return validated
   const { mode, text, requestId, chars, digest } = validated
-  const key = sha256(JSON.stringify([input.delegate.id ?? 'browser-owner', id, mode, digest]))
+  const identity = input.onBehalfOf === undefined ? [] : [input.onBehalfOf.id, input.onBehalfOf.name]
+  const key = sha256(JSON.stringify([input.delegate.id ?? 'browser-owner', id, mode, digest, ...identity]))
   if (typeof requestId === 'string') {
     const earlier = deps.idem.lookup(requestId)
     if (earlier !== undefined) return earlier.key === key ? { ok: true, replay: { ...earlier.response, replayed: true } } : refuse(409, 'request-id-conflict', 'this request_id was used for different content')
@@ -222,8 +225,8 @@ export function prepareOwnerPrompt(deps: UserSessionsDeps, input: OwnerPromptInp
     if (agent === undefined) return refuse(409, 'not-live', 'the session stopped before the line was delivered')
     const message: UserMessage = {
       id: MessageId(`a2a-owner-proxy-${randomUUID()}`), role: 'user',
-      content: [{ type: 'text', text: `${ownerPromptMarker(input.delegate.name, mode)}\n${text}` }],
-      source: { kind: 'a2a-owner-proxy', delegateName: input.delegate.name, ...(input.delegate.id !== null ? { delegateId: input.delegate.id } : {}), mode },
+      content: [{ type: 'text', text: `${ownerPromptMarker(input.delegate.name, mode, input.onBehalfOf)}\n${text}` }],
+      source: { kind: 'a2a-owner-proxy', delegateName: input.delegate.name, ...(input.delegate.id !== null ? { delegateId: input.delegate.id } : {}), mode, ...(input.onBehalfOf === undefined ? {} : { onBehalfOf: input.onBehalfOf }) },
     }
     // Registered after the audit line and before the delivery, in one synchronous stretch: a concurrent retry sees it, a throw below undoes it.
     if (typeof requestId === 'string') deps.idem.register(requestId, key, response)
