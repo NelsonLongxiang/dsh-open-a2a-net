@@ -81,10 +81,10 @@ describe('original-request browser-owner guarded HTTP faces', () => {
     } })
     const owner = await f.send(path)
     expect(Object.keys(owner.data).sort()).toEqual(['liveSessions', 'parsedTranscriptBytesEstimate', 'teamHistoryFileBytes', 'unreleasedQueryLeases'])
-    f.collectHistory.mockImplementationOnce(() => { throw new Error('/private/team/history') })
+    f.collectHistory.mockImplementationOnce(() => { throw new Error('/fixture-hidden/team/history') })
     const failure = await f.send(path)
     expect(failure).toMatchObject({ status: 503, data: { code: 'diagnostics-unavailable' } })
-    expect(failure.text).not.toContain('/private/team/history')
+    expect(failure.text).not.toContain('/fixture-hidden/team/history')
   })
 
   it.each(operations)('accepts a domain + forwarded-port browser owner for $label without rewriting Host/Origin', async op => {
