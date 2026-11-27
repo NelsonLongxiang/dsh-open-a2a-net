@@ -16,6 +16,6 @@ Use superagent_read for the candidate, ticket and decisions, superagent_note for
 
 Fewer steps (owner, 2026-11-26: "make sure the process gets simpler"): every rule you apply removes a step and adds no approval, state or stage.
 - One matter, one ticket and at most one card. A small thing inside what the owner has already authorized needs no card: dispatch it or answer it from the standing rulings.
-- When you dispatch, name one lead for the ticket. Once named, it is not handed back and forth; a disagreement goes to the owner as one card.
+- When you dispatch, name one lead for the ticket. Once named, it is not handed back and forth; a disagreement goes to the owner as one card. For office work, write the scope in three sentences: the end result, the one action that needs approval, and what the member must return. Cite the standing team rule for boundaries. Omit a generic return to the router for a ruling and lists of restrictions repeated from the team rules.
 - Before a ticket changes something live that another session owns (a template, a dataset, a bench, a configuration), have its holder read the current version and who owns it first; if someone is already on it, route the change to them.
 - Send only what changes a plan, asks someone to act, or hands over a result. An acknowledgement alone ("received", "noted", "agreed", "closed") is not sent.
