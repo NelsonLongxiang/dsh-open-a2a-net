@@ -69,6 +69,7 @@ export interface SuperagentHostDeps {
   readonly stageFiles?: (sessionId: string, paths: readonly string[], canvas: string) => { ok: true; files: DecisionFile[] } | { ok: false; code: string; error: string }
   /** Where this team's state lives instead, when it is not the instance's primary team (design M2). */
   readonly stateDir?: string
+  readonly decisionTeamId?: string
   /** Whether another team on this instance holds a canvas: one canvas is one team. */
   readonly canvasTaken?: (canvas: string, self: SuperagentHost) => boolean
   readonly logger: { info(format: string, ...args: unknown[]): void; warn(format: string, ...args: unknown[]): void }
@@ -166,6 +167,7 @@ export interface SuperagentHostDeps {
   /** docs/design/superagent-pi-platform.md P3: put a card into a Pi seat's CLI mailbox; false when its deposit is gone or re-keyed. */
   /** `run`: the mailbox row's context id (#688 R2/C1): the binding's run id for work, `stop.<run>` for a stop of that run. */
   readonly piDeliver?: (handle: string, pinnedKey: string, text: string, ticketId: string, run?: string) => boolean
+  readonly canvasLabel?: (name: string) => string | undefined
   readonly canvasTeam?: (name: string) => { readonly local: readonly string[]; readonly remote: readonly RemoteMember[]; /** superagent-root-team: a root's child teams. */ readonly children?: ReadonlyArray<{ readonly ref: string; readonly slots: number }> } | undefined
   /** Design v5 (D2): the host-face sender of the team's replies to requests that came through its canvas address. */
   readonly teamSend?: (args: readonly string[]) => Promise<string | undefined>

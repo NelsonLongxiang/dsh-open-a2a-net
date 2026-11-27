@@ -136,7 +136,13 @@ const flatten = (text: string): string => text.replace(/\s+/g, ' ').trim()
 
 function clampEntry(text: string, cap = TRANSCRIPT_ENTRY_TEXT_CAP): string {
   const flat = flatten(text)
-  return flat.length > cap ? flat.slice(0, cap) + '…' : flat
+  return flat.length > cap ? cutAt(flat, cap) + '…' : flat
+}
+
+/** The first `cap` UTF-16 units, without leaving half of a surrogate pair at the end (#951 review N3). */
+function cutAt(text: string, cap: number): string {
+  const head = text.slice(0, cap)
+  return /[\ud800-\udbff]$/.test(head) ? head.slice(0, -1) : head
 }
 
 /**
@@ -212,6 +218,6 @@ export function pageTranscript(entries: readonly TranscriptEntry[], page: { befo
   const stale = page.before !== undefined && page.before > total
   const to = page.before === undefined ? total : Math.min(Math.max(0, Math.floor(page.before)), total)
   const from = Math.max(0, to - limit)
-  const shown = entries.slice(from, to).map((entry, k) => ({ ...entry, text: entry.text.length > cap ? entry.text.slice(0, cap) + '…' : entry.text, i: from + k }))
+  const shown = entries.slice(from, to).map((entry, k) => ({ ...entry, text: entry.text.length > cap ? cutAt(entry.text, cap) + '…' : entry.text, i: from + k }))
   return { total, from, to, stale, entries: shown }
 }

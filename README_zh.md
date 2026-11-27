@@ -166,7 +166,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 画布队伍是用户自建的有名多成员路由组：**一个原子会话节点可同时属于多个队伍**，路由到 `<team>/canvas/<name>` 解析**第一个活成员**（成员顺序即路由优先级），无活成员则唤醒**第一个冷 joined 成员**（wake-on-route）；本机成员都不可用时，再依次落到远端成员（经目录解析其句柄，远端节点不会在这里被唤醒）。发起路由的会话自己不会占用本机两档（自路由规则，#41）。`canvas/` 路径段与节点别名（`<team>/<id8>`）结构性无冲突，两个命名空间互不干扰。
 
 - 存储：`<dsh-home>/a2a/canvas.json`（有序队伍条目；上限：64 队 × 32 成员；文件另带版本号、成员属主锚、暂停记录与 CLI home 钉）
-- 控制 API：`POST /__dsh_a2a/canvas`，`action: create | remove | add-member | remove-member`；`add-member` 对不存在的队伍会先建队。另有属主的成员来源与暂停治理操作 `confirm-member`、`restore-suspended`、`delete-suspended`（#334/#335），以及仅查询已有 CLI 成员候选的 `cli-home-options`。队名 ≤40 字，不含 `/`，不是纯数字，不以 `@<8 位小写十六进制>` 结尾，且不能被 roster 保留（`roster:` 前缀，或等于白名单/roster 团队名）；含暂停成员的队不能 `remove`。
+- 控制 API：`POST /__dsh_a2a/canvas`，`action: create | remove | add-member | remove-member`；`add-member` 对不存在的队伍会先建队。另有属主设置队伍显示名的 `set-label`（#953，只用于显示，队名即地址不变；显示名 ≤64 字、无控制字符、不是地址形状，`a2a-net user canvas label <名> <显示名…>` / `--clear`），以及属主的成员来源与暂停治理操作 `confirm-member`、`restore-suspended`、`delete-suspended`（#334/#335），以及仅查询已有 CLI 成员候选的 `cli-home-options`。队名 ≤40 字，不含 `/`，不是纯数字，不以 `@<8 位小写十六进制>` 结尾，且不能被 roster 保留（`roster:` 前缀，或等于白名单/roster 团队名）；含暂停成员的队不能 `remove`。
 - CLI 成员标「home 未确定」时，打开其画布队详情并点「指定 home」。宿主现读名片，只列已链接且列出该句柄的主机，并显示不可读名片数；不会自动选中。确认后复用本机 `add-member` 的显式 `home`，提交时再次现读校验，不放宽自动钉或准入。本机持有在线户口或离线墓碑时显示「本机持有，无需指定」，候选返回 `held:true` 且为空，显式 home 写入提示先撤销本机户口；回执优先投在线本机信箱；本机 publish 成功会清除冲突旧钉并在面板提示，户口离线不复活旧钉；本地投递中途到期即报错，不回落对端目录。
 - 成员必须是 joined 会话（活节点或已记意图）——未加入会话没有路由后门；退出网络（leave/archive）自动把它移出全部画布队（旧式裸句柄槽位改记为 suspended：不再路由、不计入有效成员，由属主 `restore-suspended` 或 `delete-suspended`，见 `docs/design/canvas-member-provenance.md`）
 - 成员也可以是操作者手工加入的**远端**带 zone 团队句柄（`zone/a1b2c3d4`）——这就是让该远端调用方在本机获准入、并有权拿完整卡片的链接。写入时宿主现读已链接的种子/委托主机的验签名片，把句柄钉成带属主指纹的 `zone/a1b2c3d4@<8 位指纹>`；找不到唯一可验证的属主就拒写（#334）。不带指纹的旧式裸句柄只作兼容保留（`canvasLegacyBareMembers` 默认 `true` 时仍按旧读法计入、授权和路由），需属主 `confirm-member` 确认
@@ -246,7 +246,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | --- | --- |
 | `GET /__dsh_a2a/state` | 面板与工作台轮询的状态面（会话、画布、peers、远端行、活动、账本）。 |
 | `POST /__dsh_a2a/join` · `/leave` | 加入或退出一个会话节点。 |
-| `/__dsh_a2a/canvas` · `/canvas-layout` | 画布队伍（create/remove/add-member/remove-member，另有属主的 confirm-member / restore-suspended / delete-suspended / cli-home-options）与规划板布局。 |
+| `/__dsh_a2a/canvas` · `/canvas-layout` | 画布队伍（create/remove/add-member/remove-member，另有 `set-label`（#953：队伍的显示名，属主委托或浏览器登录；队名仍是地址）与属主的 confirm-member / restore-suspended / delete-suspended / cli-home-options）与规划板布局。 |
 | `POST /__dsh_a2a/roster-op` | 属主在规划板创建（至少两个已加入的本机会话）、加减成员、解散 roster 队（`op`：create / add-member / remove-member / dissolve），并同步维护 `teamJoinAllowlist` 里的精确名；不能接纳远端或未加入的会话。 |
 | `POST /__dsh_a2a/dispatch` | 工作台快速派单到一个团队。 |
 | `POST /__dsh_a2a/tasks/abandon` · `/tasks/cancel` | 从调用方一侧结清一个欠账任务（cancel 还会尽力向目标转达停止通知：本机目标直接 steer，远端目标经 wire 投递，卡片声明 `queuedTaskCancellation` 时另带 `cancel_task_id` 撤回队列中的原任务；回复里带 `steered`、`removed`）；该行落入 `archived[]`。 |
@@ -261,7 +261,12 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | `POST /__dsh_a2a/owner-delegates/pair` | #933 终端配对（`user pair`）：`{ action: 'start', name, days }` 返回短码、轮询密钥与 10 分钟有效期；`{ action: 'poll', id, secret }` 返回 waiting / approved（此时签发，只此一次带令牌）/ retry（签发失败，配对仍为已允许）/ denied / expired / not-found（未知 id 与错误密钥同答）。不经控制路由、不需凭证；限制为同时待处理至多 3 个、按来源地址限频、属主核对短码后在团队页允许。回复不缓存。 |
 | `GET /__dsh_a2a/user/sessions` | #951 S1，user 范畴的会话列表：本节点在线与已加入的会话，含 joined、live、archived、角色、状态与排队条数（`?team=` 只留一个画布团队）。需要控制密钥加上属主（`X-DSH-Owner-Delegate` 里的代理凭证，或浏览器登录）：只有密钥为 401，代理凭证无效为 403。回答前先写一行审计；审计写不进去为 503。 |
 | `GET /__dsh_a2a/user/session` | #951 S1：读一页会话转录，`?id=&before=&limit=&chars=`（条目带序号；`before` 向前翻页，`stale` 表示日志在游标下变过；`chars` 至多 4000）。属主证明与审计同列表。 |
-| `POST /__dsh_a2a/user/session/prompt` | #951 S1：`{ id, mode: 'steer'|'queue', text, request_id? }` 把一行话放进在线且已加入的席位，首行 `[属主代输入 · <代理名> · mode]`，`source.kind` 为 `a2a-owner-proxy`。被拒的请求不写审计：id/mode/text 400、未知 404、已归档 / 未加入 / 未在线 409、同一 request_id 换了内容 409。受理的在投递前写审计（动作、目标、大小、SHA-256，从不写原文）；请求体上限 100 000 字节，文本 8000 字。 |
+| `GET /__dsh_a2a/user/session/state` | 属主鉴权并审计的单席状态读取（`?id=`）。只返回可取得的运行状态、排队计数和来源种类计数，缺省字段表示未知。 |
+| `POST /__dsh_a2a/user/session/model` | 核验属主权限及在线、已加入目标后，返回 `501 no-model-api`。实际单席选模延期。 |
+| `POST /__dsh_a2a/user/session/prompt` | #951 S1：`{ id, mode: 'steer'|'queue'|'trigger', text, request_id? }` 把一行话放进在线且已加入的席位，首行 `[属主代输入 · <代理名> · mode]`，`source.kind` 为 `a2a-owner-proxy`。被拒的请求不写审计：id/mode/text 400、未知 404、已归档 / 未加入 / 未在线 409、同一 request_id 换了内容 409。受理的在投递前写审计（动作、目标、大小、SHA-256，从不写原文）；请求体上限 100 000 字节，文本 8000 字。 |
+| `POST /__dsh_a2a/user/session/release` | 属主鉴权并审计的条件投递。`action: arm` 接收 `id`、`text`、`when`（`idle:` 或 `at:`）、`then` 和可选 `expires_hours`、`request_id`；`action: withdraw` 接收 `release` 以撤回已挂起项。 |
+| `GET /__dsh_a2a/user/session/releases` | 属主鉴权并审计的条件投递列表。支持 `?id=`，只返回元数据。尝试结果未知时不会重投。 |
+| `POST /__dsh_a2a/user/session/stop` | 属主鉴权并审计的单席取消请求（`id`、可选 `request_id`）。保留排队中的消息，空闲时返回 `stopped: false`。 |
 | `GET`/`POST /__dsh_a2a/node-ops` | user 范畴的节点运维。GET 返回本插件版本、进程号、启动时间、保留的备份和最近几次操作。POST（浏览器属主或属主代理）`{ action: 'install', tgz, sha256, restart?, forceDeps? }` 用 `npm pack` 包（base64）替换本插件自己的包目录：摘要必须一致，运行中的包必须在 `node_modules` 下，`dependencies` 有变化的包除非 `forceDeps` 一律拒；包内 `node_modules` 原样移过去，被替换的目录留作备份（保留最新三份）。`{ action: 'rollback', id?, restart? }` 换回备份；`{ action: 'restart' }` 经本机回环调用本节点的 `dsh-simple-restart`。每次操作追加到 `a2a/node-ops/log.jsonl`。 |
 | `GET /__dsh_a2a/superagent/builder` | user 范畴对本机组队顾问的只读视图（#903 S1；浏览器属主或属主代理）。`?view=inventory` 即组队顾问看到的清单：各团队的总工与按席位列出的成员、角色、规则全文与版本号、未入队的会话和最近的编制记录；不含凭证、准入名单、MCP 服务器、工具授予、GitHub 设置和文件路径。`?view=builders` 列出组队顾问会话及其等属主批准的蓝图数。 |
 | `GET`/`POST /__dsh_a2a/superagent/staffing` | 编制变更（S1a）：GET 列出账本；POST `{ action: 'submit', change: { id, summary?, ops }, agree?: true }` 或 `{ action: 'agree', id }`，须在已登录的 DSH 界面里操作。操作为 `team.create`、`member.add`（可带 profile）、`team.rules.set`（scope：team / dispatch / member:<seatId>）；只用已有会话，失败时倒序撤销。 |
@@ -273,6 +278,8 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | `POST /__dsh_a2a/blob` | 为接收方暂存一个文件（`?to=&name=`）——文件通道的写入面；对端经 `GET /a2a/blob` 拉取。 |
 
 状态面的账本：`tasks`（pending，每行带 `settleable`）、`tasksStaleCount`、`tasksDead`（已知时带 `direction`），以及 `archived`——最新 64 条已结清行，最新在前，每行带 `outcome`、`endedBy`（`receipt` | `echo` | `abandoned` | `cancelled` | `evicted`）、回执在调用方结束之后才到时带 `late: true`、已知时带 `direction`——另有 `archivedCount` 与 `archivedSplit`（按结局计数）。
+
+属主签发委托或终端发起待批准配对时可传 `scope`，应答原样回显数组。限定范围的委托可在获准的方法和路径上代替控制密钥。原有不带 `scope` 的委托仍需控制密钥。`X-DSH-On-Behalf-Of` 接收含 `id`（最多 64 字符）和 `name`（最多 32 字符）的 JSON，只用于审计和插话标注。HTTP 请求头中请转义 JSON 的非 ASCII 字符。代办人声明不参与权限判断。
 
 ## 舞台（可视化面）
 

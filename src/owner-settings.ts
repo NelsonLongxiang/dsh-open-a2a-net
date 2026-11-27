@@ -9,6 +9,10 @@
  * @module @nelsonlongxiang/dsh-open-a2a-net/owner-settings
  */
 
+import { parseDisplayLabel } from './display-label.ts'
+
+export { parseDisplayLabel } from './display-label.ts'
+
 export interface OwnerSettings {
   teamJoinAllowlist?: string[]
   /** One switch for routing and information scope (owner ruling 2026-11-18); a stale teamScopeInfo line stays, ignored. */
@@ -23,15 +27,11 @@ export interface OwnerSettings {
 export const NETWORK_KEYS = ['peers', 'originClaimUrl', 'originClaimAudiences', 'originClaimByPeer'] as const
 export type NetworkKey = typeof NETWORK_KEYS[number]
 
-/** A label shaped like a routable address (`dsh/66abc2cf`, `zone/canvas/x`, `name/<16 hex>`) would pass for another
- *  session in the directory and in `a2a-net teams <query>`; labels are display-only, so that shape is refused. */
-const ADDRESS_SHAPED = /^[A-Za-z0-9._-]+\/\S+$/
-
 /** Shared validation for boot config and owner POST; labels are plain text, never handles or authority. */
 export function parseSeatNames(value: unknown): Record<string, string> | undefined {
   if (value === null || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length > 1024) return undefined
   const entries = Object.entries(value)
-  if (entries.some(([id, name]) => !/^session-[a-zA-Z0-9-]{8,128}$/.test(id) || typeof name !== 'string' || name.trim() === '' || [...name.trim()].length > 64 || /[\p{Cc}\p{Cf}\u2028\u2029\ufffd]/u.test(name) || !/[^\p{Z}\p{C}\p{M}]/u.test(name) || ADDRESS_SHAPED.test(name.trim()))) return undefined
+  if (entries.some(([id, name]) => !/^session-[a-zA-Z0-9-]{8,128}$/.test(id) || parseDisplayLabel(name) === undefined)) return undefined
   return Object.fromEntries(entries.map(([id, name]) => [id, (name as string).trim()]))
 }
 

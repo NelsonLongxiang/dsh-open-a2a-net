@@ -619,6 +619,13 @@ describe('a member\'s turn: silent ends, failures, handoffs and stale reports', 
       expect(m.h.executor.bindingOf('session-a')).toBeUndefined()
       expect(m.h.store.tickets.get(one.ticket)!.ended).toBeUndefined()
       expect(m.h.executor.ticketsOf('session-a')).toEqual([one.ticket])
+      expect(m.h.executor.loadOf('session-a')).toMatchObject({ active: 1, blocked: 0, waiting: 1 })
+      expect(m.h.report('session-a', { state: 'blocked', summary: '依赖不可用' }, one.ticket)).toMatchObject({ ok: true })
+      expect(m.h.executor.loadOf('session-a')).toMatchObject({ active: 1, blocked: 1, waiting: 0 })
+      expect(m.h.report('session-a', { state: 'progress', summary: '依赖已恢复' }, one.ticket)).toMatchObject({ ok: true })
+      expect(m.h.executor.loadOf('session-a')).toMatchObject({ active: 1, blocked: 0, waiting: 0 })
+      expect(m.h.report('session-a', { state: 'ready', summary: '已完成' }, one.ticket)).toMatchObject({ ok: true })
+      expect(m.h.executor.loadOf('session-a')).toMatchObject({ active: 0, blocked: 0, waiting: 0 })
     } finally { await m.h.stop() }
   })
 
@@ -1300,6 +1307,10 @@ describe('design v5: the team is a canvas team', () => {
     // On the member preset it works again.
     presets['session-c'] = 'superagent-member'
     expect(h.assignedWork('assign', 'dsh/cccccccc', KEY_A, 'work')).toEqual({ ok: true })
+    expect(h.state().servesProblem).toBeUndefined()
+    presets['session-c'] = 'superagent-member-work'
+    expect(h.serveTeam({ url: 'http://127.0.0.1:8', key: KEY_A }, ['session-c'], () => true, id => presets[id])).toEqual({ ok: true })
+    expect(h.assignedWork('assign', 'dsh/cccccccc', KEY_A, 'office work')).toEqual({ ok: true })
     expect(h.state().servesProblem).toBeUndefined()
   })
 

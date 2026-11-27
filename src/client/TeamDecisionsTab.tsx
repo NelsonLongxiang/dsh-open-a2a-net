@@ -33,6 +33,7 @@ export interface DecisionRow {
   /** #888 D1: derived by the host; never stored with the card. */
   readonly needsInput?: boolean
   readonly recommendedNeedsInput?: boolean
+  readonly observerResult?: { readonly generation: string; readonly name: string; readonly at: string; readonly state: string; readonly option: string; readonly reason: string; readonly canCorrect: boolean; readonly correction?: string; readonly controlOptions?: readonly string[] }
 }
 
 /** #888 D1: what choosing `option` requires, if anything. */
@@ -135,6 +136,36 @@ function Card({ row, t, done }: { readonly row: DecisionRow; readonly done: () =
   )
 }
 
+function ObserverResult({ row, t, done }: { readonly row: DecisionRow; readonly done: () => void } & TeamDecisionsTabProps) {
+  const [option, setOption] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | undefined>(undefined)
+  const result = row.observerResult!
+  async function submit(how: 'observer-correct' | 'credential-control', choice: string) {
+    setBusy(true)
+    setError(undefined)
+    const refused = await postDecision(row, { how, generation: result.generation, option: choice })
+    setBusy(false)
+    if (refused === undefined) done()
+    else setError(refused)
+  }
+  return <article className={styles.card}>
+    <p className={styles.question}>{row.question}</p>
+    <p className={styles.hint}>{t('team.observerDecision', { name: result.name, at: result.at, option: result.option, state: t('team.observerState.' + result.state as Parameters<typeof t>[0]) })}</p>
+    <p className={styles.hint}>{result.reason}</p>
+    {result.correction !== undefined && <p className={styles.hint}>{t('team.observerCorrection', { option: result.correction })}</p>}
+    {result.canCorrect && <div className={styles.actions}>
+      <select aria-label={t('team.observerCorrect')} value={option} onChange={e => setOption(e.target.value)} disabled={busy}>
+        <option value="" disabled>{t('team.confirmChoice')}</option>
+        {row.options.filter(choice => choice !== result.option).map(choice => <option key={choice}>{choice}</option>)}
+      </select>
+      <button disabled={busy || option === ''} onClick={() => { void submit('observer-correct', option) }}>{t('team.observerCorrect')}</button>
+    </div>}
+    {(result.controlOptions ?? []).map(choice => <button key={choice} disabled={busy} onClick={() => { void submit('credential-control', choice) }}>{choice}</button>)}
+    {error !== undefined && <p role="alert" className={styles.error}>{error}</p>}
+  </article>
+}
+
 /** What one read of the waiting decisions gave: the cards, or why there are none to show. */
 export type DecisionsRead = { readonly state: 'ready'; readonly rows: readonly DecisionRow[] } | { readonly state: 'denied' | 'failed' }
 
@@ -148,8 +179,9 @@ export async function readDecisions(): Promise<DecisionsRead> {
     const response = await fetch(ROUTE, { cache: 'no-store' })
     if (response.status === 401 || response.status === 403) return { state: 'denied' }
     if (!response.ok) return { state: 'failed' }
-    const out = await response.json() as { decisions?: unknown }
-    return Array.isArray(out.decisions) ? { state: 'ready', rows: out.decisions as DecisionRow[] } : { state: 'failed' }
+    const out = await response.json() as { decisions?: unknown; observerDecisions?: unknown }
+    const history = Array.isArray(out.observerDecisions) ? out.observerDecisions as DecisionRow[] : []
+    return Array.isArray(out.decisions) ? { state: 'ready', rows: [...out.decisions as DecisionRow[], ...history] } : { state: 'failed' }
   } catch { return { state: 'failed' } }
 }
 
@@ -174,14 +206,16 @@ export function DecisionList({ t }: TeamDecisionsTabProps) {
   }, [load])
   if (rows.length === 0 && problem === undefined) return null
   // #894 review B3: cards the host already closed (timeout) or took (#888 D5) are shown but not waiting.
-  const open = rows.filter(row => row.autoAck === undefined && row.autoApproved === undefined)
+  const open = rows.filter(row => row.autoAck === undefined && row.autoApproved === undefined && row.observerResult === undefined)
   return (
     <section className={styles.decisions} aria-label={t('team.decisions')}>
       {rows.length > 0 && <span className={styles.label}>{t('team.decisionsCount', { count: String(open.length) })}</span>}
       {/* #888 D4: split by whether the recommendation needs input; cards the host already closed on a timeout are not counted. */}
       {rows.some(row => row.needsInput === true) && (() => { const fill = open.filter(row => row.recommendedNeedsInput === true).length; return <span className={styles.hint}>{t('team.countNeedsInput', { count: String(fill) })} · {t('team.countDirect', { count: String(open.length - fill) })}</span> })()}
       {problem !== undefined && <p role="alert" className={styles.error}>{t(problem === 'denied' ? 'team.decisionsDenied' : 'team.decisionsUnreadable')}{rows.length > 0 ? ` ${t('team.decisionsStale')}` : ''}</p>}
-      {rows.map(row => <Card key={row.id} row={row} t={t} done={() => { void load() }} />)}
+      {rows.map(row => row.observerResult === undefined
+        ? <Card key={row.teamId + ':' + row.id} row={row} t={t} done={() => { void load() }} />
+        : <ObserverResult key={row.teamId + ':' + row.id} row={row} t={t} done={() => { void load() }} />)}
     </section>
   )
 }

@@ -14,8 +14,11 @@ import { OWNER_PROMPT_BODY_MAX_BYTES } from '../../src/user-sessions.ts'
 const LIVE = 'session-0123456789abcdef', COLD = 'session-aaaaaaaaaaaaaaaa', UNJOINED = 'session-bbbbbbbbbbbbbbbb', ARCHIVED = 'session-cccccccccccccccc', UNKNOWN = 'session-dddddddddddddddd'
 
 let server: Server, base = '', dir = '', auditPath = '', token = '', routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => void>(), maxBytesSeen: number[] = []
-let agent: { steer: ReturnType<typeof vi.fn>; followup: ReturnType<typeof vi.fn>; status: string; inbox: { nextTurn: unknown[]; nextStep: unknown[] } }
+let agent: { steer: ReturnType<typeof vi.fn>; followup: ReturnType<typeof vi.fn>; status: string; inbox: { nextTurn: unknown[]; nextStep: unknown[] }; model?: { current: ReturnType<typeof vi.fn>; select: ReturnType<typeof vi.fn> } }
 let taint: ReturnType<typeof vi.fn>
+let catalog: unknown
+let controllerSelect: ReturnType<typeof vi.fn>
+let effects: Array<() => unknown>
 
 const event = (i: number): string => JSON.stringify(i % 2 === 0 ? { type: 'user/message', time: 1000 + i, data: { content: [{ type: 'text', text: `问 ${String(i)}` }] } } : { type: 'assistant/message', time: 1000 + i, data: { message: { content: [{ type: 'text', text: `答 ${String(i)} ${'长'.repeat(i === 3 ? 900 : 1)}` }] } } })
 
@@ -24,16 +27,22 @@ beforeEach(async () => {
   auditPath = join(dir, 'audit.jsonl')
   const store = join(dir, 'delegates.json')
   token = issueOwnerDelegate(store, '带教', 30, { read: () => undefined, write: (p, t) => writeFileSync(p, t), random: () => ({ token: 'dshod_fixture-token', id: 'd-1' }), now: () => new Date() }).token
-  configureOwnerDelegates(new OwnerDelegates(store, auditPath))
+  const delegates = new OwnerDelegates(store, auditPath)
+  configureOwnerDelegates(delegates)
+  effects = []
   mkdirSync(join(dir, 'sessions', 'b1', LIVE), { recursive: true })
   writeFileSync(join(dir, 'sessions', 'b1', LIVE, 'session.jsonl'), Array.from({ length: 45 }, (_, i) => event(i)).join('\n') + '\n')
   agent = { steer: vi.fn(), followup: vi.fn(), status: 'running', inbox: { nextTurn: [1], nextStep: [] } }
   taint = vi.fn()
+  catalog = { groups: [{ id: 'provider', models: [{ id: 'model', reasoning: { efforts: [{ id: 'low' }] } }] }] }
+  controllerSelect = vi.fn()
   routes = new Map(); maxBytesSeen = []
   const webServer = { register: (r: { path: string; handler: (req: IncomingMessage, res: ServerResponse) => void }) => { routes.set(r.path, r.handler); return () => undefined } }
   const connection = { browserPeer: { id: 'owner' }, admit: (req: Pick<IncomingMessage, 'headers'>) => (req.headers.cookie === 'login=ok' ? { peer: { id: 'owner' } } : { rejection: 401 as const }) }
   registerUserSessionFaces(webServer as never, {
-    ctx: { effect: (fn: () => unknown) => fn(), get: () => connection } as never,
+    ctx: { effect: (fn: () => () => unknown) => effects.push(fn()), on: () => undefined, get: (key: string) => key === 'connection'
+      ? connection : { modelCatalog: async () => catalog, selectModel: controllerSelect } } as never,
+    ownerDelegates: delegates, releasePath: join(dir, 'releases.json'),
     controlRoute: handler => handler,
     readJsonBody: (req, res, use, maxBytes) => {
       maxBytesSeen.push(maxBytes ?? 10_000)
@@ -50,7 +59,7 @@ beforeEach(async () => {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   base = `http://127.0.0.1:${String((server.address() as { port: number }).port)}`
 })
-afterEach(async () => { configureOwnerDelegates(undefined); await new Promise<void>(resolve => server.close(() => resolve())) })
+afterEach(async () => { effects.forEach(dispose => dispose()); configureOwnerDelegates(undefined); await new Promise<void>(resolve => server.close(() => resolve())) })
 
 const owner = (extra: Record<string, string> = {}): Record<string, string> => ({ [OWNER_DELEGATE_HEADER]: token, ...extra })
 const call = async (method: string, path: string, headers: Record<string, string> = owner(), body?: unknown): Promise<{ status: number; json: Record<string, any> }> => {
@@ -77,6 +86,100 @@ describe('who may call: the control key alone is not the owner', () => {
     expect(audit()).toEqual([])
     expect((await call('POST', '/__dsh_a2a/user/sessions', {}, {})).status).toBe(405)
     expect((await call('GET', '/__dsh_a2a/user/session/prompt', {})).status).toBe(405)
+  })
+})
+
+describe('session state', () => {
+  it('returns counts and kinds, with independent unknown fields and no message data', async () => {
+    agent.inbox.nextTurn = [{ source: { kind: 'user', person: 'private identity' }, content: 'private queue text' }]
+    agent.inbox.nextStep = [{ source: { kind: 'user' } }, { source: { kind: '__proto__' } }]
+    const res = await call('GET', '/__dsh_a2a/user/session/state?id=' + LIVE)
+    expect(res).toEqual({ status: 200, json: {
+      ok: true, id: LIVE, live: true, status: 'running',
+      inbox: { nextTurn: 1, nextStep: 2, total: 3, kinds: { user: 2, ['__proto__']: 1 } },
+    } })
+    expect(audit()).toEqual([expect.objectContaining({ action: 'state', target: LIVE })])
+    Object.defineProperty(agent.inbox, 'nextStep', { get() { throw new Error('not exposed') } })
+    const partial = await call('GET', '/__dsh_a2a/user/session/state?id=' + LIVE)
+    expect(partial.json).toEqual({ ok: true, id: LIVE, live: true, status: 'running', inbox: { nextTurn: 1 }, available: false })
+    const cold = await call('GET', '/__dsh_a2a/user/session/state?id=' + COLD)
+    expect(cold.json).toEqual({ ok: true, id: COLD, live: false, inbox: {}, available: false })
+  })
+
+  it('requires owner proof and rejects unknown IDs without a successful audit', async () => {
+    expect((await call('GET', '/__dsh_a2a/user/session/state?id=' + LIVE, {})).status).toBe(401)
+    expect((await call('GET', '/__dsh_a2a/user/session/state?id=' + UNKNOWN)).status).toBe(404)
+    expect(audit()).toEqual([])
+  })
+})
+
+describe('session model', () => {
+  const path = '/__dsh_a2a/user/session/model'
+  const model = (fields: Record<string, unknown> = {}) => call('POST', path, owner(), { id: LIVE, provider: 'provider', model: 'model', ...fields })
+
+  it('checks owner proof and target before returning the capability refusal', async () => {
+    expect((await call('POST', path, {}, { id: LIVE })).status).toBe(401)
+    expect((await call('POST', path, { cookie: 'login=ok', [OWNER_DELEGATE_HEADER]: 'invalid' }, { id: LIVE })).status).toBe(403)
+    for (const [id, status, code] of [['bad-id', 400, 'id'], [UNKNOWN, 404, 'unknown-session'], [COLD, 409, 'not-live'], [UNJOINED, 409, 'not-joined'], [ARCHIVED, 409, 'archived']] as const) {
+      expect(await model({ id })).toMatchObject({ status, json: { code } })
+    }
+    expect(await model()).toMatchObject({ status: 501, json: { code: 'no-model-api' } })
+    expect(audit()).toEqual([])
+  })
+
+  it('refuses even when the legacy controller and Agent model methods exist, with zero side effects', async () => {
+    agent.model = { current: vi.fn(() => ({ provider: 'provider', model: 'model' })), select: vi.fn() }
+    agent.status = 'idle'
+    const res = await model({ reasoning_effort: 'low' })
+    expect(res).toMatchObject({ status: 501, json: { ok: false, code: 'no-model-api' } })
+    expect(res.json).not.toHaveProperty('previous')
+    expect(agent.model.current).not.toHaveBeenCalled()
+    expect(agent.model.select).not.toHaveBeenCalled()
+    expect(controllerSelect).not.toHaveBeenCalled()
+    expect(agent.steer).not.toHaveBeenCalled()
+    expect(agent.followup).not.toHaveBeenCalled()
+    expect(taint).not.toHaveBeenCalled()
+    expect(audit()).toEqual([])
+  })
+})
+
+describe('trigger and release', () => {
+  const path = '/__dsh_a2a/user/session/release'
+
+  it('uses steer only for an idle trigger and replays the original wake observation', async () => {
+    expect(await prompt({ mode: 'trigger' })).toMatchObject({ status: 409, json: { code: 'busy' } })
+    agent.status = 'unknown'
+    expect(await prompt({ mode: 'trigger' })).toMatchObject({ status: 409, json: { code: 'no-idle-signal' } })
+    expect(audit()).toEqual([])
+    agent.status = 'idle'
+    expect(await prompt({ mode: 'trigger' })).toMatchObject({ status: 200, json: { woken: false } })
+    agent.steer.mockImplementationOnce(() => { agent.status = 'running' })
+    const fields = { mode: 'trigger', request_id: 'trigger-once' }
+    expect(await prompt(fields)).toMatchObject({ status: 200, json: { woken: true } })
+    expect(await prompt(fields)).toMatchObject({ status: 200, json: { woken: true, replayed: true } })
+    expect(agent.steer).toHaveBeenCalledTimes(2)
+    expect(agent.steer).toHaveBeenLastCalledWith(expect.objectContaining({ source: expect.objectContaining({ kind: 'a2a-owner-proxy', mode: 'trigger' }) }))
+    expect(agent.followup).not.toHaveBeenCalled()
+    expect(audit().map(row => row.action)).toEqual(['prompt-trigger', 'prompt-trigger'])
+  })
+
+  it('guards release routes, accepts a full prompt and lists only metadata', async () => {
+    const fields = { action: 'arm', id: LIVE, then: 'queue', when: 'idle:10', request_id: 'release-once', text: '世'.repeat(8000) }
+    expect((await call('POST', path, {}, fields)).status).toBe(401)
+    const armed = await call('POST', path, owner(), fields)
+    expect(armed).toMatchObject({ status: 200, json: { state: 'armed', chars: 8000 } })
+    const repeated = await call('POST', path, owner(), fields)
+    expect(repeated.json).toMatchObject({ release: armed.json.release, replayed: true })
+    const listed = await call('GET', '/__dsh_a2a/user/session/releases?id=' + LIVE)
+    expect(listed.json.releases).toEqual([expect.objectContaining({ release: armed.json.release, state: 'armed' })])
+    expect(listed.json.releases[0]).not.toHaveProperty('text')
+    expect(audit().filter(row => row.action === 'release-arm')).toEqual([expect.objectContaining({
+      actor: { id: 'd-1', name: '带教' }, armedBy: { id: 'd-1', name: '带教' },
+    })])
+    const cleared = await call('POST', path, { cookie: 'login=ok' }, { action: 'withdraw', release: armed.json.release })
+    expect(cleared.json.state).toBe('withdrawn')
+    expect(audit().at(-1)).toMatchObject({ action: 'release-withdraw', actor: { id: null, name: 'browser-owner' }, armedBy: { id: 'd-1', name: '带教' } })
+    expect(JSON.stringify(audit())).not.toContain(fields.text)
   })
 })
 

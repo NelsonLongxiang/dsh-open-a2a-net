@@ -47,6 +47,16 @@ taskKind('roster-ab12cd34-1770000000000') // { kind: 'roster', host: 'ab12cd34' 
 
 `parseRoster(text)` 读 `[A2A roster] <fp8> <时刻>` 加一行 JSON：`{ host, at, seats }`，席位带 `seatId`。头与体的 host 不一致（体的 host 不以头的 fp8 开头）返回 `undefined`——这行不被信任。
 
+名册席位可带 `teamLabel?: string`，取该席位所属画布团队的显示名。`name` 仍是席位名，`team` 仍是画布路由地址。无显示名时，宿主在完整快照里省略 `teamLabel`。消费方应以新快照为准，省略时清掉旧显示名并回退到现有展示。解码器按画布显示名的校验规则忽略无效的 `teamLabel`，仍保留席位。
+
+成员席位的 `blocked?: number` 和 `waiting?: number` 分别统计当前持有、仍开放的工单中，当前执行分派的最新回报为 `blocked` 或 `waiting` 的工单。运行中和挂起均计，同一工单只计一次。这两项是 `active` 的细分，单纯排队的工单仍由 `queued` 表示。新节点对成员席位报零值，总工、观察者席位省略这两项。旧节点省略时按未提供显示。解码器保留有效的非负安全整数，忽略无效计数字段并保留席位。
+
 ## 能力
 
 `CAPABILITIES` 列出四个已定义能力（`progressReceipts`、`teamRoster`、`directedSeats`、`reworkReturns`）；`declares(card, name)` 只在名片 `capabilities[name]` **恰为 true** 时为真（字符串 `"true"` 不算）。
+
+## `sdk/user`
+
+市场侧先用 `checkUserScopeEcho(requested, started.scope)` 核验配对开始应答，只有数组按原样回显才领取委托。领取后用 `acceptScopedUserDelegate(requested, collected)` 核验最终回显，再将返回的 `delegate` 交给 `createUserClient({ baseUrl, delegate, onBehalfOf })`。不带范围的原有委托仍可通过 `createUserClient({ baseUrl, controlKey, delegate })` 使用。
+
+客户端提供会话列表、分页读取、插话、排队、停止和团队决卡。返回结构化错误，写操作不重试，会话正文不缓存。凭据由调用方持有。节点拒绝范围外动作，调用方的人员授权须在市场服务端判定。

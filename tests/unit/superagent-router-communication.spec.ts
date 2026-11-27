@@ -27,14 +27,15 @@ const digest = (text: string) => createHash('sha256').update(text).digest('hex')
 
 it('ships generated inline router text without changing preset ids or composition', () => {
   expect(patch).toBe(renderPresetPatch())
-  expect(PRESET_PROMPT_PARTS).toEqual({ router: ['router', 'team-transport'], member: ['member', 'team-transport'], observer: ['observer', 'team-transport'] })
-  expect(presets.map(row => row.config!.id)).toEqual(['superagent-router', 'superagent-member', 'superagent-observer', 'superagent-builder'])
+  expect(PRESET_PROMPT_PARTS).toEqual({ router: ['router', 'team-transport'], member: ['member', 'team-transport'], 'member-work': ['member', 'member-work', 'team-transport'], observer: ['observer', 'team-transport'] })
+  expect(presets.map(row => row.config!.id)).toEqual(['superagent-router', 'superagent-member', 'superagent-member-work', 'superagent-observer', 'superagent-builder'])
   expect(prompt).toBe(presetPrompt('router'))
   const expectedComposition = {
     // #900: the Windows ygl MCP row runs this node on the resolved entry script (router, member, observer).
     'superagent-router': 'f12ec5d5dc39720854535dce63a9ea7906bfddf93500c4af4f3bc525e637fcb0',
     // Owner 2026-11-19: members and observers gain the PTC executor (code mode by default); router and builder unchanged.
     'superagent-member': 'cf8a0b18e2dc9ff834a8b0b3e5de626684f01255414d25660aa2276876e4a884',
+    'superagent-member-work': 'cf8a0b18e2dc9ff834a8b0b3e5de626684f01255414d25660aa2276876e4a884',
     'superagent-observer': 'cf8a0b18e2dc9ff834a8b0b3e5de626684f01255414d25660aa2276876e4a884',
     // #83: the builder gains the read-only search and skill rows, so its composition digest moves with them.
     'superagent-builder': '4e36bbf212a2b60b8f677618d92f2b3450d48a6e61f328d3d2d25d6f1c961775',
@@ -52,7 +53,8 @@ it('adds only the shared boundary to original worker personas and leaves the bui
   // rewrite (workbench-market 18: takes no tickets, tags and counts stuck points, sees health problems first — R7a).
   // #902 S1: the observer's card line names the basis, the card kinds and a2a_card_queue; S2 adds a2a_card_draft.
   // Owner 2026-11-25 (forward personas): each rule now leads with the action or allowed path, keeping its force; router, member and observer gain one wrap-up line.
-  const originalPrefixes = { member: '56985b61d5f68398c14a8121d85e8ff123abd237c6327a3c52babcebcd9a8624', observer: '9d4995720c428698c534f8a2e6603acac2a5311bb234dc310379da214c41e812' }
+  // Owner 2026-11-26 (fewer steps): router and observer gain a 「Fewer steps」 block (one matter one card, one named lead, read-before-change, no acknowledgement-only messages).
+  const originalPrefixes = { member: '56985b61d5f68398c14a8121d85e8ff123abd237c6327a3c52babcebcd9a8624', observer: 'a0f345bf20cddd113de9124423f3defe754d74751830c6ab57564e4fa0e10b85' }
   for (const [role, sha] of Object.entries(originalPrefixes)) {
     const original = readFileSync(new URL('src/superagent/prompts/' + role + '.md', root), 'utf8')
     expect(digest(original)).toBe(sha)
@@ -68,6 +70,20 @@ it('adds only the shared boundary to original worker personas and leaves the bui
   expect(builder).toContain('A skill is guidance you read: it gives you no tool')
   // Owner 2026-11-25 (forward personas): the builder's rules lead with the allowed path; the pinned clauses above are unchanged.
   expect(digest(builder)).toBe('5ac7ace8c82506d373d1576312b5fc7a1d9156677469f347e23990f9866dd2a6')
+})
+
+it('adds office rules to the member persona without changing its tool composition', () => {
+  const member = presets.find(row => row.config?.id === 'superagent-member')!
+  const office = presets.find(row => row.config?.id === 'superagent-member-work')!
+  const tools = (row: Row) => row.config!.plugins.filter((plugin: Row) => plugin.id !== 'persona')
+  expect(tools(office)).toEqual(tools(member))
+  const approvedText = readFileSync(new URL('src/superagent/prompts/member-work.md', root), 'utf8')
+  // #972, issue body updated 2026-11-27T06:05:27Z, requires this exact Markdown block.
+  expect(digest(approvedText)).toBe('25bfaa95d05254f3d487e0a890e8c18ce6fe34ab25e63163182224708081f497')
+  const fragment = approvedText.trim()
+  const officePrompt = persona(office).prefix as string
+  expect(officePrompt).toBe(presetPrompt('member-work'))
+  expect(officePrompt.replace(fragment + '\n\n', '')).toBe(persona(member).prefix)
 })
 
 it('retains upstream member initiative as a proposal, never a self-assignment or an external send', () => {
@@ -88,6 +104,16 @@ describe.each(['router', 'member', 'observer'])('%s host-managed transport contr
     expect(rendered).not.toContain('{{')
     expect(rendered).toMatchSnapshot()
   })
+})
+
+it('gives office dispatch and decision cards their concrete approval criteria', () => {
+  expect(prompt).toContain('the end result, the one action that needs approval, and what the member must return')
+  expect(prompt).toContain('Cite the standing team rule for boundaries')
+  const observer = presetPrompt('observer')
+  for (const clause of ['investigation, offline calculation and implementation on a copy', 'changing an official sheet, writing to an official dataset, or delivering externally',
+    'locations, before and after values, and the effect on quantities and amounts', 'choices would leave the result the same', 'approval from the person with authority']) {
+    expect(observer).toContain(clause)
+  }
 })
 
 const channels = [

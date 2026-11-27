@@ -3,14 +3,20 @@
  * member whose card declares teamRoster; every 5 minutes, 30 seconds after a change, and never to anyone else.
  */
 import { describe, expect, it } from 'vitest'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { mkdtempSync } from '../temp-dirs.ts'
+import { CanvasStore } from '../../src/canvas-store.ts'
+import { SuperagentHost } from '../../src/superagent/host/index.ts'
+import { parseRoster } from '../../src/sdk/wire.ts'
 import { RosterReports, rosterSeats, rosterText, ROSTER_EVERY_MS, ROSTER_SETTLE_MS } from '../../src/superagent/host/roster.ts'
 
 const T0 = Date.parse('2026-11-11T14:00:00.000Z')
 
 function roster(options: { declares?: (ref: string) => boolean; fail?: boolean; warm?: () => void } = {}) {
   let now = T0
-  const team = { canvas: 'ops', router: 'session-r', members: ['session-m1', 'session-m2'], observers: ['session-o'] }
-  const load: Record<string, { active: number; queued: number; since?: string }> = { 'session-m1': { active: 1, queued: 2, since: '2026-11-11T13:50:00.000Z' }, 'session-m2': { active: 0, queued: 0 } }
+  const team: { canvas: string; teamLabel?: string; router: string; members: string[]; observers: string[] } = { canvas: 'ops', router: 'session-r', members: ['session-m1', 'session-m2'], observers: ['session-o'] }
+  const load: Record<string, { active: number; queued: number; blocked?: number; waiting?: number; since?: string }> = { 'session-m1': { active: 1, queued: 2, since: '2026-11-11T13:50:00.000Z' }, 'session-m2': { active: 0, queued: 0 } }
   const online = new Set(['session-r', 'session-m1', 'session-o'])
   const sent: Array<{ ref: string; text: string; taskId: string }> = []
   const r = new RosterReports({
@@ -25,6 +31,32 @@ function roster(options: { declares?: (ref: string) => boolean; fail?: boolean; 
 }
 
 describe('the roster report', () => {
+  it('reads the bound canvas label at publication time through the host', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'market-roster-label-'))
+    const canvas = new CanvasStore(join(home, 'a2a', 'canvas.json'))
+    canvas.create('ops')
+    expect(canvas.setLabel('ops', '业务支持队')).toMatchObject({ ok: true })
+    let now = T0
+    const sent: string[] = []
+    const host = new SuperagentHost({
+      home, now: () => new Date(now).toISOString(), logger: { info() {}, warn() {} },
+      canvasTeam: (name: string) => name === 'ops' ? { local: ['session-r'], remote: [{ ref: 'market/aaaa1111@0123abcd' }] } : undefined,
+      canvasLabel: (name: string) => canvas.labelOf(name), handleOf: () => 'dsh/12345678', sessionName: () => '总工',
+      hostFingerprint: () => '0123456789abcdef', memberDeclares: () => true,
+      rosterSend: async (_ref: string, text: string) => { sent.push(text) },
+    } as never)
+    try {
+      expect(host.saveSettings({ canvas: 'ops', router: 'session-r' }, () => true)).toMatchObject({ ok: true })
+      const { roster: reports } = host as unknown as { roster: RosterReports }
+      await reports.tick()
+      expect(parseRoster(sent[0]!)?.seats).toMatchObject([{ role: 'router', name: '总工', team: 'dsh/canvas/ops', teamLabel: '业务支持队' }])
+      expect(canvas.setLabel('ops', undefined)).toMatchObject({ ok: true })
+      now += 1_000; await reports.tick()
+      now += ROSTER_SETTLE_MS; await reports.tick()
+      expect(sent).toHaveLength(2)
+      expect(parseRoster(sent[1]!)?.seats[0]).not.toHaveProperty('teamLabel')
+    } finally { await host.stop() }
+  })
   it('lists the router, the members with their load, and the observers, as the team\'s canvas address', () => {
     const { r: _r, ...h } = roster()
     const seats = rosterSeats({ team: () => h.team, handleOf: id => `dsh/${id}`, nameOf: () => undefined, online: id => h.online.has(id), loadOf: id => h.load[id] ?? { active: 0, queued: 0 } })
@@ -45,6 +77,45 @@ describe('the roster report', () => {
     expect(JSON.parse(body!)).toMatchObject({ host: '0123456789abcdef', at: '2026-11-11T14:00:00.000Z', seats: expect.arrayContaining([expect.objectContaining({ role: 'member', name: '后端', active: 1, queued: 2 })]) })
     expect(h.sent[0]!.taskId).toBe(`roster-01234567-${String(T0)}`)
     expect(rosterText('0123456789abcdef', 'x', [])).toBe('[A2A roster] 01234567 x\n{"host":"0123456789abcdef","at":"x","seats":[]}')
+  })
+
+  it('publishes label-only changes and omits the label after clearing it', async () => {
+    const h = roster()
+    await h.r.tick()
+    const seats = (index: number) => JSON.parse(h.sent[index]!.text.split('\n')[1]!).seats as Array<Record<string, unknown>>
+    const original = seats(0)
+    expect(original).toHaveLength(4)
+    expect(original.every(seat => !Object.hasOwn(seat, 'teamLabel'))).toBe(true)
+    h.team.teamLabel = '业务支持队'
+    h.advance(1_000); await h.r.tick()
+    h.advance(ROSTER_SETTLE_MS - 1); await h.r.tick()
+    expect(h.sent).toHaveLength(1)
+    h.advance(1); await h.r.tick()
+    expect(h.sent).toHaveLength(2)
+    expect(seats(1)).toEqual(original.map(seat => ({ ...seat, teamLabel: '业务支持队' })))
+    delete h.team.teamLabel
+    h.advance(1_000); await h.r.tick()
+    h.advance(ROSTER_SETTLE_MS); await h.r.tick()
+    expect(h.sent).toHaveLength(3)
+    expect(seats(2)).toEqual(original)
+  })
+
+  it('publishes report-count changes after settling, including zeroes for members', async () => {
+    const h = roster()
+    Object.assign(h.load['session-m1']!, { blocked: 1, waiting: 0 })
+    Object.assign(h.load['session-m2']!, { blocked: 0, waiting: 0 })
+    await h.r.tick()
+    const first = parseRoster(h.sent[0]!.text)!.seats
+    expect(first[0]).not.toHaveProperty('blocked')
+    expect(first[3]).not.toHaveProperty('waiting')
+    expect(first[1]).toMatchObject({ active: 1, queued: 2, blocked: 1, waiting: 0 })
+    expect(first[2]).toMatchObject({ blocked: 0, waiting: 0 })
+    Object.assign(h.load['session-m1']!, { blocked: 0, waiting: 1 })
+    h.advance(1_000); await h.r.tick()
+    h.advance(ROSTER_SETTLE_MS - 1); await h.r.tick()
+    expect(h.sent).toHaveLength(1)
+    h.advance(1); await h.r.tick()
+    expect(parseRoster(h.sent[1]!.text)?.seats[1]).toMatchObject({ active: 1, queued: 2, blocked: 0, waiting: 1 })
   })
 
   it('nothing changed: again only after 5 minutes; a change: 30 seconds after it', async () => {
