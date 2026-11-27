@@ -53,7 +53,7 @@ it('adds only the shared boundary to original worker personas and leaves the bui
   // #902 S1: the observer's card line names the basis, the card kinds and a2a_card_queue; S2 adds a2a_card_draft.
   // Owner 2026-11-25 (forward personas): each rule now leads with the action or allowed path, keeping its force; router, member and observer gain one wrap-up line.
   // Owner 2026-11-26 (fewer steps): router and observer gain a 「Fewer steps」 block (one matter one card, one named lead, read-before-change, no acknowledgement-only messages).
-  const originalPrefixes = { member: '56985b61d5f68398c14a8121d85e8ff123abd237c6327a3c52babcebcd9a8624', observer: '7f6e83639b24c6ac28b7d70b74441a0356822328480f5d878eb94949fd361d88' }
+  const originalPrefixes = { member: '56985b61d5f68398c14a8121d85e8ff123abd237c6327a3c52babcebcd9a8624', observer: 'a0f345bf20cddd113de9124423f3defe754d74751830c6ab57564e4fa0e10b85' }
   for (const [role, sha] of Object.entries(originalPrefixes)) {
     const original = readFileSync(new URL('src/superagent/prompts/' + role + '.md', root), 'utf8')
     expect(digest(original)).toBe(sha)
@@ -69,6 +69,16 @@ it('adds only the shared boundary to original worker personas and leaves the bui
   expect(builder).toContain('A skill is guidance you read: it gives you no tool')
   // Owner 2026-11-25 (forward personas): the builder's rules lead with the allowed path; the pinned clauses above are unchanged.
   expect(digest(builder)).toBe('5ac7ace8c82506d373d1576312b5fc7a1d9156677469f347e23990f9866dd2a6')
+})
+
+it('gives office dispatch and decision cards their concrete approval criteria', () => {
+  expect(prompt).toContain('the end result, the one action that needs approval, and what the member must return')
+  expect(prompt).toContain('Cite the standing team rule for boundaries')
+  const observer = presetPrompt('observer')
+  for (const clause of ['investigation, offline calculation and implementation on a copy', 'changing an official sheet, writing to an official dataset, or delivering externally',
+    'locations, before and after values, and the effect on quantities and amounts', 'choices would leave the result the same', 'approval from the person with authority']) {
+    expect(observer).toContain(clause)
+  }
 })
 
 it('retains upstream member initiative as a proposal, never a self-assignment or an external send', () => {
