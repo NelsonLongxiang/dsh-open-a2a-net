@@ -19,7 +19,7 @@ import { parseFileRef } from '../../blob-store.ts'
 import { GITHUB_SOURCE, PrFollower, defaultGh, parsePullRequest, type GhRun } from './pr-follow.ts'
 import { IssueSource } from './github-issues.ts'
 import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
-import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, type Role } from './role-tools.ts'
+import { MEMBER_PRESETS, OBSERVER_PRESET, ROUTER_PRESET, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
 import { DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, observerActor, observerOfActor, proposerKind, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 import type { PersonMessage, WorkbenchVia } from './deps.ts'
@@ -58,7 +58,7 @@ export function presetRefusal(router: string | undefined, members: readonly stri
     const preset = presetOf(member)
     // An observer files on the host it sits on, which the team's own host alone can admit.
     if (preset === OBSERVER_PRESET && !served) continue
-    if (preset !== undefined && preset !== MEMBER_PRESET) return `member ${member} runs the ${preset} preset: a team's member runs ${MEMBER_PRESET} (superagent 团队成员); create it under that preset`
+    if (preset !== undefined && !MEMBER_PRESETS.has(preset)) return `member ${member} runs the ${preset} preset: a team's member runs ${[...MEMBER_PRESETS].join(' or ')}; select a member preset`
   }
   return undefined
 }
