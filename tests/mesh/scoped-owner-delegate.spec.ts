@@ -1,10 +1,17 @@
 // @vitest-environment node
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { issueOwnerDelegate, revokeOwnerDelegate } from '../../src/superagent/host/owner-delegate.ts'
 import type { OwnerAction } from '../../src/superagent/host/owner-delegate-scope.ts'
 import { bootNode, tmpHome } from './harness.ts'
+
+// This fixture exercises the HTTP authorization path. An asynchronous workspace bootstrap can outlive the node.
+vi.mock('../../src/superagent/host/ygl-home.ts', async importOriginal => ({
+  ...await importOriginal<typeof import('../../src/superagent/host/ygl-home.ts')>(),
+  ensureTeamYglHome: async () => 'present',
+  ensureTeamYglProject: async () => 'present',
+}))
 
 const agentId = 'session-0123456789abcdef'
 const controlKey = 'test-control-key'
