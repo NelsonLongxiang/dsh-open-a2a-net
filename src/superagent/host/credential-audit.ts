@@ -262,7 +262,7 @@ const NOTE_TOOLS: ReadonlySet<string> = new Set([
   'todo_write',
   'a2a_ticket_read', 'a2a_ticket_report', 'a2a_ticket_ack', 'a2a_ticket_handback', 'a2a_ticket_request', 'a2a_ticket_note', 'a2a_outbound_request',
   'a2a_decision_decide', 'a2a_decision_propose', 'a2a_member_rules_propose', 'a2a_member_rules_apply', 'a2a_status', 'a2a_task_read', 'a2a_tasks', 'a2a_teams', 'a2a_probe', 'a2a_report',
-  'superagent_note', 'superagent_reply', 'superagent_read', 'superagent_status', 'superagent_route', 'superagent_split', 'superagent_request', 'superagent_assign', 'superagent_org_read',
+  'superagent_note', 'superagent_reply', 'superagent_read', 'superagent_status', 'superagent_route', 'superagent_split', 'superagent_request', 'superagent_assign', 'superagent_org_read', 'superagent_net_doctor',
   'superagent_decision_propose', 'superagent_issue_propose', 'superagent_rules_propose', 'superagent_rules_apply', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw',
 ])
 /** Only the tools that carry text a person or the host reads. The file-transfer tools (a2a_file_*) read and write files, so a prefix is not enough (#947 review N1); a tool not named here keeps the old rule. */
