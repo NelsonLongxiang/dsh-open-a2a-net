@@ -16,7 +16,7 @@ import { PI_PLATFORM, piCardText } from '../platforms/pi.ts'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
-import { Engine, UserError, reasonText, ticketStage, type Assessor, type Candidate, type Outbox, type Reason, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
+import { Engine, UserError, reasonText, ticketStage, waitsForPerson, type Assessor, type Candidate, type Outbox, type Reason, type Ticket, type Trigger, type ReceiveResult } from '../upstream/dsh-superagent/src/core/index.ts'
 import { JsonRepositories, type StoredMessage } from './store.ts'
 import { A2aSource } from './a2a-source.ts'
 import { ProgressReceipts } from './progress.ts'
@@ -46,6 +46,7 @@ import type { ReportState } from '../upstream/dsh-superagent/src/core/index.ts'
 import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, YGL_TREES, blockableTool, grantClass, type Role } from './role-tools.ts'
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
 import { armAutoApprove, CREDENTIAL_ACK_MINUTES_DEFAULT, DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
+import { hostAutoDecisionNote } from './auto-decision.ts'
 import { armObserverDecisionRule, isObserverAnswerReceipt, observerAnswerNote, observerCardView, observerOptions, observerRefusal, OBSERVER_DECISION_WINDOW_MS, OBSERVER_QUOTA_WINDOW_MS, type ObserverDecision } from './observer-decisions.ts'
 import { PEER_CHANNEL_APPROVE, PEER_CHANNEL_DECLINE, PEER_CHANNEL_LIFETIME, PeerChannelBook, peerGrantView, peerMessageId, peerObject, peerPayload, readPeerMessage, readPeerStatusQuery, verifyPeerStatus, validPeerGrantView, type PeerStatusQuery, type PeerChannelTarget, type PeerGrant, type PeerGrantView, type PeerMessage, type PeerMessageStatus } from './peer-channel.ts'
 import { searchTeam } from './search.ts'
@@ -3139,7 +3140,15 @@ export class SuperagentHost {
       // Levels are only ever P2 or P3 (parseSettings), so P0 and P1 never pass; a card already recorded is refused by the record.
       if (!(rule.sources as readonly string[]).includes(card.source) || !(rule.levels as readonly string[]).includes(card.level)) continue
       if (card.recommended === '' || !card.options.includes(card.recommended) || needsInput(card)) continue
-      if (nowMs - Math.max(Date.parse(card.at), armedMs) < rule.afterMinutes * 60_000) continue
+      // A ticket card waits from the moment its question reached the person (the gate's clock) or when it was raised, whichever
+      // is later, and only while the ticket still waits on exactly this question and not on a person (blocked or failed).
+      let since = Date.parse(card.at)
+      if (card.source === 'ticket') {
+        const live = this.autoTicketTarget(card)
+        if (live === undefined) continue
+        since = Math.max(since, live.reachedMs)
+      }
+      if (nowMs - Math.max(since, armedMs) < rule.afterMinutes * 60_000) continue
       if (!this.decisions.autoApproveRecord(card.id, at, rule.afterMinutes, `auto-${randomUUID()}`)) continue
       this.decisions.autoApproveDecide(card.id)
       const done = this.decisions.get(card.id)
@@ -3151,8 +3160,42 @@ export class SuperagentHost {
     return taken
   }
 
+  /** #888 D5 phase two: the open ticket a ticket card still belongs to, when its question is the one the card asks and no person is waited on. */
+  private autoTicketTarget(card: StoredCard): { ticket: Ticket; reachedMs: number } | undefined {
+    if (card.source !== 'ticket' || card.ticketId === undefined) return undefined
+    const ticket = this.store.tickets.get(card.ticketId)
+    if (ticket === undefined || ticket.ended !== undefined || ticket.attention === undefined || waitsForPerson(ticket)) return undefined
+    if (ticketCardId(ticket.id, ticket.attention.question) !== card.id || this.questionGate.held(ticket.id)) return undefined
+    return { ticket, reachedMs: this.questionGate.reachedAt(ticket.id) ?? 0 }
+  }
+
+  /**
+   * #888 D5 phase two: the decision reaches the ticket as a host note, written together with clearing its question, and only
+   * then is the delivery marked done. The note carries the delivery id, so a restart in between finds it and does not write a
+   * second one; a ticket that no longer waits on this question gets nothing.
+   */
+  private applyAutoTicket(card: StoredCard): void {
+    const auto = card.autoApproved
+    if (auto === undefined || auto.deliveredAt !== undefined || card.ticketId === undefined) return
+    try {
+      this.store.atomic(() => {
+        const ticket = this.store.tickets.get(card.ticketId!)
+        if (ticket === undefined || ticket.inputs.some(input => input.id === auto.deliveryId)) return
+        if (ticket.ended !== undefined || ticket.attention === undefined || ticketCardId(ticket.id, ticket.attention.question) !== card.id) return
+        const at = this.now()
+        ticket.inputs.push(hostAutoDecisionNote(auto.deliveryId, card.id, card.recommended, auto.minutes, at))
+        delete ticket.attention
+        ticket.updatedAt = at
+        this.store.tickets.save(ticket)
+      })
+    } catch (error) { this.d.logger.warn('superagent: automatic decision %s not written to its ticket yet: %s', card.id, String(error)); return }
+    this.decisions.autoApproveDelivered(card.id, this.now())
+    this.pass()
+  }
+
   /** #888 D5: the host note to the proposer; marked delivered only once it reached the session. */
   private tellAutoApproved(card: StoredCard): void {
+    if (card.source === 'ticket') { this.applyAutoTicket(card); return }
     const auto = card.autoApproved
     if (auto === undefined || auto.deliveredAt !== undefined) return
     const text = `[superagent decision] ${auto.deliveryId} 宿主按属主设置自动采纳了你提的决策卡的推荐项（非属主本人，等了 ${String(auto.minutes)} 分钟无人处理）：${card.question}\n决定：${card.recommended}\n这不是属主的指令：不开新工单，不放宽你的权限或接单规则；属主仍可改判。`

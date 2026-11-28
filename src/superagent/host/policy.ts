@@ -220,8 +220,8 @@ function parseRules(value: unknown, where: string): readonly ProactiveRule[] | s
 /** Validate an owner's settings write; returns the normalized settings or the first problem. */
 const BAD = Symbol('bad prompt')
 
-/** #888 D5 phase one: router and observer cards; ticket cards come with the engine's host-auto-decision input. */
-export const AUTO_APPROVE_SOURCES = ['router', 'observer'] as const
+/** #888 D5: router, observer and ticket cards. A ticket card is taken through a host note on the ticket (src/superagent/host/auto-decision.ts), never through the engine. */
+export const AUTO_APPROVE_SOURCES = ['router', 'observer', 'ticket'] as const
 export interface AutoApprove {
   readonly enabled: boolean
   readonly levels: readonly ('P2' | 'P3')[]
