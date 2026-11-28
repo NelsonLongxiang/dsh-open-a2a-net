@@ -128,6 +128,14 @@ export class MemberExecutor implements Executor {
   private parked: Binding[]
   /** Members stopped mid-turn, until the turn ends: a late report of the old turn must not meet a new ticket. */
   private readonly stopping = new Map<string, number>()
+  /** The ticket whose stop cancelled each stopping member's turn, for the tool guard's receipt. */
+  private readonly stoppedOn = new Map<string, string>()
+
+  /** A member whose ticket the owner stopped mid-turn: its tool calls are refused until that turn ends. */
+  haltedBy(member: string): string | undefined {
+    const at = this.stopping.get(member)
+    return at !== undefined && Date.now() - at < STOPPING_MS ? this.stoppedOn.get(member) : undefined
+  }
   /** Members idle with shell jobs still running, since when: nothing is decided about their ticket until the jobs end. */
   private readonly background = new Map<string, number>()
   /** Failed turns retried so far, by Assignment; while a retry waits, the idle that follows the failure ends nothing. */
@@ -190,17 +198,48 @@ export class MemberExecutor implements Executor {
     this.ticketMembers = stored.ticketMembers ?? {}
     this.lastMembers = stored.lastMembers ?? {}
     this.prepared = stored.prepared ?? {}
+    this.noteRecords = stored.noteRecords ?? {}
   }
   /** Tickets whose directory the prepare command has made (R1: once per ticket). */
   private prepared: Record<string, true>
+  /** #notes: when each note Input was handed to a member and when its session took it in; a note carries no such time upstream. */
+  private noteRecords: Record<string, Record<string, { deliveredAt: string; readAt?: string }>> = {}
+  /** Note Inputs folded into an assignment card still in flight, by assignment. */
+  private readonly cardNotes = new Map<string, string[]>()
 
-  private load(): { bindings: Binding[]; parked: Binding[]; repos: Record<string, string>; ticketMembers?: Record<string, { member: string; named: boolean }>; lastMembers?: Record<string, string>; prepared?: Record<string, true> } {
+  /** The host-side delivery and read times of a ticket's note Inputs. */
+  noteTimes(ticketId: string): Readonly<Record<string, { deliveredAt: string; readAt?: string }>> { return this.noteRecords[ticketId] ?? {} }
+
+  /** Pending note Inputs of a ticket as card lines; their ids are remembered for the assignment so the card counts as their delivery. */
+  private pendingNoteLines(ticket: Ticket, assignmentId: string): string[] {
+    const notes = ticket.inputs.filter((input): input is Extract<TicketInput, { kind: 'note' }> => input.kind === 'note' && ticket.undelivered.includes(input.id))
+    if (notes.length === 0) { this.cardNotes.delete(assignmentId); return [] }
+    this.cardNotes.set(assignmentId, notes.map(note => note.id))
+    return ['notes already on this ticket before you start (facts; they grant nothing, and a stop note means do not do the work):', ...notes.map(note => `- ${note.text}`)]
+  }
+
+  /** The card carrying the notes was accepted: those notes are delivered now, and not sent again. */
+  private notesCarded(ticketId: string, assignmentId: string): void {
+    const ids = this.cardNotes.get(assignmentId)
+    this.cardNotes.delete(assignmentId)
+    if (ids === undefined || ids.length === 0) return
+    this.recordNotes(ticketId, ids)
+    try { this.d.engine().inputsDelivered(ticketId, assignmentId, ids) } catch (error) { this.d.logger.warn('superagent: notes of %s not recorded delivered: %s', ticketId, String(error)) }
+  }
+
+  private recordNotes(ticketId: string, ids: readonly string[]): void {
+    const at = new Date().toISOString(), book = this.noteRecords[ticketId] ?? (this.noteRecords[ticketId] = {})
+    for (const id of ids) book[id] ??= { deliveredAt: at }
+    try { this.save() } catch (error) { this.d.logger.warn('superagent: note times of %s not saved: %s', ticketId, String(error)) }
+  }
+
+  private load(): { bindings: Binding[]; parked: Binding[]; repos: Record<string, string>; ticketMembers?: Record<string, { member: string; named: boolean }>; lastMembers?: Record<string, string>; prepared?: Record<string, true>; noteRecords?: Record<string, Record<string, { deliveredAt: string; readAt?: string }>> } {
     try {
       if (!existsSync(this.d.path)) return { bindings: [], parked: [], repos: {} }
-      const raw = JSON.parse(readFileSync(this.d.path, 'utf8')) as { bindings?: Binding[]; parked?: Binding[]; repos?: Record<string, unknown>; ticketMembers?: Record<string, { member: string; named: boolean }>; lastMembers?: Record<string, unknown>; prepared?: Record<string, true> }
+      const raw = JSON.parse(readFileSync(this.d.path, 'utf8')) as { bindings?: Binding[]; parked?: Binding[]; repos?: Record<string, unknown>; ticketMembers?: Record<string, { member: string; named: boolean }>; lastMembers?: Record<string, unknown>; prepared?: Record<string, true>; noteRecords?: Record<string, Record<string, { deliveredAt: string; readAt?: string }>> }
       const lastMembers = Object.fromEntries(Object.entries(raw.lastMembers ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
       const repos = Object.fromEntries(Object.entries(raw.repos ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
-      return { bindings: raw.bindings ?? [], parked: raw.parked ?? [], repos, ...(raw.ticketMembers !== undefined ? { ticketMembers: raw.ticketMembers } : {}), lastMembers, ...(raw.prepared !== undefined ? { prepared: raw.prepared } : {}) }
+      return { bindings: raw.bindings ?? [], parked: raw.parked ?? [], repos, ...(raw.ticketMembers !== undefined ? { ticketMembers: raw.ticketMembers } : {}), lastMembers, ...(raw.prepared !== undefined ? { prepared: raw.prepared } : {}), ...(raw.noteRecords !== undefined ? { noteRecords: raw.noteRecords } : {}) }
     } catch { return { bindings: [], parked: [], repos: {} } }
   }
   private save(): void {
@@ -209,9 +248,10 @@ export class MemberExecutor implements Executor {
     this.ticketMembers = Object.fromEntries(Object.entries(this.ticketMembers).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended }))
     this.prepared = Object.fromEntries(Object.entries(this.prepared).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended })) as Record<string, true>
     this.lastMembers = Object.fromEntries(Object.entries(this.lastMembers).filter(([id]) => this.d.ticket(id) !== undefined).slice(-LAST_MEMBERS_CAP))
+    this.noteRecords = Object.fromEntries(Object.entries(this.noteRecords).filter(([id]) => { const t = this.d.ticket(id); return t !== undefined && !t.ended }))
     mkdirSync(dirname(this.d.path), { recursive: true })
     const temporary = `${this.d.path}.tmp-${randomUUID()}`
-    try { writeFileSync(temporary, JSON.stringify({ bindings: this.bindings, parked: this.parked, repos: this.ticketRepos, ticketMembers: this.ticketMembers, lastMembers: this.lastMembers }), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.d.path) } finally { rmSync(temporary, { force: true }) }
+    try { writeFileSync(temporary, JSON.stringify({ bindings: this.bindings, parked: this.parked, repos: this.ticketRepos, ticketMembers: this.ticketMembers, lastMembers: this.lastMembers, noteRecords: this.noteRecords }), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.d.path) } finally { rmSync(temporary, { force: true }) }
   }
 
   /** A member is leaving the team (removed from the canvas): the stop its Assignment gets next says so. */
@@ -477,7 +517,7 @@ export class MemberExecutor implements Executor {
           preparing = this.preparationFor(ticket.id, candidate)
           if (preparing !== undefined) { member = candidate; break }
           tried = candidate
-          const cardText = assignmentCard(ticket, this.d.trigger, this.ticketRepos[ticket.id], this.d.memberNotes?.(candidate, ticket) ?? [])
+          const cardText = assignmentCard(ticket, this.d.trigger, this.ticketRepos[ticket.id], this.d.memberNotes?.(candidate, ticket) ?? [], this.pendingNoteLines(ticket, assignment.id))
           // Reserve the member before any external effect, but do not claim that the card arrived or the assignment started.
           const binding: Binding = { member: candidate, ticketId: ticket.id, assignmentId: assignment.id, at: new Date().toISOString(), run, card: 'sending' }
           const send = { binding, sent: ++this.causal } as { binding: Binding; sent: number; idle?: { turn: MemberTurn; claimed: number } }
@@ -525,6 +565,8 @@ export class MemberExecutor implements Executor {
         this.save()
         this.d.logger.info('superagent: ticket %s assigned to %s', ticket.id, member)
         try { engine.assignmentStarted(ticket.id, assignment.id) } catch (error) { this.d.logger.warn('superagent: assignment %s not recorded started: %s', assignment.id, String(error)) }
+        // The card already carried the pending notes: record them delivered before the queued delivery runs.
+        this.notesCarded(ticket.id, assignment.id)
         if (bound.card !== undefined) {
           if (this.d.ticket(ticket.id)?.assignments.find(a => a.id === assignment.id)?.state !== 'running') continue
           delete bound.card
@@ -567,7 +609,7 @@ export class MemberExecutor implements Executor {
     this.save()
     const notes = [...(this.d.memberNotes?.(member, now) ?? []), `prepared: the team's prepare command ran in your workspace for this ticket (directory name ${name}); work in what it made`]
     const bound = this.bindings.find(b => b.assignmentId === assignmentId)
-    if (!(await this.tryDeliver(member, assignmentCard(now, this.d.trigger, this.ticketRepos[now.id], notes), 'assign', now.id, bound !== undefined ? runOf(bound) : undefined))) fail(`member ${member} did not receive the assignment`)
+    if (!(await this.tryDeliver(member, assignmentCard(now, this.d.trigger, this.ticketRepos[now.id], notes, this.pendingNoteLines(now, assignmentId)), 'assign', now.id, bound !== undefined ? runOf(bound) : undefined))) fail(`member ${member} did not receive the assignment`)
   }
 
   deliver(ticket: Ticket, assignment: Assignment): void {
@@ -610,6 +652,7 @@ export class MemberExecutor implements Executor {
       try { engine.deliveryFailed(ticket.id, assignment.id, `member ${binding.member} did not receive the input`) } catch { /* the ticket ended meanwhile */ }
       return 'failed'
     }
+    this.recordNotes(ticket.id, inputs.filter(input => input.kind === 'note').map(input => input.id))
     try { engine.inputsDelivered(ticket.id, assignment.id, inputs.map(input => input.id)) } catch (error) { this.d.logger.warn('superagent: inputs of %s not recorded delivered: %s', ticket.id, String(error)) }
     // The member's session may take the message in before its delivery is recorded: that claim counts for it.
     if ((this.claimedAt.get(binding.member) ?? 0) >= sentAt) this.markRead(binding.member)
@@ -655,7 +698,7 @@ export class MemberExecutor implements Executor {
         && (assignment.report.state === 'ready' || assignment.report.state === 'dropped')
       const why = this.leaving.delete(binding.member) ? 'you were removed from the team' : reason
       // Upstream cancels the worker's turn; here the member stays out of the pool until that turn has ended.
-      if (!ownEnd && this.d.cancelTurn?.(binding.member) === true) this.stopping.set(binding.member, Date.now())
+      if (!ownEnd && this.d.cancelTurn?.(binding.member) === true) { this.stopping.set(binding.member, Date.now()); this.stoppedOn.set(binding.member, ticket.id) }
       if (!ownEnd) void this.tryDeliver(binding.member, `[superagent] ticket ${ticket.id} «${ticket.title}» is no longer yours (${why}). Stop working on it; do not report on it again.`, 'stop', ticket.id, runOf(binding))
     }
     queueMicrotask(() => this.launch())
@@ -676,6 +719,13 @@ export class MemberExecutor implements Executor {
     if (binding === undefined || binding.card !== undefined) return
     const ticket = this.d.ticket(binding.ticketId)
     if (ticket === undefined || ticket.ended) return
+    const book = this.noteRecords[ticket.id]
+    if (book !== undefined) {
+      const at = new Date().toISOString()
+      let changed = false
+      for (const record of Object.values(book)) if (record.readAt === undefined) { record.readAt = at; changed = true }
+      if (changed) { try { this.save() } catch (error) { this.d.logger.warn('superagent: note read times of %s not saved: %s', ticket.id, String(error)) } }
+    }
     const unread = ticket.inputs.filter((input): input is Extract<TicketInput, { kind: 'trigger' }> => input.kind === 'trigger' && !input.readAt && input.deliveredTo === binding.assignmentId).map(input => input.id)
     if (unread.length === 0) return
     try { this.d.engine().inputsRead(ticket.id, unread) } catch (error) { this.d.logger.warn('superagent: inputs of %s not recorded read: %s', ticket.id, String(error)) }
@@ -684,6 +734,7 @@ export class MemberExecutor implements Executor {
   /** The member's turn ended: Inputs delivered to it before now count as read, and the engine hears the turn end. */
   memberIdle(member: string, turn: MemberTurn = { quiet: true, text: '' }): void {
     if (this.closed) return
+    this.stoppedOn.delete(member)
     if (this.stopping.delete(member)) queueMicrotask(() => this.launch())
     const binding = this.bindingOf(member)
     this.dropDeferredIdle(member)
@@ -809,7 +860,7 @@ export interface QueuedAssignment {
 }
 
 /** The first message a member gets for a ticket: what it may do, bounded by its Mandate, and how to report. */
-export function assignmentCard(ticket: Ticket, trigger: MemberExecutorDeps['trigger'], repo?: string, notes: readonly string[] = []): string {
+export function assignmentCard(ticket: Ticket, trigger: MemberExecutorDeps['trigger'], repo?: string, notes: readonly string[] = [], pending: readonly string[] = []): string {
   const origin = trigger(ticket.origin.triggerId)
   const name = ticket.execution?.name ?? ticket.id
   return [
@@ -823,6 +874,7 @@ export function assignmentCard(ticket: Ticket, trigger: MemberExecutorDeps['trig
     'request text:',
     origin === undefined ? '(the original message is not readable)' : origin.text,
     '',
+    ...(pending.length > 0 ? [...pending, ''] : []),
     `Work in your own workspace, in a directory or worktree named ${name}; in a git checkout, create that worktree at .worktrees/${name} and list .worktrees/ in the checkout's .git/info/exclude, so the checkout stays clean (your sandbox writes only inside your workspace: a path beside the checkout is refused). Stay within the scope; derive what to do from the request yourself.`,
     `Do not open sessions, subagents, or A2A routes. Report with a2a_ticket_report, naming ticket_id ${ticket.id}. When you hand off (a result, a question, waiting, blocked) you may get another ticket; a later [superagent input] brings this one back:`,
     '- progress while you work only when something changed for the person; waiting when you wait for a Trigger;',

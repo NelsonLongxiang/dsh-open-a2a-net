@@ -2457,6 +2457,7 @@ export function apply(ctx: Context, bootConfig: Config): void {
     // superagent-builder TB1: a session under the builder preset that holds no team role is the team builder.
     roleOf: id => superagentTeams?.ofSession(id)?.toolRoleOf(id) ?? (superagentTeams !== undefined && sessionPresetOf(id) === BUILDER_PRESET ? 'builder' : undefined), grantedOf: id => superagentTeams?.ofSession(id)?.grantedTools(id) ?? [], blockedOf: id => superagentTeams?.ofSession(id)?.settings.blockedTools ?? [], onRefused: (id, role, name) => superagentTeams?.ofSession(id)?.requestTool(id, role, name),
     agentOf: id => ctx.get('agents')?.get(SessionId(id)) as RoleAgent | undefined,
+    haltedOf: id => superagentTeams?.ofSession(id)?.haltedOf(id),
     peerMessageOf: id => (superagentTeams?.ofSession(id)?.peerGrantViews(id).length ?? 0) > 0,
     logger,
   })
