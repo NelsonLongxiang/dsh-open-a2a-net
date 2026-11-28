@@ -654,10 +654,11 @@ export function registerSuperagentTools(ctx: Context, teamOf: (sessionId: string
       address: { type: 'string', required: true, description: 'The other team\'s A2A address.' },
       text: { type: 'string', required: true, description: 'Exactly what to send (at most 4000 characters); nothing else from the ticket goes with it.' },
       why: { type: 'string', required: true, description: 'Why the ticket needs it, for whoever decides.' },
+      files: { type: 'array', items: { type: 'string' }, description: 'Optional files from your workspace to send with the request (at most 16, each within the file channel limit). The card lists each name, byte count and sha256; the host grants them to the other team only after approval, and the other team pulls them with a2a_file_fetch.' },
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => said('a2a_outbound_request', value) },
     presentCall: args => ({ card: 'generic', title: `a2a_outbound_request → ${String(args.address)}`, kind: 'other', rawInput: args }),
-    execute: async (args: { ticket_id?: string; address?: string; text?: string; why?: string }, exec): Promise<Record<string, JsonValue>> => {
+    execute: async (args: { ticket_id?: string; address?: string; text?: string; why?: string; files?: string[] }, exec): Promise<Record<string, JsonValue>> => {
       const h = host(exec), me = callerOf(exec)
       if (h === undefined || me === undefined) return { ok: false, code: 'not-team', error: 'a2a_outbound_request serves only the sessions of a superagent team on this host' }
       return await h.requestOutbound(me, args) as Record<string, JsonValue>

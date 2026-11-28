@@ -29,7 +29,7 @@ import { MemberExecutor, runOf, transientError, type MemberTurn, type PrepareRun
 import { PiEvents } from './pi-events.ts'
 import { ReviewRequests, reviewRoute } from './review-requests.ts'
 import { unsettledText } from './receipt-settlement.ts'
-import { approverCheck, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, writeTicketNoteOnce, type OutboundAsk, type OutboundRecord, type OutboundApproval } from './outbound.ts'
+import { approverCheck, fileCardLines, OutboundRequests, ownAddresses, OUTBOUND_APPROVE, OUTBOUND_DECLINE, withFileRefs, writeTicketNoteOnce, type OutboundAsk, type OutboundRecord, type OutboundApproval } from './outbound.ts'
 import {legacyOutboundApproval} from './legacy-outbound-approval.ts'
 import { OutboundResults, RESULT_UNAVAILABLE } from './outbound-results.ts'
 import { DENY_ALL, RESTRICTED_TURN_TEXT, ResultAudit, renderResultBody } from './outbound-disclosure.ts'
@@ -369,6 +369,8 @@ export class SuperagentHost {
     this.outboundResults = new OutboundResults({ indexPath: join(dir, 'outbound-results.json'), bodyPath: join(dir, 'outbound-bodies.json'), now: () => Date.parse(this.now()), logger: d.logger })
     this.outbound = new OutboundRequests({ path: join(dir, 'outbound.json'), result: credential => { this.outboundResults.register(credential) }, ask: (address, text, task, sender) => this.a2a.askApproved(address, text, task!, sender!),
       sender: create => create ? this.a2a.ensureIdentity() : Promise.resolve(this.a2a.address ?? ''), approval: record => this.outboundApproval(record),
+      grantFiles: record => this.d.grantFiles?.(record.by, record.files ?? [], this.settings.canvas ?? '', record.address.replace(/@[0-9a-f]{8}$/, '')) ?? { ok: false, error: 'this host cannot grant files' },
+      revokeFiles: record => this.d.revokeFiles?.(record.by, record.files ?? [], this.settings.canvas ?? '', record.address.replace(/@[0-9a-f]{8}$/, '')),
       narrowReceipt:(binding,caller,message)=>this.d.narrowRecovery?.receipt(binding,caller,message)===true,
       narrowNote:(ticketId,text)=>{try{const ticket=this.store.tickets.get(ticketId);if(!ticket||ticket.ended)return false;if(!ticket.inputs.some(input=>input.kind==='note'&&input.text===text))this.engine.note(ticketId,text);return true}catch{return false}},
       query: async (record, attempt) => d.outboundOutcome?.({ sender: attempt.sender, task: attempt.task, address: record.address, message: record.approval!.message }) ?? { delivery: 'unknown' }, logger: d.logger, now: () => this.now(),
@@ -1860,15 +1862,17 @@ export class SuperagentHost {
     }
     let checked = check()
     if (!checked.ok) return checked
+    const staged = this.stageCardFiles(session, ask.files)
+    if (!staged.ok) return staged
     if (CLI_HANDLE_RE.test(checked.address)) {
       if (!await this.a2a.admitsOutboundCli(checked.address)) return { ok: false, code: 'address', error: 'the CLI handle must have a local canvas link and pass admission' }
       // Ownership or capacity may have changed while admission was checked.
       checked = check()
       if (!checked.ok) return checked
     }
-    const out = this.decisions.propose({ source: 'outbound', by: session, at: this.now(), question: `${this.displayName(session)} ${checked.question}`, ...(checked.reason !== undefined ? { reason: checked.reason } : {}), spec: { level: 'P0', options: [OUTBOUND_APPROVE, OUTBOUND_DECLINE], recommended: OUTBOUND_APPROVE }, outbound: { ticketId: checked.ticketId, address: checked.address, text: checked.text, team: this.settingsValue.canvas ?? '', title: checked.title } })
-    if (out.ok && out.reused !== true) this.outbound.waiting(out.id, checked.ticketId, checked.address, checked.text, session)
-    return out.ok ? { ok: true, card_id: out.id } : out
+    const out = this.decisions.propose({ source: 'outbound', by: session, at: this.now(), question: `${this.displayName(session)} ${checked.question}${fileCardLines(staged.files)}`, ...(checked.reason !== undefined ? { reason: checked.reason } : {}), ...(staged.files.length > 0 ? { files: staged.files } : {}), spec: { level: 'P0', options: [OUTBOUND_APPROVE, OUTBOUND_DECLINE], recommended: OUTBOUND_APPROVE }, outbound: { ticketId: checked.ticketId, address: checked.address, text: checked.text, team: this.settingsValue.canvas ?? '', title: checked.title, ...(staged.files.length > 0 ? { files: staged.files } : {}) } })
+    if (out.ok && out.reused !== true) this.outbound.waiting(out.id, checked.ticketId, checked.address, checked.text, session, staged.files)
+    return out.ok ? { ok: true, card_id: out.id, ...(staged.files.length > 0 ? { files: staged.files.map(f => ({ name: f.name, size: f.size, sha256: f.sha256 })) } : {}) } : out
   }
 
   /** Validate retained server-owned approval, not recovery-call text or a member's assertion. */
@@ -1883,10 +1887,11 @@ export class SuperagentHost {
       || !Number.isFinite(Date.parse(card.decided.at)) || Date.parse(this.now()) < Date.parse(card.decided.at)
       || Date.parse(this.now()) - Date.parse(card.decided.at) > 30 * 86_400_000
       || payload.ticketId !== record.ticketId || payload.address !== record.address || payload.text !== record.text
+      || JSON.stringify(payload.files?.map(f => f.sha256) ?? []) !== JSON.stringify(record.files?.map(f => f.sha256) ?? [])
       || payload.team === '' || payload.team !== this.settingsValue.canvas) return deny('outbound-approval', '缺少相符且有效的原批准载荷，未恢复发送；旧记录需维护核账。')
     const title = payload.title.length > 80 ? payload.title.slice(0, 80) + '…' : payload.title
     return { ok: true, at: card.decided.at, team: payload.team,
-      message: '[来自 superagent 团队 ' + payload.team + ' 的请求 · 工单「' + title + '」]\n' + payload.text }
+      message: withFileRefs('[来自 superagent 团队 ' + payload.team + ' 的请求 · 工单「' + title + '」]\n' + payload.text, payload.files) }
   }
 
   async prepareNarrowOutbound(card:string,task:string,receiver:{home:string;key:string;session:string},reconciliation:string):Promise<Record<string,unknown>> {try{return {ok:true,proposal:await this.narrowOutbound.prepare(card,task,receiver,reconciliation)}}catch{return {ok:false,code:'narrow-recovery-refused',error:'原批准、尝试链或精确接收身份无法可靠核验，未发送。'}}}

@@ -84,7 +84,7 @@ export interface StoredCard extends DecisionSpec {
   readonly by: string
   readonly ticketId?: string
   /** Server-owned immutable payload of an outbound approval, never supplied by the recovery caller. */
-  readonly outbound?: { readonly ticketId: string; readonly address: string; readonly text: string; readonly team: string; readonly title: string }
+  readonly outbound?: { readonly ticketId: string; readonly address: string; readonly text: string; readonly team: string; readonly title: string; readonly files?: readonly DecisionFile[] }
   readonly at: string
   /** Files the proposer put on the card (C8). */
   readonly files?: readonly DecisionFile[]
