@@ -23,7 +23,7 @@ function setup(over: Partial<NetDoctorFaceDeps> = {}) {
   }
   registerNetDoctorFaces(webServer as never, deps)
   const call = async (path: string, init: { method?: string; headers?: Record<string, string>; body?: string; remote?: string } = {}) => {
-    const req = Object.assign(Readable.from([Buffer.from(init.body ?? '{}')]), { method: init.method ?? 'POST', headers: { host: 'me.example:3', 'x-a2a-caller-url': 'http://b.example:1/', ...(init.headers ?? {}) }, socket: { remoteAddress: init.remote ?? '10.0.0.9' } })
+    const req = Object.assign(Readable.from([Buffer.from(init.body ?? '{}')]), { method: init.method ?? 'POST', headers: { host: 'me.example:3', 'x-a2a-caller-url': 'http://b.example:1/', ...(init.headers ?? {}) }, socket: { remoteAddress: init.remote ?? '192.0.2.9' } })
     let status = 0; let body = ''
     await handlers.get(path)!(req as never, { writeHead: (s: number) => { status = s }, end: (b: string) => { body = b } } as never)
     return { status, body: body === '' ? {} : JSON.parse(body) as Record<string, unknown> }
@@ -38,7 +38,7 @@ describe('POST /a2a/link-check', () => {
     expect(res.status).toBe(200)
     expect(res.body).toEqual({ ok: true, you: { caller: 'zone-b', callerUrl: 'http://b.example:1/', inPeers: true, dialledHost: 'me.example:3', audienceMisses: [{ audience: 'http://dialled.example:9', count: 2, lastAt: 5 }], pinnedCliHomes: [{ handle: 'zone-b/cli-1', home: 'http://b.example:1' }] } })
     const text = JSON.stringify(res.body)
-    expect(text).not.toContain('10.0.0.9')
+    expect(text).not.toContain('192.0.2.9')
     expect(text).not.toContain('zone-c')
   })
   it('a wrong key is a 404 and nothing else runs: no peer lookup, no claim verification', async () => {
@@ -72,7 +72,7 @@ describe('POST /a2a/link-check', () => {
     const { call, calls } = setup({ keyPrecheck: () => false })
     for (let i = 0; i < LINK_CHECKS_PER_MINUTE; i += 1) expect((await call('/a2a/link-check')).status).toBe(404)
     expect((await call('/a2a/link-check')).status).toBe(429)
-    expect((await call('/a2a/link-check', { remote: '10.0.0.77' })).status).toBe(404)
+    expect((await call('/a2a/link-check', { remote: '192.0.2.77' })).status).toBe(404)
     expect(calls.verify).not.toHaveBeenCalled()
   })
 })
