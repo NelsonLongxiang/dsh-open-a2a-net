@@ -609,6 +609,27 @@ describe('a member\'s turn: silent ends, failures, handoffs and stale reports', 
     } finally { await m.h.stop() }
   })
 
+  it('note delivery and read times survive a restart of the executor', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-notes-'))
+    let m = await team({ home })
+    const times = (host: typeof m.h, ticket: string) => (host as unknown as { executor: { noteTimes(id: string): Record<string, { deliveredAt: string; readAt?: string }> } }).executor.noteTimes(ticket)
+    let ticket = '', before: Record<string, { deliveredAt: string; readAt?: string }> = {}
+    try {
+      const one = m.accept('第一', '一'); ticket = one.ticket
+      m.h.engine.note(ticket, '停写：不要做业务写入')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      await m.tick()
+      m.h.memberClaimed('session-a')
+      before = { ...times(m.h, ticket) }
+      expect(Object.values(before)).toHaveLength(1)
+      expect(Object.values(before)[0]!.readAt).toBeDefined()
+    } finally { await m.h.stop() }
+    m = await team({ home })
+    try {
+      expect(times(m.h, ticket)).toEqual(before)
+    } finally { await m.h.stop() }
+  })
+
   it('after a person stops the ticket, the member\'s tool calls are refused with a receipt until the cancelled turn ends', async () => {
     const { RoleTools } = await import('../../src/superagent/host/role-tools.ts')
     let running = true
@@ -623,6 +644,9 @@ describe('a member\'s turn: silent ends, failures, handoffs and stale reports', 
       expect(tools.guard('write', member)).toContain(one.ticket)
       expect(tools.guard('bash', member)).toContain('stopped by a person')
       expect(tools.guard('a2a_ticket_report', member)).toBeUndefined()
+      // Only report and acknowledgement run: every other tool, other a2a_* ones included, is refused with the ticket named.
+      expect(tools.guard('a2a_ticket_ack', member)).toBeUndefined()
+      for (const name of ['a2a_route', 'a2a_file_fetch', 'a2a_outbound_request', 'a2a_ticket_request', 'a2a_ticket_handback']) expect(tools.guard(name, member), name).toContain(one.ticket)
       running = false
       m.h.memberIdle('session-a')
       expect(tools.guard('write', member)).toBeUndefined()
