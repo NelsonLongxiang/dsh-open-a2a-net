@@ -195,7 +195,19 @@ export function writeHomeA2a(home: string, changes: OwnerSettings, effective: Re
   for (const key of ['teamJoinAllowlist', 'teamScope', 'announce', 'seatNames'] as const) if (changes[key] !== undefined) overlay[key] = changes[key]
   for (const [key, value] of Object.entries(changes.network ?? {})) overlay[key] = value
   WRITTEN_SINCE_BOOT.set(path, overlay)
+  // #838 H: tell the host that owns this home so the hot network keys apply now (a listener failing never fails the write).
+  for (const listener of [...(WRITE_LISTENERS.get(path) ?? [])]) { try { listener({ ...overlay }) } catch { /* the file is already written; the host logs its own reload failure */ } }
   return { ok: true, restartNeeded, path }
+}
+
+const WRITE_LISTENERS = new Map<string, Set<(overlay: Readonly<Record<string, unknown>>) => void>>()
+
+/** #838 H: subscribe to successful home-layer a2a writes of one home; returns the unsubscribe. */
+export function onHomeA2aWritten(home: string, listener: (overlay: Readonly<Record<string, unknown>>) => void): () => void {
+  const path = home.replace(/\/+$/, '') + '/cordis.patch.yml'
+  const set = WRITE_LISTENERS.get(path) ?? new Set()
+  set.add(listener); WRITE_LISTENERS.set(path, set)
+  return () => { set.delete(listener) }
 }
 
 const WRITTEN_SINCE_BOOT = new Map<string, Record<string, unknown>>()

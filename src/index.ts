@@ -46,7 +46,8 @@ import { canvasOwners, canvasFailure } from './canvas-discovery.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
-import { applyOwnerSettings, loadSeatNames, writeHomeA2a, type OwnerSettings } from './owner-settings.ts'
+import { applyOwnerSettings, loadSeatNames, onHomeA2aWritten, writeHomeA2a, type OwnerSettings } from './owner-settings.ts'
+import { createLiveNetConfig } from './live-net-config.ts'
 import { CLI_HANDLE_RE, CliDepositStore, markReturnedReceipt, remoteCliTarget, type ReceiptSettlement } from './cli-deposit.ts'
 import { archivedBySameReceipt } from './task-ledger-rows.ts'
 import { cliHomeChoices, decideCliHome } from './cli-home.ts'
@@ -282,8 +283,12 @@ export const TIMER_MAX_DELAY_MS = 2_147_483_647
  */
 export const CARD_TTL_MAX_MS = 4 * TIMER_MAX_DELAY_MS + 3
 
-export function apply(ctx: Context, config: Config): void {
+export function apply(ctx: Context, bootConfig: Config): void {
   const logger = ctx.logger('a2a')
+  // #838 H: peers / originClaimUrl / originClaimAudiences / originClaimByPeer are read through one live snapshot that the
+  // home-layer writer swaps after a write (src/live-net-config.ts); every read below goes through `config`, never `bootConfig`.
+  const liveNet = createLiveNetConfig(bootConfig)
+  const config = liveNet.config
   // The node card's lifetime (#835 review): it sets the signed card's expiresAt and the TTL/4 re-sign timer. A missing,
   // non-finite, zero or tiny value would sign a NaN or already-expired card and re-sign every millisecond, so refuse to
   // start instead of guessing a lifetime for a signed card.
@@ -329,7 +334,7 @@ export function apply(ctx: Context, config: Config): void {
   // be discovered from a ledger full of unexplained steering.
   const teamWarning = originClaimTeamWarning(config.team)
   if (teamWarning !== undefined) logger.warn(teamWarning)
-  const originClaimByPeer = normalizeOriginClaimByPeer(config.originClaimByPeer)
+  let originClaimByPeer = normalizeOriginClaimByPeer(config.originClaimByPeer)
   for (const row of originClaimByPeer.ignored) logger.warn(originClaimByPeerWarning(row))
   const exposure = directDeliveryExposure(config.peers, config.apiKey)
   if (exposure.warning !== undefined) logger.warn(exposure.warning)
@@ -672,6 +677,8 @@ export function apply(ctx: Context, config: Config): void {
   const ownCanvasFingerprint = canvasOwnerFingerprint(encodePublicKey(createPublicKey(nodePrivateKey)))
   /** Our own card URL once the web server settles — the OriginClaim anchor. */
   let ownCardUrl = ''
+  /** The card URL the web server's own address gives, kept so clearing `originClaimUrl` falls back to it without a restart. */
+  let ownCardUrlDefault = ''
   /**
    * The OriginClaim envelope headers (gh#9+gh#10, src/origin-claim.ts): the
    * bound form names the target's origin, method and path; the unbound
@@ -799,7 +806,7 @@ export function apply(ctx: Context, config: Config): void {
   const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'), { staleTtlMs: config.taskStaleTtlMs, warn: message => logger.warn(message) })
   const enforceBlockers = taskLedger.settlementEnforceBlockers()
   const enforceRefused = config.settlementAuth === 'enforce' && enforceBlockers.length > 0 ? { reason: 'legacy forwarded canvas debts lack receiver facts', blockers: enforceBlockers } : undefined
-  if (enforceRefused !== undefined) { logger.error('settlementAuth enforce refused; running observe (#125/#275): %s', JSON.stringify(enforceRefused)); config = { ...config, settlementAuth: 'observe' } }
+  if (enforceRefused !== undefined) { logger.error('settlementAuth enforce refused; running observe (#125/#275): %s', JSON.stringify(enforceRefused)); Object.defineProperty(config, 'settlementAuth', { value: 'observe', enumerable: true, writable: true, configurable: true }) /* keep the live getters: never spread config */ }
   // Unjoined-node reporting ingress (design: docs/design/unjoined-report-ingress.md):
   // a one-way signal channel for sessions with no network membership — a
   // fallen-off or never-joined session reports "I exist / I have a task"
@@ -2045,7 +2052,8 @@ export function apply(ctx: Context, config: Config): void {
       const bound = (webServer as { host?: '127.0.0.1' | '0.0.0.0' }).host
       const urlOverride = config.originClaimUrl ?? ''
       const reachHost = urlOverride !== '' ? '' : bound === '0.0.0.0' && lanIp !== '' ? lanIp : '127.0.0.1'
-      ownCardUrl = urlOverride !== '' ? urlOverride : `http://${reachHost}:${String((webServer as { port: number }).port)}`
+      ownCardUrlDefault = `http://${reachHost !== '' ? reachHost : '127.0.0.1'}:${String((webServer as { port: number }).port)}`
+      ownCardUrl = urlOverride !== '' ? urlOverride : ownCardUrlDefault
       const cardCore = (): CardCore => ({
         name: config.agentName,
         session,
@@ -3291,6 +3299,29 @@ export function apply(ctx: Context, config: Config): void {
   }
   // #312: topology-only callbacks must never replace a full session/roster card cache entry.
   const signedDiscoveryPeers = new Map<string, { at: number; expiresAt: number; key: string; peers: readonly string[] }>()
+  // #838 H: the home-layer writer calls this after every successful a2a write. Tightening must bite at once: a removed
+  // peer, audience or per-peer claim URL loses the caches and derived state that would keep it alive; loosening needs none.
+  const sameHostUrl = (a: string, b: string): boolean => { try { const x = new URL(a); const y = new URL(b); return x.origin === y.origin && x.pathname.replace(/\/+$/, '') === y.pathname.replace(/\/+$/, '') } catch { return a === b } }
+  const stopHotNet = onHomeA2aWritten(home, overlay => {
+    const diff = liveNet.reload(overlay, message => logger.warn(message))
+    if (typeof overlay.teamScope === 'boolean') { ownerTeamScopeInfo = overlay.teamScope; ownerTeamScopeRouting = overlay.teamScope }
+    if (diff.changed.length === 0) return
+    if (diff.changed.includes('originClaimByPeer')) {
+      originClaimByPeer = normalizeOriginClaimByPeer(config.originClaimByPeer)
+      for (const row of originClaimByPeer.ignored) logger.warn(originClaimByPeerWarning(row))
+    }
+    if (diff.changed.includes('peers')) {
+      peerStore.setSeeds(config.peers)
+      for (const url of diff.removedPeers) {
+        peerStore.drop(url)
+        for (const key of [...cardCache.keys()]) if (sameHostUrl(key, url)) cardCache.delete(key)
+        for (const key of [...signedDiscoveryPeers.keys()]) if (sameHostUrl(key, url)) signedDiscoveryPeers.delete(key)
+      }
+    }
+    if (diff.changed.includes('originClaimUrl') && ownCardUrl !== '') ownCardUrl = config.originClaimUrl !== '' ? config.originClaimUrl : ownCardUrlDefault
+    logger.info(`a2a: network config hot-applied (${diff.changed.join(', ')})`)
+  })
+  ctx.effect(() => () => { stopHotNet() }, 'a2a: hot network config')
   async function verifyOriginClaim(req: IncomingMessage, options?: { readonly cli?: boolean; readonly rawBody?: Uint8Array }): Promise<OriginClaimVerdict> {
     const claim = await verifyOriginClaimOf(req, {
       cardCache,

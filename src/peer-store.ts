@@ -90,6 +90,15 @@ export class PeerStore {
   ) {
     this.now = now ?? (() => Date.now())
     this.restore()
+    this.setSeeds(seeds)
+  }
+
+  /**
+   * (Re)apply the configured seed set. The constructor calls it at boot; the #838 H hot reload calls it again when the
+   * owner changes `peers`: new URLs become seeds, a removed one loses its immunity (it is no longer owner-configured)
+   * and keeps what it learned, so ordinary eviction can drop it.
+   */
+  setSeeds(seeds: readonly string[]): void {
     for (const seed of seeds) {
       if (seed === '') continue
       // The config is authoritative for a seed: it is (re)marked as one —
