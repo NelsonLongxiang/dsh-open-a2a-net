@@ -252,33 +252,15 @@ function shellCard(command: string, kind: CredentialKind, depth = 0): boolean {
 }
 
 /**
- * A `web_search(...)` call's argument is a search term: a product name or an ordinary sentence, never a place the call
- * reads (#895, 2026-11-27). Its whole argument is dropped before the program text is judged. A call whose parentheses do
- * not balance is left as written, so a shape this cannot read keeps the old rule.
+ * A `web_search(...)` call whose whole argument is plain literal text (one quoted string, or an object of plain keys and
+ * quoted strings) is a search term: a product name or an ordinary sentence, never a place the call reads (#895,
+ * 2026-11-27). Only such a call is emptied before the program text is judged. An argument that holds anything else (an
+ * identifier, a call, a template, a concatenation, a nested call) is not text, so the old rule applies to it unchanged.
  */
-function withoutSearchTerms(code: string): string {
-  const call = /\b(?:tools\.)?web_search\s*\(/g
-  let out = ''
-  let from = 0
-  for (let m = call.exec(code); m !== null; m = call.exec(code)) {
-    if (m.index < from) continue
-    let depth = 1
-    let quote = ''
-    let end = -1
-    for (let i = m.index + m[0].length; i < code.length; i += 1) {
-      const c = code[i]!
-      if (quote !== '') { if (c === '\\') i += 1; else if (c === quote) quote = ''; continue }
-      if (c === '"' || c === "'" || c === '`') quote = c
-      else if (c === '(') depth += 1
-      else if (c === ')') { depth -= 1; if (depth === 0) { end = i; break } }
-    }
-    if (end < 0) return code
-    out += code.slice(from, m.index + m[0].length) + code.slice(end, end + 1)
-    from = end + 1
-    call.lastIndex = from
-  }
-  return out + code.slice(from)
-}
+const QUOTED = String.raw`"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'`
+const SEARCH_TERM_CALL = new RegExp(
+  String.raw`\b(?:tools\.)?web_search\s*\(\s*(?:${QUOTED}|\{\s*(?:(?:[A-Za-z_$][\w$]*|${QUOTED})\s*:\s*(?:${QUOTED})\s*(?:,\s*)?)*\})\s*\)`, 'g')
+const withoutSearchTerms = (code: string): string => code.replace(SEARCH_TERM_CALL, 'web_search()')
 
 /** Whether a program text (a generic executor's code) reads a protected place or makes a request with a credential header. */
 function codeCard(code: string, kind: CredentialKind): boolean {
