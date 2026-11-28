@@ -22,7 +22,7 @@ async function fixture(withConnection = true) {
   if (withConnection) await ctx.plugin(MockGuiConnection, { origin: ORIGIN })
   const calls = { decide: vi.fn(() => ({ ok: true })), settings: vi.fn(() => ({ ok: true })), sync: vi.fn(async () => ({ ok: true, logins: [] })),
     file: vi.fn(() => ({ name: 'fixture.txt', sha256, size: bytes.length })), staffing: vi.fn(async () => ({ ok: true })), recover: vi.fn(async () => ({ ok: true, state: 'failed' })), withdraw: vi.fn(() => ({ ok: true, withdrawn: true })) }
-  const team = { decide: calls.decide, saveSettings: calls.settings, githubCollaborators: calls.sync, settings: { allowed: { github: [] } }, decisionFile: calls.file, recoverOutbound: calls.recover, ownerCastQueue: calls.withdraw }
+  const team = { decide: calls.decide, isPeerChannelCard: () => false, saveSettings: calls.settings, githubCollaborators: calls.sync, settings: { allowed: { github: [] } }, decisionFile: calls.file, recoverOutbound: calls.recover, ownerCastQueue: calls.withdraw }
   const collectHistory = vi.fn(() => 42)
   const collectCache = vi.fn(() => 128)
   const collectSessions = vi.fn(() => [{}, {}])

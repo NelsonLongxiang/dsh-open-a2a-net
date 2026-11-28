@@ -44,6 +44,16 @@
 
 接入与确认细节见 [The A2A Source](superagent.md#the-a2a-source-agents)。这份源码资料不能证明某个运行实例已经开启来源、登记调用方或通过接单规则。
 
+## 已批准的队内交流
+
+持有开放工单的成员可以用 a2a_ticket_report 的 peer_channel 对象申请与一名具名队友交流。提供 ticket_id、state=progress、作为申请理由的 summary，以及 peer_channel.to。由宿主出 P1 决策卡。真属主或符合本队 observerDecides 门槛的观察者可批准；申请人和接收人不能代批自己的卡。
+
+批准起七天内，申请人的 a2a_whoami 显示对端、关联工单和到期时刻，并可调用 a2a_team_message。参数为 to、稳定 message_id、text，以及有多个匹配工单时的 ticket_id。授权单向生效。到期、撤销、换席或工单丢失后，原授权不能继续发送；续期需要新卡。
+
+发送会先留原单审计，再以非人上下文排入目标会话。queued 表示已入队；对方是否阅读、接手或完成另看相关回执。状态未知时用同一目标和 message_id 加 status=true 对账，再次发送同 id 只读已记录结果。文件只发已确认共享文件系统上的绝对路径及 sha256；该字段不改变读取权限。当前远端 DSH 成员支持文本，文件引用需可证共享存储。
+
+观察者用 a2a_ticket_read kind=peer-channels 读授权清单，用 kind=peer-channel-audit 和 ticket_id 读原单通信记录，并可用 a2a_decision_decide 的 revoke_grant=true、card_id=授权号、option=revoke 和 reason 撤销。总工可用 superagent_read kind=peer-channel-audit 读原单审计。真属主使用 /__dsh_a2a/superagent/peer-channels 的 list、audit 和 revoke 操作。跨队联系继续走获批出站。
+
 ## 3. 向别队或普通节点求助：受控出站
 
 已有开放工单才提出 a2a_outbound_request；传 ticket_id、address、text、why。地址可以是受支持的会话句柄或画布地址，不要求目标本身必须是 SuperAgent 团队。

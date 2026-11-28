@@ -27,8 +27,9 @@ import { apply, type Config } from '../../src/index.ts'
 import { canvasOwnerFingerprint } from '../../src/canvas-id.ts'
 import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
-import { cliEnv, MockGuiConnection, mockGuiLogin, bootNode, postJson, reservePort } from './harness.ts'
+import { cliEnv, MockGuiConnection, mockGuiLogin, bootNode, postJson, reservePort, runContext, tmpHome } from './harness.ts'
 import {A2aSource} from '../../src/superagent/host/a2a-source.ts'
+import { SuperagentHost } from '../../src/superagent/host/index.ts'
 import {pollMailbox} from '../../src/superagent/a2a-watch.ts'
 
 class ManyAgents extends Service {
@@ -98,6 +99,88 @@ beforeEach(() => { vi.stubGlobal('WebSocket', function throwOnSocket() { throw n
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('superagent engine in the a2a host', () => {
+  it.each([false, true])('authorizes one-way team messaging through a real Owner card (remote recipient=%s)', async remote => {
+    const [pa, pb] = await Promise.all([reservePort(), reservePort()])
+    const au = 'http://127.0.0.1:' + pa, bu = 'http://127.0.0.1:' + pb
+    const home = mkdtempSync(join(tmpdir(), 'team-peer-origin-'))
+    const a = await mount(home, { team: 'alpha', originClaimUrl: au, teamScopeInfo: false, teamScopeRouting: false, peers: remote ? [bu] : [] }, pa)
+    const b = remote ? await bootNode({ name: 'peer-target', session: 'peer-target', team: 'beta', agentId: X_ID,
+      port: pb, peers: [au], originClaimUrl: bu, home: tmpHome(), sessionNodes: true, superagent: true, teamScopeInfo: false, teamScopeRouting: false, silent: true }) : undefined
+    try {
+      const handle = 'beta/d3333333'
+      if (b !== undefined) {
+        expect(await (await postJson(b.baseUrl, '/__dsh_a2a/join', { id: X_ID })).json()).toMatchObject({ id: X_ID, team: handle })
+        for (const id of [R_ID, M_ID]) expect(await a.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'team', id })).toMatchObject({ ok: true })
+        const added = await a.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'team', id: handle, peer: bu })
+        expect(added, JSON.stringify(added)).toMatchObject({ ok: true })
+        expect(await a.sa({ action: 'settings', settings: { canvas: 'team', router: R_ID } })).toMatchObject({ ok: true })
+        const topology = await fetch(au + '/__dsh_a2a/state').then(r => r.json()) as any
+        const team = topology.canvas.teams.find((row: any) => row.name === 'team').id
+        const served = await postJson(b.baseUrl, '/__dsh_a2a/superagent', { action: 'serve', team, members: [X_ID] }).then(res => res.json())
+        expect(served, JSON.stringify(served)).toMatchObject({ ok: true })
+      } else expect(await a.team(R_ID, [M_ID, X_ID])).toMatchObject({ ok: true })
+      const peer = remote ? (await a.state()).executor.remoteMembers[0].ref : X_ID
+      const request = await a.sa({ action: 'request', text: 'Open the team message fixture' })
+      await vi.waitFor(() => expect(a.R.steered.some(text => text.includes(request.triggerId))).toBe(true))
+      const accepted = await a.tool('superagent_route', a.R, { items: [{ kind: 'accept', trigger_id: request.triggerId, title: 'Peer message fixture', scope: 'Check the grant', reason: 'Owner fixture', member: M_ID }] })
+      const ticket = accepted.results[0].ticket_id
+      await vi.waitFor(async () => expect((await a.state()).executor.bindings.some((row: any) => row.ticketId === ticket && row.member === M_ID)).toBe(true))
+      const args = { to: peer, ticket_id: ticket, message_id: 'peer-test', text: 'A scoped team message' }
+      expect(await a.tool('a2a_team_message', a.M, args)).toMatchObject({ ok: false, code: 'not-granted' })
+      const card = await a.tool('a2a_ticket_report', a.M, { state: 'progress', ticket_id: ticket, summary: 'Coordinate with this teammate', peer_channel: { to: peer } })
+      expect(card, JSON.stringify(card)).toMatchObject({ ok: true, id: expect.any(String) })
+      expect(await a.post('/__dsh_a2a/superagent/decisions', { id: card.id, how: 'choose', option: 'o1' })).toMatchObject({ ok: true, granted: true })
+      const whoami = await a.tool('a2a_whoami', a.M, {})
+      expect(whoami.peerChannels).toMatchObject([{ ticketId: ticket, recipient: peer, expiresAt: expect.any(Number) }])
+      const grant = whoami.peerChannels[0].id
+      expect(await a.tool('a2a_team_message', a.M, { ...args, to: O_ID })).toMatchObject({ ok: false, code: 'not-granted' })
+      if (remote) {
+        const original = SuperagentHost.prototype.peerMemberDelivery
+        const delivery = vi.spyOn(SuperagentHost.prototype, 'peerMemberDelivery').mockImplementation(function (this: SuperagentHost, ...params) {
+          const result = original.apply(this, params)
+          return params[0] === 'peer-channel-message' && result.status === 'queued' ? { ok: true, status: 'unknown' } : result
+        })
+        try {
+          expect(await a.tool('a2a_team_message', a.M, args)).toMatchObject({ ok: true, status: 'unknown' })
+          expect(await a.tool('a2a_team_message', a.M, { ...args, status: true })).toMatchObject({ ok: true, status: 'queued' })
+          const calls = delivery.mock.calls.filter(([op]) => op === 'peer-channel-status')
+          expect(calls).toHaveLength(1)
+          expect(Object.keys(calls[0]![4] as object).sort()).toEqual(['grantId', 'id', 'nonce', 'receivingBinding'])
+        } finally { delivery.mockRestore() }
+      } else expect(await a.tool('a2a_team_message', a.M, args)).toMatchObject({ ok: true, status: 'queued' })
+      const received = () => b ? b.steered.map(line => typeof line === 'string' ? line : JSON.stringify(line)) : a.X.steered
+      await vi.waitFor(() => expect(received().filter(line => line.includes(args.text))).toHaveLength(1))
+      expect(await a.tool('a2a_team_message', a.M, args)).toMatchObject({ ok: true, status: 'queued', replayed: true })
+      expect(await a.tool('a2a_team_message', a.M, { ...args, text: 'Different payload' })).toMatchObject({ ok: false, code: 'conflict' })
+      expect(await a.tool('a2a_team_message', a.M, { ...args, status: true })).toMatchObject({ ok: true, status: 'queued' })
+      const reverse = b ? await b.ctx.tools.get('a2a_team_message')!.execute({ ...args, to: M_ID }, runContext(b.agents.agent))
+        : await a.tool('a2a_team_message', a.X, { ...args, to: M_ID })
+      expect(reverse).toMatchObject({ ok: false, code: 'not-granted' })
+      if (b !== undefined) {
+        const unsigned = await postJson(b.baseUrl, '/a2a/superagent-member', { op: 'peer-channel-message', member: handle, team: 'alpha/canvas/team', message: args })
+        expect(await unsigned.json()).toMatchObject({ ok: false, code: 'untrusted-origin' })
+        expect(received().filter(line => line.includes(args.text))).toHaveLength(1)
+      }
+      const file = { path: '/fixture/reference-only', sha256: 'a'.repeat(64) }
+      const fileArgs = { to: peer, message_id: 'file-ref', file }
+      const result = await a.tool('a2a_team_message', a.M, fileArgs)
+      expect(result).toMatchObject(remote ? { ok: false, code: 'shared-files-unverified' } : { ok: true, status: 'queued' })
+      if (!remote) await vi.waitFor(() => expect(received().some(line => line.includes(file.path) && line.includes(file.sha256))).toBe(true))
+      expect(await a.tool('a2a_ticket_read', a.M, { kind: 'peer-channel-audit', ticket_id: ticket })).toMatchObject({ ok: false, code: 'not-authorized' })
+      const owner = await a.post('/__dsh_a2a/superagent/peer-channels', { op: 'audit', id: ticket })
+      expect(owner.ok).toBe(true)
+      expect(owner.messages.filter((message: any) => message.id === 'peer-test')).toMatchObject([{ id: 'peer-test', ticketId: ticket, text: args.text, status: 'queued', sender: M_ID, recipient: peer }])
+      expect(received().filter(line => line.includes(args.text))).toHaveLength(1)
+      expect(received().filter(line => line.includes('[superagent assignment]'))).toHaveLength(0)
+      expect(await a.post('/__dsh_a2a/superagent/peer-channels', { op: 'revoke', id: grant })).toMatchObject({ ok: true })
+      expect(await a.tool('a2a_team_message', a.M, { ...args, message_id: 'after-revoke' })).toMatchObject({ ok: false, code: 'not-granted' })
+      expect((await a.tool('a2a_whoami', a.M, {})).peerChannels).toBeUndefined()
+    } finally {
+      await a.dispose()
+      await b?.dispose()
+    }
+  }, 60_000)
+
   it.each([false,true])('single-request legacy owner recovery completes original ticket; lost response=%s',async lost=>{
     let source:A2aSource|undefined
     const start=A2aSource.prototype.start,sourceSpy=vi.spyOn(A2aSource.prototype,'start').mockImplementation(function(this:A2aSource){source=this;return start.call(this)})

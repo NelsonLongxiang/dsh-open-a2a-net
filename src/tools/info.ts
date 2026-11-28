@@ -71,6 +71,7 @@ export type DirectoryTeamRow = { memberRef?: string; team: string; session: stri
 
 /** Everything the information-plane tools capture from apply(). */
 export interface InfoToolsDeps {
+  readonly peerChannelsOf?: (sessionId: string) => Promise<readonly { id: string; ticketId: string; recipient: string; expiresAt: number }[]>
   readonly ctx: Context
   readonly config: Config
   readonly logger: ReturnType<Context['logger']>
@@ -251,6 +252,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
             },
             teamScope: { type: 'boolean' },
             teamScopeRouting: { type: 'boolean' },
+            peerChannels: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'This session’s active team message grants and expiry.' },
             note: { type: 'string', description: 'What join does and does not gate, in one sentence.' },
             lastRefusals: {
               type: 'array',
@@ -275,6 +277,7 @@ export function createInfoTools(deps: InfoToolsDeps) {
         allowlist?: Record<string, JsonValue>
         teamScope?: boolean
         teamScopeRouting?: boolean
+        peerChannels?: Array<Record<string, JsonValue>>
         lastRefusals?: Array<Record<string, JsonValue>>
         note?: string
       }> => {
@@ -297,7 +300,9 @@ export function createInfoTools(deps: InfoToolsDeps) {
           .reverse()
           .map(entry => ({ at: entry.at, action: entry.action, team: entry.team, reason: entry.reason ?? '' }))
         const patterns = [...deps.ownerAllowlist]
+        const grants = await deps.peerChannelsOf?.(agentId)
         return {
+          ...(grants?.length ? { peerChannels: grants.map(grant => ({ ...grant })) } : {}),
           ok: true,
           face: 'session',
           node: {
