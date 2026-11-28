@@ -276,6 +276,7 @@ a2a-net pi install                            # 把 a2a-seat 扩展复制到 ~/.
 | `/__dsh_a2a/fleet-canvas-op` | 把画布操作中继到某 peer 的 `/a2a/canvas-op`，盖上本节点的 OriginClaim；由对端的链接门裁决。 |
 | `/__dsh_a2a/cli-deposit` | `a2a-net` CLI 身份的寄存、列表、撤销、信箱读取与准入查询（`admission`，须由该身份自己签名）。 |
 | `GET /__dsh_a2a/nodes` · `POST` | 节点身份（docs/design/node-identity.md）：GET 读名册或单个节点（`?name=`）；POST 是身份写入，即使在 loopback 也要 `X-API-Key`；未配置 `apiKey` 的主机直接拒绝一切身份写入。 |
+| `GET /__dsh_a2a/net-doctor` | 网络体检（#838）：四个热键（`peers`、`originClaimUrl`、`originClaimAudiences`、`originClaimByPeer`）各自的生效值、来源层、home 文件值与运行值是否一致，加上不联网的检查；`?peer=<本机 peers 里已有的 URL>` 还会问该对端的 `POST /a2a/link-check`「你怎么看我」。只读。 |
 | `POST /__dsh_a2a/blob` | 为接收方暂存一个文件（`?to=&name=`）——文件通道的写入面；对端经 `GET /a2a/blob` 拉取。 |
 
 状态面的账本：`tasks`（pending，每行带 `settleable`）、`tasksStaleCount`、`tasksDead`（已知时带 `direction`），以及 `archived`——最新 64 条已结清行，最新在前，每行带 `outcome`、`endedBy`（`receipt` | `echo` | `abandoned` | `cancelled` | `evicted`）、回执在调用方结束之后才到时带 `late: true`、已知时带 `direction`——另有 `archivedCount` 与 `archivedSplit`（按结局计数）。
