@@ -47,7 +47,7 @@ import { MEMBER_PRESET, OBSERVER_PRESET, ROUTER_PRESET, YGL_TREES, blockableTool
 import { CLI_HANDLE_RE } from '../../cli-deposit.ts'
 import { armAutoApprove, CREDENTIAL_ACK_MINUTES_DEFAULT, DEFAULT_SETTINGS, WORKBENCH_CLI, WORKBENCH_OWNER, OBSERVER_OPEN_MAX, PROMPT_MAX, memberActor, observerActor, observerOfActor, parseSettings, parseStoredSettings, policyEffects, policyVersion, teamPolicy, teamScope, type RemoteMember, type TeamSettings } from './policy.ts'
 import { armObserverDecisionRule, isObserverAnswerReceipt, observerAnswerNote, observerCardView, observerOptions, observerRefusal, OBSERVER_DECISION_WINDOW_MS, OBSERVER_QUOTA_WINDOW_MS, type ObserverDecision } from './observer-decisions.ts'
-import { PEER_CHANNEL_APPROVE, PEER_CHANNEL_DECLINE, PEER_CHANNEL_LIFETIME, PeerChannelBook, peerGrantView, peerMessageId, peerObject, peerPayload, readPeerMessage, validPeerGrantView, type PeerChannelTarget, type PeerGrant, type PeerGrantView, type PeerMessage, type PeerMessageStatus } from './peer-channel.ts'
+import { PEER_CHANNEL_APPROVE, PEER_CHANNEL_DECLINE, PEER_CHANNEL_LIFETIME, PeerChannelBook, peerGrantView, peerMessageId, peerObject, peerPayload, readPeerMessage, readPeerStatusQuery, verifyPeerStatus, validPeerGrantView, type PeerStatusQuery, type PeerChannelTarget, type PeerGrant, type PeerGrantView, type PeerMessage, type PeerMessageStatus } from './peer-channel.ts'
 import { searchTeam } from './search.ts'
 import { A2aReceipts, END_RECEIPT_GRACE_MS } from './receipts.ts'
 export { END_RECEIPT_GRACE_MS } from './receipts.ts'
@@ -1988,7 +1988,7 @@ export class SuperagentHost {
     } catch { return { ok: false, code: 'storage' } }
   }
 
-  private async postPeerMember(remote: RemoteMember, op: string, team: string, message?: PeerMessage): Promise<Record<string, unknown>> {
+  private async postPeerMember(remote: RemoteMember, op: string, team: string, message?: PeerMessage | PeerStatusQuery): Promise<Record<string, unknown>> {
     try { return await this.d.signedPost?.(remote.url, '/a2a/superagent-member', { op, member: remote.ref.replace(/@[0-9a-f]{8}$/, ''), team, ...(message !== undefined ? { message } : {}) }) ?? { ok: false, code: 'unavailable' } }
     catch { return { ok: false, code: 'unknown' } }
   }
@@ -2101,9 +2101,11 @@ export class SuperagentHost {
       const grant = active.find(row => row.id === prior.payload.grantId)
       if (prior.status === 'unknown' && grant !== undefined) {
         const remote = this.peerRemote(grant.recipient)
-        const status = remote !== undefined ? (await this.postPeerMember(remote, 'peer-channel-status', grant.team, prior.payload)).status
-          : this.d.peerDeliveryStatus?.(grant.recipient, prior.payload, grant.recipientBinding)
-        if (status === 'queued' || status === 'refused') try { this.peerChannels.finish(owner, id, status) } catch { /* unknown */ }
+        if (remote !== undefined) await this.reconcileRemotePeer(grant, remote, owner, id, memberBinding)
+        else {
+          const status = this.d.peerDeliveryStatus?.(grant.recipient, prior.payload, grant.recipientBinding)
+          if (status === 'queued' || status === 'refused') try { this.peerChannels.finish(owner, id, status) } catch { /* unknown */ }
+        }
       }
       return { ok: true, status: this.peerChannels.find(owner, id)?.status ?? 'unknown', messageId: id }
     }
@@ -2147,6 +2149,19 @@ export class SuperagentHost {
     return { ok: true, status: this.peerChannels.find(owner, id)?.status ?? 'unknown', messageId: id }
   }
 
+  private async reconcileRemotePeer(grant: PeerGrant, remote: RemoteMember, owner: string, id: string, memberBinding?: string): Promise<void> {
+    if (grant.receivingBinding === undefined) return
+    const current = (): boolean => this.eligiblePeerGrants(grant.sender, Date.parse(this.now()), memberBinding).some(row => row.id === grant.id) &&
+      this.peerChannels.find(owner, id)?.status === 'unknown'
+    try {
+      if (await this.d.peerHostMatches?.(remote.url, remote.key) !== true || !current()) return
+      const query = { id, grantId: grant.id, receivingBinding: grant.receivingBinding, nonce: randomUUID() }
+      const answer = await this.postPeerMember(remote, 'peer-channel-status', grant.team, query)
+      const status = verifyPeerStatus(grant.team, remote.ref.replace(/@[0-9a-f]{8}$/, ''), query, answer, remote.key)
+      if (status !== undefined && current()) this.peerChannels.finish(owner, id, status)
+    } catch { /* An unavailable target or journal leaves the prior outcome unknown. */ }
+  }
+
   async peerRemoteOperation(op: string, handle: string, key: string, raw: unknown): Promise<Record<string, unknown>> {
     const member = this.settings.remoteMembers.find(row => row.platform !== PI_PLATFORM && row.key === key && row.ref.replace(/@[0-9a-f]{8}$/, '') === handle)
     if (!member) return { ok: false, code: 'not-member' }
@@ -2171,18 +2186,23 @@ export class SuperagentHost {
     if (!local || !binding || !served.members.includes(local)) return { ok: false, code: 'not-member' }
     if (op === 'peer-channel-binding') return { ok: true, binding }
     if (op === 'peer-channel-refresh') { void this.refreshPeerGrants(local); return { ok: true } }
+    if (op === 'peer-channel-status') {
+      const query = readPeerStatusQuery(raw)
+      if (query === undefined || query.receivingBinding !== binding) return { ok: false, code: 'not-granted' }
+      const owner = 'in:' + signerKey + ':' + local + ':' + query.grantId
+      const prior = this.peerChannels.find(owner, query.id)
+      if (prior !== undefined && (prior.payload.receivingBinding !== binding || prior.payload.team !== team)) return { ok: false, code: 'not-granted' }
+      if (prior?.status === 'unknown' && this.d.peerDeliveryStatus?.(local, prior.payload, binding) === 'queued') {
+        try { this.peerChannels.finish(owner, query.id, 'queued') } catch { /* unknown */ }
+      }
+      return { ok: true, status: this.peerChannels.find(owner, query.id)?.status ?? 'unknown' }
+    }
     const message = readPeerMessage(raw)
     if (!message || message.file !== undefined || message.team !== team || message.receivingBinding !== binding ||
       message.recipient.replace(/@[0-9a-f]{8}$/, '') !== member) return { ok: false, code: 'not-granted' }
     const owner = 'in:' + signerKey + ':' + local + ':' + message.grantId
     const prior = this.peerChannels.find(owner, message.id)
     if (prior && JSON.stringify(prior.payload) !== JSON.stringify(message)) return { ok: false, code: 'conflict' }
-    if (op === 'peer-channel-status') {
-      if (prior?.status === 'unknown' && this.d.peerDeliveryStatus?.(local, message, binding) === 'queued') {
-        try { this.peerChannels.finish(owner, message.id, 'queued') } catch { /* unknown */ }
-      }
-      return { ok: true, status: this.peerChannels.find(owner, message.id)?.status ?? 'unknown' }
-    }
     if (op !== 'peer-channel-message') return { ok: false, code: 'op' }
     if (prior) return { ok: true, status: prior.status, replayed: true }
     try { this.peerChannels.reserve(owner, message) } catch { return { ok: false, code: 'storage' } }

@@ -61,7 +61,7 @@ import { formatReceipt, holdsRow, parseReceipt, receiptExtras, receiptTaskId, ta
 import { holdsOpenTicket, readSelfChecks } from './superagent/host/self-check-read.ts'
 import { SuperagentHost } from './superagent/host/index.ts'
 import { registerSuperagentTools } from './superagent/host/tools.ts'
-import { peerDeliveryId, peerMessageText, type PeerMessage } from './superagent/host/peer-channel.ts'
+import { peerDeliveryId, peerMessageText, signPeerStatus, type PeerMessage } from './superagent/host/peer-channel.ts'
 import { BUILDER_PRESET, RoleTools, scopeKeyOf, type RoleAgent } from './superagent/host/role-tools.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
 import { ReconciliationInbox } from './reconciliation-inbox.ts'
@@ -4031,6 +4031,7 @@ export function apply(ctx: Context, config: Config): void {
   // superagent's HTTP faces live in src/faces/superagent.ts (#570 line ratchet); registered after cardCache exists: whenWebServerSettled may run its callback at once.
   if (superagentHost !== undefined && superagentTeams !== undefined) whenWebServerSettled((webServer) => {
     registerSuperagentFaces(webServer, {
+      signPeerStatus: (team, member, query, status) => signPeerStatus(team, member, query, status, nodePrivateKey),
       canvasLabel: name => canvasStore.labelOf(name),
       ownerDelegatesPath: join(home, 'a2a', 'owner-delegates.json'),
       sidebarSends,

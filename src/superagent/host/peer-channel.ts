@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, createPublicKey, randomUUID, sign, verify, type KeyObject } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, win32 } from 'node:path'
 
@@ -63,6 +63,38 @@ export interface PeerMessage {
 }
 
 export type PeerMessageStatus = 'unknown' | 'queued' | 'refused'
+
+export interface PeerStatusQuery {
+  readonly id: string
+  readonly grantId: string
+  readonly receivingBinding: string
+  readonly nonce: string
+}
+
+export function readPeerStatusQuery(raw: unknown): PeerStatusQuery | undefined {
+  const row = peerObject(raw)
+  if (!row || !peerMessageId(row.id) || !identifier(row.grantId) || !identifier(row.receivingBinding) ||
+    typeof row.nonce !== 'string' || !/^[0-9a-f-]{36}$/.test(row.nonce)) return undefined
+  return { id: row.id, grantId: row.grantId, receivingBinding: row.receivingBinding, nonce: row.nonce }
+}
+
+function peerStatusProofBytes(team: string, member: string, query: PeerStatusQuery, status: string): Buffer {
+  return Buffer.from(JSON.stringify(['a2a-peer-channel-status-v1', team, member, query.grantId, query.id, query.receivingBinding, query.nonce, status]))
+}
+
+export function signPeerStatus(team: string, member: string, query: PeerStatusQuery, status: string, key: KeyObject): string {
+  return sign(null, peerStatusProofBytes(team, member, query, status), key).toString('base64')
+}
+
+export function verifyPeerStatus(team: string, member: string, query: PeerStatusQuery, answer: Record<string, unknown>, key: string): 'queued' | 'refused' | undefined {
+  const { status, proof } = answer
+  if (answer.ok !== true || (status !== 'queued' && status !== 'refused') || typeof proof !== 'string' || !/^[A-Za-z0-9+/]{86}==$/.test(proof)) return undefined
+  try {
+    const publicKey = createPublicKey({ key: Buffer.from(key, 'base64'), format: 'der', type: 'spki' })
+    if (publicKey.asymmetricKeyType === 'ed25519' && verify(null, peerStatusProofBytes(team, member, query, status), publicKey, Buffer.from(proof, 'base64'))) return status
+  } catch { /* Unverifiable response leaves the message outcome unknown. */ }
+  return undefined
+}
 
 export function peerDeliveryId(message: PeerMessage, binding: string): string {
   return 'peer-' + createHash('sha256').update(JSON.stringify([message.team, message.grantId, message.id, message.sender, message.recipient, binding])).digest('hex')

@@ -35,10 +35,12 @@ import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { canvasOwnerFingerprint, splitCanvasOwner } from '../canvas-id.ts'
 import type { StaffingExecutor, StaffingChange } from '../superagent/host/staffing.ts'
 import type { SidebarSends } from '../sidebar-sends.ts'
+import { readPeerStatusQuery, type PeerStatusQuery } from '../superagent/host/peer-channel.ts'
 
 /** What the superagent faces need from the host's closure. */
 export interface SuperagentFaceDeps {
   readonly ctx: Context
+  readonly signPeerStatus?: (team: string, member: string, query: PeerStatusQuery, status: string) => string
   readonly config: Config
   readonly superagentHost: SuperagentHost
   readonly superagentTeams: SuperagentTeams
@@ -266,10 +268,14 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
       for (const team of superagentTeams!.all()) { refused = ask(team); if (!['not-team', 'not-member'].includes(String(refused.code))) return refused }
       return refused
     }
-    signedFace('/a2a/superagent-member', (body, claim) => firstTeam(team =>
-      typeof body.op === 'string' && body.op.startsWith('peer-channel-')
-        ? team.peerMemberDelivery(body.op, body.member, claim.key, body.team, body.message)
-        : team.assignedWork(body.op, body.member, claim.key, body.text)), 'a2a: superagent member face')
+    signedFace('/a2a/superagent-member', (body, claim) => {
+      if (typeof body.op !== 'string' || !body.op.startsWith('peer-channel-')) return firstTeam(team => team.assignedWork(body.op, body.member, claim.key, body.text))
+      const result = firstTeam(team => team.peerMemberDelivery(body.op, body.member, claim.key, body.team, body.message))
+      if (body.op !== 'peer-channel-status' || result.ok !== true) return result
+      const query = readPeerStatusQuery(body.message)
+      if (query === undefined || typeof body.team !== 'string' || typeof body.member !== 'string' || typeof result.status !== 'string' || d.signPeerStatus === undefined) return { ok: false, code: 'unavailable' }
+      return { ...result, proof: d.signPeerStatus(body.team, body.member, query, result.status) }
+    }, 'a2a: superagent member face')
     signedFace('/a2a/superagent-team', async (body, claim) => {
       if (typeof body.member !== 'string' || !claimCovers(body.member, claim.caller)) return { ok: false, code: 'not-signer', error: 'the signer does not speak for that member' }
       const { member } = body

@@ -29,6 +29,7 @@ import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { cliEnv, MockGuiConnection, mockGuiLogin, bootNode, postJson, reservePort, runContext, tmpHome } from './harness.ts'
 import {A2aSource} from '../../src/superagent/host/a2a-source.ts'
+import { SuperagentHost } from '../../src/superagent/host/index.ts'
 import {pollMailbox} from '../../src/superagent/a2a-watch.ts'
 
 class ManyAgents extends Service {
@@ -133,7 +134,20 @@ describe('superagent engine in the a2a host', () => {
       expect(whoami.peerChannels).toMatchObject([{ ticketId: ticket, recipient: peer, expiresAt: expect.any(Number) }])
       const grant = whoami.peerChannels[0].id
       expect(await a.tool('a2a_team_message', a.M, { ...args, to: O_ID })).toMatchObject({ ok: false, code: 'not-granted' })
-      expect(await a.tool('a2a_team_message', a.M, args)).toMatchObject({ ok: true, status: 'queued' })
+      if (remote) {
+        const original = SuperagentHost.prototype.peerMemberDelivery
+        const delivery = vi.spyOn(SuperagentHost.prototype, 'peerMemberDelivery').mockImplementation(function (this: SuperagentHost, ...params) {
+          const result = original.apply(this, params)
+          return params[0] === 'peer-channel-message' && result.status === 'queued' ? { ok: true, status: 'unknown' } : result
+        })
+        try {
+          expect(await a.tool('a2a_team_message', a.M, args)).toMatchObject({ ok: true, status: 'unknown' })
+          expect(await a.tool('a2a_team_message', a.M, { ...args, status: true })).toMatchObject({ ok: true, status: 'queued' })
+          const calls = delivery.mock.calls.filter(([op]) => op === 'peer-channel-status')
+          expect(calls).toHaveLength(1)
+          expect(Object.keys(calls[0]![4] as object).sort()).toEqual(['grantId', 'id', 'nonce', 'receivingBinding'])
+        } finally { delivery.mockRestore() }
+      } else expect(await a.tool('a2a_team_message', a.M, args)).toMatchObject({ ok: true, status: 'queued' })
       const received = () => b ? b.steered.map(line => typeof line === 'string' ? line : JSON.stringify(line)) : a.X.steered
       await vi.waitFor(() => expect(received().filter(line => line.includes(args.text))).toHaveLength(1))
       expect(await a.tool('a2a_team_message', a.M, args)).toMatchObject({ ok: true, status: 'queued', replayed: true })
