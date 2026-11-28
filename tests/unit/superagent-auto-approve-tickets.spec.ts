@@ -135,6 +135,48 @@ describe('D5 phase two: ticket cards', () => {
     await m.h.stop()
   })
 
+  it('while the observer holds the question it is not taken; the wait runs from when the question reached the person', async () => {
+    const m = await team()
+    const ticket = await m.openTicket()
+    const card = await m.ask(ticket)
+    const gate = (m.h as unknown as { questionGate: { held(id: string): boolean; pending: Map<string, unknown>; reached: Map<string, number> } }).questionGate
+    expect(gate.held(ticket)).toBe(false)
+    m.enable()
+    gate.pending.set(ticket, { observer: 'session-o', since: T0 })
+    m.clock.t = T0 + 200 * MIN
+    m.h.pass()
+    expect(m.book().get(card)!.decided).toBeUndefined()
+    expect(m.autoNotes(ticket)).toHaveLength(0)
+    // The observer let go at 100 minutes in: the person's clock starts there, not at the card's own time.
+    gate.pending.delete(ticket)
+    gate.reached.set(ticket, T0 + 190 * MIN)
+    m.h.pass()
+    expect(m.book().get(card)!.decided).toBeUndefined()
+    m.clock.t = T0 + 221 * MIN
+    m.h.pass()
+    expect(m.book().get(card)!.decided).toMatchObject({ by: 'host' })
+    await m.h.stop()
+  })
+
+  it('a delivery that is written but not marked done is not written twice', async () => {
+    const m = await team()
+    const ticket = await m.openTicket()
+    const card = await m.ask(ticket)
+    m.enable()
+    m.clock.t = T0 + 40 * MIN
+    m.h.pass()
+    expect(m.autoNotes(ticket)).toHaveLength(1)
+    // As after a restart between the write and the mark: the record says not delivered and the question is back as it was.
+    const stored = m.book().get(card)!
+    stored.autoApproved = { ...stored.autoApproved, deliveredAt: undefined }
+    const t = m.ticketOf(ticket)
+    t.attention = { id: 'again', question: '要哪个？' } as never
+    m.h.store.tickets.save(t)
+    m.h.pass()
+    expect(m.autoNotes(ticket)).toHaveLength(1)
+    await m.h.stop()
+  })
+
   it('a backlog does not go at once: the wait starts when the rule was switched on', async () => {
     const m = await team()
     const ticket = await m.openTicket()
