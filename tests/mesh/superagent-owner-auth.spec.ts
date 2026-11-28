@@ -23,8 +23,14 @@ async function fixture(withConnection = true) {
   const calls = { decide: vi.fn(() => ({ ok: true })), settings: vi.fn(() => ({ ok: true })), sync: vi.fn(async () => ({ ok: true, logins: [] })),
     file: vi.fn(() => ({ name: 'fixture.txt', sha256, size: bytes.length })), staffing: vi.fn(async () => ({ ok: true })), recover: vi.fn(async () => ({ ok: true, state: 'failed' })), withdraw: vi.fn(() => ({ ok: true, withdrawn: true })) }
   const team = { decide: calls.decide, isPeerChannelCard: () => false, saveSettings: calls.settings, githubCollaborators: calls.sync, settings: { allowed: { github: [] } }, decisionFile: calls.file, recoverOutbound: calls.recover, ownerCastQueue: calls.withdraw }
+  const collectHistory = vi.fn(() => 42)
+  const collectCache = vi.fn(() => 128)
+  const collectSessions = vi.fn(() => [{}, {}])
+  const lookup = ctx.get.bind(ctx)
+  vi.spyOn(ctx, 'get').mockImplementation(((name: string) => name === 'sessions' ? { list: collectSessions } : lookup(name as never)) as typeof ctx.get)
   const outer = vi.fn((req: IncomingMessage) => req.headers['x-fixture-control-denied'] !== '1')
-  const deps = { ctx, config: { team: 'dsh' }, superagentHost: team, superagentTeams: { get: () => team, decisionCards: () => [], health: () => [] },
+  const deps = { ctx, config: { team: 'dsh' }, superagentHost: team, superagentTeams: { get: () => team, decisionCards: () => [], health: () => [], all: () => [{ store: { historyFileBytes: collectHistory } }] },
+    transcriptCache: { parsedBytesEstimate: collectCache },
     controlRoute: (handler: (req: IncomingMessage, res: ServerResponse) => void) => (req: IncomingMessage, res: ServerResponse) => {
       if (!outer(req)) { res.writeHead(403, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, code: 'control-refused' })); return }
       handler(req, res)
@@ -43,7 +49,7 @@ async function fixture(withConnection = true) {
     })
     req.once('error', reject); req.end(body === undefined ? undefined : JSON.stringify(body))
   })
-  return { ctx, calls, send, outer, connection: withConnection ? ctx.get('connection') as unknown as MockGuiConnection : undefined }
+  return { ctx, calls, send, outer, collectHistory, collectCache, collectSessions, connection: withConnection ? ctx.get('connection') as unknown as MockGuiConnection : undefined }
 }
 
 const operations = [
@@ -61,6 +67,26 @@ const operations = [
 ] as const
 
 describe('original-request browser-owner guarded HTTP faces', () => {
+  it('returns only aggregate metrics and marks the lease count as uncollected', async () => {
+    const f = await fixture()
+    const path = '/__dsh_a2a/superagent/diagnostics'
+    const blocked = await f.send(path, undefined, { 'x-fixture-control-denied': '1' })
+    const unauthenticated = await f.send(path, undefined, { cookie: '', 'x-api-key': 'fixture-key' })
+    const nonOwner = await f.send(path, undefined, { cookie: 'fixture-api-operator=1' })
+    const write = await f.send(path, {})
+    expect([blocked.status, unauthenticated.status, nonOwner.status, write.status]).toEqual([403, 401, 403, 405])
+    for (const read of [f.collectHistory, f.collectCache, f.collectSessions]) expect(read).not.toHaveBeenCalled()
+    expect(await f.send(path)).toMatchObject({ status: 200, data: {
+      liveSessions: 2, parsedTranscriptBytesEstimate: 128, teamHistoryFileBytes: 42, unreleasedQueryLeases: '未采集',
+    } })
+    const owner = await f.send(path)
+    expect(Object.keys(owner.data).sort()).toEqual(['liveSessions', 'parsedTranscriptBytesEstimate', 'teamHistoryFileBytes', 'unreleasedQueryLeases'])
+    f.collectHistory.mockImplementationOnce(() => { throw new Error('/fixture-hidden/team/history') })
+    const failure = await f.send(path)
+    expect(failure).toMatchObject({ status: 503, data: { code: 'diagnostics-unavailable' } })
+    expect(failure.text).not.toContain('/fixture-hidden/team/history')
+  })
+
   it.each(operations)('accepts a domain + forwarded-port browser owner for $label without rewriting Host/Origin', async op => {
     const f = await fixture()
     const result = await f.send(op.path, op.body)

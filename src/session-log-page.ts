@@ -38,7 +38,14 @@ export function findSessionLogPath(roots: readonly string[], id: string): string
 
 /** Parsed transcripts of the files read lately, so paging back through one session does not decode it again each page. */
 export class TranscriptCache {
-  private readonly rows = new Map<string, readonly TranscriptEntry[]>()
+  private readonly rows = new Map<string, { entries: readonly TranscriptEntry[]; textBytes: number }>()
+
+  /** UTF-8 size of text retained in the parsed cache, excluding object overhead. */
+  parsedBytesEstimate(): number {
+    let bytes = 0
+    for (const row of this.rows.values()) bytes += row.textBytes
+    return bytes
+  }
 
   /**
    * @param path - the log file.
@@ -50,11 +57,12 @@ export class TranscriptCache {
   entries(path: string, size: number, mtimeMs: number, parse: () => { entries: readonly TranscriptEntry[]; decodedBytes: number }): readonly TranscriptEntry[] {
     const key = `${path}|${String(size)}|${String(mtimeMs)}`
     const hit = this.rows.get(key)
-    if (hit !== undefined) { this.rows.delete(key); this.rows.set(key, hit); return hit }
+    if (hit !== undefined) { this.rows.delete(key); this.rows.set(key, hit); return hit.entries }
     const parsed = parse()
     if (parsed.decodedBytes <= CACHE_DECODED_MAX) {
       for (const stale of [...this.rows.keys()].filter(k => k.startsWith(path + '|'))) this.rows.delete(stale)
-      this.rows.set(key, parsed.entries)
+      const textBytes = parsed.entries.reduce((total, entry) => total + Buffer.byteLength(entry.text), 0)
+      this.rows.set(key, { entries: parsed.entries, textBytes })
       while (this.rows.size > CACHE_MAX) this.rows.delete(this.rows.keys().next().value as string)
     }
     return parsed.entries

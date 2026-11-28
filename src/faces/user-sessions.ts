@@ -26,6 +26,7 @@ export interface UserSessionFaceDeps {
   readonly joinedSessions: { has(id: string): boolean; list(): readonly string[] }
   readonly archived: (id: string) => boolean
   readonly sessionLogRoots: () => readonly string[]
+  readonly transcriptCache?: TranscriptCache
   readonly scanSessionLogList: () => Array<{ id: string; mtimeMs: number }>
   readonly nameOf: (agent: unknown) => string
   readonly teamOf: (agent: unknown) => string
@@ -58,7 +59,7 @@ function intParam(value: string | null, min: number, max: number): number | unde
  * @param d - what they need from the host.
  */
 export function registerUserSessionFaces(webServer: WebServer, d: UserSessionFaceDeps): void {
-  const cache = new TranscriptCache()
+  const cache = d.transcriptCache ?? new TranscriptCache()
   const idem = d.idem ?? new PromptIdempotency()
   const hostDeps = {
     live: (id: string) => d.liveSessions.has(id),

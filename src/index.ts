@@ -168,6 +168,7 @@ import { registerTaskRead } from './tools/task-read.ts'
 import { createInfoTools, type DirectoryTeamRow } from './tools/info.ts'
 import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerUserSessionFaces } from './faces/user-sessions.ts'
+import { TranscriptCache } from './session-log-page.ts'
 import { scopeRefusal } from './superagent/host/owner-delegate-scope.ts'
 import { registerFileFaces } from './faces/files.ts'
 import { registerSuperagentFaces } from './faces/superagent.ts'
@@ -2246,6 +2247,7 @@ export function apply(ctx: Context, config: Config): void {
   // candidate cards in its own session (host relay, not A2A) and decides only through the superagent_* tools.
   let staffing: StaffingExecutor | undefined
   let teamMcpTools: TeamMcpTools | undefined
+  const transcriptCache = new TranscriptCache()
   const superagentTeams: SuperagentTeams | undefined = config.superagent === true ? new SuperagentTeams({
     home: join(home, 'a2a'), logger,
     deliverToSession: (id, text) => { const agent = sessionNodes.get(id); if (agent === undefined) return false; followupRelay(agent, text, config.team); return true },
@@ -3945,7 +3947,7 @@ export function apply(ctx: Context, config: Config): void {
     // gh#77: the session-log faces (local transcript reader + remote-log proxy) live in src/faces/session-log.ts.
     registerSessionLogFaces(webServer, { ctx, config, controlRoute, scanSessionLogList, readSessionLogTail, peerStore, peerFetch, peerRequestHeaders, directoryPeerCandidates, memoizedCardFetch })
     // #951 S1: owner operations on local sessions.
-    registerUserSessionFaces(webServer, { ctx, releasePath: join(home, 'a2a', 'user-releases.json'), ownerDelegates, warn: message => logger.warn(message), controlRoute, readJsonBody, liveSessions: sessionNodes, joinedSessions, archived: id => archivedSessionFilter()?.(id) === true, sessionLogRoots, scanSessionLogList, nameOf: agent => nodeMetadataOf(agent as Agent).name, teamOf: agent => sessionTeamOf(agent as Agent), taint: id => markLineage(sessionNodes.get(id), 'relay'), roleOf: id => superagentTeams?.ofSession(id)?.roleOf(id) ?? (superagentTeams?.all().some(team => team.isObserver(id)) === true ? 'observer' : null) })
+    registerUserSessionFaces(webServer, { ctx, transcriptCache, releasePath: join(home, 'a2a', 'user-releases.json'), ownerDelegates, warn: message => logger.warn(message), controlRoute, readJsonBody, liveSessions: sessionNodes, joinedSessions, archived: id => archivedSessionFilter()?.(id) === true, sessionLogRoots, scanSessionLogList, nameOf: agent => nodeMetadataOf(agent as Agent).name, teamOf: agent => sessionTeamOf(agent as Agent), taint: id => markLineage(sessionNodes.get(id), 'relay'), roleOf: id => superagentTeams?.ofSession(id)?.roleOf(id) ?? (superagentTeams?.all().some(team => team.isObserver(id)) === true ? 'observer' : null) })
     registerFileFaces(webServer, { ctx, config, blobStore, ownOrigin: () => originOf(ownCardUrl), canvasStore, verifyOriginClaim, peerKeyAdmits, controlRoute, recordActivity })
   })
 
@@ -4031,6 +4033,7 @@ export function apply(ctx: Context, config: Config): void {
   // superagent's HTTP faces live in src/faces/superagent.ts (#570 line ratchet); registered after cardCache exists: whenWebServerSettled may run its callback at once.
   if (superagentHost !== undefined && superagentTeams !== undefined) whenWebServerSettled((webServer) => {
     registerSuperagentFaces(webServer, {
+      transcriptCache,
       signPeerStatus: (team, member, query, status) => signPeerStatus(team, member, query, status, nodePrivateKey),
       canvasLabel: name => canvasStore.labelOf(name),
       ownerDelegatesPath: join(home, 'a2a', 'owner-delegates.json'),
