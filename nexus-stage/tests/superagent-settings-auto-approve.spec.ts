@@ -18,6 +18,7 @@ describe('the automatic approval section', () => {
     expect(q('包括 P2').checked).toBe(false)
     expect(q('总工提的卡').checked).toBe(false)
     expect(q('观察者提的卡').checked).toBe(false)
+    expect(q('工单提问的卡').checked).toBe(false)
     expect(q('等多少分钟没人处理再自动采纳（15–1440）').value).toBe('30')
     expect(fields.patch()).toEqual({ patch: {} })
   })
@@ -26,6 +27,15 @@ describe('the automatic approval section', () => {
     q('打开决策卡自动采纳').checked = true
     q('总工提的卡').checked = true
     expect(fields.patch()).toEqual({ patch: { autoApprove: { enabled: true, levels: ['P3'], sources: ['router'], afterMinutes: 30, perHour: 10 } } })
+  })
+  it('the ticket source is its own box: kept when other settings are saved, and sent when ticked', () => {
+    const kept = mount({ ...base, autoApprove: { enabled: true, levels: ['P3'], sources: ['router', 'ticket'], afterMinutes: 30, perHour: 10, armedAt: '2026-11-24T09:00:00.000Z' } })
+    expect(kept.q('工单提问的卡').checked).toBe(true)
+    expect(kept.fields.patch()).toEqual({ patch: {} })
+    const fresh = mount(base)
+    fresh.q('打开决策卡自动采纳').checked = true
+    fresh.q('工单提问的卡').checked = true
+    expect(fresh.fields.patch()).toEqual({ patch: { autoApprove: { enabled: true, levels: ['P3'], sources: ['ticket'], afterMinutes: 30, perHour: 10 } } })
   })
   it('an existing rule with a stamp is untouched until changed; out-of-range numbers are refused', () => {
     const { fields, q } = mount({ ...base, autoApprove: { enabled: true, levels: ['P3'], sources: ['observer'], afterMinutes: 60, perHour: 5, armedAt: '2026-11-24T09:00:00.000Z' } })

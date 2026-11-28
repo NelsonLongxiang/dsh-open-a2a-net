@@ -183,15 +183,15 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
 
   // #888 D5: owner 2026-11-24 — off by default; when turned on, P3 only, 30 minutes, no sources until the owner adds them.
   const aa = s.autoApprove ?? { enabled: false, levels: ['P3'], sources: [], afterMinutes: 30, perHour: 10 }
-  const autoBox = section('决策卡自动采纳', '打开后，总工或观察者提的决策卡在下面选定的级别和来源里，等够时间仍没人处理，宿主会自动采纳推荐项，并告诉提卡方这不是你本人的决定；你仍可改判。P0、P1，有需要填写的选项的卡，以及工具、对外请求等宿主卡永远不自动采纳。打开或放宽时从那一刻重新计时，已积压的卡不会马上被批。这一块的修改需要在已登录的界面里保存。')
+  const autoBox = section('决策卡自动采纳', '打开后，总工、观察者或工单上的成员提的决策卡在下面选定的级别和来源里，等够时间仍没人处理，宿主会自动采纳推荐项，并告诉提卡方这不是你本人的决定；你仍可改判。P0、P1，有需要填写的选项的卡，以及工具、对外请求等宿主卡永远不自动采纳。打开或放宽时从那一刻重新计时，已积压的卡不会马上被批。这一块的修改需要在已登录的界面里保存。')
   const check = (label: string, checked: boolean): HTMLInputElement => { const box = el('input', '') as HTMLInputElement; box.type = 'checkbox'; box.checked = checked; box.setAttribute('aria-label', label); box.addEventListener('change', mark); return box }
   const row = (box: HTMLInputElement, label: string): HTMLElement => { const r = el('label', 'wb-sa-hint'); r.append(box, document.createTextNode(` ${label}`)); return r }
   const autoOn = check('打开决策卡自动采纳', aa.enabled)
   const autoP2 = check('包括 P2', aa.levels.includes('P2')), autoP3 = check('包括 P3', aa.levels.includes('P3'))
-  const autoRouter = check('总工提的卡', aa.sources.includes('router')), autoObserver = check('观察者提的卡', aa.sources.includes('observer'))
+  const autoRouter = check('总工提的卡', aa.sources.includes('router')), autoObserver = check('观察者提的卡', aa.sources.includes('observer')), autoTicket = check('工单提问的卡', aa.sources.includes('ticket'))
   const autoMinutes = input('等多少分钟没人处理再自动采纳（15–1440）', String(aa.afterMinutes), '30')
   const autoPerHour = input('每小时最多自动采纳几张（1–60）', String(aa.perHour), '10')
-  autoBox.append(row(autoOn, '打开自动采纳'), row(autoP3, 'P3'), row(autoP2, 'P2'), row(autoRouter, '总工提的卡'), row(autoObserver, '观察者提的卡'), autoMinutes, autoPerHour)
+  autoBox.append(row(autoOn, '打开自动采纳'), row(autoP3, 'P3'), row(autoP2, 'P2'), row(autoRouter, '总工提的卡'), row(autoObserver, '观察者提的卡'), row(autoTicket, '工单提问的卡（成员在工单上向你提的问题）'), autoMinutes, autoPerHour)
 
   const observerBox = section('观察者代决', '开启后，观察者可代决新到且符合动作范围的卡。敏感处置与需要填写的卡由属主处理。')
   const observerOn = check('开启观察者代决', s.observerDecides !== undefined)
@@ -283,7 +283,7 @@ export function buildTeamFields(s: TeamFieldValues, memberName: (id: string) => 
     const afterMinutes = Number(autoMinutes.value.trim()), perHour = Number(autoPerHour.value.trim())
     if (!Number.isInteger(afterMinutes) || afterMinutes < 15 || afterMinutes > 1440) return { error: '自动采纳的等待时间要是 15–1440 的整数分钟' }
     if (!Number.isInteger(perHour) || perHour < 1 || perHour > 60) return { error: '每小时自动采纳上限要是 1–60 的整数' }
-    const nextAuto = { enabled: autoOn.checked, levels: [...(autoP2.checked ? ['P2'] : []), ...(autoP3.checked ? ['P3'] : [])], sources: [...(autoRouter.checked ? ['router'] : []), ...(autoObserver.checked ? ['observer'] : [])], afterMinutes, perHour }
+    const nextAuto = { enabled: autoOn.checked, levels: [...(autoP2.checked ? ['P2'] : []), ...(autoP3.checked ? ['P3'] : [])], sources: [...(autoRouter.checked ? ['router'] : []), ...(autoObserver.checked ? ['observer'] : []), ...(autoTicket.checked ? ['ticket'] : [])], afterMinutes, perHour }
     const { armedAt: _stamp, ...currentAuto } = aa
     if (!same(nextAuto, { enabled: currentAuto.enabled, levels: [...currentAuto.levels], sources: [...currentAuto.sources], afterMinutes: currentAuto.afterMinutes, perHour: currentAuto.perHour })) out.autoApprove = nextAuto
     if (observerOn.checked) {

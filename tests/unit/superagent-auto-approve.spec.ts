@@ -32,7 +32,7 @@ describe('D5 settings', () => {
     const ok = parseSettings({ autoApprove: { enabled: true, armedAt: '2000-01-01T00:00:00Z' } }, DEFAULT_SETTINGS)
     expect(ok).toMatchObject({ ok: true, settings: { autoApprove: { ...AUTO_APPROVE_DEFAULT, enabled: true } } })
     expect((ok as { settings: { autoApprove: Record<string, unknown> } }).settings.autoApprove).not.toHaveProperty('armedAt')
-    for (const bad of [{ levels: ['P1'] }, { levels: ['P3', 'P3'] }, { sources: ['ticket'] }, { sources: ['health'] }, { afterMinutes: 14 }, { afterMinutes: 30.5 }, { perHour: 61 }, { enabled: 'yes' }])
+    for (const bad of [{ levels: ['P1'] }, { levels: ['P3', 'P3'] }, { sources: ['ticket', 'ticket'] }, { sources: ['health'] }, { afterMinutes: 14 }, { afterMinutes: 30.5 }, { perHour: 61 }, { enabled: 'yes' }])
       expect(parseSettings({ autoApprove: on(bad) }, DEFAULT_SETTINGS)).toMatchObject({ ok: false })
     expect(parseSettings({ autoApprove: null }, { ...DEFAULT_SETTINGS, autoApprove: on() as never })).toMatchObject({ ok: true })
     expect((parseSettings({ autoApprove: null }, { ...DEFAULT_SETTINGS, autoApprove: on() as never }) as { settings: object }).settings).not.toHaveProperty('autoApprove')
