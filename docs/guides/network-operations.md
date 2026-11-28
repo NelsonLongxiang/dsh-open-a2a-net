@@ -114,6 +114,12 @@
   3. 重启宿主（按本页「禁重启宿主铁律」用分离拉起）。
   4. 按上一条核验 `host.*` 与 `peers` 的 `link`；两端 `peers` 的 `link` 都是 `linked`、`claimRejectsRecent` 不再出现新行、`boundMissRecent` 不再增长，才算恢复（`boundMissInbound` 是进程内计数，重启后本来就是 0，不能说明恢复）。
 
+### 热加载与体检（#838 第一批）
+
+- **热加载**：`peers`、`originClaimUrl`、`originClaimAudiences`、`originClaimByPeer` 经 home 层写入器（属主面板或团队顾问的网络蓝图）写成功后**不重启立即生效**：`/__dsh_a2a/state` 与之后的每个请求读到新值，进行中的请求用它开始时的快照。写入值形状不对时与启动一样被忽略并告警，原值继续运行。删掉一个 peer 时，该 peer 的名片缓存与签名发现缓存同步清掉（收紧立即生效）；新增则等下次读取自然生效。`teamScope` 本就即时生效；`announce` 控制发现通告的启停，仍按「重启后生效」。
+- **本机体检**：控制面 `GET /__dsh_a2a/net-doctor`（需控制面鉴权）给出四个键各自的**生效值、来源层（默认 / profile / home）、home 文件值与运行值是否一致**，以及不联网的检查：`originClaimUrl` 为空且绑 loopback（#814）、`originClaimByPeer` 键不在 `peers`、同一 peer 两种写法、受众未命中。被拒请求（`claimRejectsRecent`）只当作**对端自报、未验证**的提示列出，不据此起草任何一台主机的改动。
+- **双侧检查**：`GET /__dsh_a2a/net-doctor?peer=<本机 peers 里已有的 URL>` 让本机向该对端的 `POST /a2a/link-check` 问「你怎么看我」。link-check 的门顺序：按来源地址限速 → 静态密钥检查 → 声明的调用方 URL 必须已在对端 `peers` → 才验签（此前不出站）。任何一道不过都是**同一个 404**，不说原因；它只能诊断验签**之后**的故障（受众未命中、准入或钉住的 home 不对），验签失败类读对端自己的体检。答复只含与调用方有关的事实，不含本机 socket 地址、对端配置或凭据。团队顾问用只读工具 `superagent_net_doctor` 调同一份数据。
+
 ## 七、a2a-net CLI（会话外调用方，0.6.27+）
 
 脚本、终端或其他 agent 工具链不是 DSH 会话，用本包自带的 `a2a-net` 命令入网：自有 Ed25519 身份（`<name>/<16 位十六进制>`），在**一台** home 宿主寄存签名卡片（户口，最长 4h；过期以离线行保留，重新 `publish` 恢复），收件进该宿主上的信箱（64 条，读不删除），不会被唤醒。

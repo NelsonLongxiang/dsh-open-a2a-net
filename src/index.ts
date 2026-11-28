@@ -46,7 +46,8 @@ import { canvasOwners, canvasFailure } from './canvas-discovery.ts'
 import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
-import { applyOwnerSettings, loadSeatNames, writeHomeA2a, type OwnerSettings } from './owner-settings.ts'
+import { applyOwnerSettings, loadSeatNames, onHomeA2aWritten, writeHomeA2a, type OwnerSettings } from './owner-settings.ts'
+import { createLiveNetConfig, forgetPeerEntries } from './live-net-config.ts'
 import { CLI_HANDLE_RE, CliDepositStore, markReturnedReceipt, remoteCliTarget, type ReceiptSettlement } from './cli-deposit.ts'
 import { archivedBySameReceipt } from './task-ledger-rows.ts'
 import { cliHomeChoices, decideCliHome } from './cli-home.ts'
@@ -170,6 +171,8 @@ import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerUserSessionFaces } from './faces/user-sessions.ts'
 import { scopeRefusal } from './superagent/host/owner-delegate-scope.ts'
 import { registerFileFaces } from './faces/files.ts'
+import { registerNetDoctorFaces } from './faces/net-doctor.ts'
+import { effectiveNetView, localFindings, NET_KEY_DEFAULTS, readHomeBlock } from './net-doctor.ts'
 import { registerSuperagentFaces } from './faces/superagent.ts'
 import {RequestRecoveryStore} from './request-recovery.ts'
 import { restrictDirToCurrentUser } from './windows-private-dir.ts'
@@ -282,8 +285,12 @@ export const TIMER_MAX_DELAY_MS = 2_147_483_647
  */
 export const CARD_TTL_MAX_MS = 4 * TIMER_MAX_DELAY_MS + 3
 
-export function apply(ctx: Context, config: Config): void {
+export function apply(ctx: Context, bootConfig: Config): void {
   const logger = ctx.logger('a2a')
+  // #838 H: peers / originClaimUrl / originClaimAudiences / originClaimByPeer are read through one live snapshot that the
+  // home-layer writer swaps after a write (src/live-net-config.ts); every read below goes through `config`, never `bootConfig`.
+  const liveNet = createLiveNetConfig(bootConfig)
+  const config = liveNet.config
   // The node card's lifetime (#835 review): it sets the signed card's expiresAt and the TTL/4 re-sign timer. A missing,
   // non-finite, zero or tiny value would sign a NaN or already-expired card and re-sign every millisecond, so refuse to
   // start instead of guessing a lifetime for a signed card.
@@ -329,7 +336,7 @@ export function apply(ctx: Context, config: Config): void {
   // be discovered from a ledger full of unexplained steering.
   const teamWarning = originClaimTeamWarning(config.team)
   if (teamWarning !== undefined) logger.warn(teamWarning)
-  const originClaimByPeer = normalizeOriginClaimByPeer(config.originClaimByPeer)
+  let originClaimByPeer = normalizeOriginClaimByPeer(config.originClaimByPeer)
   for (const row of originClaimByPeer.ignored) logger.warn(originClaimByPeerWarning(row))
   const exposure = directDeliveryExposure(config.peers, config.apiKey)
   if (exposure.warning !== undefined) logger.warn(exposure.warning)
@@ -386,6 +393,36 @@ export function apply(ctx: Context, config: Config): void {
     const claim = await verifyOriginClaim(req, rawBody !== undefined ? { rawBody } : undefined)
     if (!claim.ok || claim.cli === true || !claim.bound || (rawBody !== undefined && claim.bodyBound !== true)) return false
     const expected = linkKeyMap.get(originOf(claim.callerUrl))
+    return expected !== undefined && secretEqual(presented, expected)
+  }
+  /** #838 A: the address the web server bound, learned when the doctor face registers. */
+  let webBoundHost: '127.0.0.1' | '0.0.0.0' | undefined
+  /** #838 A: this host's own effective network view and offline checks; no peer call, no credential. */
+  function netDoctorReport(): Record<string, unknown> {
+    const patchPath = join(home, 'cordis.patch.yml')
+    const running = { peers: config.peers, originClaimUrl: config.originClaimUrl ?? '', originClaimAudiences: config.originClaimAudiences ?? [], originClaimByPeer: config.originClaimByPeer ?? {} }
+    const view = effectiveNetView({ running, defaults: NET_KEY_DEFAULTS, home: readHomeBlock(existsSync(patchPath) ? readFileSync(patchPath, 'utf8') : '') })
+    return { ...view, findings: localFindings({ running, announce: config.announce === true, boundHost: webBoundHost, claimRejects: claimRejectsRecent, boundMisses: boundMissRecent }) }
+  }
+  /** #838 A: ask one configured peer how it sees this host (POST /a2a/link-check, signed and body-bound). A 404 is uninformative on purpose. */
+  async function linkCheckPeer(peer: string): Promise<Record<string, unknown>> {
+    const target = peer.replace(/\/+$/, '') + '/a2a/link-check'
+    const body = '{}'
+    const key = outboundKeyFor(target, linkKeyMap, config.apiKey)
+    try {
+      const response = await peerFetch(target, { method: 'POST', headers: { 'Content-Type': 'application/json', ...originClaimHeaders({ url: target, method: 'POST', body }), ...(key !== '' ? { 'X-API-Key': key } : {}) }, body, redirect: 'manual', signal: AbortSignal.timeout(5_000) })
+      if (response.status === 200) return { status: 'ok', peer, answer: JSON.parse(await response.text()) as unknown }
+      if (response.status === 429) return { status: 'rate-limited', peer }
+      return { status: 'refused', peer, httpStatus: response.status, note: 'A refusal never says why. It means the peer does not accept us as a verified peer on this face: our key, our declared URL, our entry in its peers, or our signature. Read the peer host\'s own doctor for the reason.' }
+    } catch (error) { return { status: 'unreachable', peer, error: error instanceof Error ? error.message : String(error) } }
+  }
+  /** #838 A: the peer key gate without any request: the apiKey, or the link key of the declared caller origin. */
+  function peerKeyPrecheck(req: IncomingMessage): boolean {
+    if (config.apiKey === '') return true
+    const presented = String(req.headers['x-api-key'] ?? '')
+    if (secretEqual(presented, config.apiKey)) return true
+    if (!isLinkKey(presented, linkKeyMap, secretEqual)) return false
+    const expected = linkKeyMap.get(originOf(String(req.headers['x-a2a-caller-url'] ?? '')))
     return expected !== undefined && secretEqual(presented, expected)
   }
   /**
@@ -672,6 +709,8 @@ export function apply(ctx: Context, config: Config): void {
   const ownCanvasFingerprint = canvasOwnerFingerprint(encodePublicKey(createPublicKey(nodePrivateKey)))
   /** Our own card URL once the web server settles — the OriginClaim anchor. */
   let ownCardUrl = ''
+  /** The card URL the web server's own address gives, kept so clearing `originClaimUrl` falls back to it without a restart. */
+  let ownCardUrlDefault = ''
   /**
    * The OriginClaim envelope headers (gh#9+gh#10, src/origin-claim.ts): the
    * bound form names the target's origin, method and path; the unbound
@@ -799,7 +838,7 @@ export function apply(ctx: Context, config: Config): void {
   const taskLedger = new TaskLedger(join(home, 'a2a', 'tasks.json'), { staleTtlMs: config.taskStaleTtlMs, warn: message => logger.warn(message) })
   const enforceBlockers = taskLedger.settlementEnforceBlockers()
   const enforceRefused = config.settlementAuth === 'enforce' && enforceBlockers.length > 0 ? { reason: 'legacy forwarded canvas debts lack receiver facts', blockers: enforceBlockers } : undefined
-  if (enforceRefused !== undefined) { logger.error('settlementAuth enforce refused; running observe (#125/#275): %s', JSON.stringify(enforceRefused)); config = { ...config, settlementAuth: 'observe' } }
+  if (enforceRefused !== undefined) { logger.error('settlementAuth enforce refused; running observe (#125/#275): %s', JSON.stringify(enforceRefused)); Object.defineProperty(config, 'settlementAuth', { value: 'observe', enumerable: true, writable: true, configurable: true }) /* keep the live getters: never spread config */ }
   // Unjoined-node reporting ingress (design: docs/design/unjoined-report-ingress.md):
   // a one-way signal channel for sessions with no network membership — a
   // fallen-off or never-joined session reports "I exist / I have a task"
@@ -2045,7 +2084,8 @@ export function apply(ctx: Context, config: Config): void {
       const bound = (webServer as { host?: '127.0.0.1' | '0.0.0.0' }).host
       const urlOverride = config.originClaimUrl ?? ''
       const reachHost = urlOverride !== '' ? '' : bound === '0.0.0.0' && lanIp !== '' ? lanIp : '127.0.0.1'
-      ownCardUrl = urlOverride !== '' ? urlOverride : `http://${reachHost}:${String((webServer as { port: number }).port)}`
+      ownCardUrlDefault = `http://${reachHost !== '' ? reachHost : '127.0.0.1'}:${String((webServer as { port: number }).port)}`
+      ownCardUrl = urlOverride !== '' ? urlOverride : ownCardUrlDefault
       const cardCore = (): CardCore => ({
         name: config.agentName,
         session,
@@ -2446,7 +2486,7 @@ export function apply(ctx: Context, config: Config): void {
     // #906 review B2: builders that are not loaded right now come from the host's own notes of what it saw loaded.
     const builderRegistry = new BuilderRegistry(join(home, 'a2a', 'builder-sessions.json'), logger)
     whenWebServerSettled(webServer => registerBuilderFace(webServer, { ctx, controlRoute, inventory: builderInventory, roster: () => builderRegistry.roster({ loaded: [...liveRoots.keys()].map(id => ({ id, preset: sessionPresetOf(id) })), builderPreset: BUILDER_PRESET, onTeam: id => superagentTeams!.ofSession(id) !== undefined, now: new Date().toISOString() }).map(row => ({ ...row, joined: joinedSessions.has(row.id) })) }))
-    registerBuilderTools(ctx, isBuilderSession, builderInventory, { staffing: () => staffing, personMessage: id => { const agent = ctx.get('agents')?.get(SessionId(id)) as Agent | undefined; return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
+    registerBuilderTools(ctx, isBuilderSession, builderInventory, { netDoctor: async peer => { const own = netDoctorReport(); return peer === undefined || peer === '' ? own : config.peers.includes(peer) ? { ...own, peerCheck: await linkCheckPeer(peer) } : { ...own, peerCheck: { status: 'not-a-peer', peer } } }, staffing: () => staffing, personMessage: id => { const agent = ctx.get('agents')?.get(SessionId(id)) as Agent | undefined; return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
       teamRules: ref => { const team = superagentTeams!.get(ref === 'primary' ? '' : ref); return team === undefined || (ref === '' ) ? undefined : { ...(team.settings.canvas !== undefined ? { canvas: team.settings.canvas } : {}), rules: team.settings.rules, dispatch: team.settings.dispatch } } })
     // #791: the builder drafts an issue; the host files it with the operator's gh after the owner's own typed message.
     registerBuilderIssueTools(ctx, id => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET, {
@@ -3292,6 +3332,25 @@ export function apply(ctx: Context, config: Config): void {
   }
   // #312: topology-only callbacks must never replace a full session/roster card cache entry.
   const signedDiscoveryPeers = new Map<string, { at: number; expiresAt: number; key: string; peers: readonly string[] }>()
+  // #838 H: the home-layer writer calls this after every successful a2a write. Tightening must bite at once: a removed
+  // peer, audience or per-peer claim URL loses the caches and derived state that would keep it alive; loosening needs none.
+  const stopHotNet = onHomeA2aWritten(home, overlay => {
+    const diff = liveNet.reload(overlay, message => logger.warn(message))
+    if (typeof overlay.teamScope === 'boolean') { ownerTeamScopeInfo = overlay.teamScope; ownerTeamScopeRouting = overlay.teamScope }
+    if (diff.changed.length === 0) return
+    if (diff.changed.includes('originClaimByPeer')) {
+      originClaimByPeer = normalizeOriginClaimByPeer(config.originClaimByPeer)
+      for (const row of originClaimByPeer.ignored) logger.warn(originClaimByPeerWarning(row))
+    }
+    if (diff.changed.includes('peers')) {
+      peerStore.setSeeds(config.peers)
+      for (const url of diff.removedPeers) peerStore.drop(url)
+      forgetPeerEntries(diff.removedPeers, cardCache, signedDiscoveryPeers)
+    }
+    if (diff.changed.includes('originClaimUrl') && ownCardUrl !== '') ownCardUrl = config.originClaimUrl !== '' ? config.originClaimUrl : ownCardUrlDefault
+    logger.info(`a2a: network config hot-applied (${diff.changed.join(', ')})`)
+  })
+  ctx.effect(() => () => { stopHotNet() }, 'a2a: hot network config')
   async function verifyOriginClaim(req: IncomingMessage, options?: { readonly cli?: boolean; readonly rawBody?: Uint8Array }): Promise<OriginClaimVerdict> {
     const claim = await verifyOriginClaimOf(req, {
       cardCache,
@@ -3962,6 +4021,12 @@ export function apply(ctx: Context, config: Config): void {
     registerSessionLogFaces(webServer, { ctx, config, controlRoute, scanSessionLogList, readSessionLogTail, peerStore, peerFetch, peerRequestHeaders, directoryPeerCandidates, memoizedCardFetch })
     // #951 S1: owner operations on local sessions.
     registerUserSessionFaces(webServer, { ctx, releasePath: join(home, 'a2a', 'user-releases.json'), ownerDelegates, warn: message => logger.warn(message), controlRoute, readJsonBody, liveSessions: sessionNodes, joinedSessions, archived: id => archivedSessionFilter()?.(id) === true, sessionLogRoots, scanSessionLogList, nameOf: agent => nodeMetadataOf(agent as Agent).name, teamOf: agent => sessionTeamOf(agent as Agent), taint: id => markLineage(sessionNodes.get(id), 'relay'), roleOf: id => superagentTeams?.ofSession(id)?.roleOf(id) ?? (superagentTeams?.all().some(team => team.isObserver(id)) === true ? 'observer' : null) })
+    webBoundHost = (webServer as { host?: '127.0.0.1' | '0.0.0.0' }).host
+    registerNetDoctorFaces(webServer, {
+      ctx, controlRoute, verifyOriginClaim, peerKeyAdmits, keyPrecheck: peerKeyPrecheck, peerConfigured: configuredSeedCaller,
+      boundMisses: () => boundMissRecent, pinnedCliHomes: () => canvasStore.pinnedCliHomes(),
+      report: netDoctorReport, linkCheck: linkCheckPeer,
+    })
     registerFileFaces(webServer, { ctx, config, blobStore, ownOrigin: () => originOf(ownCardUrl), canvasStore, verifyOriginClaim, peerKeyAdmits, controlRoute, recordActivity })
   })
 
