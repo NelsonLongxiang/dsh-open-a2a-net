@@ -343,6 +343,7 @@ Set an `apiKey` before exposing the listener beyond loopback.
 | `/__dsh_a2a/fleet-canvas-op` | Relay a canvas operation (`create`, `add-member`, `remove-member`, `remove`) to a peer's `/a2a/canvas-op`, stamped with this node's OriginClaim; the peer's link gate decides. |
 | `/__dsh_a2a/cli-deposit` | Deposit, list, revoke, mailbox reads and admission queries (`admission`, which must be signed by the identity itself) for `a2a-net` CLI identities. |
 | `GET /__dsh_a2a/nodes` · `POST` | Node identities (docs/design/node-identity.md): GET reads the roster or one node (`?name=`); POST is an identity write and needs the `X-API-Key` even on loopback; a host with no `apiKey` refuses every identity write. |
+| `GET /__dsh_a2a/net-doctor` | The network doctor (#838): per hot key (`peers`, `originClaimUrl`, `originClaimAudiences`, `originClaimByPeer`) the effective value, its layer and whether the home file and the running value agree, plus offline checks. `?peer=<one of our peers>` also asks that peer's `POST /a2a/link-check` how it sees this host. Read-only. |
 | `POST /__dsh_a2a/blob` | Stage a file for a recipient (`?to=&name=`) — the file channel's write side; peers pull through `GET /a2a/blob`. |
 
 The state face's ledger: `tasks` (pending, each with `settleable`), `tasksStaleCount`, `tasksDead` (with
