@@ -195,6 +195,8 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
               // Design superagent-reevaluate-note D1: the owner asks for a fresh judgement of a stored message.
               send(200, sa.reevaluate(typeof fields.trigger_id === 'string' ? fields.trigger_id : ''))
             } else if (fields.action === 'admit-root') {
+              // The owner's decision, so the same browser-owner proof as the other owner-only actions, before any effect.
+              if (!requireBrowserOwner(req, send)) return
               // superagent-root-team S5: the owner lets a root team on another host send this team requests.
               const handle = typeof fields.handle === 'string' ? fields.handle.trim() : ''
               // Two links, both the owner's: the wire's (a requester link on the team's canvas, pinned to the root's home host)

@@ -21,8 +21,8 @@ async function fixture(withConnection = true) {
   await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 })
   if (withConnection) await ctx.plugin(MockGuiConnection, { origin: ORIGIN })
   const calls = { decide: vi.fn(() => ({ ok: true })), settings: vi.fn(() => ({ ok: true })), sync: vi.fn(async () => ({ ok: true, logins: [] })),
-    file: vi.fn(() => ({ name: 'fixture.txt', sha256, size: bytes.length })), staffing: vi.fn(async () => ({ ok: true })), recover: vi.fn(async () => ({ ok: true, state: 'failed' })), withdraw: vi.fn(() => ({ ok: true, withdrawn: true })) }
-  const team = { decide: calls.decide, isPeerChannelCard: () => false, saveSettings: calls.settings, githubCollaborators: calls.sync, settings: { allowed: { github: [] } }, decisionFile: calls.file, recoverOutbound: calls.recover, ownerCastQueue: calls.withdraw }
+    file: vi.fn(() => ({ name: 'fixture.txt', sha256, size: bytes.length })), staffing: vi.fn(async () => ({ ok: true })), recover: vi.fn(async () => ({ ok: true, state: 'failed' })), withdraw: vi.fn(() => ({ ok: true, withdrawn: true })), admit: vi.fn() }
+  const team = { decide: calls.decide, isPeerChannelCard: () => false, saveSettings: calls.settings, githubCollaborators: calls.sync, settings: { canvas: 'fixture-canvas', allowed: { github: [] } }, decisionFile: calls.file, recoverOutbound: calls.recover, ownerCastQueue: calls.withdraw, admitRequester: calls.admit, admittedRoots: () => ['root/0123456789abcdef'] }
   const outer = vi.fn((req: IncomingMessage) => req.headers['x-fixture-control-denied'] !== '1')
   const deps = { ctx, config: { team: 'dsh' }, superagentHost: team, superagentTeams: { get: () => team, decisionCards: () => [], health: () => [] },
     controlRoute: (handler: (req: IncomingMessage, res: ServerResponse) => void) => (req: IncomingMessage, res: ServerResponse) => {
@@ -57,6 +57,7 @@ const operations = [
   { label: 'cast off a member', path: '/__dsh_a2a/superagent', body: { action: 'settings', settings: { castOff: ['session-m'] } }, effect: 'settings' },
   { label: 'observer may trigger the router', path: '/__dsh_a2a/superagent', body: { action: 'settings', settings: { observerTriggerRouter: true } }, effect: 'settings' },
   { label: 'cast withdraw', path: '/__dsh_a2a/superagent', body: { action: 'cast-withdraw', session_id: 'session-m', id: 'q1' }, effect: 'withdraw' },
+  { label: 'admit a root team', path: '/__dsh_a2a/superagent', body: { action: 'admit-root', handle: 'root/0123456789abcdef' }, effect: 'admit' },
   { label: 'staffing agreement', path: '/__dsh_a2a/superagent/staffing', body: { action: 'agree', id: 'fixture-change' }, effect: 'staffing' },
 ] as const
 
