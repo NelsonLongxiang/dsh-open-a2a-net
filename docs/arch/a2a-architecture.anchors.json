@@ -3,7 +3,7 @@
   "sourceCommit": "21a5119",
   "scope": "Committed source only; no deployment inference",
   "sources": {
-    "src/index.ts": "5621898cd03755375e8c90ee042e8da574d83d4aeee8752e94eefb97d35cf13e",
+    "src/index.ts": "4b9ac66652ecbab0c2fbe9f619e644208051ececc96eb02672e747ceee424389",
     "src/faces/admin.ts": "f819c415b6bba4f114b91d8c996dfbd311e0a8996b3b13f5f527072bd1facf4c",
     "src/canvas-store.ts": "a42b3cdb8b307137c56847510ba071adcc391db88a0544a30925855afcfd08a6",
     "src/peer-store.ts": "c059c3374b0f0cefdb8106adb4e69660fa1a99b0bca04f75f6c15c234976efbe",
@@ -225,7 +225,7 @@
     {
       "page": "p1-arch",
       "cell": "e3",
-      "ref": "src/index.ts:4876",
+      "ref": "src/index.ts:4877",
       "expect": "const callerNodeId = originAgentId"
     },
     {
@@ -267,7 +267,7 @@
     {
       "page": "p1-arch",
       "cell": "f1",
-      "ref": "src/index.ts:4267",
+      "ref": "src/index.ts:4268",
       "expect": "function memoizedCardFetch(): ZoneCardFetch {"
     },
     {
