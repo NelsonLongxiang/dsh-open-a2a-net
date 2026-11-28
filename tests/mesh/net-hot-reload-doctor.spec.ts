@@ -38,6 +38,23 @@ describe('hot network keys on a real host', () => {
     } finally { await a.dispose(); await c.dispose() }
   })
 
+  it('removing a peer also drops its warm card: the same peer added back shows no stale card name', async () => {
+    const portA = await reservePort(); const portC = await reservePort()
+    const c = await bootNode({ name: 'C', session: 'warm-c', team: 'gamma', port: portC, sessionNodes: true, peers: [`http://127.0.0.1:${String(portA)}`] })
+    const a = await bootNode({ name: 'A', session: 'warm-a', team: 'alpha', port: portA, sessionNodes: true, peers: [c.baseUrl] })
+    try {
+      await waitFor(async () => (await stateOf(a.baseUrl)).peers.some(peer => peer.url === c.baseUrl && peer.name !== undefined), 'the peer card to be cached')
+      const base = Config({ peers: [c.baseUrl] } as never) as never
+      expect(writeHomeA2a(a.home, { network: { peers: [] } }, base, defaults, fs)).toMatchObject({ ok: true })
+      expect((await stateOf(a.baseUrl)).peers.find(peer => peer.url === c.baseUrl)).toBeUndefined()
+      // The peer comes back as a seed. Its warm card was dropped with it, so the very next read has no name yet.
+      expect(writeHomeA2a(a.home, { network: { peers: [c.baseUrl] } }, base, defaults, fs)).toMatchObject({ ok: true })
+      const back = (await stateOf(a.baseUrl)).peers.find(peer => peer.url === c.baseUrl)
+      expect(back).toBeDefined()
+      expect(back!.name).toBeUndefined()
+    } finally { await a.dispose(); await c.dispose() }
+  })
+
   it('a malformed written value is ignored and the previous configuration keeps running', async () => {
     const a = await bootNode({ name: 'A', session: 'hot-bad', team: 'alpha', port: await reservePort(), sessionNodes: true, originClaimAudiences: ['http://alias.example:1'] })
     try {
