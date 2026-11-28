@@ -129,7 +129,7 @@ export const BUILDER_ISSUE_TOOLS: readonly string[] = ['superagent_issue_propose
  * does not widen this list (#83). Blueprints (BS2) go to the host's staffing executor, never straight to a route.
  * #791: it also reads the network to check itself, and drafts issues the host files after the owner agrees.
  */
-export const BUILDER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, ...SELF_TOOLS, ...SELF_REFLECT_TOOLS, ...BUILDER_CHECK_TOOLS, 'read', 'glob', 'grep', 'skill', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', ...BUILDER_ISSUE_TOOLS]
+export const BUILDER_TOOLS: readonly string[] = [...SCHEDULE_TOOLS, ...SELF_TOOLS, ...SELF_REFLECT_TOOLS, ...BUILDER_CHECK_TOOLS, 'read', 'glob', 'grep', 'skill', 'superagent_net_doctor', 'superagent_org_read', 'superagent_rule_templates', 'superagent_blueprint_propose', 'superagent_blueprint_apply', 'superagent_blueprint_withdraw', ...BUILDER_ISSUE_TOOLS]
 
 /** The tools only a team's sessions have: a session with no role is not offered them. */
 const PEER_CHANNEL_TOOL = 'a2a_team_message'

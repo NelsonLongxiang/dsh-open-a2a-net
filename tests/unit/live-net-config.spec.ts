@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { Config } from '../../src/config.ts'
-import { createLiveNetConfig, sanitizeLiveNetValue } from '../../src/live-net-config.ts'
+import { createLiveNetConfig, forgetPeerEntries, sameHostUrl, sanitizeLiveNetValue } from '../../src/live-net-config.ts'
 import { onHomeA2aWritten, writeHomeA2a } from '../../src/owner-settings.ts'
 import { PeerStore } from '../../src/peer-store.ts'
 
@@ -98,6 +98,26 @@ describe('the home-layer writer drives the reload', () => {
     expect(live.config.peers).toEqual(['http://c.example:3'])
     expect(live.config.originClaimAudiences).toEqual(['http://new.example:3'])
     expect(readFileSync(join(h, 'cordis.patch.yml'), 'utf8')).toContain('peers: ["http://c.example:3"]')
+  })
+})
+
+describe('forgetPeerEntries', () => {
+  it('drops the warm card and the signed-discovery entry of a removed peer, by origin and path, and keeps every other peer', () => {
+    const cards = new Map<string, unknown>([['http://a.example:1', 1], ['http://a.example:1/', 2], ['http://b.example:2', 3], ['http://a.example:1/mount', 4]])
+    const discovery = new Map<string, unknown>([['http://a.example:1', 1], ['http://c.example:3', 2]])
+    expect(forgetPeerEntries(['http://a.example:1'], cards, discovery)).toBe(3)
+    expect([...cards.keys()]).toEqual(['http://b.example:2', 'http://a.example:1/mount'])
+    expect([...discovery.keys()]).toEqual(['http://c.example:3'])
+  })
+  it('removing nothing drops nothing', () => {
+    const cards = new Map<string, unknown>([['http://a.example:1', 1]])
+    expect(forgetPeerEntries([], cards)).toBe(0)
+    expect(cards.size).toBe(1)
+  })
+  it('sameHostUrl ignores trailing slashes only', () => {
+    expect(sameHostUrl('http://a.example:1', 'http://a.example:1/')).toBe(true)
+    expect(sameHostUrl('http://a.example:1', 'http://a.example:2')).toBe(false)
+    expect(sameHostUrl('http://a.example:1/x', 'http://a.example:1/y')).toBe(false)
   })
 })
 

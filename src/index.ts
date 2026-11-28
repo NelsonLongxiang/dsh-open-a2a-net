@@ -47,7 +47,7 @@ import { fileURLToPath } from 'node:url'
 import { JoinedSessions } from './joined-store.ts'
 import { ExposureStore } from './exposure-store.ts'
 import { applyOwnerSettings, loadSeatNames, onHomeA2aWritten, writeHomeA2a, type OwnerSettings } from './owner-settings.ts'
-import { createLiveNetConfig } from './live-net-config.ts'
+import { createLiveNetConfig, forgetPeerEntries } from './live-net-config.ts'
 import { CLI_HANDLE_RE, CliDepositStore, markReturnedReceipt, remoteCliTarget, type ReceiptSettlement } from './cli-deposit.ts'
 import { archivedBySameReceipt } from './task-ledger-rows.ts'
 import { cliHomeChoices, decideCliHome } from './cli-home.ts'
@@ -171,6 +171,8 @@ import { registerSessionLogFaces } from './faces/session-log.ts'
 import { registerUserSessionFaces } from './faces/user-sessions.ts'
 import { scopeRefusal } from './superagent/host/owner-delegate-scope.ts'
 import { registerFileFaces } from './faces/files.ts'
+import { registerNetDoctorFaces } from './faces/net-doctor.ts'
+import { effectiveNetView, localFindings, NET_KEY_DEFAULTS, readHomeBlock } from './net-doctor.ts'
 import { registerSuperagentFaces } from './faces/superagent.ts'
 import {RequestRecoveryStore} from './request-recovery.ts'
 import { restrictDirToCurrentUser } from './windows-private-dir.ts'
@@ -391,6 +393,36 @@ export function apply(ctx: Context, bootConfig: Config): void {
     const claim = await verifyOriginClaim(req, rawBody !== undefined ? { rawBody } : undefined)
     if (!claim.ok || claim.cli === true || !claim.bound || (rawBody !== undefined && claim.bodyBound !== true)) return false
     const expected = linkKeyMap.get(originOf(claim.callerUrl))
+    return expected !== undefined && secretEqual(presented, expected)
+  }
+  /** #838 A: the address the web server bound, learned when the doctor face registers. */
+  let webBoundHost: '127.0.0.1' | '0.0.0.0' | undefined
+  /** #838 A: this host's own effective network view and offline checks; no peer call, no credential. */
+  function netDoctorReport(): Record<string, unknown> {
+    const patchPath = join(home, 'cordis.patch.yml')
+    const running = { peers: config.peers, originClaimUrl: config.originClaimUrl ?? '', originClaimAudiences: config.originClaimAudiences ?? [], originClaimByPeer: config.originClaimByPeer ?? {} }
+    const view = effectiveNetView({ running, defaults: NET_KEY_DEFAULTS, home: readHomeBlock(existsSync(patchPath) ? readFileSync(patchPath, 'utf8') : '') })
+    return { ...view, findings: localFindings({ running, announce: config.announce === true, boundHost: webBoundHost, claimRejects: claimRejectsRecent, boundMisses: boundMissRecent }) }
+  }
+  /** #838 A: ask one configured peer how it sees this host (POST /a2a/link-check, signed and body-bound). A 404 is uninformative on purpose. */
+  async function linkCheckPeer(peer: string): Promise<Record<string, unknown>> {
+    const target = peer.replace(/\/+$/, '') + '/a2a/link-check'
+    const body = '{}'
+    const key = outboundKeyFor(target, linkKeyMap, config.apiKey)
+    try {
+      const response = await peerFetch(target, { method: 'POST', headers: { 'Content-Type': 'application/json', ...originClaimHeaders({ url: target, method: 'POST', body }), ...(key !== '' ? { 'X-API-Key': key } : {}) }, body, redirect: 'manual', signal: AbortSignal.timeout(5_000) })
+      if (response.status === 200) return { status: 'ok', peer, answer: JSON.parse(await response.text()) as unknown }
+      if (response.status === 429) return { status: 'rate-limited', peer }
+      return { status: 'refused', peer, httpStatus: response.status, note: 'A refusal never says why. It means the peer does not accept us as a verified peer on this face: our key, our declared URL, our entry in its peers, or our signature. Read the peer host\'s own doctor for the reason.' }
+    } catch (error) { return { status: 'unreachable', peer, error: error instanceof Error ? error.message : String(error) } }
+  }
+  /** #838 A: the peer key gate without any request: the apiKey, or the link key of the declared caller origin. */
+  function peerKeyPrecheck(req: IncomingMessage): boolean {
+    if (config.apiKey === '') return true
+    const presented = String(req.headers['x-api-key'] ?? '')
+    if (secretEqual(presented, config.apiKey)) return true
+    if (!isLinkKey(presented, linkKeyMap, secretEqual)) return false
+    const expected = linkKeyMap.get(originOf(String(req.headers['x-a2a-caller-url'] ?? '')))
     return expected !== undefined && secretEqual(presented, expected)
   }
   /**
@@ -2453,7 +2485,7 @@ export function apply(ctx: Context, bootConfig: Config): void {
     // #906 review B2: builders that are not loaded right now come from the host's own notes of what it saw loaded.
     const builderRegistry = new BuilderRegistry(join(home, 'a2a', 'builder-sessions.json'), logger)
     whenWebServerSettled(webServer => registerBuilderFace(webServer, { ctx, controlRoute, inventory: builderInventory, roster: () => builderRegistry.roster({ loaded: [...liveRoots.keys()].map(id => ({ id, preset: sessionPresetOf(id) })), builderPreset: BUILDER_PRESET, onTeam: id => superagentTeams!.ofSession(id) !== undefined, now: new Date().toISOString() }).map(row => ({ ...row, joined: joinedSessions.has(row.id) })) }))
-    registerBuilderTools(ctx, isBuilderSession, builderInventory, { staffing: () => staffing, personMessage: id => { const agent = ctx.get('agents')?.get(SessionId(id)) as Agent | undefined; return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
+    registerBuilderTools(ctx, isBuilderSession, builderInventory, { netDoctor: async peer => { const own = netDoctorReport(); return peer === undefined || peer === '' ? own : config.peers.includes(peer) ? { ...own, peerCheck: await linkCheckPeer(peer) } : { ...own, peerCheck: { status: 'not-a-peer', peer } } }, staffing: () => staffing, personMessage: id => { const agent = ctx.get('agents')?.get(SessionId(id)) as Agent | undefined; return agent === undefined ? undefined : personMessageFrom(sessionEventsOf(agent)) },
       teamRules: ref => { const team = superagentTeams!.get(ref === 'primary' ? '' : ref); return team === undefined || (ref === '' ) ? undefined : { ...(team.settings.canvas !== undefined ? { canvas: team.settings.canvas } : {}), rules: team.settings.rules, dispatch: team.settings.dispatch } } })
     // #791: the builder drafts an issue; the host files it with the operator's gh after the owner's own typed message.
     registerBuilderIssueTools(ctx, id => superagentTeams!.ofSession(id) === undefined && sessionPresetOf(id) === BUILDER_PRESET, {
@@ -3301,7 +3333,6 @@ export function apply(ctx: Context, bootConfig: Config): void {
   const signedDiscoveryPeers = new Map<string, { at: number; expiresAt: number; key: string; peers: readonly string[] }>()
   // #838 H: the home-layer writer calls this after every successful a2a write. Tightening must bite at once: a removed
   // peer, audience or per-peer claim URL loses the caches and derived state that would keep it alive; loosening needs none.
-  const sameHostUrl = (a: string, b: string): boolean => { try { const x = new URL(a); const y = new URL(b); return x.origin === y.origin && x.pathname.replace(/\/+$/, '') === y.pathname.replace(/\/+$/, '') } catch { return a === b } }
   const stopHotNet = onHomeA2aWritten(home, overlay => {
     const diff = liveNet.reload(overlay, message => logger.warn(message))
     if (typeof overlay.teamScope === 'boolean') { ownerTeamScopeInfo = overlay.teamScope; ownerTeamScopeRouting = overlay.teamScope }
@@ -3312,11 +3343,8 @@ export function apply(ctx: Context, bootConfig: Config): void {
     }
     if (diff.changed.includes('peers')) {
       peerStore.setSeeds(config.peers)
-      for (const url of diff.removedPeers) {
-        peerStore.drop(url)
-        for (const key of [...cardCache.keys()]) if (sameHostUrl(key, url)) cardCache.delete(key)
-        for (const key of [...signedDiscoveryPeers.keys()]) if (sameHostUrl(key, url)) signedDiscoveryPeers.delete(key)
-      }
+      for (const url of diff.removedPeers) peerStore.drop(url)
+      forgetPeerEntries(diff.removedPeers, cardCache, signedDiscoveryPeers)
     }
     if (diff.changed.includes('originClaimUrl') && ownCardUrl !== '') ownCardUrl = config.originClaimUrl !== '' ? config.originClaimUrl : ownCardUrlDefault
     logger.info(`a2a: network config hot-applied (${diff.changed.join(', ')})`)
@@ -3992,6 +4020,12 @@ export function apply(ctx: Context, bootConfig: Config): void {
     registerSessionLogFaces(webServer, { ctx, config, controlRoute, scanSessionLogList, readSessionLogTail, peerStore, peerFetch, peerRequestHeaders, directoryPeerCandidates, memoizedCardFetch })
     // #951 S1: owner operations on local sessions.
     registerUserSessionFaces(webServer, { ctx, releasePath: join(home, 'a2a', 'user-releases.json'), ownerDelegates, warn: message => logger.warn(message), controlRoute, readJsonBody, liveSessions: sessionNodes, joinedSessions, archived: id => archivedSessionFilter()?.(id) === true, sessionLogRoots, scanSessionLogList, nameOf: agent => nodeMetadataOf(agent as Agent).name, teamOf: agent => sessionTeamOf(agent as Agent), taint: id => markLineage(sessionNodes.get(id), 'relay'), roleOf: id => superagentTeams?.ofSession(id)?.roleOf(id) ?? (superagentTeams?.all().some(team => team.isObserver(id)) === true ? 'observer' : null) })
+    webBoundHost = (webServer as { host?: '127.0.0.1' | '0.0.0.0' }).host
+    registerNetDoctorFaces(webServer, {
+      ctx, controlRoute, verifyOriginClaim, peerKeyAdmits, keyPrecheck: peerKeyPrecheck, peerConfigured: configuredSeedCaller,
+      boundMisses: () => boundMissRecent, pinnedCliHomes: () => canvasStore.pinnedCliHomes(),
+      report: netDoctorReport, linkCheck: linkCheckPeer,
+    })
     registerFileFaces(webServer, { ctx, config, blobStore, ownOrigin: () => originOf(ownCardUrl), canvasStore, verifyOriginClaim, peerKeyAdmits, controlRoute, recordActivity })
   })
 

@@ -149,6 +149,8 @@ export function blueprintDiff(ops: StaffingChange['ops'], current: (team: string
 
 /** What the blueprint tools need from the host: the executor, the owner's last typed message in a session, a team's rules. */
 export interface BlueprintDeps {
+  /** #838 A: this host's network doctor, with the double-sided check when one configured peer is named. */
+  readonly netDoctor?: (peer?: string) => Promise<Record<string, unknown>>
   readonly staffing: () => StaffingExecutor | undefined
   readonly personMessage: (sessionId: string) => { id: string; atMs: number; text: string } | undefined
   readonly teamRules: (team: string) => { canvas?: string; rules: ReadonlyArray<{ name: string; text: string }>; dispatch: string } | undefined
@@ -182,6 +184,15 @@ export function registerBuilderTools(ctx: Context, isBuilder: (sessionId: string
     },
   } as never))
   if (blueprints === undefined) return
+  const netDoctor = blueprints.netDoctor
+  if (netDoctor !== undefined) ctx.tools.register(defineTool({
+    name: 'superagent_net_doctor',
+    description: 'Team builder only, read-only: how this host\'s network keys (peers, originClaimUrl, originClaimAudiences, originClaimByPeer) are set — effective value, layer, file vs running — and the offline checks it can make. Name one configured peer to also ask it how it sees this host. Peer-reported rejects are UNVERIFIED hints: never draft a change for either host from them alone; confirm on the host that owns the setting.',
+    parameters: { peer: { type: 'string', description: 'A peer URL already in this host\'s peers; empty for this host only.' } },
+    output: { schema: { type: 'object', additionalProperties: true }, render: (_args: unknown, value: Record<string, unknown>) => said('network doctor', value) },
+    presentCall: () => ({ card: 'generic', title: 'network doctor (read)', kind: 'other', rawInput: {} }),
+    execute: async (args: { peer?: string }, exec: { agent?: { id: unknown } }): Promise<Record<string, JsonValue>> => caller(exec) ? JSON.parse(JSON.stringify({ ok: true, ...await netDoctor(typeof args.peer === 'string' ? args.peer : undefined) })) as Record<string, JsonValue> : refused,
+  } as never))
   const me = (exec: { agent?: { id: unknown } }): string | undefined => exec.agent !== undefined && isBuilder(String(exec.agent.id)) ? String(exec.agent.id) : undefined
   const noExecutor = { ok: false, code: 'no-staffing', error: 'this host has no staffing executor' }
   ctx.tools.register(defineTool({

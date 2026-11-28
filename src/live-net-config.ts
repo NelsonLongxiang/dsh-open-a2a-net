@@ -45,6 +45,18 @@ export interface LiveNet<C extends object> {
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
 const removed = (before: readonly string[], after: readonly string[]): string[] => before.filter(item => !after.includes(item))
 
+/** The same peer: same origin and same path, trailing slashes and a bare root ignored. */
+export function sameHostUrl(a: string, b: string): boolean {
+  try { const x = new URL(a); const y = new URL(b); return x.origin === y.origin && x.pathname.replace(/\/+$/, '') === y.pathname.replace(/\/+$/, '') } catch { return a === b }
+}
+
+/** Drop every entry keyed by a removed peer from each map (card cache, signed discovery set, ...). Returns how many went. */
+export function forgetPeerEntries(removedPeers: readonly string[], ...maps: ReadonlyArray<Map<string, unknown>>): number {
+  let dropped = 0
+  for (const map of maps) for (const key of [...map.keys()]) if (removedPeers.some(url => sameHostUrl(key, url))) { map.delete(key); dropped += 1 }
+  return dropped
+}
+
 export function createLiveNetConfig<C extends object>(boot: C): LiveNet<C> {
   let state: Record<LiveNetKey, unknown> = {
     peers: (boot as Record<string, unknown>).peers,
