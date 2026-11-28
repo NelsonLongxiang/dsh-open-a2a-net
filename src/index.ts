@@ -61,6 +61,7 @@ import { formatReceipt, holdsRow, parseReceipt, receiptExtras, receiptTaskId, ta
 import { holdsOpenTicket, readSelfChecks } from './superagent/host/self-check-read.ts'
 import { SuperagentHost } from './superagent/host/index.ts'
 import { registerSuperagentTools } from './superagent/host/tools.ts'
+import { peerDeliveryId, peerMessageText, signPeerStatus, type PeerMessage } from './superagent/host/peer-channel.ts'
 import { BUILDER_PRESET, RoleTools, scopeKeyOf, type RoleAgent } from './superagent/host/role-tools.ts'
 import { ReconciliationReminders, type ReminderAgent } from './reconciliation-reminders.ts'
 import { ReconciliationInbox } from './reconciliation-inbox.ts'
@@ -2237,6 +2238,10 @@ export function apply(ctx: Context, config: Config): void {
     warn:code=>logger.warn('a2a: sourced followup (%s); check ledger persistence and original task',code),
   })
   const followupRelay = (agent: Agent, text: string, sender?: string, localFrom?: string, taskId?: string, callerKey?: string, taskExpected=true): 'inserted'|void => followupDelivery.deliver(agent,text,sender,localFrom,taskId,callerKey,taskExpected)
+  function peerDeliveryStatus(id: string, message: PeerMessage, binding: string): 'queued' | 'unknown' {
+    const delivery = taskLedger.deliveryFor(peerDeliveryId(message, binding))
+    return delivery?.sessionId === id && delivery.callerKey === binding && (delivery.state === 'enqueued' || delivery.state === 'claimed') ? 'queued' : 'unknown'
+  }
   // superagent design v4, PR-B: superagent's domain engine in this host (on by default, idle until a team is bound). The router gets
   // candidate cards in its own session (host relay, not A2A) and decides only through the superagent_* tools.
   let staffing: StaffingExecutor | undefined
@@ -2244,6 +2249,19 @@ export function apply(ctx: Context, config: Config): void {
   const superagentTeams: SuperagentTeams | undefined = config.superagent === true ? new SuperagentTeams({
     home: join(home, 'a2a'), logger,
     deliverToSession: (id, text) => { const agent = sessionNodes.get(id); if (agent === undefined) return false; followupRelay(agent, text, config.team); return true },
+    peerTeamAddress: canvas => canvasTeamOf(canvas) + '@' + ownCanvasFingerprint,
+    peerHostMatches: async (url, key) => (await fetchPeerCard(url))?.publicKey === key,
+    // Both roots use this host's filesystem. Remote members have no shared-files authority.
+    peerSharedFiles: (sender, recipient) => sessionNodes.has(sender) && sessionNodes.has(recipient),
+    deliverPeerMessage: (id, message, binding) => {
+      const agent = sessionNodes.get(id)
+      if (agent === undefined || typeof agent.followup !== 'function') return 'refused'
+      const task = peerDeliveryId(message, binding)
+      try { followupRelay(agent, peerMessageText(message), message.sender, undefined, task, binding, false) }
+      catch { /* The queue may already have accepted the stable message. */ }
+      return peerDeliveryStatus(id, message, binding)
+    },
+    peerDeliveryStatus,
     interval: (fn, ms) => ctx.timer.interval(fn, ms),
     // The team's A2A address (PR-B2b) is a CLI identity the a2a-net CLI runs against this very host.
     homeUrl: () => superagentHomeUrl,
@@ -2384,6 +2402,7 @@ export function apply(ctx: Context, config: Config): void {
     // superagent-builder TB1: a session under the builder preset that holds no team role is the team builder.
     roleOf: id => superagentTeams?.ofSession(id)?.toolRoleOf(id) ?? (superagentTeams !== undefined && sessionPresetOf(id) === BUILDER_PRESET ? 'builder' : undefined), grantedOf: id => superagentTeams?.ofSession(id)?.grantedTools(id) ?? [], blockedOf: id => superagentTeams?.ofSession(id)?.settings.blockedTools ?? [], onRefused: (id, role, name) => superagentTeams?.ofSession(id)?.requestTool(id, role, name),
     agentOf: id => ctx.get('agents')?.get(SessionId(id)) as RoleAgent | undefined,
+    peerMessageOf: id => (superagentTeams?.ofSession(id)?.peerGrantViews(id).length ?? 0) > 0,
     logger,
   })
   function syncRoleTools(): void { for (const agent of liveRootAgents(ctx.get('agents'))) superagentRoleTools.sync(agent as unknown as RoleAgent) }
@@ -2422,7 +2441,7 @@ export function apply(ctx: Context, config: Config): void {
     // superagent-team-mcp M2: each allowed tool of a team's MCP server is a tool of its own; the host holds the token.
     teamMcpTools = new TeamMcpTools(ctx, id => superagentTeams!.ofSession(id), () => superagentTeams!.all(), logger)
     // A member's turn ending is the executor's turn-end fact (PR-C1).
-    ctx.on('agent/status', payload => { superagentRoleTools.sync(payload.agent as unknown as RoleAgent); if (payload.status === 'idle') superagentTeams!.ofSession(String(payload.agent.id))?.memberIdle(String(payload.agent.id)) })
+    ctx.on('agent/status', payload => { superagentRoleTools.sync(payload.agent as unknown as RoleAgent); if (payload.status === 'idle') { const id = String(payload.agent.id); const team = superagentTeams!.ofSession(id); team?.memberIdle(id); if (team?.settings.serves?.members.includes(id)) void team.refreshPeerGrants(id) } })
     // A failed turn is retried or fails the ticket for a person (upstream); without this it read as still working.
     ctx.on('agent/error', ({ agent, error }) => { superagentTeams!.ofSession(String(agent.id))?.memberFailed(String(agent.id), error) })
     // PR-F: an Input counts as read once the member's session takes the message carrying it into its history.
@@ -4012,6 +4031,7 @@ export function apply(ctx: Context, config: Config): void {
   // superagent's HTTP faces live in src/faces/superagent.ts (#570 line ratchet); registered after cardCache exists: whenWebServerSettled may run its callback at once.
   if (superagentHost !== undefined && superagentTeams !== undefined) whenWebServerSettled((webServer) => {
     registerSuperagentFaces(webServer, {
+      signPeerStatus: (team, member, query, status) => signPeerStatus(team, member, query, status, nodePrivateKey),
       canvasLabel: name => canvasStore.labelOf(name),
       ownerDelegatesPath: join(home, 'a2a', 'owner-delegates.json'),
       sidebarSends,
@@ -4294,6 +4314,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const infoTools = createInfoTools({
     nudgeEscalations:()=>nudgeObservations.snapshot(),
+    peerChannelsOf: id => superagentTeams?.ofSession(id)?.refreshPeerGrants(id) ?? Promise.resolve([]),
     ctx, config, logger, session, lanIp, get ownCardUrl() { return ownCardUrl }, peerStore, taskLedger,
     inFlightRoutes, recentActivity, joinedSessions, sessionNodes, canvasStore,
     teamMemberships, exposureStore, idempotencyStore, cardCache,

@@ -35,10 +35,12 @@ import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { canvasOwnerFingerprint, splitCanvasOwner } from '../canvas-id.ts'
 import type { StaffingExecutor, StaffingChange } from '../superagent/host/staffing.ts'
 import type { SidebarSends } from '../sidebar-sends.ts'
+import { readPeerStatusQuery, type PeerStatusQuery } from '../superagent/host/peer-channel.ts'
 
 /** What the superagent faces need from the host's closure. */
 export interface SuperagentFaceDeps {
   readonly ctx: Context
+  readonly signPeerStatus?: (team: string, member: string, query: PeerStatusQuery, status: string) => string
   readonly config: Config
   readonly superagentHost: SuperagentHost
   readonly superagentTeams: SuperagentTeams
@@ -225,7 +227,7 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
     }), 'a2a: superagent control route')
     // PR-C2: the two host-to-host faces. Each takes a signed, body-bound OriginClaim and judges the signer's card key against
     // the key the owner pinned: the team host's key on a member host, the member host's key on the team host.
-    const signedFace = (path: string, judge: (body: Record<string, unknown>, claim: { caller: string; key: string; cli: boolean }) => Record<string, unknown>, label: string, acceptCli = false): void => {
+    const signedFace = (path: string, judge: (body: Record<string, unknown>, claim: { caller: string; key: string; cli: boolean }) => Record<string, unknown> | Promise<Record<string, unknown>>, label: string, acceptCli = false): void => {
       ctx.effect(() => webServer.register({
         kind: 'exact',
         path,
@@ -249,7 +251,8 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
                 send({ ok: false, code: 'untrusted-origin', error: `a signed, body-bound OriginClaim is required (${claim.ok ? 'unbound' : claim.reason})` })
                 return
               }
-              const out = judge(body, { caller: claim.caller, key: claim.card.publicKey, cli: claim.cli === true })
+              if (body === null || typeof body !== 'object' || Array.isArray(body)) { send({ ok: false, code: 'arguments' }); return }
+              const out = await judge(body, { caller: claim.caller, key: claim.card.publicKey, cli: claim.cli === true })
               recordActivity('in', path, claim.caller, out.ok === true)
               // A signer that is not the pinned key (an impostor sharing a handle) is refused by identity; a malformed body is not counted.
               if (out.ok !== true && ['not-signer', 'not-team', 'not-member'].includes(String(out.code))) superagentHost.noteRefusal(`superagent-${String(out.code)}`, { caller: claim.caller, target: path })
@@ -265,10 +268,26 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
       for (const team of superagentTeams!.all()) { refused = ask(team); if (!['not-team', 'not-member'].includes(String(refused.code))) return refused }
       return refused
     }
-    signedFace('/a2a/superagent-member', (body, claim) => firstTeam(team => team.assignedWork(body.op, body.member, claim.key, body.text)), 'a2a: superagent member face')
-    signedFace('/a2a/superagent-team', (body, claim) => typeof body.member === 'string' && claimCovers(body.member, claim.caller)
-      ? firstTeam(team => team.remoteEvent(body.op, body.member, claim.key, body.report, claim.cli))
-      : { ok: false, code: 'not-signer', error: 'the signer does not speak for that member' }, 'a2a: superagent team face', true)
+    signedFace('/a2a/superagent-member', (body, claim) => {
+      if (typeof body.op !== 'string' || !body.op.startsWith('peer-channel-')) return firstTeam(team => team.assignedWork(body.op, body.member, claim.key, body.text))
+      const result = firstTeam(team => team.peerMemberDelivery(body.op, body.member, claim.key, body.team, body.message))
+      if (body.op !== 'peer-channel-status' || result.ok !== true) return result
+      const query = readPeerStatusQuery(body.message)
+      if (query === undefined || typeof body.team !== 'string' || typeof body.member !== 'string' || typeof result.status !== 'string' || d.signPeerStatus === undefined) return { ok: false, code: 'unavailable' }
+      return { ...result, proof: d.signPeerStatus(body.team, body.member, query, result.status) }
+    }, 'a2a: superagent member face')
+    signedFace('/a2a/superagent-team', async (body, claim) => {
+      if (typeof body.member !== 'string' || !claimCovers(body.member, claim.caller)) return { ok: false, code: 'not-signer', error: 'the signer does not speak for that member' }
+      const { member } = body
+      if (!claim.cli && typeof body.op === 'string' && body.op.startsWith('peer-channel-')) {
+        for (const team of superagentTeams.all()) {
+          const result = await team.peerRemoteOperation(body.op, member, claim.key, body.report)
+          if (result.code !== 'not-member') return result
+        }
+        return { ok: false, code: 'not-member' }
+      }
+      return firstTeam(team => team.remoteEvent(body.op, member, claim.key, body.report, claim.cli))
+    }, 'a2a: superagent team face', true)
   }
 
   /** Design M8: the teams linked instances advertise on their cards; only a team whose A2A Source is on is advertised. */
@@ -306,11 +325,34 @@ export function registerSuperagentFaces(webServer: WebServer, d: SuperagentFaceD
             send(200, team.ownerObserverDecision(typeof fields.id === 'string' ? fields.id : '', fields.how, fields.generation, fields.option, fields.note))
             return
           }
-          if (!requireBrowserOwner(req, send)) return
-          send(200, team.decide(typeof fields.id === 'string' ? fields.id : '', fields.how, fields.option, fields.note, fields.files))
+          const id = typeof fields.id === 'string' ? fields.id : ''
+          const peerCard = team.isPeerChannelCard(id)
+          if (!requireBrowserOwner(req, send, !peerCard)) return
+          if (peerCard) {
+            void team.checkPeerDecision(id, fields.option).then(current => {
+              send(200, current ? team.decide(id, fields.how, fields.option, fields.note, fields.files, true) : { ok: false, code: 'not-granted' })
+            }).catch(() => send(503, { ok: false, code: 'unavailable' }))
+            return
+          }
+          send(200, team.decide(id, fields.how, fields.option, fields.note, fields.files))
         })
       }),
     }), 'a2a: superagent decisions face')
+    ctx.effect(() => webServer.register({
+      kind: 'exact', path: '/__dsh_a2a/superagent/peer-channels',
+      handler: controlRoute((req: IncomingMessage, res: ServerResponse) => {
+        const send = (status: number, value: unknown): void => {
+          res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(value))
+        }
+        if (!requireBrowserOwner(req, send, false)) return
+        if (req.method !== 'POST') { send(405, { ok: false, code: 'method' }); return }
+        readJsonBody(req, res, body => {
+          const fields = body as { teamId?: string; op?: unknown; id?: unknown; reason?: unknown } | null
+          const team = superagentTeams.get(fields?.teamId)
+          send(200, team?.peerChannelAdmin(undefined, fields?.op, fields?.id, fields?.reason) ?? { ok: false, code: 'not-team' })
+        })
+      }),
+    }), 'a2a: owner peer channel administration')
     // C8: a file on a card, for the owner. Only files a card names, only while the file channel still holds them (24 h).
     ctx.effect(() => webServer.register({
       kind: 'exact',
