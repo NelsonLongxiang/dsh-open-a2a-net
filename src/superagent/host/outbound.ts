@@ -17,6 +17,7 @@ import {writeTaskLedger} from '../../task-ledger-persistence.ts'
 import {keepUnsettled,receiptStanding,type UnsettledReceipt} from './receipt-settlement.ts'
 import type { ResultCredential } from './outbound-results.ts'
 import type { Trigger } from '../upstream/dsh-superagent/src/core/index.ts'
+import type { DecisionFile } from './decisions.ts'
 
 /** Another team's address: a session handle `<zone>/<id8>` or a canvas team `<zone>/canvas/<name>`, either with `@<fp8>`. */
 export const OUTBOUND_ADDRESS = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}\/(?:[0-9a-f]{8}|canvas\/[^\s/@]{1,64})(?:@[0-9a-f]{8})?$/
@@ -29,6 +30,8 @@ export interface OutboundRecord {
   readonly ticketId: string
   readonly address: string
   readonly text: string
+  /** #952: files staged for the card; granted to the target only when the card is approved. */
+  readonly files?: readonly DecisionFile[]
   readonly by: string
   readonly at: string
   state: 'waiting' | 'sending' | 'unknown' | 'sent' | 'failed' | 'declined' | 'answered'
@@ -91,7 +94,13 @@ export type OutboundApproval = { readonly ok: true; readonly at: string; readonl
   | { readonly ok: false; readonly code: string; readonly error: string }
 export interface OutboundRecovery { readonly ok: boolean; readonly state?: OutboundRecord['state']; readonly task?: string; readonly code?: string; readonly error?: string }
 
-export interface OutboundAsk { readonly ticket_id?: unknown; readonly address?: unknown; readonly text?: unknown; readonly why?: unknown }
+export interface OutboundAsk { readonly ticket_id?: unknown; readonly address?: unknown; readonly text?: unknown; readonly why?: unknown; readonly files?: unknown }
+
+/** The approved message: the text, then one reference line per attached file (#952). */
+export const withFileRefs = (message: string, files: readonly DecisionFile[] | undefined): string => files === undefined || files.length === 0 ? message : `${message}\n${files.map(file => file.ref).join('\n')}`
+
+/** The card lines naming each attached file by name, size and sha256 (#952). */
+export const fileCardLines = (files: readonly DecisionFile[]): string => files.length === 0 ? '' : `\n附件（批准后才授权给对方团队）：\n${files.map(file => `- ${file.name}（${String(file.size)} 字节，sha256 ${file.sha256}）`).join('\n')}`
 
 export interface OutboundDeps {
   readonly path: string
@@ -106,6 +115,10 @@ export interface OutboundDeps {
   readonly narrowReceipt?: (binding:RecoveryBinding,caller:string,message:string)=>boolean
   readonly narrowNote?: (ticketId:string,text:string)=>boolean
   /** Idempotent ticket note for answers (see writeTicketNoteOnce); without it, `note` is used and a throw counts as failed. */
+  /** #952: grant the held files to the address when the card is approved; a refusal means nothing is sent. */
+  readonly grantFiles?: (record: Readonly<OutboundRecord>) => { readonly ok: true } | { readonly ok: false; readonly error: string }
+  /** #952: revoke the held files (and, when asked, the target's grants) when the card is declined or fails. */
+  readonly revokeFiles?: (record: Readonly<OutboundRecord>) => void
   readonly noteOnce?: (ticketId: string, text: string) => NoteResult
   readonly note: (ticketId: string, text: string) => void
   /** #881 v2: record a verified final result (never throws; its failure never touches settlement, notes or retries). */
@@ -227,9 +240,9 @@ export class OutboundRequests {
   }
 
   /** A card was raised for a checked request. */
-  waiting(card: string, ticketId: string, address: string, text: string, by: string): void {
+  waiting(card: string, ticketId: string, address: string, text: string, by: string, files?: readonly DecisionFile[]): void {
     if (this.records[card] !== undefined) return
-    this.put({ card, ticketId, address, text, by, at: this.d.now(), state: 'waiting' })
+    this.put({ card, ticketId, address, text, by, at: this.d.now(), state: 'waiting', ...(files !== undefined && files.length > 0 ? { files } : {}) })
   }
 
   /**
@@ -243,6 +256,7 @@ export class OutboundRequests {
     this.busy.add(card)
     try {
       if (!approved) {
+        try { this.d.revokeFiles?.(record) } catch { /* the grants expire in 24h */ }
         this.put({ ...record, state: 'declined' })
         this.d.note(record.ticketId, `对外请求（发往 ${record.address}）未获批准，没有发出。`)
         return undefined
@@ -250,7 +264,15 @@ export class OutboundRequests {
       const header = `[来自 superagent 团队 ${team} 的请求 · 工单「${clip(titleOf(record.ticketId) ?? '', 80)}」]`
       const current = this.d.approval?.(record)
       if (current?.ok === false) return undefined
-      const approval = current?.ok === true ? { at: current.at, team: current.team, message: current.message } : { at: this.d.now(), team, message: `${header}\n${record.text}` }
+      const approval = current?.ok === true ? { at: current.at, team: current.team, message: current.message } : { at: this.d.now(), team, message: withFileRefs(`${header}\n${record.text}`, record.files) }
+      if (record.files !== undefined && record.files.length > 0) {
+        const granted = this.d.grantFiles?.(record) ?? { ok: false as const, error: '这台宿主不能授权文件' }
+        if (!granted.ok) {
+          this.put({ ...record, state: 'failed', error: `附件未能授权，请求没有发出：${granted.error}` })
+          this.d.note(record.ticketId, `对外请求（发往 ${record.address}）已获批准，但附件未能授权，没有发出：${granted.error}`)
+          return undefined
+        }
+      }
       return await this.sendAttempt({ ...record, approval })
     } finally { this.busy.delete(card) }
   }

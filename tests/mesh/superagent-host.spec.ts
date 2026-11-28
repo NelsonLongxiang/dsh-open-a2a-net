@@ -27,6 +27,8 @@ import { apply, type Config } from '../../src/index.ts'
 import { canvasOwnerFingerprint } from '../../src/canvas-id.ts'
 import { spawn } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { readdirSync, statSync } from 'node:fs'
 import { cliEnv, MockGuiConnection, mockGuiLogin, bootNode, postJson, reservePort, runContext, tmpHome } from './harness.ts'
 import {A2aSource} from '../../src/superagent/host/a2a-source.ts'
 import { SuperagentHost } from '../../src/superagent/host/index.ts'
@@ -92,6 +94,13 @@ async function mount(home: string, extra: Partial<Config> = {}, listenPort = 0) 
     return await sa({ action: 'settings', settings: { canvas: 'team', router, ...extra } })
   }
   return { ctx, port, agents, R: R!, M: M!, O: O!, X: X!, post, sa, state, tool, team, dispose: async () => { await ctx.fiber.dispose() } }
+}
+function findOutboundFile(dir: string): string {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name)
+    if (statSync(p).isDirectory()) { const hit = (() => { try { return findOutboundFile(p) } catch { return '' } })(); if (hit !== '') return hit } else if (name === 'outbound.json') return p
+  }
+  throw new Error('no outbound.json')
 }
 const triggerIn = (card: string): string => /^trigger (\S+) /m.exec(card)![1]!
 
@@ -343,6 +352,118 @@ describe('superagent engine in the a2a host', () => {
       await Promise.all([a.dispose(), b.dispose()])
     }
   }, 90_000)
+
+  it('#952: an outbound card carries files, grants them only on approval, and the other team pulls them by sha256', async () => {
+    const [aPort, bPort] = await Promise.all([reservePort(), reservePort()])
+    const url = (port: number) => 'http://127.0.0.1:' + port
+    const options = { teamScopeRouting: true, teamScopeInfo: true, forwardDirect: true, cardCacheTtlMs: 0 }
+    const a = await mount(mkdtempSync(join(tmpdir(), 'sa-952-origin-')), { ...options, team: 'alpha', session: 'sa-952-a', originClaimUrl: url(aPort), peers: [url(bPort)] }, aPort)
+    const b = await mount(mkdtempSync(join(tmpdir(), 'sa-952-target-')), { ...options, team: 'beta', session: 'sa-952-b', originClaimUrl: url(bPort), peers: [url(aPort)] }, bPort)
+    const work = mkdtempSync(join(tmpdir(), 'sa-952-work-'))
+    const content = Buffer.from('attachment for the other team\n中文也要完整')
+    const digest = createHash('sha256').update(content).digest('hex')
+    writeFileSync(join(work, 'deliverable.txt'), content)
+    ;(a.M as unknown as { session: { header?: unknown } }).session.header = { cwd: work }
+    const inbox = mkdtempSync(join(tmpdir(), 'sa-952-inbox-'))
+    ;(b.R as unknown as { session: { header?: unknown } }).session.header = { cwd: inbox }
+    try {
+      expect(await a.team(R_ID, [M_ID], { sources: { a2a: true } })).toMatchObject({ ok: true })
+      await vi.waitFor(async () => expect((await a.state()).a2a.health['a2a-deposit']?.state).toBe('ready'), { timeout: 15_000 })
+      const requester = (await a.state()).a2a.address as string
+      expect(await b.team(R_ID, [], { sources: { a2a: true }, bots: { a2a: [requester] }, acceptMode: 'auto', rules: [{ name: 'fixture', text: 'Accept test requests.' }] })).toMatchObject({ ok: true })
+      await vi.waitFor(async () => expect((await b.state()).a2a.health['a2a-deposit']?.state).toBe('ready'), { timeout: 15_000 })
+      expect(await b.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'requesters', id: requester, home: url(aPort) })).toMatchObject({ ok: true })
+      expect(await a.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'destinations', id: requester })).toMatchObject({ ok: true })
+      expect(await a.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'destinations', id: 'beta/a0000000', peer: url(bPort) })).toMatchObject({ ok: true })
+      const request = await a.sa({ action: 'request', text: 'Open an origin ticket' })
+      await vi.waitFor(() => expect(a.R.steered.some(text => text.includes(request.triggerId))).toBe(true), { timeout: 8_000 })
+      const opened = await a.tool('superagent_route', a.R, { items: [{ trigger_id: request.triggerId, kind: 'accept', title: 'Origin ticket', scope: 'fixture', reason: 'owner fixture', member: M_ID }] })
+      const ticket = opened.results[0].ticket_id
+      const text = 'Please review the attached deliverable'
+      const raised = await a.tool('a2a_outbound_request', a.M, { ticket_id: ticket, address: 'beta/canvas/team', text, why: 'fixture', files: ['deliverable.txt'] })
+      expect(raised).toMatchObject({ ok: true, files: [{ name: 'deliverable.txt', size: content.length, sha256: digest }] })
+      const listed: any = await (await globalThis.fetch(url(aPort) + '/__dsh_a2a/superagent/decisions', { headers: mockGuiLogin() })).json()
+      const card = listed.decisions.find((row: any) => row.id === raised.card_id)
+      expect(card.question).toContain('deliverable.txt（' + String(content.length) + ' 字节，sha256 ' + digest + '）')
+      // Before approval nothing is granted to the other team: only the card's own holding grant exists.
+      expect((await a.tool('a2a_file_grants', a.M, {})).grants.map((grant: any) => grant.to)).toEqual(['alpha/canvas/team'])
+      expect(await a.post('/__dsh_a2a/superagent/decisions', { id: raised.card_id, how: 'choose', option: '批准：以团队名义发出' })).toMatchObject({ ok: true, approved: true })
+      await vi.waitFor(async () => expect((await a.state()).outbound.find((row: any) => row.card === raised.card_id)).toMatchObject({ state: 'sent' }), { timeout: 15_000 })
+      expect((await a.tool('a2a_file_grants', a.M, {})).grants.map((grant: any) => grant.to).sort()).toEqual(['alpha/canvas/team', 'beta/canvas/team'])
+      await vi.waitFor(() => expect(b.R.steered.some(message => message.includes('[superagent candidate]') && message.includes(text))).toBe(true), { timeout: 25_000 })
+      const candidate = b.R.steered.find(message => message.includes('[superagent candidate]') && message.includes(text))!
+      const refLine = candidate.split('\n').find(line => line.startsWith('[A2A file] v1'))
+      expect(refLine, candidate).toBeDefined()
+      const fetched = await b.tool('a2a_file_fetch', b.R, { ref: refLine })
+      expect(fetched, JSON.stringify(fetched)).toMatchObject({ ok: true, sha256: digest })
+      expect(createHash('sha256').update(readFileSync(fetched.path as string)).digest('hex')).toBe(digest)
+    } finally {
+      await Promise.all([a.dispose(), b.dispose()])
+    }
+  }, 120_000)
+
+  it('#952: declining an outbound card with files revokes its grants and sends nothing', async () => {
+    const m = await mount(mkdtempSync(join(tmpdir(), 'sa-952-decline-')), { teamScopeRouting: true, forwardDirect: false })
+    const work = mkdtempSync(join(tmpdir(), 'sa-952-work-'))
+    writeFileSync(join(work, 'draft.txt'), 'not to be sent')
+    ;(m.M as unknown as { session: { header?: unknown } }).session.header = { cwd: work }
+    try {
+      expect(await m.team(R_ID, [M_ID], { sources: { a2a: true } })).toMatchObject({ ok: true })
+      await vi.waitFor(async () => expect((await m.state()).a2a.address ?? '').not.toBe(''), { timeout: 8000 })
+      const sender = (await m.state()).a2a.address as string
+      expect(await m.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'destination', id: sender })).toMatchObject({ ok: true })
+      const request = await m.sa({ action: 'request', text: 'decline fixture' })
+      await vi.waitFor(() => expect(m.R.steered.some(text => text.includes(request.triggerId))).toBe(true), { timeout: 8000 })
+      const accepted = await m.tool('superagent_route', m.R, { items: [{ trigger_id: request.triggerId, kind: 'accept', title: 'decline', scope: 'fixture', reason: 'owner fixture', member: M_ID }] })
+      const ticket = accepted.results[0].ticket_id
+      const raised = await m.tool('a2a_outbound_request', m.M, { ticket_id: ticket, address: 'dsh/canvas/destination', text: 'with a file', why: 'fixture', files: ['draft.txt'] })
+      expect(raised.ok, JSON.stringify(raised)).toBe(true)
+      expect((await m.tool('a2a_file_grants', m.M, {})).grants).toHaveLength(1)
+      expect(await m.post('/__dsh_a2a/superagent/decisions', { id: raised.card_id, how: 'choose', option: '拒绝' })).toMatchObject({ ok: true, approved: false })
+      expect((await m.tool('a2a_file_grants', m.M, {})).grants).toHaveLength(0)
+      expect((await m.state()).outbound.find((row: any) => row.card === raised.card_id)).toMatchObject({ state: 'declined' })
+      expect(m.O.steered).toHaveLength(0)
+    } finally { await m.dispose() }
+  }, 60_000)
+
+  it('#952: recovery refuses an approved outbound whose files no longer match the approved payload, and sends nothing', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'sa-952-tamper-'))
+    const work = mkdtempSync(join(tmpdir(), 'sa-952-work-'))
+    writeFileSync(join(work, 'a.txt'), 'approved bytes')
+    let m = await mount(home, { teamScopeRouting: true, forwardDirect: false })
+    ;(m.M as unknown as { session: { header?: unknown } }).session.header = { cwd: work }
+    try {
+      expect(await m.team(R_ID, [M_ID], { sources: { a2a: true } })).toMatchObject({ ok: true })
+      let sender = ''
+      await vi.waitFor(async () => { sender = (await m.state()).a2a.address ?? ''; expect(sender).not.toBe('') }, { timeout: 8000 })
+      expect(await m.post('/__dsh_a2a/canvas', { action: 'add-member', name: 'destination', id: sender })).toMatchObject({ ok: true })
+      const request = await m.sa({ action: 'request', text: 'tamper fixture' })
+      await vi.waitFor(() => expect(m.R.steered.some(text => text.includes(request.triggerId))).toBe(true), { timeout: 8000 })
+      const accepted = await m.tool('superagent_route', m.R, { items: [{ trigger_id: request.triggerId, kind: 'accept', title: 'tamper', scope: 'fixture', reason: 'owner fixture', member: M_ID }] })
+      const ticket = accepted.results[0].ticket_id
+      await vi.waitFor(async () => expect((await m.state()).executor.bindings.some((row: any) => row.ticketId === ticket && row.member === M_ID)).toBe(true), { timeout: 8000 })
+      const raised = await m.tool('a2a_outbound_request', m.M, { ticket_id: ticket, address: 'dsh/canvas/destination', text: 'approved with a file', why: 'fixture', files: ['a.txt'] })
+      expect(raised.ok, JSON.stringify(raised)).toBe(true)
+      expect(await m.post('/__dsh_a2a/superagent/decisions', { id: raised.card_id, how: 'choose', option: '批准：以团队名义发出' })).toMatchObject({ ok: true, approved: true })
+      let failed: any
+      await vi.waitFor(async () => { failed = (await m.state()).outbound.find((row: any) => row.card === raised.card_id); expect(failed).toMatchObject({ state: 'failed', attempts: [{ delivery: 'not-sent' }] }) }, { timeout: 15000 })
+      const task = failed.task
+      await m.dispose()
+      // The retained record's files are altered on disk: they no longer match the approved payload.
+      const path = findOutboundFile(home)
+      const store = JSON.parse(readFileSync(path, 'utf8')) as Record<string, any>
+      const rows = Array.isArray(store.records) ? store.records : Object.values(store.records ?? store)
+      const row = rows.find((r: any) => r?.card === raised.card_id)
+      expect(row?.files?.length).toBe(1)
+      row.files[0].sha256 = 'f'.repeat(64)
+      writeFileSync(path, JSON.stringify(store))
+      m = await mount(home, { teamScopeRouting: true, forwardDirect: true })
+      await vi.waitFor(async () => expect((await m.state()).a2a.address ?? '').not.toBe(''), { timeout: 8000 })
+      const retry = await m.sa({ action: 'outbound-retry', card_id: raised.card_id, task_id: task })
+      expect(retry, JSON.stringify(retry)).toMatchObject({ ok: false, code: 'outbound-approval' })
+      expect(m.O.steered).toHaveLength(0)
+    } finally { await m.dispose() }
+  }, 60_000)
 
   it.each(['home', 'foreign'] as const)('R2: %s-owned canvas binds the exact wire fingerprint without redirecting a foreign owner to home', async owner => {
     const home = mkdtempSync(join(tmpdir(), 'sa-owned-recovery-'))
