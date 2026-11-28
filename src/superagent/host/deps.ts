@@ -67,6 +67,10 @@ export interface SuperagentHostDeps {
   /** The task ledger's state of a request the team identity received (owner ruling 2026-11-18: one book for receipts owed). */
   readonly receiptLedger?: (task: string) => import('./receipts.ts').LedgerOwed
   readonly stageFiles?: (sessionId: string, paths: readonly string[], canvas: string) => { ok: true; files: DecisionFile[] } | { ok: false; code: string; error: string }
+  /** #952: grant files an approved outbound card holds to the other team's address; the held bytes must still be on the file channel. */
+  readonly grantFiles?: (sessionId: string, files: readonly DecisionFile[], canvas: string, to: string) => { ok: true } | { ok: false; error: string }
+  /** #952: revoke the card's held grants (and the target's, when it was granted). */
+  readonly revokeFiles?: (sessionId: string, files: readonly DecisionFile[], canvas: string, to: string) => void
   /** Where this team's state lives instead, when it is not the instance's primary team (design M2). */
   readonly stateDir?: string
   readonly decisionTeamId?: string

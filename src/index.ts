@@ -2361,6 +2361,21 @@ export function apply(ctx: Context, config: Config): void {
     },
     // Decision cards C8: a proposer's files go on the file channel, granted to its team's canvas, as a2a_file_send stages them.
     stageFiles: (id, paths, canvas) => stageCardFiles({ blobStore, from: originOf(ownCardUrl), cwd: (sessionNodes.get(id)?.session as { header?: { cwd?: unknown } } | undefined)?.header?.cwd, team: `${config.team}/canvas/${canvas}`, by: id }, paths),
+    // #952: an approved outbound card grants its held files to the other team's address (the file channel's own grant), and a declined one revokes them.
+    grantFiles: (id, files, canvas, to) => {
+      const held = `${config.team}/canvas/${canvas}`
+      const staged: string[] = []
+      for (const file of files) {
+        const grant = blobStore.list().find(row => row.sha256 === file.sha256 && row.by === id && row.to === held)
+        const bytes = grant === undefined ? undefined : blobStore.read(grant)
+        if (bytes === undefined) { for (const sha of staged) blobStore.revoke(sha, to, id); return { ok: false, error: `${file.name} is no longer held on the file channel (grants last 24h); ask again` } }
+        const out = blobStore.stage(bytes, { name: file.name, to, by: id })
+        if (!out.ok) { for (const sha of staged) blobStore.revoke(sha, to, id); return { ok: false, error: `${file.name}: ${out.error}` } }
+        staged.push(out.sha256)
+      }
+      return { ok: true }
+    },
+    revokeFiles: (id, files, canvas, to) => { for (const file of files) { blobStore.revoke(file.sha256, `${config.team}/canvas/${canvas}`, id); if (to !== '') blobStore.revoke(file.sha256, to, id) } },
     memberTurn: id => { const agent = sessionNodes.get(id); return agent === undefined ? undefined : memberTurnFrom(id, sessionEventsOf(agent), ctx.get('jobs' as never), message => logger.warn(message)) },
     teamSend: teamCanvasSend,
     // #888 D3: a file input must still be on the file channel when the owner decides.
