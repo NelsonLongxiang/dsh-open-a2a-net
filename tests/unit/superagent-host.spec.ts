@@ -577,6 +577,58 @@ describe('a member\'s turn: silent ends, failures, handoffs and stale reports', 
     return { h, sent, turn, accept, cards, toRouter, tick }
   }
 
+  it('a note on the ticket before work begins goes into the assignment card, and its delivery and read times are recorded', async () => {
+    const m = await team()
+    try {
+      const one = m.accept('第一', '一')
+      m.h.engine.note(one.ticket, '停写：不要做业务写入')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      expect(m.cards('[superagent assignment]')[0]).toContain('停写：不要做业务写入')
+      await m.tick()
+      // Carried by the card, so not sent a second time as an input.
+      expect(m.cards('[superagent input]').some(t => t.includes('停写：不要做业务写入'))).toBe(false)
+      const times = () => (m.h as unknown as { executor: { noteTimes(id: string): Record<string, { deliveredAt: string; readAt?: string }> } }).executor.noteTimes(one.ticket)
+      expect(Object.values(times())).toHaveLength(1)
+      expect(Object.values(times())[0]!.readAt).toBeUndefined()
+      m.h.memberClaimed('session-a')
+      expect(Object.values(times())[0]!.readAt).toBeDefined()
+    } finally { await m.h.stop() }
+  })
+
+  it('a note that arrives after work began is delivered as an input and gets delivery and read times', async () => {
+    const m = await team()
+    try {
+      const one = m.accept('第一', '一')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      m.h.engine.note(one.ticket, '后到的备注')
+      await vi.waitFor(() => { expect(m.cards('[superagent input]').some(t => t.includes('后到的备注'))).toBe(true) })
+      const times = (m.h as unknown as { executor: { noteTimes(id: string): Record<string, { deliveredAt: string; readAt?: string }> } }).executor.noteTimes(one.ticket)
+      expect(Object.values(times)).toHaveLength(1)
+      m.h.memberClaimed('session-a')
+      expect(Object.values(times)[0]!.readAt).toBeDefined()
+    } finally { await m.h.stop() }
+  })
+
+  it('after a person stops the ticket, the member\'s tool calls are refused with a receipt until the cancelled turn ends', async () => {
+    const { RoleTools } = await import('../../src/superagent/host/role-tools.ts')
+    let running = true
+    const m = await team({ cancelTurn: () => running })
+    try {
+      const one = m.accept('第一', '一')
+      await vi.waitFor(() => { expect(m.cards('[superagent assignment]')).toHaveLength(1) })
+      const tools = new RoleTools({ roleOf: id => id === 'session-a' ? 'member' : undefined, haltedOf: id => m.h.haltedOf(id), agentOf: () => undefined, logger: { warn: () => {} } })
+      const member = { id: 'session-a' } as never
+      expect(tools.guard('write', member)).toBeUndefined()
+      m.h.engine.stopTicket(one.ticket, 'owner stop')
+      expect(tools.guard('write', member)).toContain(one.ticket)
+      expect(tools.guard('bash', member)).toContain('stopped by a person')
+      expect(tools.guard('a2a_ticket_report', member)).toBeUndefined()
+      running = false
+      m.h.memberIdle('session-a')
+      expect(tools.guard('write', member)).toBeUndefined()
+    } finally { await m.h.stop() }
+  })
+
   it('a turn that ends without a report reports waiting with the member\'s last words, and frees the member', async () => {
     const m = await team()
     try {

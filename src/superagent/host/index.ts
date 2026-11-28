@@ -556,6 +556,8 @@ export class SuperagentHost {
 
   /** A member's turn ended (agent idle): the executor's turn-end fact — told to the served team host when it is theirs. */
   memberIdle(sessionId: string): void { this.memberEvent(sessionId, 'idle') }
+  /** The ticket a person stopped under this member's running turn, until that turn ends (the tool guard refuses its calls meanwhile). */
+  haltedOf(sessionId: string): string | undefined { return this.executor.haltedBy(sessionId) }
   /** A member's turn failed (agent error): retried or reported as failed — by the team host when it is theirs. */
   memberFailed(sessionId: string, error: unknown): void {
     if (this.settings.members.includes(sessionId)) { this.executor.memberError(sessionId, error); return }

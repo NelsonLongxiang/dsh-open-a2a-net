@@ -239,6 +239,8 @@ export interface RoleToolsDeps {
   readonly grantedOf?: (sessionId: string) => readonly string[]
   /** The tools the owner blocked for this team's members and observers (T6). */
   readonly blockedOf?: (sessionId: string) => readonly string[]
+  /** The ticket the owner stopped under this member's running turn, while that turn has not ended. */
+  readonly haltedOf?: (sessionId: string) => string | undefined
   /** A grantable tool was refused: the host may raise a request and say so in the refusal (T3). */
   readonly onRefused?: (sessionId: string, role: Role, name: string) => string | undefined
   /** A loaded agent by session id (for a subagent's parents). */
@@ -281,6 +283,9 @@ export class RoleTools {
       return (held?.role === 'member' || held?.role === 'observer') && held.session === String(agent?.id) && this.d.peerMessageOf?.(held.session) === true ? undefined : '[superagent] not-granted'
     }
     if (held === undefined) return undefined
+    // A stop is the owner's word on one ticket: until the cancelled turn ends, only the report and acknowledgement tools run.
+    const halted = held.role === 'member' ? this.d.haltedOf?.(held.session) : undefined
+    if (halted !== undefined && name !== 'a2a_ticket_report' && name !== 'a2a_ticket_ack') return `[superagent] ticket ${halted} was stopped by a person; do not continue it. ${name} is refused until this turn ends`
     const refusal = roleToolRefusal(held.role, name, args, this.d.grantedOf?.(held.session) ?? [], this.d.blockedOf?.(held.session) ?? [])
     // T6: a member's refusal is the boundary or the owner's block, which a card would only ask about again.
     if (refusal === undefined || held.role !== 'router' || !grantableTool(held.role, name)) return refusal
