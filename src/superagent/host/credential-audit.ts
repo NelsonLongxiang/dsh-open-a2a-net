@@ -251,10 +251,22 @@ function shellCard(command: string, kind: CredentialKind, depth = 0): boolean {
   return false
 }
 
+/**
+ * A `web_search(...)` call whose whole argument is plain literal text (one quoted string, or an object of plain keys and
+ * quoted strings) is a search term: a product name or an ordinary sentence, never a place the call reads (#895,
+ * 2026-11-27). Only such a call is emptied before the program text is judged. An argument that holds anything else (an
+ * identifier, a call, a template, a concatenation, a nested call) is not text, so the old rule applies to it unchanged.
+ */
+const QUOTED = String.raw`"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'`
+const SEARCH_TERM_CALL = new RegExp(
+  String.raw`\b(?:tools\.)?web_search\s*\(\s*(?:${QUOTED}|\{\s*(?:(?:[A-Za-z_$][\w$]*|${QUOTED})\s*:\s*(?:${QUOTED})\s*(?:,\s*)?)*\})\s*\)`, 'g')
+const withoutSearchTerms = (code: string): string => code.replace(SEARCH_TERM_CALL, 'web_search()')
+
 /** Whether a program text (a generic executor's code) reads a protected place or makes a request with a credential header. */
 function codeCard(code: string, kind: CredentialKind): boolean {
   if (kind === 'authorization-header') return AUTH_HEADER.test(code) && AUTH_REQUEST_CODE.test(code)
-  return (kind === 'credential-file' ? matchesFile(code) : matchesOther(code)) && READ_CODE.test(code)
+  const read = withoutSearchTerms(code)
+  return (kind === 'credential-file' ? matchesFile(read) : matchesOther(read)) && READ_CODE.test(read)
 }
 
 /** Tools whose arguments are notes, descriptions or reports: text the host passes on, never a target. */

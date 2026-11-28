@@ -233,6 +233,43 @@ describe('#947 follow-up: a quoted parenthesis does not end an expansion; a note
   })
 })
 
+describe('run_code: a web search term is not a target (#895, 2026-11-27)', () => {
+  it('a program that only searches the web is recorded, whatever the query says', () => {
+    recordedOnly('run_code', { code: "const r = await tools.web_search({ query: 'Codex accounts .npmrc token news, head of source' }); return r" })
+    recordedOnly('run_code', { code: 'const r = await web_search("cat ~/.ssh/id_rsa tutorial"); console.log(r)' })
+    recordedOnly('run_code', { code: "await tools.web_search({ query: 'how (and why) a keychain, cat and source work' })" })
+  })
+  it('the same code that also reads a protected file still raises the card', () => {
+    carded('run_code', { code: "await tools.web_search({ query: 'news' }); const k = require('fs').readFileSync('/home/dev/.ssh/id_rsa')" }, 'credential-file')
+    carded('run_code', { code: "await tools.web_search({ query: 'news' }); await tools.read({ file_path: '/home/dev/.npmrc' })" }, 'credential-file')
+    carded('run_code', { code: "const q = 'x'; await tools.web_search({ query: q }); await tools.read({ file_path: '/tmp/claude-501/-a/b/scratchpad/token.txt' })" }, 'other-session')
+  })
+  it('a search term does not hide a read written inside the same call, and an unbalanced call keeps the old rule', () => {
+    carded('run_code', { code: "await tools.web_search({ query: 'x' }), require('fs').readFileSync('/home/dev/.aws/credentials')" }, 'credential-file')
+    carded('run_code', { code: "await tools.web_search({ query: 'x', note: (1 }); readFileSync('/home/dev/.ssh/id_rsa'" }, 'credential-file')
+  })
+  it('only a plain literal argument is a search term: an argument that computes anything keeps the old rule', () => {
+    const TICK = String.fromCharCode(96), DOLLAR = String.fromCharCode(36)
+    carded('run_code', { code: "await tools.web_search({ query: require('fs').readFileSync('/home/dev/.ssh/id_rsa', 'utf8') })" }, 'credential-file')
+    carded('run_code', { code: "await tools.web_search(await tools.read({ file_path: '/home/dev/.npmrc' }))" }, 'credential-file')
+    carded('run_code', { code: "await tools.web_search({ query: " + TICK + DOLLAR + "{await tools.read({ file_path: '/home/dev/.npmrc' })}" + TICK + " })" }, 'credential-file')
+    carded('run_code', { code: "await tools.web_search('x' + require('fs').readFileSync('/home/dev/.ssh/id_rsa'))" }, 'credential-file')
+    carded('run_code', { code: "await tools.web_search({ query: 'x', note: (await tools.read({ file_path: '/home/dev/.npmrc' })) })" }, 'credential-file')
+  })
+  it('quotes, escapes and brackets inside a literal term are text, not code', () => {
+    recordedOnly('run_code', { code: "await tools.web_search('smile :) cat ~/.ssh/id_rsa')" })
+    recordedOnly('run_code', { code: "await tools.web_search('it\\'s cat ~/.ssh/id_rsa')" })
+    recordedOnly('run_code', { code: "await tools.web_search({ \"query\": 'a (b', other: \"c ) cat ~/.npmrc\" })" })
+    carded('run_code', { code: "await tools.web_search('a'); require('fs').readFileSync('/home/dev/.ssh/id_rsa')" }, 'credential-file')
+  })
+  it('an Authorization request is not touched by this rule', () => {
+    carded('run_code', { code: "await tools.web_search({ query: 'x' }); await fetch(u, { headers: { Authorization: '" + BEARER + "' } })" }, 'authorization-header')
+  })
+  it('a plain read of a skill file by path, with nothing protected in the program, is not even recorded', () => {
+    expect(credentialVerdict('run_code', { code: "const s = await tools.read({ file_path: '/home/dev/.dsh/skills/ygl-trees-quickstart/SKILL.md' }); return s" })).toEqual({ kinds: [], card: [] })
+  })
+})
+
 describe('run_code: the program text, read the same way', () => {
   it('a note or a description that mentions a name is recorded; a read of the file, or a request with the header, raises the card', () => {
     recordedOnly('run_code', { code: "await tools.a2a_ticket_report({ summary: 'cli.json and ~/.ssh were not touched; Authorization: Bearer is only quoted' })" })
